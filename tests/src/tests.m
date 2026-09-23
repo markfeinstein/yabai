@@ -13,6 +13,7 @@ typedef TEST_SIG(function);
 
 #include "area.c"
 #include "window.c"
+#include "space_gesture.c"
 
 TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
 {
@@ -42,12 +43,14 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
 });
 
 #define TEST_ENTRY(name) { #name, test_##name },
-#define TEST_LIST                                              \
-    TEST_ENTRY(display_area_is_in_direction)                   \
-    TEST_ENTRY(closest_display_in_direction)                   \
-    TEST_ENTRY(window_subrole_is_unknown)                      \
-    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
-    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings)
+#define TEST_LIST                                                 \
+    TEST_ENTRY(display_area_is_in_direction)                      \
+    TEST_ENTRY(closest_display_in_direction)                      \
+    TEST_ENTRY(window_subrole_is_unknown)                         \
+    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole)  \
+    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings)   \
+    TEST_ENTRY(space_gesture_encoding)                             \
+    TEST_ENTRY(space_gesture_invalid_request)
 
 static struct {
     char *name;
