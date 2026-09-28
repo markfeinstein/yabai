@@ -951,8 +951,9 @@ static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 
 // NOTE: Apps that hide a window on close (e.g. Electron) order it out without minimizing it or
 // hiding the app, so none of those events arrives to untile it; the window server's own visibility
-// notifications do. The ordered-in state is checked again because these are queued: the window
-// may have been ordered back in (or out) by the time the event is handled.
+// notifications do. The ordered-in state must be checked: switching spaces sends 816 for every window
+// on the space being left although they stay ordered in (seen on macOS 27), and the events are queued,
+// so the window may have been ordered back in (or out) by the time one is handled.
 static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
 {
     uint32_t wid = (uint64_t)(intptr_t) context;
