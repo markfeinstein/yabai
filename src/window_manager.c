@@ -2323,6 +2323,21 @@ void window_manager_toggle_window_native_fullscreen(struct window *window)
     window_manager_wait_for_native_fullscreen_transition(window);
 }
 
+static struct window_node *window_node_toggle_zoom_parent(struct window_node *node)
+{
+    if (!node->parent) return NULL;
+
+    if (node->zoom == node->parent) {
+        node->zoom = NULL;
+        return node;
+    }
+
+    node->parent->left->zoom = NULL;
+    node->parent->right->zoom = NULL;
+    node->zoom = node->parent;
+    return node->parent;
+}
+
 void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct window *window)
 {
     TIME_FUNCTION;
@@ -2333,22 +2348,13 @@ void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct 
     struct window_node *node = view_find_window_node(view, window->id);
     assert(node);
 
-    if (!node->parent) return;
+    struct window_node *flush_node = window_node_toggle_zoom_parent(node);
+    if (!flush_node) return;
 
-    if (node->zoom == node->parent) {
-        node->zoom = NULL;
-        if (space_is_visible(view->sid)) {
-            window_node_flush(node);
-        } else {
-            view_set_flag(view, VIEW_IS_DIRTY);
-        }
+    if (space_is_visible(view->sid)) {
+        window_node_flush(flush_node);
     } else {
-        node->zoom = node->parent;
-        if (space_is_visible(view->sid)) {
-            window_node_flush(node);
-        } else {
-            view_set_flag(view, VIEW_IS_DIRTY);
-        }
+        view_set_flag(view, VIEW_IS_DIRTY);
     }
 }
 

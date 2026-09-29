@@ -14,12 +14,40 @@ typedef TEST_SIG(function);
 #include "area.c"
 #include "window.c"
 
+TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
+{
+    struct window_node parent = {0};
+    struct window_node left = {0};
+    struct window_node right = {0};
+
+    parent.left = &left;
+    parent.right = &right;
+    left.parent = &parent;
+    right.parent = &parent;
+
+    struct window_node *flush_node = window_node_toggle_zoom_parent(&left);
+    TEST_CHECK(flush_node == &parent, true);
+    TEST_CHECK(left.zoom == &parent, true);
+    TEST_CHECK(right.zoom == NULL, true);
+
+    flush_node = window_node_toggle_zoom_parent(&right);
+    TEST_CHECK(flush_node == &parent, true);
+    TEST_CHECK(left.zoom == NULL, true);
+    TEST_CHECK(right.zoom == &parent, true);
+
+    flush_node = window_node_toggle_zoom_parent(&right);
+    TEST_CHECK(flush_node == &right, true);
+    TEST_CHECK(left.zoom == NULL, true);
+    TEST_CHECK(right.zoom == NULL, true);
+});
+
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
     TEST_ENTRY(window_subrole_is_unknown)                      \
-    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole)
+    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
+    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings)
 
 static struct {
     char *name;
