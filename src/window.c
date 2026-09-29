@@ -1081,12 +1081,18 @@ bool window_level_is_standard(struct window *window)
     return level == g_layer_normal_window_level;
 }
 
+static bool window_subrole_is_unknown(CFStringRef subrole)
+{
+    return subrole && CFEqual(subrole, kAXUnknownSubrole);
+}
+
 bool window_is_unknown(struct window *window)
 {
-    CFStringRef subrole = window_subrole(window);
+    CFStringRef subrole = window_ax_subrole(window);
     if (!subrole) return false;
 
-    bool result = CFEqual(subrole, kAXUnknownSubrole);
+    bool result = window_subrole_is_unknown(subrole);
+    CFRelease(subrole);
     return result;
 }
 
