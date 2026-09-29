@@ -11,6 +11,11 @@
 # sudo yabai --load-sa
 #
 
+# menu bar spaces indicator (uncomment to enable)
+# yabai -m config menubar on
+# yabai -m config menubar_style expanded
+# yabai -m config menubar_space_filter occupied
+
 # global settings
 yabai -m config                                 \
     external_bar                 off:40:0       \

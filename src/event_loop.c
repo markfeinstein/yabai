@@ -70,6 +70,16 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     }
 }
 
+static bool application_window_collection_changed_inventory(int previous_window_count, int window_count)
+{
+    return previous_window_count != window_count;
+}
+
+static void application_window_inventory_did_change(void)
+{
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
@@ -174,6 +184,9 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
     int window_count;
     struct window **window_list = window_manager_add_application_windows(&g_space_manager, &g_window_manager, application, &window_count);
+    if (application_window_collection_changed_inventory(0, window_count)) {
+        application_window_inventory_did_change();
+    }
     uint32_t prev_window_id = g_window_manager.focused_window_id;
 
     uint64_t sid;
@@ -317,6 +330,9 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
 
     application_unobserve(application);
     application_destroy(application);
+    if (application_window_collection_changed_inventory(window_count, 0)) {
+        application_window_inventory_did_change();
+    }
 
     //
     // @cleanup
@@ -387,7 +403,12 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     for (int i = 0; i < buf_len(g_window_manager.applications_to_refresh); ++i) {
         if (application == g_window_manager.applications_to_refresh[i]) {
             debug("%s: %s has windows that are not yet resolved\n", __FUNCTION__, application->name);
+            int previous_window_count = g_window_manager.window.count;
             window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, i);
+            // Resolution controls retry state independently: a false result can still add windows.
+            if (application_window_collection_changed_inventory(previous_window_count, g_window_manager.window.count)) {
+                application_window_inventory_did_change();
+            }
             break;
         }
     }
@@ -485,6 +506,7 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
     }
 
     event_signal_push(SIGNAL_APPLICATION_VISIBLE, application);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(APPLICATION_HIDDEN)
@@ -546,6 +568,7 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
     }
 
     event_signal_push(SIGNAL_APPLICATION_HIDDEN, application);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(WINDOW_CREATED)
@@ -598,6 +621,8 @@ static EVENT_HANDLER(WINDOW_CREATED)
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         update_window_notifications();
     }
+
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(WINDOW_DESTROYED)
@@ -631,6 +656,8 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         update_window_notifications();
     }
+
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(WINDOW_FOCUSED)
@@ -670,6 +697,7 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
 
     window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
     event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
 }
 
 static EVENT_HANDLER(WINDOW_MOVED)
@@ -774,6 +802,8 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
         if (window->subrole) CFRelease(window->subrole);
         window->subrole = window_ax_subrole(window);
+
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
     }
 
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
@@ -868,6 +898,7 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
     }
 
     event_signal_push(SIGNAL_WINDOW_MINIMIZED, window);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(WINDOW_DEMINIMIZED)
@@ -919,6 +950,7 @@ static EVENT_HANDLER(WINDOW_DEMINIMIZED)
     }
 
     event_signal_push(SIGNAL_WINDOW_DEMINIMIZED, window);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(WINDOW_TITLE_CHANGED)
@@ -947,6 +979,7 @@ static EVENT_HANDLER(SLS_WINDOW_ORDERED)
     debug("%s: %d\n", __FUNCTION__, wid);
     struct window_node *node = table_find(&g_window_manager.insert_feedback, &wid);
     if (node) SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 // NOTE: Apps that hide a window on close (e.g. Electron) order it out without minimizing it or
@@ -972,6 +1005,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
     if (ordered_in) return;
 
     window_manager_window_did_order_out(&g_window_manager, window);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
@@ -993,6 +1027,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
 
     uint64_t sid = space_manager_active_space();
     window_manager_window_did_order_in(&g_window_manager, window, space_manager_is_window_on_space(sid, window) ? sid : 0);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
@@ -1009,6 +1044,7 @@ static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
     }
 
     EVENT_HANDLER_WINDOW_DESTROYED(window, 0);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(SLS_SPACE_CREATED)
@@ -1020,6 +1056,7 @@ static EVENT_HANDLER(SLS_SPACE_CREATED)
         debug("%s: %lld, %d\n", __FUNCTION__, sid, type);
         space_manager_find_view(&g_space_manager, sid);
         event_signal_push(SIGNAL_SPACE_CREATED, context);
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
     }
 }
 
@@ -1034,6 +1071,7 @@ static EVENT_HANDLER(SLS_SPACE_DESTROYED)
         view_destroy(view);
         free(view);
         event_signal_push(SIGNAL_SPACE_DESTROYED, context);
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
     }
 }
 
@@ -1072,6 +1110,7 @@ static EVENT_HANDLER(SPACE_CHANGED)
     }
 
     event_signal_push(SIGNAL_SPACE_CHANGED, NULL);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_FOCUS);
 }
 
 static EVENT_HANDLER(DISPLAY_CHANGED)
@@ -1124,6 +1163,7 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
     }
 
     event_signal_push(SIGNAL_DISPLAY_CHANGED, NULL);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
 }
 
 static EVENT_HANDLER(DISPLAY_ADDED)
@@ -1133,6 +1173,7 @@ static EVENT_HANDLER(DISPLAY_ADDED)
     space_manager_handle_display_add(&g_space_manager, did);
     window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, did);
     event_signal_push(SIGNAL_DISPLAY_ADDED, context);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
 }
 
 static EVENT_HANDLER(DISPLAY_REMOVED)
@@ -1142,6 +1183,7 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
     display_manager_remove_label_for_display(&g_display_manager, did);
     window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, display_manager_main_display_id());
     event_signal_push(SIGNAL_DISPLAY_REMOVED, context);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
 }
 
 static EVENT_HANDLER(DISPLAY_MOVED)
@@ -1150,6 +1192,7 @@ static EVENT_HANDLER(DISPLAY_MOVED)
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid(&g_space_manager);
     event_signal_push(SIGNAL_DISPLAY_MOVED, context);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
 }
 
 static EVENT_HANDLER(DISPLAY_RESIZED)
@@ -1158,6 +1201,7 @@ static EVENT_HANDLER(DISPLAY_RESIZED)
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid_for_display(&g_space_manager, did);
     event_signal_push(SIGNAL_DISPLAY_RESIZED, context);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
 }
 
 static EVENT_HANDLER(MOUSE_DOWN)
@@ -1586,6 +1630,7 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 
     event_signal_push(SIGNAL_MISSION_CONTROL_EXIT, (void*)(uintptr_t)g_mission_control_mode);
     g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
 }
 
 static EVENT_HANDLER(DOCK_DID_RESTART)
@@ -1602,6 +1647,7 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
     }
 
     event_signal_push(SIGNAL_DOCK_DID_RESTART, NULL);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
 }
 
 static enum ffm_mode ffm_value;
@@ -1655,6 +1701,20 @@ static EVENT_HANDLER(SYSTEM_WOKE)
     }
 
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);
+}
+
+static EVENT_HANDLER(MENU_BAR_REFRESH)
+{
+    (void) context;
+    (void) param1;
+    menu_bar_manager_refresh();
+}
+
+static EVENT_HANDLER(MENU_BAR_ACTION)
+{
+    (void) param1;
+    menu_bar_manager_handle_action(context);
 }
 
 static EVENT_HANDLER(DAEMON_MESSAGE)
@@ -1732,6 +1792,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     case MOUSE_MOVED: {
         CFRelease(context);
     } break;
+    case MENU_BAR_ACTION: {
+        menu_bar_manager_release_action(context);
+    } break;
     default: {
     } break;
     }
@@ -1771,7 +1834,8 @@ void event_loop_post(struct event_loop *event_loop, enum event_type type, void *
     struct event replaced;
     uint32_t capacity = 0;
     struct event event = { .type = type, .param1 = param1, .context = context };
-    enum event_queue_result result = event_queue_push(&event_loop->queue, event, type == MOUSE_MOVED, &replaced, &capacity);
+    bool merge = type == MOUSE_MOVED || type == MENU_BAR_REFRESH;
+    enum event_queue_result result = event_queue_push(&event_loop->queue, event, merge, &replaced, &capacity);
 
     if (result == EVENT_QUEUE_MERGED) {
         event_loop_release_event_context(replaced.type, replaced.context);

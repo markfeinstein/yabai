@@ -28,6 +28,9 @@ typedef TEST_SIG(function);
 #include "space_gesture.c"
 #include "window_ordered.c"
 #include "event_queue.c"
+#include "menu_bar_model.c"
+#include "menu_bar_manager.c"
+#undef TEST_ENTRY
 
 TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
 {
@@ -76,7 +79,19 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
-    TEST_ENTRY(event_queue_full_failstops_destructive_events)
+    TEST_ENTRY(event_queue_full_failstops_destructive_events)    \
+    TEST_ENTRY(menu_bar_model_defaults_and_zero_counts)          \
+    TEST_ENTRY(menu_bar_model_classification_cases)              \
+    TEST_ENTRY(menu_bar_model_filter_focus_identity_and_failure_metadata) \
+    TEST_ENTRY(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels) \
+    TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
+    TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
+    TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
+    TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
+    TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
+    TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
+    TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
+    TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown)
 
 static struct {
     char *name;

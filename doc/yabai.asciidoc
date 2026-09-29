@@ -143,6 +143,21 @@ Global Settings
     'all':  Apply the given padding to all spaces regardless of their display. +
     'off':  Do not apply any special padding.
 
+*menubar* ['<BOOL_SEL>']::
+    Show yabai Spaces as a read-only native macOS menu bar status item. Default is 'off'. +
+    The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
+
+*menubar_style* ['compact|expanded']::
+    Set the menu bar status item layout. Default is 'expanded'. +
+    'compact': Show one screen outline for the keyboard-focused display's visible space. +
+    'expanded': Show one screen outline for every filtered space, grouped by display, in the menu bar.
+
+*menubar_space_filter* ['occupied|all']::
+    Select which spaces are shown by the menu bar item and its menu. Default is 'occupied'. +
+    'occupied': Show spaces with user-facing application windows, spaces that are currently visible on a display, and spaces with unresolved occupancy. Floating, unmanaged, minimized, hidden and native-fullscreen application windows count. Sticky-only, system and transient windows do not make a space occupied. +
+    'all': Show all user-navigation spaces reported by macOS, including native-fullscreen spaces. Virtual spaces are not created or shown. +
+    The compact and expanded layouts share the same display-grouped informational menu. A checkmark marks each display's visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in *yabairc* to persist them.
+
 *menubar_opacity* ['<FLOAT_SEL>']::
     Changes the transparency of the macOS menubar. +
     If the value is 0.0, the menubar will no longer respond to mouse-events, effectively hiding the menubar permanently. +

@@ -288,6 +288,10 @@ int main(int argc, char **argv)
         error("yabai: could not acquire lock-file! abort..\n");
     }
 
+    if (!menu_bar_manager_init()) {
+        error("yabai: could not initialize menu bar manager! abort..\n");
+    }
+
     if (!event_loop_begin(&g_event_loop)) {
         error("yabai: could not start event loop! abort..\n");
     }
@@ -340,6 +344,7 @@ int main(int argc, char **argv)
     window_manager_init(&g_window_manager);
     space_manager_begin(&g_space_manager);
     window_manager_begin(&g_space_manager, &g_window_manager);
+    event_loop_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0);
 
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         update_window_notifications();

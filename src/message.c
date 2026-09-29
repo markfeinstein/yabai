@@ -33,6 +33,9 @@ extern bool g_verbose;
 #define COMMAND_CONFIG_ANIMATION_DURATION    "window_animation_duration"
 #define COMMAND_CONFIG_ANIMATION_EASING      "window_animation_easing"
 #define COMMAND_CONFIG_SHADOW                "window_shadow"
+#define COMMAND_CONFIG_MENUBAR               MENU_BAR_CONFIG_ENABLED
+#define COMMAND_CONFIG_MENUBAR_STYLE         MENU_BAR_CONFIG_STYLE
+#define COMMAND_CONFIG_MENUBAR_SPACE_FILTER  MENU_BAR_CONFIG_SPACE_FILTER
 #define COMMAND_CONFIG_MENUBAR_OPACITY       "menubar_opacity"
 #define COMMAND_CONFIG_ACTIVE_WINDOW_OPACITY "active_window_opacity"
 #define COMMAND_CONFIG_NORMAL_WINDOW_OPACITY "normal_window_opacity"
@@ -1208,10 +1211,13 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 fprintf(rsp, "%s\n", display_arrangement_order_str[g_display_manager.order]);
             } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_DEFAULT)) {
                 g_display_manager.order = DISPLAY_ARRANGEMENT_ORDER_DEFAULT;
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_DISPLAY);
             } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_X)) {
                 g_display_manager.order = DISPLAY_ARRANGEMENT_ORDER_X;
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_DISPLAY);
             } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_Y)) {
                 g_display_manager.order = DISPLAY_ARRANGEMENT_ORDER_Y;
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_DISPLAY);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1339,6 +1345,42 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 window_manager_set_purify_mode(&g_window_manager, PURIFY_DISABLED);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", menu_bar_manager_enabled_string(menu_bar_manager_enabled()));
+            } else {
+                enum menu_bar_enabled enabled;
+                if (menu_bar_manager_parse_enabled(value.text, value.length, &enabled)) {
+                    menu_bar_manager_set_enabled(enabled);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_STYLE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", menu_bar_manager_style_string(menu_bar_manager_style()));
+            } else {
+                enum menu_bar_style style;
+                if (menu_bar_manager_parse_style(value.text, value.length, &style)) {
+                    menu_bar_manager_set_style(style);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_SPACE_FILTER)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", menu_bar_manager_space_filter_string(menu_bar_manager_space_filter()));
+            } else {
+                enum menu_bar_space_filter filter;
+                if (menu_bar_manager_parse_space_filter(value.text, value.length, &filter)) {
+                    menu_bar_manager_set_space_filter(filter);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+                }
             }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_OPACITY)) {
             struct token_value value = token_to_value(get_token(&message));
@@ -1722,6 +1764,7 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
         if (selector.did_parse && selector.did) {
             if (acting_did != selector.did) {
                 display_manager_focus_display(selector.did, display_space_id(selector.did));
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_SPACE);
             } else {
                 daemon_fail(rsp, "cannot focus an already focused display.\n");
             }
@@ -1738,6 +1781,8 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                 daemon_fail(rsp, "cannot focus space due to an error with the scripting-addition.\n");
+            } else {
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_DISPLAY);
             }
         }
     } else if (token_equals(command, COMMAND_DISPLAY_LABEL)) {
@@ -1745,9 +1790,12 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
         if (parse_label(rsp, get_token(&message), LABEL_DISPLAY, &label)) {
             if (label) {
                 display_manager_set_label_for_display(&g_display_manager, acting_did, label);
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_DISPLAY);
             } else {
                 if (!display_manager_remove_label_for_display(&g_display_manager, acting_did)) {
                     daemon_fail(rsp, "the selected display was not associated with a label!\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_DISPLAY);
                 }
             }
         }
@@ -1791,6 +1839,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot focus space due to an error with the scripting-addition.\n");
                 } else if (result == SPACE_OP_ERROR_GESTURE) {
                     daemon_fail(rsp, "cannot focus space: could not construct the desktop-switching gesture.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_SPACE_SWITCH)) {
@@ -1805,6 +1855,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot focus space due to an error with the scripting-addition.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_SPACE_MOVE)) {
@@ -1821,6 +1873,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot move space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot move space due to an error with the scripting-addition.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_SPACE_SWAP)) {
@@ -1835,6 +1889,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot swap space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot swap space due to an error with the scripting-addition.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_SPACE_DISPLAY)) {
@@ -1855,6 +1911,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot send space to display because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot send space to display due to an error with the scripting-addition.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_DISPLAY);
                 }
             }
         } else if (token_equals(command, COMMAND_SPACE_CREATE)) {
@@ -1877,6 +1935,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "cannot create space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                 daemon_fail(rsp, "cannot create space due to an error with the scripting-addition.\n");
+            } else {
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
             }
         } else if (token_equals(command, COMMAND_SPACE_DESTROY)) {
             struct selector selector = parse_space_selector(rsp, &message, acting_sid, true);
@@ -1902,6 +1962,8 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "cannot destroy space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                 daemon_fail(rsp, "cannot destroy space due to an error with the scripting-addition.\n");
+            } else {
+                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
             }
         } else if (token_equals(command, COMMAND_SPACE_EQUALIZE)) {
             struct token value = get_token(&message);
@@ -2034,9 +2096,12 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
             if (parse_label(rsp, get_token(&message), LABEL_SPACE, &label)) {
                 if (label) {
                     space_manager_set_label_for_space(&g_space_manager, acting_sid, label);
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_SPACE);
                 } else {
                     if (!space_manager_remove_label_for_space(&g_space_manager, acting_sid)) {
                         daemon_fail(rsp, "the selected space was not associated with a label!\n");
+                    } else {
+                        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_SPACE);
                     }
                 }
             }
@@ -2147,6 +2212,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "can not move window to a macOS fullscreen space!\n");
                 } else {
                     window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, sid, false);
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_SPACE)) {
@@ -2156,6 +2222,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "can not move window to a macOS fullscreen space!\n");
                 } else {
                     window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, selector.sid, false);
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_SWAP)) {
@@ -2174,6 +2241,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot swap a window with a window in the same stack.\n");
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot swap a window with itself.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_WARP)) {
@@ -2192,6 +2261,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot warp a window with a window in the same stack.\n");
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot warp a window onto itself.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_STACK)) {
@@ -2204,6 +2275,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot stack window, max capacity of %d reached.\n", NODE_MAX_WINDOW_COUNT);
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot stack a window onto itself.\n");
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_INSERT)) {
@@ -2279,7 +2352,11 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 }
             } else if (token_equals(value, ARGUMENT_WINDOW_TOGGLE_STICKY)) {
                 if (acting_window) {
-                    window_manager_make_window_sticky(&g_space_manager, &g_window_manager, acting_window, !window_check_flag(acting_window, WINDOW_STICKY));
+                    bool was_sticky = window_check_flag(acting_window, WINDOW_STICKY);
+                    window_manager_make_window_sticky(&g_space_manager, &g_window_manager, acting_window, !was_sticky);
+                    if (window_check_flag(acting_window, WINDOW_STICKY) != was_sticky) {
+                        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
+                    }
                 } else {
                     daemon_fail(rsp, "could not locate the window to act on!\n");
                 }

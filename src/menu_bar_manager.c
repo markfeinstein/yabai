@@ -1,0 +1,991 @@
+#include "menu_bar_manager.h"
+#include "event_loop.h"
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+extern struct event_loop g_event_loop;
+extern struct display_manager g_display_manager;
+extern struct space_manager g_space_manager;
+extern struct window_manager g_window_manager;
+extern int g_connection;
+
+struct menu_bar_space_builder
+{
+    struct menu_bar_space_input *input;
+    struct menu_bar_window_input *windows;
+    size_t window_count;
+    size_t window_capacity;
+};
+
+struct menu_bar_display_builder
+{
+    struct menu_bar_display_input input;
+    struct menu_bar_space_input *space_inputs;
+    struct menu_bar_space_builder *space_builders;
+};
+
+struct menu_bar_manager_state
+{
+    bool initialized;
+    bool refresh_pending;
+    uint32_t dirty_reasons;
+    struct menu_bar_settings settings;
+    uint64_t generation;
+    uint64_t enabled_generation_floor;
+    struct menu_bar_snapshot *last_snapshot;
+    uint64_t action_failure_generation;
+    char *action_failure_text;
+    uint32_t menu_tracking_depth;
+    uint32_t pre_menu_focused_display_id;
+};
+
+struct menu_bar_manager_native_seams
+{
+    int (*active_display_count)(void);
+    uint32_t (*arrangement_display_id)(int arrangement);
+    uint64_t *(*display_space_list)(uint32_t did, int *count);
+    uint64_t (*display_space_id)(uint32_t did);
+    int (*space_type)(int cid, uint64_t sid);
+    int (*mission_control_index)(uint64_t sid);
+    uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized);
+    uint64_t *(*window_space_list)(uint32_t wid, int *count);
+    bool (*window_is_sticky)(uint32_t wid);
+    bool (*space_is_fullscreen)(uint64_t sid);
+};
+
+static struct menu_bar_manager_state g_menu_bar_manager;
+static struct menu_bar_manager_native_seams g_menu_bar_manager_native;
+
+static bool menu_bar_manager_valid_enabled(enum menu_bar_enabled enabled)
+{
+    return enabled == MENU_BAR_DISABLED || enabled == MENU_BAR_ENABLED;
+}
+
+static bool menu_bar_manager_valid_style(enum menu_bar_style style)
+{
+    return style == MENU_BAR_STYLE_COMPACT || style == MENU_BAR_STYLE_EXPANDED;
+}
+
+static bool menu_bar_manager_valid_space_filter(enum menu_bar_space_filter filter)
+{
+    return filter == MENU_BAR_SPACE_FILTER_OCCUPIED || filter == MENU_BAR_SPACE_FILTER_ALL;
+}
+
+static bool menu_bar_manager_text_equals(const char *text, size_t length, const char *literal)
+{
+    return text && literal && strlen(literal) == length && memcmp(text, literal, length) == 0;
+}
+
+static char *menu_bar_manager_copy_string(const char *string)
+{
+    if (!string) return NULL;
+
+    size_t length = strlen(string);
+    char *copy = malloc(length + 1);
+    if (!copy) return NULL;
+
+    memcpy(copy, string, length + 1);
+    return copy;
+}
+
+static char *menu_bar_manager_copy_cfstring(CFStringRef string)
+{
+    if (!string) return NULL;
+
+    CFIndex length = CFStringGetLength(string);
+    CFIndex max_size = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+    if (max_size <= 0 || (uint64_t) max_size > SIZE_MAX) return NULL;
+
+    char *buffer = malloc((size_t) max_size);
+    if (!buffer) return NULL;
+
+    if (!CFStringGetCString(string, buffer, max_size, kCFStringEncodingUTF8)) {
+        free(buffer);
+        return NULL;
+    }
+
+    return buffer;
+}
+
+static void menu_bar_manager_clear_action_failure(void)
+{
+    free(g_menu_bar_manager.action_failure_text);
+    g_menu_bar_manager.action_failure_text = NULL;
+    g_menu_bar_manager.action_failure_generation = 0;
+}
+
+static void menu_bar_manager_set_action_failure(uint64_t generation, const char *message)
+{
+    char *copy = menu_bar_manager_copy_string(message ? message : "action failed");
+    if (!copy) return;
+
+    menu_bar_manager_clear_action_failure();
+    g_menu_bar_manager.action_failure_generation = generation;
+    g_menu_bar_manager.action_failure_text = copy;
+}
+
+static int menu_bar_manager_native_active_display_count(void)
+{
+    return g_menu_bar_manager_native.active_display_count
+        ? g_menu_bar_manager_native.active_display_count()
+        : display_manager_active_display_count();
+}
+
+static uint32_t menu_bar_manager_native_arrangement_display_id(int arrangement)
+{
+    return g_menu_bar_manager_native.arrangement_display_id
+        ? g_menu_bar_manager_native.arrangement_display_id(arrangement)
+        : display_manager_arrangement_display_id(arrangement);
+}
+
+static uint64_t *menu_bar_manager_native_display_space_list(uint32_t did, int *count)
+{
+    return g_menu_bar_manager_native.display_space_list
+        ? g_menu_bar_manager_native.display_space_list(did, count)
+        : display_space_list(did, count);
+}
+
+static uint64_t menu_bar_manager_native_display_space_id(uint32_t did)
+{
+    return g_menu_bar_manager_native.display_space_id
+        ? g_menu_bar_manager_native.display_space_id(did)
+        : display_space_id(did);
+}
+
+static int menu_bar_manager_native_space_type(uint64_t sid)
+{
+    return g_menu_bar_manager_native.space_type
+        ? g_menu_bar_manager_native.space_type(g_connection, sid)
+        : SLSSpaceGetType(g_connection, sid);
+}
+
+static int menu_bar_manager_native_mission_control_index(uint64_t sid)
+{
+    return g_menu_bar_manager_native.mission_control_index
+        ? g_menu_bar_manager_native.mission_control_index(sid)
+        : space_manager_mission_control_index(sid);
+}
+
+static uint32_t *menu_bar_manager_native_space_window_list(uint64_t sid, int *count, bool include_minimized)
+{
+    return g_menu_bar_manager_native.space_window_list
+        ? g_menu_bar_manager_native.space_window_list(sid, count, include_minimized)
+        : space_window_list(sid, count, include_minimized);
+}
+
+static uint64_t *menu_bar_manager_native_window_space_list(uint32_t wid, int *count)
+{
+    return g_menu_bar_manager_native.window_space_list
+        ? g_menu_bar_manager_native.window_space_list(wid, count)
+        : window_space_list(wid, count);
+}
+
+static bool menu_bar_manager_native_window_is_sticky(uint32_t wid)
+{
+    return g_menu_bar_manager_native.window_is_sticky
+        ? g_menu_bar_manager_native.window_is_sticky(wid)
+        : window_is_sticky(wid);
+}
+
+static bool menu_bar_manager_native_space_is_fullscreen(uint64_t sid)
+{
+    return g_menu_bar_manager_native.space_is_fullscreen
+        ? g_menu_bar_manager_native.space_is_fullscreen(sid)
+        : space_is_fullscreen(sid);
+}
+
+static bool menu_bar_manager_resize(void **items, size_t item_size, size_t *capacity, size_t needed)
+{
+    if (needed <= *capacity) return true;
+
+    size_t new_capacity = *capacity ? *capacity * 2 : 4;
+    while (new_capacity < needed) {
+        if (new_capacity > SIZE_MAX / 2) return false;
+        new_capacity *= 2;
+    }
+
+    if (item_size && new_capacity > SIZE_MAX / item_size) return false;
+    void *new_items = realloc(*items, new_capacity * item_size);
+    if (!new_items) return false;
+
+    *items = new_items;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool menu_bar_manager_space_add_window(struct menu_bar_space_builder *space,
+                                              struct menu_bar_window_input window)
+{
+    if (!menu_bar_manager_resize((void **) &space->windows,
+                                 sizeof(struct menu_bar_window_input),
+                                 &space->window_capacity,
+                                 space->window_count + 1)) {
+        return false;
+    }
+
+    space->windows[space->window_count++] = window;
+    return true;
+}
+
+static bool menu_bar_manager_space_add_app(struct menu_bar_space_input *space, const char *name)
+{
+    if (!name || !name[0]) name = "Unknown";
+
+    struct menu_bar_app_summary_input *apps = (struct menu_bar_app_summary_input *) space->apps;
+    for (size_t i = 0; i < space->app_count; ++i) {
+        if (strcmp(apps[i].name, name) == 0) {
+            ++apps[i].window_count;
+            return true;
+        }
+    }
+
+    if (space->app_count == SIZE_MAX) return false;
+    if ((space->app_count + 1) > SIZE_MAX / sizeof(struct menu_bar_app_summary_input)) return false;
+
+    struct menu_bar_app_summary_input *new_apps = realloc(apps, (space->app_count + 1) * sizeof(struct menu_bar_app_summary_input));
+    if (!new_apps) return false;
+
+    new_apps[space->app_count].name = name;
+    new_apps[space->app_count].window_count = 1;
+    space->apps = new_apps;
+    ++space->app_count;
+    return true;
+}
+
+static int menu_bar_manager_app_compare(const void *a, const void *b)
+{
+    const struct menu_bar_app_summary_input *app_a = a;
+    const struct menu_bar_app_summary_input *app_b = b;
+    return strcmp(app_a->name, app_b->name);
+}
+
+static int menu_bar_manager_space_compare(const void *a, const void *b)
+{
+    const struct menu_bar_space_input *space_a = a;
+    const struct menu_bar_space_input *space_b = b;
+
+    if (space_a->mission_control_index < space_b->mission_control_index) return -1;
+    if (space_a->mission_control_index > space_b->mission_control_index) return 1;
+    if (space_a->space_id < space_b->space_id) return -1;
+    if (space_a->space_id > space_b->space_id) return 1;
+    return 0;
+}
+
+static void menu_bar_manager_destroy_builders(struct menu_bar_display_builder *displays, size_t display_count)
+{
+    if (!displays) return;
+
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        free((void *) display->input.uuid);
+
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_builder *space = &display->space_builders[space_index];
+            struct menu_bar_space_input *input = &display->space_inputs[space_index];
+            free(space->windows);
+            free((void *) input->apps);
+        }
+
+        free(display->space_builders);
+        free(display->space_inputs);
+    }
+
+    free(displays);
+}
+
+static struct menu_bar_space_builder *menu_bar_manager_find_space_builder(struct menu_bar_display_builder *displays,
+                                                                          size_t display_count,
+                                                                          uint64_t sid,
+                                                                          struct menu_bar_space_input **input_out)
+{
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_input *space_input = &display->space_inputs[space_index];
+            if (space_input->space_id == sid) {
+                if (input_out) *input_out = space_input;
+                return &display->space_builders[space_index];
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static uint32_t menu_bar_manager_window_flags_for_space(struct window *window, uint64_t sid)
+{
+    uint32_t flags = 0;
+
+    if (window_check_flag(window, WINDOW_FLOAT)) flags |= MENU_BAR_WINDOW_FLOATING;
+    if (!window_manager_find_managed_window(&g_window_manager, window)) flags |= MENU_BAR_WINDOW_UNMANAGED;
+    if (window->application && window->application->is_hidden) flags |= MENU_BAR_WINDOW_HIDDEN;
+    if (window_check_flag(window, WINDOW_MINIMIZE)) flags |= MENU_BAR_WINDOW_MINIMIZED;
+    if (window_check_flag(window, WINDOW_STICKY) || menu_bar_manager_native_window_is_sticky(window->id)) flags |= MENU_BAR_WINDOW_STICKY;
+    if (window_check_flag(window, WINDOW_FULLSCREEN) || menu_bar_manager_native_space_is_fullscreen(sid)) flags |= MENU_BAR_WINDOW_NATIVE_FULLSCREEN;
+    if (!window_is_real(window)) flags |= MENU_BAR_WINDOW_TRANSIENT;
+
+    return flags;
+}
+
+static bool menu_bar_manager_add_window_to_space(struct menu_bar_display_builder *displays,
+                                                 size_t display_count,
+                                                 struct window *window,
+                                                 uint64_t sid)
+{
+    struct menu_bar_space_input *space_input = NULL;
+    struct menu_bar_space_builder *space = menu_bar_manager_find_space_builder(displays, display_count, sid, &space_input);
+    if (!space || !space_input) return true;
+
+    struct menu_bar_window_input window_input = {
+        .space_id = sid,
+        .app_name = window->application ? window->application->name : NULL,
+        .flags = menu_bar_manager_window_flags_for_space(window, sid)
+    };
+
+    enum menu_bar_window_occupancy occupancy = menu_bar_model_classify_window(&window_input);
+    if (!menu_bar_manager_space_add_window(space, window_input)) return false;
+
+    if (occupancy == MENU_BAR_WINDOW_OCCUPANCY_COUNTED) {
+        if (!menu_bar_manager_space_add_app(space_input, window_input.app_name)) return false;
+    }
+
+    return true;
+}
+
+static bool menu_bar_manager_mark_space_unknown(struct menu_bar_space_builder *space, uint64_t sid)
+{
+    struct menu_bar_window_input unknown = {
+        .space_id = sid,
+        .app_name = NULL,
+        .flags = MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN
+    };
+
+    return menu_bar_manager_space_add_window(space, unknown);
+}
+
+static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_builder *display,
+                                                        uint32_t did,
+                                                        uint32_t arrangement_index)
+{
+    int native_space_count = 0;
+    uint64_t *native_spaces = menu_bar_manager_native_display_space_list(did, &native_space_count);
+    uint64_t visible_sid = menu_bar_manager_native_display_space_id(did);
+
+    display->input.display_id = did;
+    display->input.arrangement_index = arrangement_index;
+
+    CFStringRef uuid = display_uuid(did);
+    if (uuid) {
+        display->input.uuid = menu_bar_manager_copy_cfstring(uuid);
+        CFRelease(uuid);
+    }
+
+    struct display_label *display_label = display_manager_get_label_for_display(&g_display_manager, did);
+    display->input.label = display_label ? display_label->label : NULL;
+    display->input.name = NULL;
+
+    if (!native_spaces || native_space_count <= 0) return true;
+
+    size_t user_space_count = 0;
+    for (int i = 0; i < native_space_count; ++i) {
+        int type = menu_bar_manager_native_space_type(native_spaces[i]);
+        if (type == 0 || type == 4) ++user_space_count;
+    }
+
+    if (!user_space_count) return true;
+
+    display->space_inputs = calloc(user_space_count, sizeof(struct menu_bar_space_input));
+    display->space_builders = calloc(user_space_count, sizeof(struct menu_bar_space_builder));
+    if (!display->space_inputs || !display->space_builders) {
+        free(display->space_inputs);
+        free(display->space_builders);
+        display->space_inputs = NULL;
+        display->space_builders = NULL;
+        return false;
+    }
+
+    display->input.spaces = display->space_inputs;
+    display->input.space_count = user_space_count;
+
+    size_t output_index = 0;
+    for (int i = 0; i < native_space_count; ++i) {
+        uint64_t sid = native_spaces[i];
+        int type = menu_bar_manager_native_space_type(sid);
+        if (type != 0 && type != 4) continue;
+
+        struct menu_bar_space_input *space = &display->space_inputs[output_index];
+        struct menu_bar_space_builder *builder = &display->space_builders[output_index];
+        builder->input = space;
+
+        struct space_label *space_label = space_manager_get_label_for_space(&g_space_manager, sid);
+        space->space_id = sid;
+        space->mission_control_index = (uint32_t) menu_bar_manager_native_mission_control_index(sid);
+        space->label = space_label ? space_label->label : NULL;
+        space->is_native_fullscreen = type == 4;
+        space->is_visible = sid == visible_sid;
+        space->membership = MENU_BAR_SPACE_MEMBERSHIP_EMPTY;
+
+        ++output_index;
+    }
+
+    qsort(display->space_inputs, display->input.space_count, sizeof(struct menu_bar_space_input), menu_bar_manager_space_compare);
+
+    for (size_t i = 0; i < display->input.space_count; ++i) {
+        display->space_builders[i].input = &display->space_inputs[i];
+    }
+
+    return true;
+}
+
+static bool menu_bar_manager_collect_raw_untracked(struct menu_bar_display_builder *displays,
+                                                   size_t display_count)
+{
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_input *space_input = &display->space_inputs[space_index];
+            struct menu_bar_space_builder *space = &display->space_builders[space_index];
+
+            int raw_window_count = 0;
+            uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(space_input->space_id, &raw_window_count, true);
+            if (!raw_window_list || raw_window_count <= 0) continue;
+
+            bool has_untracked_candidate = false;
+            for (int i = 0; i < raw_window_count; ++i) {
+                if (!window_manager_find_window(&g_window_manager, raw_window_list[i])) {
+                    has_untracked_candidate = true;
+                    break;
+                }
+            }
+
+            if (has_untracked_candidate && !menu_bar_manager_mark_space_unknown(space, space_input->space_id)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool menu_bar_manager_mark_visible_spaces_unknown(struct menu_bar_display_builder *displays,
+                                                         size_t display_count)
+{
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_input *space_input = &display->space_inputs[space_index];
+            if (!space_input->is_visible) continue;
+
+            if (!menu_bar_manager_mark_space_unknown(&display->space_builders[space_index], space_input->space_id)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool menu_bar_manager_add_tracked_window_from_raw_membership(struct menu_bar_display_builder *displays,
+                                                                    size_t display_count,
+                                                                    struct window *window)
+{
+    bool found_raw_membership = false;
+    bool raw_query_succeeded = false;
+
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            uint64_t sid = display->space_inputs[space_index].space_id;
+            int raw_window_count = 0;
+            uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(sid, &raw_window_count, true);
+            if (!raw_window_list || raw_window_count <= 0) continue;
+
+            raw_query_succeeded = true;
+            for (int i = 0; i < raw_window_count; ++i) {
+                if (raw_window_list[i] != window->id) continue;
+
+                found_raw_membership = true;
+                if (!menu_bar_manager_add_window_to_space(displays, display_count, window, sid)) return false;
+                break;
+            }
+        }
+    }
+
+    if (found_raw_membership) return true;
+
+    /*
+     * The window is still tracked and otherwise countable, but its authoritative
+     * space list is unresolved. Avoid inventing a space with window_space() or
+     * marking every space unknown; retain bounded uncertainty only on visible
+     * spaces until the next real membership/closure event resolves it.
+     */
+    (void) raw_query_succeeded;
+    return menu_bar_manager_mark_visible_spaces_unknown(displays, display_count);
+}
+
+static bool menu_bar_manager_collect_tracked_windows(struct menu_bar_display_builder *displays,
+                                                     size_t display_count)
+{
+    table_for (struct window *window, g_window_manager.window, {
+        if (!window || !window->id) continue;
+
+        uint32_t base_flags = 0;
+        if (window_check_flag(window, WINDOW_STICKY) || menu_bar_manager_native_window_is_sticky(window->id)) base_flags |= MENU_BAR_WINDOW_STICKY;
+        if (!window_is_real(window)) base_flags |= MENU_BAR_WINDOW_TRANSIENT;
+
+        if (base_flags & (MENU_BAR_WINDOW_STICKY | MENU_BAR_WINDOW_TRANSIENT)) {
+            continue;
+        }
+
+        int space_count = 0;
+        uint64_t *space_list = menu_bar_manager_native_window_space_list(window->id, &space_count);
+        if (!space_list || space_count <= 0) {
+            if (!menu_bar_manager_add_tracked_window_from_raw_membership(displays, display_count, window)) {
+                return false;
+            }
+            continue;
+        }
+
+        for (int i = 0; i < space_count; ++i) {
+            if (!menu_bar_manager_add_window_to_space(displays, display_count, window, space_list[i])) {
+                return false;
+            }
+        }
+    })
+
+    return true;
+}
+
+static void menu_bar_manager_finalize_membership(struct menu_bar_display_builder *displays,
+                                                 size_t display_count)
+{
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_builder *builder = &display->space_builders[space_index];
+            struct menu_bar_space_input *space = &display->space_inputs[space_index];
+
+            space->membership = menu_bar_model_classify_space_membership(builder->windows, builder->window_count);
+            if (space->app_count > 1) {
+                qsort((void *) space->apps, space->app_count, sizeof(struct menu_bar_app_summary_input), menu_bar_manager_app_compare);
+            }
+        }
+    }
+}
+
+static uint32_t menu_bar_manager_focused_display_id(void)
+{
+    if (g_menu_bar_manager.menu_tracking_depth && g_menu_bar_manager.pre_menu_focused_display_id) {
+        return g_menu_bar_manager.pre_menu_focused_display_id;
+    }
+
+    if (g_display_manager.current_display_id) return g_display_manager.current_display_id;
+    return display_manager_active_display_id();
+}
+
+static struct menu_bar_snapshot *menu_bar_manager_create_snapshot(void)
+{
+    int active_display_count = menu_bar_manager_native_active_display_count();
+    size_t display_capacity = active_display_count > 0 ? (size_t) active_display_count : 0;
+    struct menu_bar_display_builder *displays = display_capacity ? calloc(display_capacity, sizeof(struct menu_bar_display_builder)) : NULL;
+    if (display_capacity && !displays) return NULL;
+
+    size_t display_count = 0;
+    for (int arrangement = 1; arrangement <= active_display_count; ++arrangement) {
+        uint32_t did = menu_bar_manager_native_arrangement_display_id(arrangement);
+        if (!did) continue;
+
+        if (!menu_bar_manager_collect_spaces_for_display(&displays[display_count], did, (uint32_t) arrangement - 1)) {
+            menu_bar_manager_destroy_builders(displays, display_count + 1);
+            return NULL;
+        }
+
+        ++display_count;
+    }
+
+    if (!menu_bar_manager_collect_raw_untracked(displays, display_count) ||
+        !menu_bar_manager_collect_tracked_windows(displays, display_count)) {
+        menu_bar_manager_destroy_builders(displays, display_count);
+        return NULL;
+    }
+
+    menu_bar_manager_finalize_membership(displays, display_count);
+
+    uint32_t focused_did = menu_bar_manager_focused_display_id();
+    char *focused_uuid = NULL;
+    if (focused_did) {
+        CFStringRef uuid = display_uuid(focused_did);
+        if (uuid) {
+            focused_uuid = menu_bar_manager_copy_cfstring(uuid);
+            CFRelease(uuid);
+        }
+    }
+
+    struct menu_bar_display_input *display_inputs = NULL;
+    if (display_count) {
+        display_inputs = calloc(display_count, sizeof(struct menu_bar_display_input));
+        if (!display_inputs) {
+            free(focused_uuid);
+            menu_bar_manager_destroy_builders(displays, display_count);
+            return NULL;
+        }
+
+        for (size_t i = 0; i < display_count; ++i) {
+            display_inputs[i] = displays[i].input;
+        }
+    }
+
+    ++g_menu_bar_manager.generation;
+    if (g_menu_bar_manager.generation == 0) ++g_menu_bar_manager.generation;
+
+    struct menu_bar_snapshot *snapshot = menu_bar_model_snapshot_create(g_menu_bar_manager.generation,
+                                                                        g_menu_bar_manager.settings,
+                                                                        display_inputs,
+                                                                        display_count,
+                                                                        focused_did != 0,
+                                                                        focused_did,
+                                                                        focused_uuid,
+                                                                        g_menu_bar_manager.action_failure_generation,
+                                                                        g_menu_bar_manager.action_failure_text);
+    free(display_inputs);
+    free(focused_uuid);
+    menu_bar_manager_destroy_builders(displays, display_count);
+    return snapshot;
+}
+
+static void menu_bar_manager_publish_if_changed(struct menu_bar_snapshot *snapshot)
+{
+    if (!snapshot) return;
+
+    if (g_menu_bar_manager.last_snapshot &&
+        menu_bar_model_snapshot_equal(g_menu_bar_manager.last_snapshot,
+                                      snapshot,
+                                      MENU_BAR_MODEL_COMPARE_ACTION_FAILURE)) {
+        menu_bar_model_snapshot_destroy(snapshot);
+        return;
+    }
+
+    struct menu_bar_snapshot *snapshot_for_compare = menu_bar_model_snapshot_clone(snapshot);
+    if (snapshot_for_compare) {
+        menu_bar_model_snapshot_destroy(g_menu_bar_manager.last_snapshot);
+        g_menu_bar_manager.last_snapshot = snapshot_for_compare;
+    }
+
+    menu_bar_publish_snapshot(snapshot);
+}
+
+static void menu_bar_manager_ui_action_callback(const struct menu_bar_action *action, void *context)
+{
+    (void) context;
+    if (!action) return;
+
+    struct menu_bar_action *copy = malloc(sizeof(struct menu_bar_action));
+    if (!copy) return;
+
+    *copy = *action;
+    event_loop_post(&g_event_loop, MENU_BAR_ACTION, copy, 0);
+}
+
+static bool menu_bar_manager_action_in_enabled_lifecycle(const struct menu_bar_action *action)
+{
+    if (!action) return false;
+    if (!g_menu_bar_manager.initialized) return false;
+    if (g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return false;
+    if (!g_menu_bar_manager.last_snapshot) return false;
+    if (!action->generation) return false;
+    if (action->generation < g_menu_bar_manager.enabled_generation_floor) return false;
+    if (action->generation > g_menu_bar_manager.generation) return false;
+
+    return true;
+}
+
+static struct menu_bar_snapshot *menu_bar_manager_create_disabled_snapshot(void)
+{
+    ++g_menu_bar_manager.generation;
+    if (g_menu_bar_manager.generation == 0) ++g_menu_bar_manager.generation;
+
+    return menu_bar_model_snapshot_create(g_menu_bar_manager.generation,
+                                          g_menu_bar_manager.settings,
+                                          NULL,
+                                          0,
+                                          false,
+                                          0,
+                                          NULL,
+                                          0,
+                                          NULL);
+}
+
+static void menu_bar_manager_publish_disabled_snapshot(void)
+{
+    struct menu_bar_snapshot *snapshot = menu_bar_manager_create_disabled_snapshot();
+    struct menu_bar_snapshot *snapshot_for_compare = snapshot ? menu_bar_model_snapshot_clone(snapshot) : NULL;
+
+    menu_bar_model_snapshot_destroy(g_menu_bar_manager.last_snapshot);
+    g_menu_bar_manager.last_snapshot = snapshot_for_compare;
+
+    if (snapshot) {
+        menu_bar_publish_snapshot(snapshot);
+    } else {
+        menu_bar_publish_snapshot(NULL);
+    }
+}
+
+bool menu_bar_manager_init(void)
+{
+    struct menu_bar_callbacks callbacks = {
+        .action = menu_bar_manager_ui_action_callback,
+        .context = NULL
+    };
+
+    if (!menu_bar_init(&callbacks)) return false;
+
+    g_menu_bar_manager.initialized = true;
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    g_menu_bar_manager.settings = (struct menu_bar_settings) { 0 };
+    g_menu_bar_manager.generation = 0;
+    g_menu_bar_manager.enabled_generation_floor = 1;
+    g_menu_bar_manager.menu_tracking_depth = 0;
+    g_menu_bar_manager.pre_menu_focused_display_id = 0;
+    menu_bar_manager_clear_action_failure();
+
+    return true;
+}
+
+void menu_bar_manager_shutdown(void)
+{
+    g_menu_bar_manager.initialized = false;
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    while (g_menu_bar_manager.menu_tracking_depth > 0) {
+        --g_menu_bar_manager.menu_tracking_depth;
+        event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+    }
+    g_menu_bar_manager.pre_menu_focused_display_id = 0;
+
+    menu_bar_model_snapshot_destroy(g_menu_bar_manager.last_snapshot);
+    g_menu_bar_manager.last_snapshot = NULL;
+    g_menu_bar_manager.enabled_generation_floor = g_menu_bar_manager.generation + 1;
+    if (g_menu_bar_manager.enabled_generation_floor == 0) g_menu_bar_manager.enabled_generation_floor = 1;
+    menu_bar_manager_clear_action_failure();
+    menu_bar_publish_snapshot(NULL);
+    menu_bar_shutdown();
+}
+
+struct menu_bar_settings menu_bar_manager_settings(void)
+{
+    return g_menu_bar_manager.settings;
+}
+
+enum menu_bar_enabled menu_bar_manager_enabled(void)
+{
+    return g_menu_bar_manager.settings.enabled;
+}
+
+enum menu_bar_style menu_bar_manager_style(void)
+{
+    return g_menu_bar_manager.settings.style;
+}
+
+enum menu_bar_space_filter menu_bar_manager_space_filter(void)
+{
+    return g_menu_bar_manager.settings.space_filter;
+}
+
+const char *menu_bar_manager_enabled_string(enum menu_bar_enabled enabled)
+{
+    switch (enabled) {
+    case MENU_BAR_ENABLED:  return "on";
+    case MENU_BAR_DISABLED: return "off";
+    }
+
+    return "off";
+}
+
+const char *menu_bar_manager_style_string(enum menu_bar_style style)
+{
+    switch (style) {
+    case MENU_BAR_STYLE_EXPANDED: return MENU_BAR_STYLE_EXPANDED_STR;
+    case MENU_BAR_STYLE_COMPACT:  return MENU_BAR_STYLE_COMPACT_STR;
+    }
+
+    return MENU_BAR_STYLE_EXPANDED_STR;
+}
+
+const char *menu_bar_manager_space_filter_string(enum menu_bar_space_filter filter)
+{
+    switch (filter) {
+    case MENU_BAR_SPACE_FILTER_ALL:      return MENU_BAR_SPACE_FILTER_ALL_STR;
+    case MENU_BAR_SPACE_FILTER_OCCUPIED: return MENU_BAR_SPACE_FILTER_OCCUPIED_STR;
+    }
+
+    return MENU_BAR_SPACE_FILTER_OCCUPIED_STR;
+}
+
+bool menu_bar_manager_parse_enabled(const char *text, size_t length, enum menu_bar_enabled *enabled)
+{
+    if (menu_bar_manager_text_equals(text, length, "on")) {
+        if (enabled) *enabled = MENU_BAR_ENABLED;
+        return true;
+    }
+
+    if (menu_bar_manager_text_equals(text, length, "off")) {
+        if (enabled) *enabled = MENU_BAR_DISABLED;
+        return true;
+    }
+
+    return false;
+}
+
+bool menu_bar_manager_parse_style(const char *text, size_t length, enum menu_bar_style *style)
+{
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_STYLE_COMPACT_STR)) {
+        if (style) *style = MENU_BAR_STYLE_COMPACT;
+        return true;
+    }
+
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_STYLE_EXPANDED_STR)) {
+        if (style) *style = MENU_BAR_STYLE_EXPANDED;
+        return true;
+    }
+
+    return false;
+}
+
+bool menu_bar_manager_parse_space_filter(const char *text, size_t length, enum menu_bar_space_filter *filter)
+{
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_SPACE_FILTER_OCCUPIED_STR)) {
+        if (filter) *filter = MENU_BAR_SPACE_FILTER_OCCUPIED;
+        return true;
+    }
+
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_SPACE_FILTER_ALL_STR)) {
+        if (filter) *filter = MENU_BAR_SPACE_FILTER_ALL;
+        return true;
+    }
+
+    return false;
+}
+
+bool menu_bar_manager_set_enabled(enum menu_bar_enabled enabled)
+{
+    if (!menu_bar_manager_valid_enabled(enabled)) return false;
+    if (g_menu_bar_manager.settings.enabled == enabled) return true;
+
+    g_menu_bar_manager.settings.enabled = enabled;
+    menu_bar_manager_clear_action_failure();
+
+    if (enabled == MENU_BAR_ENABLED) {
+        g_menu_bar_manager.enabled_generation_floor = g_menu_bar_manager.generation + 1;
+        if (g_menu_bar_manager.enabled_generation_floor == 0) g_menu_bar_manager.enabled_generation_floor = 1;
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_STARTUP);
+    } else {
+        g_menu_bar_manager.refresh_pending = false;
+        g_menu_bar_manager.dirty_reasons = 0;
+        while (g_menu_bar_manager.menu_tracking_depth > 0) {
+            --g_menu_bar_manager.menu_tracking_depth;
+            event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+        }
+        g_menu_bar_manager.pre_menu_focused_display_id = 0;
+        menu_bar_manager_publish_disabled_snapshot();
+    }
+
+    return true;
+}
+
+bool menu_bar_manager_set_style(enum menu_bar_style style)
+{
+    if (!menu_bar_manager_valid_style(style)) return false;
+    if (g_menu_bar_manager.settings.style == style) return true;
+
+    g_menu_bar_manager.settings.style = style;
+    menu_bar_manager_clear_action_failure();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
+    return true;
+}
+
+bool menu_bar_manager_set_space_filter(enum menu_bar_space_filter filter)
+{
+    if (!menu_bar_manager_valid_space_filter(filter)) return false;
+    if (g_menu_bar_manager.settings.space_filter == filter) return true;
+
+    g_menu_bar_manager.settings.space_filter = filter;
+    menu_bar_manager_clear_action_failure();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
+    return true;
+}
+
+void menu_bar_manager_mark_dirty(uint32_t reason)
+{
+    if (!g_menu_bar_manager.initialized) return;
+    if (g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return;
+
+    g_menu_bar_manager.dirty_reasons |= reason;
+    if (g_menu_bar_manager.refresh_pending) return;
+
+    g_menu_bar_manager.refresh_pending = true;
+    event_loop_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0);
+}
+
+void menu_bar_manager_refresh(void)
+{
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+
+    if (!g_menu_bar_manager.initialized || g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return;
+
+    struct menu_bar_snapshot *snapshot = menu_bar_manager_create_snapshot();
+    menu_bar_manager_publish_if_changed(snapshot);
+}
+
+void menu_bar_manager_handle_action(struct menu_bar_action *action)
+{
+    if (!action) return;
+
+    switch (action->type) {
+    case MENU_BAR_ACTION_SET_STYLE: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        if (!menu_bar_manager_set_style(action->data.set_style.style)) {
+            menu_bar_manager_set_action_failure(action->generation, "invalid menu bar style");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG);
+        }
+    } break;
+    case MENU_BAR_ACTION_SET_SPACE_FILTER: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        if (!menu_bar_manager_set_space_filter(action->data.set_space_filter.filter)) {
+            menu_bar_manager_set_action_failure(action->generation, "invalid menu bar space filter");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG);
+        }
+    } break;
+    case MENU_BAR_ACTION_MENU_TRACKING_CHANGED: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        if (action->data.menu_tracking.is_tracking) {
+            if (g_menu_bar_manager.menu_tracking_depth++ == 0) {
+                g_menu_bar_manager.pre_menu_focused_display_id = menu_bar_manager_focused_display_id();
+            }
+            event_loop_post(&g_event_loop, MENU_OPENED, NULL, 0);
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
+        } else if (g_menu_bar_manager.menu_tracking_depth > 0) {
+            --g_menu_bar_manager.menu_tracking_depth;
+            if (g_menu_bar_manager.menu_tracking_depth == 0) g_menu_bar_manager.pre_menu_focused_display_id = 0;
+            event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
+        }
+    } break;
+    case MENU_BAR_ACTION_NONE:
+    default:
+        break;
+    }
+
+    menu_bar_manager_release_action(action);
+}
+
+void menu_bar_manager_release_action(struct menu_bar_action *action)
+{
+    free(action);
+}
