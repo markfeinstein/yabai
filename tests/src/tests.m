@@ -1,9 +1,21 @@
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+
 unsigned char __src_osax_payload[1];
 unsigned int __src_osax_payload_len;
 unsigned char __src_osax_loader[1];
 unsigned int __src_osax_loader_len;
 
+static bool g_event_queue_test_fail_allocation;
+static void *event_queue_test_allocate(size_t size)
+{
+    return g_event_queue_test_fail_allocation ? NULL : malloc(size);
+}
+
+#define EVENT_QUEUE_ALLOCATE(size) event_queue_test_allocate(size)
 #include "../../src/manifest.m"
+#undef EVENT_QUEUE_ALLOCATE
 
 #define TEST_SIG(name) bool test_##name(void)
 typedef TEST_SIG(function);
@@ -15,6 +27,7 @@ typedef TEST_SIG(function);
 #include "window.c"
 #include "space_gesture.c"
 #include "window_ordered.c"
+#include "event_queue.c"
 
 TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
 {
@@ -44,19 +57,12 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
 });
 
 #define TEST_ENTRY(name) { #name, test_##name },
-<<<<<<< HEAD
-#define TEST_LIST                                                 \
-    TEST_ENTRY(display_area_is_in_direction)                      \
-    TEST_ENTRY(closest_display_in_direction)                      \
-    TEST_ENTRY(window_subrole_is_unknown)                         \
-    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole)  \
-    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings)   \
-    TEST_ENTRY(space_gesture_encoding)                             \
-    TEST_ENTRY(space_gesture_invalid_request)
-=======
 #define TEST_LIST                                              \
     TEST_ENTRY(display_area_is_in_direction)                   \
-    TEST_ENTRY(closest_display_in_direction)                    \
+    TEST_ENTRY(closest_display_in_direction)                   \
+    TEST_ENTRY(window_subrole_is_unknown)                      \
+    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
+    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
@@ -65,8 +71,12 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(window_ordered_in_keeps_float)                   \
     TEST_ENTRY(window_reordered_stays_tiled)                    \
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
-    TEST_ENTRY(macos_version_newer_than_listed)
->>>>>>> 27e8dac (untile windows their app orders out without minimizing or hiding)
+    TEST_ENTRY(macos_version_newer_than_listed)                 \
+    TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
+    TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
+    TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
+    TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
+    TEST_ENTRY(event_queue_full_failstops_destructive_events)
 
 static struct {
     char *name;

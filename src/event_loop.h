@@ -59,17 +59,36 @@ struct event
     enum event_type type;
     int param1;
     void *context;
-    struct event *next;
 };
+
+struct event_queue
+{
+    pthread_mutex_t lock;
+    struct event *events;
+    uint32_t capacity;
+    uint32_t head;
+    uint32_t count;
+};
+
+enum event_queue_result
+{
+    EVENT_QUEUE_ADDED,
+    EVENT_QUEUE_MERGED,
+    EVENT_QUEUE_GREW,
+    EVENT_QUEUE_FULL
+};
+
+static bool event_queue_init(struct event_queue *queue, uint32_t capacity);
+static enum event_queue_result event_queue_push(struct event_queue *queue, struct event event, bool merge,
+                                                struct event *replaced, uint32_t *capacity);
+static bool event_queue_pop(struct event_queue *queue, struct event *event);
 
 struct event_loop
 {
     bool is_running;
     pthread_t thread;
     sem_t *semaphore;
-    struct memory_pool pool;
-    struct event *head;
-    struct event *tail;
+    struct event_queue queue;
 };
 
 bool event_loop_begin(struct event_loop *event_loop);

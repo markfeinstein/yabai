@@ -1692,23 +1692,17 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
 
 static void *event_loop_run(void *context)
 {
-    struct event *head, *next;
+    struct event event;
     struct event_loop *event_loop = context;
 
     while (event_loop->is_running) {
         NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-        for (;;) {
+        while (event_queue_pop(&event_loop->queue, &event)) {
             profile_begin();
 
-            do {
-                head = __atomic_load_n(&event_loop->head, __ATOMIC_RELAXED);
-                next = __atomic_load_n(&head->next, __ATOMIC_RELAXED);
-                if (!next) goto empty;
-            } while (!__sync_bool_compare_and_swap(&event_loop->head, head, next));
-
-            switch (__atomic_load_n(&next->type, __ATOMIC_RELAXED)) {
-#define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(__atomic_load_n(&next->context, __ATOMIC_RELAXED), __atomic_load_n(&next->param1, __ATOMIC_RELAXED)); break;
+            switch (event.type) {
+#define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(event.context, event.param1); break;
                 EVENT_TYPE_LIST
 #undef EVENT_TYPE_ENTRY
             }
@@ -1719,7 +1713,6 @@ static void *event_loop_run(void *context)
             profile_end_and_print();
         }
 
-empty:
         [pool drain];
         sem_wait(event_loop->semaphore);
     }
@@ -1727,38 +1720,79 @@ empty:
     return NULL;
 }
 
+static void event_loop_release_event_context(enum event_type type, void *context)
+{
+    if (!context) return;
+
+    switch (type) {
+    case WINDOW_CREATED:
+    case MOUSE_DOWN:
+    case MOUSE_UP:
+    case MOUSE_DRAGGED:
+    case MOUSE_MOVED: {
+        CFRelease(context);
+    } break;
+    default: {
+    } break;
+    }
+}
+
+static bool event_loop_rejected_event_is_fatal(enum event_type type)
+{
+    switch (type) {
+    case APPLICATION_TERMINATED:
+    case WINDOW_DESTROYED: {
+        return true;
+    } break;
+    default: {
+        return false;
+    } break;
+    }
+}
+
+static void event_loop_release_rejected_event(enum event_type type, void *context, int param1)
+{
+    if (event_loop_rejected_event_is_fatal(type)) {
+        error("fatal error: event queue rejected destructive event %d\n", type);
+    }
+
+    switch (type) {
+    case DAEMON_MESSAGE: {
+        if (param1 >= 0) socket_close(param1);
+    } break;
+    default: {
+        event_loop_release_event_context(type, context);
+    } break;
+    }
+}
+
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
-    bool success;
-    struct event *tail, *new_tail;
+    struct event replaced;
+    uint32_t capacity = 0;
+    struct event event = { .type = type, .param1 = param1, .context = context };
+    enum event_queue_result result = event_queue_push(&event_loop->queue, event, type == MOUSE_MOVED, &replaced, &capacity);
 
-    new_tail = memory_pool_push(&event_loop->pool, sizeof(struct event));
-    __atomic_store_n(&new_tail->type, type, __ATOMIC_RELEASE);
-    __atomic_store_n(&new_tail->param1, param1, __ATOMIC_RELEASE);
-    __atomic_store_n(&new_tail->context, context, __ATOMIC_RELEASE);
-    __atomic_store_n(&new_tail->next, NULL, __ATOMIC_RELEASE);
-    __asm__ __volatile__ ("" ::: "memory");
-
-    do {
-        tail = __atomic_load_n(&event_loop->tail, __ATOMIC_RELAXED);
-        success = __sync_bool_compare_and_swap(&tail->next, NULL, new_tail);
-    } while (!success);
-    __sync_bool_compare_and_swap(&event_loop->tail, tail, new_tail);
+    if (result == EVENT_QUEUE_MERGED) {
+        event_loop_release_event_context(replaced.type, replaced.context);
+    } else if (result == EVENT_QUEUE_GREW) {
+        warn("%s: the event loop is falling behind, its queue now holds %u events\n", __FUNCTION__, capacity);
+    } else if (result == EVENT_QUEUE_FULL) {
+        warn("%s: could not grow the event queue, event %d dropped\n", __FUNCTION__, type);
+        event_loop_release_rejected_event(type, context, param1);
+        return;
+    }
 
     sem_post(event_loop->semaphore);
 }
 
 bool event_loop_begin(struct event_loop *event_loop)
 {
-    if (!memory_pool_init(&event_loop->pool, KILOBYTES(512))) return false;
+    if (!event_queue_init(&event_loop->queue, EVENT_QUEUE_CAPACITY)) return false;
 
     event_loop->semaphore = sem_open("yabai_event_loop_semaphore", O_CREAT, 0600, 0);
     sem_unlink("yabai_event_loop_semaphore");
     if (event_loop->semaphore == SEM_FAILED) return false;
-
-    event_loop->head = memory_pool_push(&event_loop->pool, sizeof(struct event));
-    event_loop->head->next = NULL;
-    event_loop->tail = event_loop->head;
 
     event_loop->is_running = true;
     pthread_create(&event_loop->thread, NULL, &event_loop_run, event_loop);
