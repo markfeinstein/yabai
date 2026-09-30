@@ -345,6 +345,18 @@ static inline bool token_is_valid(struct token token)
     return token.text && token.length > 0;
 }
 
+static bool token_is_decimal(struct token token)
+{
+    for (int i = 0; i < token.length; ++i) {
+        char c = token.text[i];
+        if (!(c >= '0' && c <= '9')) {
+            return false;
+        }
+    }
+
+    return token.length > 0;
+}
+
 static bool token_is_positive_integer(struct token token, int *value)
 {
     *value = 0;
@@ -354,7 +366,38 @@ static bool token_is_positive_integer(struct token token, int *value)
         if (!(c >= '0' && c <= '9')) {
             return false;
         }
-        *value = *value * 10 + token_char_int_table[(int)c];
+
+        int digit = token_char_int_table[(int)c];
+        if (*value > (INT_MAX - digit) / 10) {
+            *value = 0;
+            return false;
+        }
+
+        *value = *value * 10 + digit;
+    }
+
+    return true;
+}
+
+static bool token_has_hexadecimal_prefix(struct token token)
+{
+    return token.length >= 2 &&
+           token.text[0] == '0' &&
+          (token.text[1] == 'x' ||
+           token.text[1] == 'X');
+}
+
+static bool token_is_prefixed_hexadecimal_digits(struct token token)
+{
+    if (!token_has_hexadecimal_prefix(token) || token.length <= 2) return false;
+
+    for (int i = 2; i < token.length; ++i) {
+        char c = token.text[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
     }
 
     return true;
@@ -364,22 +407,16 @@ static bool token_is_hexadecimal(struct token token, uint32_t *value)
 {
     *value = 0;
 
-    if (token.length <= 2) return false;
-
-    if (!(token.text[0] == '0' &&
-         (token.text[1] == 'x' ||
-          token.text[1] == 'X'))) {
-        return false;
-    }
+    if (!token_is_prefixed_hexadecimal_digits(token)) return false;
 
     for (int i = 2; i < token.length; ++i) {
-        char c = token.text[i];
-        if (!((c >= '0' && c <= '9') ||
-              (c >= 'a' && c <= 'f') ||
-              (c >= 'A' && c <= 'F'))) {
+        uint32_t digit = (uint32_t)token_char_int_table[(int)token.text[i]];
+        if (*value > (UINT32_MAX - digit) / 16) {
+            *value = 0;
             return false;
         }
-        *value = *value * 16 + (uint32_t)token_char_int_table[(int)c];
+
+        *value = *value * 16 + digit;
     }
 
     return true;
@@ -388,9 +425,10 @@ static bool token_is_hexadecimal(struct token token, uint32_t *value)
 static bool token_is_float(struct token token, float *value)
 {
     char *end = NULL;
+    errno = 0;
     float v = strtof(token.text, &end);
 
-    if (!end || *end) {
+    if (!end || *end || errno == ERANGE || !__builtin_isfinite(v)) {
         *value = 0.0f;
         return false;
     } else {
@@ -406,8 +444,12 @@ static struct token_value token_to_value(struct token token)
     if (token_is_valid(token)) {
         if (token_is_positive_integer(token, &value.int_value)) {
             value.type = TOKEN_TYPE_INT;
+        } else if (token_is_decimal(token)) {
+            value.type = TOKEN_TYPE_UNKNOWN;
         } else if (token_is_hexadecimal(token, &value.u32_value)) {
             value.type = TOKEN_TYPE_U32;
+        } else if (token_is_prefixed_hexadecimal_digits(token)) {
+            value.type = TOKEN_TYPE_UNKNOWN;
         } else if (token_is_float(token, &value.float_value)) {
             value.type = TOKEN_TYPE_FLOAT;
         } else if ((value.string_value = token.text)) {
@@ -508,6 +550,62 @@ static uint8_t parse_resize_handle(char *handle)
     } else {
         return 0;
     }
+}
+
+static bool parse_unsigned_component(char **cursor, unsigned *value, char terminator)
+{
+    *value = 0;
+    char *at = *cursor;
+    if (!*at || *at == terminator) return false;
+
+    while (*at && *at != terminator) {
+        char c = *at;
+        if (!(c >= '0' && c <= '9')) return false;
+
+        unsigned digit = (unsigned) token_char_int_table[(int)c];
+        if (*value > (UINT_MAX - digit) / 10) {
+            *value = 0;
+            return false;
+        }
+
+        *value = *value * 10 + digit;
+        ++at;
+    }
+
+    if (terminator) {
+        if (*at != terminator) return false;
+        ++at;
+    } else if (*at) {
+        return false;
+    }
+
+    *cursor = at;
+    return true;
+}
+
+static bool parse_window_grid_command(char *text, unsigned *r, unsigned *c, unsigned *x, unsigned *y, unsigned *w, unsigned *h)
+{
+    char *cursor = text;
+    if (!parse_unsigned_component(&cursor, r, ':') ||
+        !parse_unsigned_component(&cursor, c, ':') ||
+        !parse_unsigned_component(&cursor, x, ':') ||
+        !parse_unsigned_component(&cursor, y, ':') ||
+        !parse_unsigned_component(&cursor, w, ':') ||
+        !parse_unsigned_component(&cursor, h, '\0')) {
+        return false;
+    }
+
+    return *r > 0 && *c > 0;
+}
+
+static bool floats_are_finite(float a, float b)
+{
+    return __builtin_isfinite(a) && __builtin_isfinite(b);
+}
+
+static bool token_value_is_nonnegative_float(struct token_value value)
+{
+    return value.type == TOKEN_TYPE_FLOAT && value.float_value >= 0.0f;
 }
 
 enum label_type
@@ -1297,7 +1395,7 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             struct token_value value = token_to_value(get_token(&message));
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%f\n", g_window_manager.window_opacity_duration);
-            } else if (value.type == TOKEN_TYPE_FLOAT) {
+            } else if (token_value_is_nonnegative_float(value)) {
                 g_window_manager.window_opacity_duration = value.float_value;
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
@@ -1306,7 +1404,7 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             struct token_value value = token_to_value(get_token(&message));
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%f\n", g_window_manager.window_animation_duration);
-            } else if (value.type == TOKEN_TYPE_FLOAT) {
+            } else if (token_value_is_nonnegative_float(value)) {
                 if (value.float_value == 0.0f) {
                     g_window_manager.window_animation_duration = value.float_value;
                 } else if (!scripting_addition_is_sip_friendly()) {
@@ -2294,7 +2392,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_WINDOW_GRID)) {
             unsigned r, c, x, y, w, h;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_GRID, &r, &c, &x, &y, &w, &h) == 6)) {
+            if (parse_window_grid_command(value.text, &r, &c, &x, &y, &w, &h)) {
                 enum window_op_error result = window_manager_apply_grid(&g_space_manager, &g_window_manager, acting_window, r, c, x, y, w, h);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_VIEW) {
                     daemon_fail(rsp, "cannot apply grid layout to a managed window.\n");
@@ -2306,7 +2404,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             float x, y;
             char type[MAXLEN];
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_MOVE, type, &x, &y) == 3)) {
+            if ((sscanf(value.text, ARGUMENT_WINDOW_MOVE, type, &x, &y) == 3) && floats_are_finite(x, y)) {
                 enum window_op_error result = window_manager_move_window_relative(&g_window_manager, acting_window, parse_value_type(type), x, y);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_VIEW) {
                     daemon_fail(rsp, "cannot move a managed window.\n");
@@ -2318,7 +2416,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             float w, h;
             char handle[MAXLEN];
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_RESIZE, handle, &w, &h) == 3)) {
+            if ((sscanf(value.text, ARGUMENT_WINDOW_RESIZE, handle, &w, &h) == 3) && floats_are_finite(w, h)) {
                 enum window_op_error result = window_manager_resize_window_relative(&g_window_manager, acting_window, parse_resize_handle(handle), w, h, true);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_NODE) {
                     daemon_fail(rsp, "cannot locate bsp node for the managed window.\n");
@@ -2334,7 +2432,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             float r;
             char type[MAXLEN];
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_RATIO, type, &r) == 2)) {
+            if ((sscanf(value.text, ARGUMENT_WINDOW_RATIO, type, &r) == 2) && __builtin_isfinite(r)) {
                 enum window_op_error result = window_manager_adjust_window_ratio(&g_window_manager, acting_window, parse_value_type(type), r);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_VIEW) {
                     daemon_fail(rsp, "cannot adjust ratio of a non-managed window.\n");
@@ -2786,10 +2884,10 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
         } else if (string_equals(key, ARGUMENT_RULE_KEY_GRID)) {
             if (exclusion) unsupported_exclusion = key;
 
-            if ((sscanf(value, ARGUMENT_RULE_VALUE_GRID,
-                        &rule->effects.grid[0], &rule->effects.grid[1],
-                        &rule->effects.grid[2], &rule->effects.grid[3],
-                        &rule->effects.grid[4], &rule->effects.grid[5]) != 6)) {
+            if (!parse_window_grid_command(value,
+                                           &rule->effects.grid[0], &rule->effects.grid[1],
+                                           &rule->effects.grid[2], &rule->effects.grid[3],
+                                           &rule->effects.grid[4], &rule->effects.grid[5])) {
                 daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);
                 did_parse = false;
             }

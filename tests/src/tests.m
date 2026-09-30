@@ -40,6 +40,7 @@ typedef TEST_SIG(function);
 #include "event_queue.c"
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
+#include "message.c"
 #include "message_frame.c"
 #include "sa_message.c"
 #undef TEST_ENTRY
@@ -108,6 +109,12 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
     TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
+    TEST_ENTRY(message_numeric_token_boundaries)                          \
+    TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
+    TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
+    TEST_ENTRY(message_window_grid_numeric_validation)                    \
+    TEST_ENTRY(message_rule_grid_numeric_validation)                      \
+    TEST_ENTRY(message_direct_float_components_reject_non_finite)         \
     TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
     TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
     TEST_ENTRY(daemon_response_buffer_preserves_exact_bytes)              \
