@@ -56,7 +56,9 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         struct display_label *display_label = display_manager_get_label_for_display(&g_display_manager, did);
-        fprintf(rsp, "\t\"label\":\"%s\"", display_label ? display_label->label : "");
+        char *label = display_label ? display_label->label : NULL;
+        char *escaped_label = label ? ts_string_escape(label) : NULL;
+        fprintf(rsp, "\t\"label\":\"%s\"", escaped_label ? escaped_label : label ? label : "");
         did_output = true;
     }
 

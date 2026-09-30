@@ -72,6 +72,103 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_CHECK(right.zoom == NULL, true);
 });
 
+TEST_FUNC(serialization_string_escaping_is_strict,
+{
+    char xml_input[] = "amp& lt< gt> quote\" apos'";
+    char *xml_escaped = plist_xml_escape(xml_input);
+    TEST_CHECK(xml_escaped != NULL, true);
+    TEST_CHECK(strcmp(xml_escaped, "amp&amp; lt&lt; gt&gt; quote&quot; apos&apos;") == 0, true);
+    free(xml_escaped);
+
+    __auto_type saved_temp_storage = g_temp_storage;
+    memset(&g_temp_storage, 0, sizeof(g_temp_storage));
+
+    char *old_user = getenv("USER") ? strdup(getenv("USER")) : NULL;
+    char *old_path = getenv("PATH") ? strdup(getenv("PATH")) : NULL;
+    setenv("USER", "user&<>\"'", 1);
+    setenv("PATH", "/bin:/tmp/a&b<c>d\"e'f", 1);
+    int plist_length = 0;
+    char *plist = populate_plist(&plist_length);
+    TEST_CHECK(plist != NULL, true);
+    TEST_CHECK(plist_length == (int) strlen(plist), true);
+    TEST_CHECK(strstr(plist, "<string>/bin:/tmp/a&amp;b&lt;c&gt;d&quot;e&apos;f</string>") != NULL, true);
+    TEST_CHECK(strstr(plist, "/tmp/yabai_user&amp;&lt;&gt;&quot;&apos;.out.log") != NULL, true);
+    TEST_CHECK(strstr(plist, "/tmp/yabai_user&amp;&lt;&gt;&quot;&apos;.err.log") != NULL, true);
+
+    NSData *plist_data = [NSData dataWithBytes:plist length:(NSUInteger)plist_length];
+    NSError *plist_error = nil;
+    id plist_object = [NSPropertyListSerialization propertyListWithData:plist_data options:NSPropertyListImmutable format:nil error:&plist_error];
+    TEST_CHECK(plist_object != nil, true);
+    NSDictionary *plist_dictionary = (NSDictionary *) plist_object;
+    TEST_CHECK([[[plist_dictionary objectForKey:@"EnvironmentVariables"] objectForKey:@"PATH"] isEqualToString:@"/bin:/tmp/a&b<c>d\"e'f"], true);
+    TEST_CHECK([[plist_dictionary objectForKey:@"StandardOutPath"] isEqualToString:@"/tmp/yabai_user&<>\"'.out.log"], true);
+    TEST_CHECK([[plist_dictionary objectForKey:@"StandardErrorPath"] isEqualToString:@"/tmp/yabai_user&<>\"'.err.log"], true);
+    TEST_CHECK([[plist_dictionary objectForKey:@"ProgramArguments"] count], (NSUInteger) 1);
+    free(plist);
+    if (old_user) { setenv("USER", old_user, 1); free(old_user); } else { unsetenv("USER"); }
+    if (old_path) { setenv("PATH", old_path, 1); free(old_path); } else { unsetenv("PATH"); }
+
+    g_temp_storage = saved_temp_storage;
+    if (!g_temp_storage.memory) {
+        TEST_CHECK(ts_init(KILOBYTES(64)), true);
+    }
+
+    g_temp_storage.used = 0;
+    char json_input[] = "quote\" backslash\\ newline\n tab\t control\x01";
+    char *json_escaped = ts_string_escape(json_input);
+    TEST_CHECK(strcmp(json_escaped, "quote\\\" backslash\\\\ newline\\n tab\\t control\\u0001") == 0, true);
+    char expected_json[256];
+    snprintf(expected_json, sizeof(expected_json), "%s", json_escaped);
+    NSString *json_original = [NSString stringWithUTF8String:json_input];
+
+    g_temp_storage.used = 0;
+    struct rule rule = {0};
+    rule.label = json_input;
+    rule.effects.scratchpad = json_input;
+    FILE *rule_file = tmpfile();
+    TEST_CHECK(rule_file != NULL, true);
+    rule_serialize(rule_file, &rule, 7);
+    rewind(rule_file);
+    char rule_buffer[2048] = {0};
+    fread(rule_buffer, 1, sizeof(rule_buffer)-1, rule_file);
+    fclose(rule_file);
+    char expected_rule_label[256];
+    char expected_rule_scratchpad[256];
+    snprintf(expected_rule_label, sizeof(expected_rule_label), "\"label\":\"%s\"", expected_json);
+    snprintf(expected_rule_scratchpad, sizeof(expected_rule_scratchpad), "\"scratchpad\":\"%s\"", expected_json);
+    TEST_CHECK(strstr(rule_buffer, expected_rule_label) != NULL, true);
+    TEST_CHECK(strstr(rule_buffer, expected_rule_scratchpad) != NULL, true);
+    NSData *rule_data = [NSData dataWithBytes:rule_buffer length:strlen(rule_buffer)];
+    NSError *rule_error = nil;
+    NSDictionary *rule_json = [NSJSONSerialization JSONObjectWithData:rule_data options:0 error:&rule_error];
+    TEST_CHECK(rule_json != nil, true);
+    TEST_CHECK([[rule_json objectForKey:@"label"] isEqualToString:json_original], true);
+    TEST_CHECK([[rule_json objectForKey:@"scratchpad"] isEqualToString:json_original], true);
+
+    struct signal signal = {0};
+    signal.label = json_input;
+    signal.command = json_input;
+    FILE *signal_file = tmpfile();
+    TEST_CHECK(signal_file != NULL, true);
+    event_signal_serialize(signal_file, &signal, SIGNAL_APPLICATION_LAUNCHED, 3);
+    rewind(signal_file);
+    char signal_buffer[2048] = {0};
+    fread(signal_buffer, 1, sizeof(signal_buffer)-1, signal_file);
+    fclose(signal_file);
+    char expected_signal_label[256];
+    char expected_signal_action[256];
+    snprintf(expected_signal_label, sizeof(expected_signal_label), "\"label\":\"%s\"", expected_json);
+    snprintf(expected_signal_action, sizeof(expected_signal_action), "\"action\":\"%s\"", expected_json);
+    TEST_CHECK(strstr(signal_buffer, expected_signal_label) != NULL, true);
+    TEST_CHECK(strstr(signal_buffer, expected_signal_action) != NULL, true);
+    NSData *signal_data = [NSData dataWithBytes:signal_buffer length:strlen(signal_buffer)];
+    NSError *signal_error = nil;
+    NSDictionary *signal_json = [NSJSONSerialization JSONObjectWithData:signal_data options:0 error:&signal_error];
+    TEST_CHECK(signal_json != nil, true);
+    TEST_CHECK([[signal_json objectForKey:@"label"] isEqualToString:json_original], true);
+    TEST_CHECK([[signal_json objectForKey:@"action"] isEqualToString:json_original], true);
+});
+
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
     TEST_ENTRY(display_area_is_in_direction)                   \
@@ -81,6 +178,7 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
+    TEST_ENTRY(serialization_string_escaping_is_strict)          \
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \

@@ -5,15 +5,19 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
 {
     TIME_FUNCTION;
 
-    char *app   = rule->app;
-    char *title = rule->title;
-    char *role  = rule->role;
-    char *srole = rule->subrole;
+    char *label      = rule->label;
+    char *app        = rule->app;
+    char *title      = rule->title;
+    char *role       = rule->role;
+    char *srole      = rule->subrole;
+    char *scratchpad = rule->effects.scratchpad;
 
-    char *escaped_app   = app   ? ts_string_escape(app)   : NULL;
-    char *escaped_title = title ? ts_string_escape(title) : NULL;
-    char *escaped_role  = role  ? ts_string_escape(role)  : NULL;
-    char *escaped_srole = srole ? ts_string_escape(srole) : NULL;
+    char *escaped_label      = label      ? ts_string_escape(label)      : NULL;
+    char *escaped_app        = app        ? ts_string_escape(app)        : NULL;
+    char *escaped_title      = title      ? ts_string_escape(title)      : NULL;
+    char *escaped_role       = role       ? ts_string_escape(role)       : NULL;
+    char *escaped_srole      = srole      ? ts_string_escape(srole)      : NULL;
+    char *escaped_scratchpad = scratchpad ? ts_string_escape(scratchpad) : NULL;
 
     fprintf(rsp,
             "{\n"
@@ -38,7 +42,7 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
             "\t\"flags\":\"0x%08x\"\n"
             "}",
             index,
-            rule->label ? rule->label : "",
+            escaped_label ? escaped_label : label ? label : "",
             escaped_app ? escaped_app : app ? app : "",
             escaped_title ? escaped_title : title ? title : "",
             escaped_role ? escaped_role : role ? role : "",
@@ -55,7 +59,7 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
             rule->effects.grid[0], rule->effects.grid[1],
             rule->effects.grid[2], rule->effects.grid[3],
             rule->effects.grid[4], rule->effects.grid[5],
-            rule->effects.scratchpad ? rule->effects.scratchpad : "",
+            escaped_scratchpad ? escaped_scratchpad : scratchpad ? scratchpad : "",
             json_bool(rule_check_flag(rule, RULE_ONE_SHOT)),
             (uint32_t)(rule->effects.flags << 16) | (uint32_t)rule->flags);
 }

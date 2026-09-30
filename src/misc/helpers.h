@@ -326,6 +326,7 @@ static inline char *ts_string_escape(char *s)
     return result;
 }
 
+
 static inline CFStringRef CFSTRINGNUM32(int32_t num)
 {
     char num_str[255] = {0};
