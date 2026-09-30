@@ -34,6 +34,7 @@ typedef TEST_SIG(function);
 
 #include "area.c"
 #include "window.c"
+#include "event_loop.c"
 #include "space_gesture.c"
 #include "window_ordered.c"
 #include "event_queue.c"
@@ -76,6 +77,8 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(closest_display_in_direction)                   \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
+    TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
+    TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \

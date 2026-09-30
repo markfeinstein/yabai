@@ -23,3 +23,16 @@ TEST_FUNC(window_is_unknown_does_not_consume_cached_subrole,
     CFRelease(window.subrole);
     CFRelease(window.ref);
 });
+
+TEST_FUNC(window_unobserve_without_application_clears_notifications,
+{
+    struct window window = {0};
+    window.ref = AXUIElementCreateApplication(getpid());
+    window.notification = AX_WINDOW_ALL;
+
+    window_unobserve(&window);
+
+    TEST_CHECK(window.notification, 0u);
+
+    CFRelease(window.ref);
+});
