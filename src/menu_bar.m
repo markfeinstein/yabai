@@ -582,6 +582,9 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     action.type = MENU_BAR_ACTION_MENU_TRACKING_CHANGED;
     action.generation = _tracking_generation;
     action.data.menu_tracking.is_tracking = true;
+    action.data.menu_tracking.focused_display_id = _snapshot && _snapshot->has_focused_display
+                                                 ? _snapshot->focused_display_id
+                                                 : 0;
     [self sendAction:action];
 }
 

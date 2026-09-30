@@ -871,33 +871,48 @@ bool window_manager_set_window_layer(struct window *window, int layer)
     if (!window_list) return result;
 
     int window_count = CFArrayGetCount(window_list);
+    if (!window_count) {
+        CFRelease(window_list);
+        return result;
+    }
+
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_list, window_count);
+    if (!query) {
+        CFRelease(window_list);
+        return result;
+    }
+
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+    if (!iterator) {
+        CFRelease(query);
+        CFRelease(window_list);
+        return result;
+    }
 
     int relation_count = 0;
     uint32_t parent_list[window_count];
     uint32_t child_list[window_count];
 
-    while (SLSWindowIteratorAdvance(iterator)) {
+    while (relation_count < window_count && SLSWindowIteratorAdvance(iterator)) {
         parent_list[relation_count] = SLSWindowIteratorGetParentID(iterator);
         child_list[relation_count] = SLSWindowIteratorGetWindowID(iterator);
         ++relation_count;
     }
 
     int check_count = 1;
-    uint32_t check_list[window_count];
+    uint32_t check_list[window_count + 1];
     check_list[0] = window->id;
 
     for (int i = 0; i < check_count; ++i) {
-        for (int j = 0; j < window_count; ++j) {
+        for (int j = 0; j < relation_count; ++j) {
             if (parent_list[j] != check_list[i]) continue;
             scripting_addition_set_layer(child_list[j], child_layer);
-            check_list[check_count++] = child_list[j];
+            if (check_count <= window_count) check_list[check_count++] = child_list[j];
         }
     }
 
-    CFRelease(query);
     CFRelease(iterator);
+    CFRelease(query);
     CFRelease(window_list);
 
     return result;

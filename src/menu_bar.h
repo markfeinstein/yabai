@@ -42,7 +42,8 @@ struct menu_bar_action_set_space_filter
 
 struct menu_bar_action_menu_tracking
 {
-    bool is_tracking;       /* true on menu-open begin, false on close/end. */
+    bool is_tracking;              /* true on menu-open begin, false on close/end. */
+    uint32_t focused_display_id;   /* Source snapshot focus at menu-open begin, or 0 if unresolved. */
 };
 
 struct menu_bar_action

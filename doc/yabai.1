@@ -187,6 +187,33 @@ Specify top and bottom padding for a potential custom bar that you may be runnin
 \fIoff\fP:  Do not apply any special padding.
 .RE
 .sp
+\fBmenubar\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Show yabai Spaces as a read\-only native macOS menu bar status item. Default is \fIoff\fP.
+.br
+The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and \fBmenubar_opacity\fP settings.
+.RE
+.sp
+\fBmenubar_style\fP [\fIcompact|expanded\fP]
+.RS 4
+Set the menu bar status item layout. Default is \fIexpanded\fP.
+.br
+\fIcompact\fP: Show one screen outline for the keyboard\-focused display's visible space.
+.br
+\fIexpanded\fP: Show one screen outline for every filtered space, grouped by display, in the menu bar.
+.RE
+.sp
+\fBmenubar_space_filter\fP [\fIoccupied|all\fP]
+.RS 4
+Select which spaces are shown by the menu bar item and its menu. Default is \fIoccupied\fP.
+.br
+\fIoccupied\fP: Show spaces with user\-facing application windows, spaces that are currently visible on a display, and spaces with unresolved occupancy. Floating, unmanaged, minimized, hidden and native\-fullscreen application windows count. Sticky\-only, system and transient windows do not make a space occupied.
+.br
+\fIall\fP: Show all user\-navigation spaces reported by macOS, including native\-fullscreen spaces. Virtual spaces are not created or shown.
+.br
+The compact and expanded layouts share the same display\-grouped informational menu. A checkmark marks each display's visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in \fByabairc\fP to persist them.
+.RE
+.sp
 \fBmenubar_opacity\fP [\fI<FLOAT_SEL>\fP]
 .RS 4
 Changes the transparency of the macOS menubar.

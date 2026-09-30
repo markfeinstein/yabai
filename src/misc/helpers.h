@@ -183,7 +183,15 @@ static const char *layer_str[] =
 static inline bool socket_open(int *sockfd)
 {
     *sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    return *sockfd != -1;
+    if (*sockfd == -1) return false;
+
+    int no_sigpipe = 1;
+    if (setsockopt(*sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) != 0) {
+        close(*sockfd);
+        *sockfd = -1;
+        return false;
+    }
+    return true;
 }
 
 static inline bool socket_connect(int sockfd, char *socket_path)

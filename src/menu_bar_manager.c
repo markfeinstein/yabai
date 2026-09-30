@@ -577,7 +577,7 @@ static void menu_bar_manager_finalize_membership(struct menu_bar_display_builder
 
 static uint32_t menu_bar_manager_focused_display_id(void)
 {
-    if (g_menu_bar_manager.menu_tracking_depth && g_menu_bar_manager.pre_menu_focused_display_id) {
+    if (g_menu_bar_manager.menu_tracking_depth) {
         return g_menu_bar_manager.pre_menu_focused_display_id;
     }
 
@@ -966,7 +966,7 @@ void menu_bar_manager_handle_action(struct menu_bar_action *action)
 
         if (action->data.menu_tracking.is_tracking) {
             if (g_menu_bar_manager.menu_tracking_depth++ == 0) {
-                g_menu_bar_manager.pre_menu_focused_display_id = menu_bar_manager_focused_display_id();
+                g_menu_bar_manager.pre_menu_focused_display_id = action->data.menu_tracking.focused_display_id;
             }
             event_loop_post(&g_event_loop, MENU_OPENED, NULL, 0);
             menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);

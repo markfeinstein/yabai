@@ -15,13 +15,22 @@ static void *event_queue_test_allocate(size_t size)
 
 #define EVENT_QUEUE_ALLOCATE(size) event_queue_test_allocate(size)
 #include "../../src/manifest.m"
+#include "../../src/osax/message_validation.h"
+#include "../../src/sa_message.h"
 #undef EVENT_QUEUE_ALLOCATE
 
 #define TEST_SIG(name) bool test_##name(void)
 typedef TEST_SIG(function);
 
-#define TEST_FUNC(name, code) static TEST_SIG(name) { char *test_name = #name; bool result = true; {code} return result; }
-#define TEST_CHECK(r, e) if ((r) != (e)) { printf("                   \e[1;33m%s\e[m\e[1;31m#%d %s == %s\e[m \e[1;31m(%d == %d)\e[m\n", test_name, __LINE__, #r, #e, r, e); result = false; }
+#define TEST_FUNC(name, ...) static TEST_SIG(name) { char *test_name = #name; bool result = true; {__VA_ARGS__} return result; }
+#define TEST_CHECK(r, e) do { \
+    __auto_type test_actual = (r); \
+    __auto_type test_expected = (e); \
+    if (test_actual != test_expected) { \
+        printf("                   \e[1;33m%s\e[m\e[1;31m#%d %s == %s\e[m\n", test_name, __LINE__, #r, #e); \
+        result = false; \
+    } \
+} while (0)
 
 #include "area.c"
 #include "window.c"
@@ -30,6 +39,8 @@ typedef TEST_SIG(function);
 #include "event_queue.c"
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
+#include "message_frame.c"
+#include "sa_message.c"
 #undef TEST_ENTRY
 
 TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
@@ -80,6 +91,7 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
     TEST_ENTRY(event_queue_full_failstops_destructive_events)    \
+    TEST_ENTRY(daemon_message_admission_bounds_and_reuses_slots) \
     TEST_ENTRY(menu_bar_model_defaults_and_zero_counts)          \
     TEST_ENTRY(menu_bar_model_classification_cases)              \
     TEST_ENTRY(menu_bar_model_filter_focus_identity_and_failure_metadata) \
@@ -90,8 +102,37 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
     TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
     TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
+    TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
-    TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown)
+    TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
+    TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
+    TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
+    TEST_ENTRY(daemon_response_buffer_preserves_exact_bytes)              \
+    TEST_ENTRY(daemon_response_buffer_accepts_empty_and_boundary_responses) \
+    TEST_ENTRY(daemon_response_buffer_overflow_selects_failure_response)  \
+    TEST_ENTRY(socket_io_fragmented_exact_read)                           \
+    TEST_ENTRY(socket_io_write_all_delivers_fragmented_buffer)            \
+    TEST_ENTRY(daemon_response_large_buffer_reaches_draining_peer)        \
+    TEST_ENTRY(daemon_response_stalled_peer_has_bounded_write_failure)    \
+    TEST_ENTRY(socket_io_write_all_times_out_with_blocking_descriptor_and_stalled_peer) \
+    TEST_ENTRY(socket_io_write_all_rejects_peer_close_without_sigpipe)    \
+    TEST_ENTRY(socket_io_rejects_early_eof_and_total_timeout)             \
+    TEST_ENTRY(client_response_stalled_peer_times_out)                    \
+    TEST_ENTRY(client_response_fragmented_stream_refreshes_inactivity_deadline) \
+    TEST_ENTRY(client_response_fragmented_failure_routes_everything_to_stderr) \
+    TEST_ENTRY(client_response_later_failure_marker_and_embedded_nul_remain_stdout) \
+    TEST_ENTRY(client_response_eof_completes_successfully)                \
+    TEST_ENTRY(sa_handshake_accepts_fragmented_version_and_attributes)    \
+    TEST_ENTRY(sa_handshake_accepts_empty_version)                        \
+    TEST_ENTRY(sa_handshake_rejects_missing_terminator_at_capacity)       \
+    TEST_ENTRY(sa_handshake_rejects_truncated_attributes)                 \
+    TEST_ENTRY(sa_handshake_rejects_early_eof)                            \
+    TEST_ENTRY(sa_handshake_observes_total_timeout)                       \
+    TEST_ENTRY(sa_request_without_status_observes_total_timeout)          \
+    TEST_ENTRY(sa_payload_builder_boundaries_and_variable_counts)         \
+    TEST_ENTRY(sa_message_fixed_sender_layouts_are_strict)                \
+    TEST_ENTRY(sa_message_swap_sparse_and_mixed_records_are_strict)       \
+    TEST_ENTRY(sa_message_variable_counts_and_entries_are_strict)
 
 static struct {
     char *name;

@@ -25,6 +25,8 @@
 #include <stdio.h>
 
 #include "common.h"
+#include "message_validation.h"
+#include "../misc/socket_io.h"
 
 #ifdef __x86_64__
 #include "x64_payload.m"
@@ -568,6 +570,8 @@ static inline id space_for_display_with_id(CFStringRef display_uuid, uint64_t sp
 
 static inline id display_space_for_display_uuid(CFStringRef display_uuid)
 {
+    if (!display_uuid) return nil;
+
     id result = nil;
 
     NSArray *display_spaces = get_ivar_value(dock_spaces, "_displaySpaces");
@@ -576,8 +580,8 @@ static inline id display_space_for_display_uuid(CFStringRef display_uuid)
             id display_source_space = get_ivar_value(display_space, "_currentSpace");
             uint64_t sid = get_space_id(display_source_space);
             CFStringRef uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), sid);
-            bool match = CFEqual(uuid, display_uuid);
-            CFRelease(uuid);
+            bool match = uuid && CFEqual(uuid, display_uuid);
+            if (uuid) CFRelease(uuid);
             if (match) {
                 result = display_space;
                 break;
@@ -602,9 +606,9 @@ static inline id display_space_for_space_with_id(uint64_t space_id)
     return nil;
 }
 
-static void do_space_move(char *message)
+static bool do_space_move(char *message)
 {
-    if (dock_spaces == nil || dp_desktop_picture_manager == nil || move_space_fp == 0) return;
+    if (dock_spaces == nil || dp_desktop_picture_manager == nil || move_space_fp == 0) return false;
 
     uint64_t source_space_id, dest_space_id, source_prev_space_id;
     unpack(source_space_id);
@@ -614,28 +618,38 @@ static void do_space_move(char *message)
     bool focus_dest_space;
     unpack(focus_dest_space);
 
+    bool request_dispatched = false;
     CFStringRef source_display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), source_space_id);
+    CFStringRef dest_display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), dest_space_id);
+    if (!source_display_uuid || !dest_display_uuid) goto cleanup;
+
     id source_space = space_for_display_with_id(source_display_uuid, source_space_id);
     id source_display_space = display_space_for_display_uuid(source_display_uuid);
-
-    CFStringRef dest_display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), dest_space_id);
     id dest_space = space_for_display_with_id(dest_display_uuid, dest_space_id);
-    unsigned dest_display_id = ((unsigned (*)(id, SEL, id)) objc_msgSend)(dock_spaces, @selector(displayIDForSpace:), dest_space);
     id dest_display_space = display_space_for_display_uuid(dest_display_uuid);
+    if (source_space == nil || source_display_space == nil || dest_space == nil || dest_display_space == nil) goto cleanup;
+
+    id source_prev_space = nil;
+    if (source_prev_space_id) {
+        source_prev_space = space_for_display_with_id(source_display_uuid, source_prev_space_id);
+        if (source_prev_space == nil) goto cleanup;
+    }
+
+    unsigned dest_display_id = ((unsigned (*)(id, SEL, id)) objc_msgSend)(dock_spaces, @selector(displayIDForSpace:), dest_space);
 
     if (source_prev_space_id) {
         NSArray *ns_source_space = @[ @(source_space_id) ];
         NSArray *ns_dest_space = @[ @(source_prev_space_id) ];
-        id new_source_space = space_for_display_with_id(source_display_uuid, source_prev_space_id);
         SLSShowSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_dest_space);
         SLSHideSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_source_space);
         SLSManagedDisplaySetCurrentSpace(SLSMainConnectionID(), source_display_uuid, source_prev_space_id);
-        set_ivar_value(source_display_space, "_currentSpace", [new_source_space retain]);
+        set_ivar_value(source_display_space, "_currentSpace", [source_prev_space retain]);
         [ns_dest_space release];
         [ns_source_space release];
     }
 
     asm__call_move_space(source_space, dest_space, dest_display_uuid, dock_spaces, move_space_fp);
+    request_dispatched = true;
 
     dispatch_sync(dispatch_get_main_queue(), ^{
         ((void (*)(id, SEL, id, unsigned, CFStringRef)) objc_msgSend)(dp_desktop_picture_manager, @selector(moveSpace:toDisplay:displayUUID:), source_space, dest_display_id, dest_display_uuid);
@@ -644,7 +658,9 @@ static void do_space_move(char *message)
     if (focus_dest_space) {
         uint64_t new_source_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), source_display_uuid);
         id new_source_space = space_for_display_with_id(source_display_uuid, new_source_space_id);
-        set_ivar_value(source_display_space, "_currentSpace", [new_source_space retain]);
+        if (new_source_space != nil) {
+            set_ivar_value(source_display_space, "_currentSpace", [new_source_space retain]);
+        }
 
         NSArray *ns_dest_monitor_space = @[ @(dest_space_id) ];
         SLSHideSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_dest_monitor_space);
@@ -653,24 +669,31 @@ static void do_space_move(char *message)
         [ns_dest_monitor_space release];
     }
 
-    CFRelease(source_display_uuid);
-    CFRelease(dest_display_uuid);
+cleanup:
+    if (source_display_uuid) CFRelease(source_display_uuid);
+    if (dest_display_uuid) CFRelease(dest_display_uuid);
+    return request_dispatched;
 }
 
 typedef void (*remove_space_call)(id space, id display_space, id dock_spaces, uint64_t space_id1, uint64_t space_id2);
-static void do_space_destroy(char *message)
+static bool do_space_destroy(char *message)
 {
-    if (dock_spaces == nil || remove_space_fp == 0) return;
+    if (dock_spaces == nil || remove_space_fp == 0) return false;
 
     uint64_t space_id;
     unpack(space_id);
 
     CFStringRef display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), space_id);
-    uint64_t active_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), display_uuid);
+    if (!display_uuid) return false;
 
     id space = space_for_display_with_id(display_uuid, space_id);
     id display_space = display_space_for_display_uuid(display_uuid);
+    if (space == nil || display_space == nil) {
+        CFRelease(display_uuid);
+        return false;
+    }
 
+    uint64_t active_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), display_uuid);
     dispatch_sync(dispatch_get_main_queue(), ^{
         ((remove_space_call) remove_space_fp)(space, display_space, dock_spaces, space_id, space_id);
     });
@@ -678,28 +701,41 @@ static void do_space_destroy(char *message)
     if (active_space_id == space_id) {
         uint64_t dest_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), display_uuid);
         id dest_space = space_for_display_with_id(display_uuid, dest_space_id);
-        set_ivar_value(display_space, "_currentSpace", [dest_space retain]);
+        if (dest_space != nil) {
+            set_ivar_value(display_space, "_currentSpace", [dest_space retain]);
+        }
     }
 
     CFRelease(display_uuid);
+    return true;
 }
 
-static void do_space_create(char *message)
+static bool do_space_create(char *message)
 {
-    if (dock_spaces == nil || add_space_fp == 0) return;
+    if (dock_spaces == nil || add_space_fp == 0) return false;
 
     uint64_t space_id;
     unpack(space_id);
 
-    CFStringRef __block display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), space_id);
+    CFStringRef display_uuid = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), space_id);
+    if (!display_uuid) return false;
+
+    __block bool request_dispatched = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
-        id new_space = macOSSequoia
-                     ? [[objc_getClass("ManagedSpace") alloc] init]
-                     : [[objc_getClass("Dock.ManagedSpace") alloc] init];
         id display_space = display_space_for_display_uuid(display_uuid);
-        asm__call_add_space(new_space, display_space, add_space_fp);
-        CFRelease(display_uuid);
+        if (display_space != nil) {
+            id new_space = macOSSequoia
+                         ? [[objc_getClass("ManagedSpace") alloc] init]
+                         : [[objc_getClass("Dock.ManagedSpace") alloc] init];
+            if (new_space != nil) {
+                asm__call_add_space(new_space, display_space, add_space_fp);
+                request_dispatched = true;
+            }
+        }
     });
+
+    CFRelease(display_uuid);
+    return request_dispatched;
 }
 
 
@@ -1073,16 +1109,19 @@ static void do_window_order_in(char *message)
 
 static inline CFArrayRef cfarray_of_cfnumbers(void *values, size_t size, int count, CFNumberType type)
 {
-    CFNumberRef temp[count];
+    if (!values || count < 0) return NULL;
+
+    CFMutableArrayRef result = CFArrayCreateMutable(NULL, count, &kCFTypeArrayCallBacks);
+    if (!result) return NULL;
 
     for (int i = 0; i < count; ++i) {
-        temp[i] = CFNumberCreate(NULL, type, ((char *)values) + (size * i));
-    }
-
-    CFArrayRef result = CFArrayCreate(NULL, (const void **)temp, count, &kCFTypeArrayCallBacks);
-
-    for (int i = 0; i < count; ++i) {
-        CFRelease(temp[i]);
+        CFNumberRef number = CFNumberCreate(NULL, type, ((char *) values) + (size * i));
+        if (!number) {
+            CFRelease(result);
+            return NULL;
+        }
+        CFArrayAppendValue(result, number);
+        CFRelease(number);
     }
 
     return result;
@@ -1097,8 +1136,10 @@ static void do_window_list_move_to_space(char *message)
     unpack(count);
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers((uint32_t*)message, sizeof(uint32_t), count, kCFNumberSInt32Type);
-    SLSMoveWindowsToManagedSpace(SLSMainConnectionID(), window_list_ref, sid);
-    CFRelease(window_list_ref);
+    if (window_list_ref) {
+        SLSMoveWindowsToManagedSpace(SLSMainConnectionID(), window_list_ref, sid);
+        CFRelease(window_list_ref);
+    }
 }
 
 static void do_window_move_to_space(char *message)
@@ -1110,8 +1151,10 @@ static void do_window_move_to_space(char *message)
     unpack(wid);
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
-    SLSMoveWindowsToManagedSpace(SLSMainConnectionID(), window_list_ref, sid);
-    CFRelease(window_list_ref);
+    if (window_list_ref) {
+        SLSMoveWindowsToManagedSpace(SLSMainConnectionID(), window_list_ref, sid);
+        CFRelease(window_list_ref);
+    }
 }
 
 static void do_handshake(int sockfd)
@@ -1157,8 +1200,14 @@ static bool operation_is_supported(enum sa_opcode op)
     }
 }
 
-static void handle_message(int sockfd, char *message)
+static void handle_message(int sockfd, char *message, size_t length)
 {
+    if (!sa_message_is_valid(message, length)) {
+        uint8_t status = 0;
+        send(sockfd, &status, sizeof(status), 0);
+        return;
+    }
+
     enum sa_opcode op = *message++;
     if (op == SA_OPCODE_HANDSHAKE) {
         do_handshake(sockfd);
@@ -1176,13 +1225,13 @@ static void handle_message(int sockfd, char *message)
         status = do_space_focus(message);
     } break;
     case SA_OPCODE_SPACE_CREATE: {
-        do_space_create(message);
+        status = do_space_create(message);
     } break;
     case SA_OPCODE_SPACE_DESTROY: {
-        do_space_destroy(message);
+        status = do_space_destroy(message);
     } break;
     case SA_OPCODE_SPACE_MOVE: {
-        do_space_move(message);
+        status = do_space_move(message);
     } break;
     case SA_OPCODE_WINDOW_MOVE: {
         do_window_move(message);
@@ -1234,26 +1283,19 @@ static void handle_message(int sockfd, char *message)
     send(sockfd, &status, sizeof(status), 0);
 }
 
-static inline bool read_message(int sockfd, char *message)
+static inline int read_message(int sockfd, char *message)
 {
-    int bytes_read    = 0;
-    int bytes_to_read = 0;
+    int16_t bytes_to_read = 0;
+    uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
 
-    if (read(sockfd, &bytes_to_read, sizeof(int16_t)) == sizeof(int16_t)) {
-        if (bytes_to_read >= SA_SOCKET_BUFF_LEN) return false;
-        if (bytes_to_read <= 0)                  return false;
-
-        do {
-            int cur_read = read(sockfd, message+bytes_read, bytes_to_read-bytes_read);
-            if (cur_read <= 0) break;
-
-            bytes_read += cur_read;
-        } while (bytes_read < bytes_to_read);
-
-        return bytes_read == bytes_to_read;
+    if (!socket_io_read_exact_until(sockfd, &bytes_to_read, sizeof(bytes_to_read), deadline)) return 0;
+    if (!sa_message_length_is_valid(bytes_to_read)) {
+        sa_message_send_failure_status(sockfd);
+        return 0;
     }
+    if (!socket_io_read_exact_until(sockfd, message, (size_t) bytes_to_read, deadline)) return 0;
 
-    return false;
+    return bytes_to_read;
 }
 
 static void *handle_connection(void *unused)
@@ -1262,9 +1304,17 @@ static void *handle_connection(void *unused)
         int sockfd = accept(daemon_sockfd, NULL, 0);
         if (sockfd == -1) continue;
 
+        // Unlike yabai, Dock does not install a process-wide SIGPIPE handler.
+        int no_sigpipe = 1;
+        if (setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) != 0) {
+            close(sockfd);
+            continue;
+        }
+
         char message[SA_SOCKET_BUFF_LEN];
-        if (read_message(sockfd, message)) {
-            handle_message(sockfd, message);
+        int message_length = read_message(sockfd, message);
+        if (message_length) {
+            handle_message(sockfd, message, (size_t) message_length);
         }
 
         shutdown(sockfd, SHUT_RDWR);

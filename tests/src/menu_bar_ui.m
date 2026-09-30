@@ -10,6 +10,7 @@ struct menu_bar_ui_action_log
     enum menu_bar_action_type type[16];
     uint64_t generation[16];
     bool is_tracking[16];
+    uint32_t focused_display_id[16];
 };
 
 static void
@@ -24,6 +25,9 @@ menu_bar_ui_record_action(const struct menu_bar_action *action, void *context)
     log->is_tracking[index] = action->type == MENU_BAR_ACTION_MENU_TRACKING_CHANGED
                             ? action->data.menu_tracking.is_tracking
                             : false;
+    log->focused_display_id[index] = action->type == MENU_BAR_ACTION_MENU_TRACKING_CHANGED
+                                   ? action->data.menu_tracking.focused_display_id
+                                   : 0;
 }
 
 static struct menu_bar_callbacks
@@ -322,6 +326,35 @@ menu_bar_ui_screen_selection(NSView *strip, uint32_t *indexes, size_t capacity, 
     }
     if (omitted_out) *omitted_out = omitted;
     return count;
+}
+
+static bool
+test_menu_tracking_captures_source_snapshot_focus(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"test"];
+
+    [controller testSetSnapshot:menu_bar_ui_detailed_snapshot(9)];
+    [controller menuWillOpen:menu];
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.is_tracking[0] == true);
+    TEST_CHECK(log.generation[0] == 9);
+    TEST_CHECK(log.focused_display_id[0] == 1);
+    [controller menuDidClose:menu];
+
+    [controller testSetSnapshot:menu_bar_ui_snapshot(10, MENU_BAR_ENABLED)];
+    [controller menuWillOpen:menu];
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.is_tracking[2] == true);
+    TEST_CHECK(log.generation[2] == 10);
+    TEST_CHECK(log.focused_display_id[2] == 0);
+    [controller menuDidClose:menu];
+
+    [menu release];
+    [controller release];
+    return true;
 }
 
 static bool
@@ -897,6 +930,7 @@ int main(void)
 {
     @autoreleasepool {
         struct menu_bar_ui_test_case tests[] = {
+            { "menu_tracking_captures_source_snapshot_focus", test_menu_tracking_captures_source_snapshot_focus },
             { "teardown_balances_tracking_without_cancel_close", test_teardown_balances_tracking_without_cancel_close },
             { "synchronous_and_late_close_are_suppressed_during_teardown", test_synchronous_and_late_close_are_suppressed_during_teardown },
             { "deferred_snapshot_is_disposed_when_teardown_has_no_menu", test_deferred_snapshot_is_disposed_when_teardown_has_no_menu },

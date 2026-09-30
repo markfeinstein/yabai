@@ -27,7 +27,7 @@ tsan: clean-build $(BINS)
 install: BUILD_FLAGS=-std=c11 -Wall -Wextra -DNDEBUG -O3 -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
 install: clean-build $(BINS)
 
-$(OSAX_SRC): $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
+$(OSAX_SRC): $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/socket_io.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
 	xcrun clang $(OSAX_PATH)/payload.m -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/payload $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon
 	xcrun clang $(OSAX_PATH)/loader.m -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/loader -framework Cocoa
 	xxd -i -a $(OSAX_PATH)/payload $(OSAX_PATH)/payload_bin.c
@@ -42,8 +42,8 @@ icon:
 	python3 $(SCRIPT_PATH)/seticon.py $(ASSET_PATH)/icon/2x/icon-512px@2x.png $(BUILD_PATH)/yabai
 
 publish:
-	sed -i '' "60s/^VERSION=.*/VERSION=\"$(shell $(BUILD_PATH)/yabai --version | cut -d "v" -f 2)\"/" $(SCRIPT_PATH)/install.sh
-	sed -i '' "61s/^EXPECTED_HASH=.*/EXPECTED_HASH=\"$(shell shasum -a 256 $(BUILD_PATH)/$(shell $(BUILD_PATH)/yabai --version).tar.gz | cut -d " " -f 1)\"/" $(SCRIPT_PATH)/install.sh
+	sed -i '' "s/^VERSION=.*/VERSION=\"$(shell $(BUILD_PATH)/yabai --version | cut -d "v" -f 2)\"/" $(SCRIPT_PATH)/install.sh
+	sed -i '' "s/^EXPECTED_HASH=.*/EXPECTED_HASH=\"$(shell shasum -a 256 $(BUILD_PATH)/$(shell $(BUILD_PATH)/yabai --version).tar.gz | cut -d " " -f 1)\"/" $(SCRIPT_PATH)/install.sh
 
 archive: man install sign icon
 	rm -rf $(ARCH_PATH)

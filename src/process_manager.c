@@ -105,11 +105,15 @@ uint64_t process_manager_active_space_for_psn(int connection)
         space_count += count;
     }
 
+    if (!space_list || !space_count) return sid;
+
     uint64_t set_tags = 0;
     uint64_t clear_tags = 0;
     uint32_t options = 0x2;
 
     CFArrayRef space_list_ref = cfarray_of_cfnumbers(space_list, sizeof(uint64_t), space_count, kCFNumberSInt64Type);
+    if (!space_list_ref) return sid;
+
     CFArrayRef window_list_ref = SLSCopyWindowsWithOptionsAndTags(g_connection, connection, space_list_ref, options, &set_tags, &clear_tags);
     if (!window_list_ref) goto err;
 
@@ -117,7 +121,10 @@ uint64_t process_manager_active_space_for_psn(int connection)
     if (!count) goto out;
 
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_list_ref, count);
+    if (!query) goto out;
+
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+    if (!iterator) goto query_err;
 
     while (SLSWindowIteratorAdvance(iterator)) {
         uint64_t tags = SLSWindowIteratorGetTags(iterator);
@@ -136,8 +143,9 @@ uint64_t process_manager_active_space_for_psn(int connection)
         }
     }
 
-    CFRelease(query);
     CFRelease(iterator);
+query_err:
+    CFRelease(query);
 out:
     CFRelease(window_list_ref);
 err:

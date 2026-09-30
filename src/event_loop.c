@@ -1719,33 +1719,42 @@ static EVENT_HANDLER(MENU_BAR_ACTION)
 
 static EVENT_HANDLER(DAEMON_MESSAGE)
 {
+    daemon_message_admission_release(&g_daemon_message_admission);
     TIME_FUNCTION;
 
-    FILE *rsp         = NULL;
-    int bytes_read    = 0;
+    struct daemon_response_buffer response = {};
     int bytes_to_read = 0;
+    uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
 
-    if (read(param1, &bytes_to_read, sizeof(int)) == sizeof(int)) {
-        char *message = ts_alloc_unaligned(bytes_to_read);
-
-        do {
-            int cur_read = read(param1, message+bytes_read, bytes_to_read-bytes_read);
-            if (cur_read <= 0) break;
-
-            bytes_read += cur_read;
-        } while (bytes_read < bytes_to_read);
-
-        if ((bytes_read == bytes_to_read) && (rsp = fdopen(param1, "w"))) {
-            debug_message(__FUNCTION__, message);
-            handle_message(rsp, message);
-
-            fflush(rsp);
-            fclose(rsp);
-
-            return;
-        }
+    if (!socket_io_read_exact_until(param1, &bytes_to_read, sizeof(bytes_to_read), deadline)) {
+        goto cleanup;
+    }
+    if (!daemon_message_length_is_valid(bytes_to_read)) {
+        daemon_message_send_invalid_length(param1);
+        goto cleanup;
     }
 
+    char *message = ts_alloc_unaligned((size_t) bytes_to_read);
+    if (!message || !socket_io_read_exact_until(param1, message, (size_t) bytes_to_read, deadline)) {
+        goto cleanup;
+    }
+    if (!daemon_message_body_is_valid(message, (size_t) bytes_to_read)) {
+        daemon_message_send_invalid_body(param1);
+        goto cleanup;
+    }
+    if (!daemon_response_buffer_open(&response)) {
+        daemon_response_send_buffer_failure_until(param1, socket_io_deadline_after_ms(DAEMON_RESPONSE_WRITE_TIMEOUT_MS));
+        goto cleanup;
+    }
+
+    debug_message(__FUNCTION__, message);
+    handle_message(response.stream, message);
+
+    (void) daemon_response_buffer_send_until(param1, &response,
+                                              socket_io_deadline_after_ms(DAEMON_RESPONSE_WRITE_TIMEOUT_MS));
+
+cleanup:
+    daemon_response_buffer_destroy(&response);
     socket_close(param1);
 }
 #pragma clang diagnostic pop
@@ -1821,6 +1830,7 @@ static void event_loop_release_rejected_event(enum event_type type, void *contex
 
     switch (type) {
     case DAEMON_MESSAGE: {
+        daemon_message_admission_release(&g_daemon_message_admission);
         if (param1 >= 0) socket_close(param1);
     } break;
     default: {

@@ -4,6 +4,8 @@ static struct {
     pthread_t thread;
 } g_message_loop;
 
+struct daemon_message_admission g_daemon_message_admission;
+
 extern struct event_loop g_event_loop;
 extern struct display_manager g_display_manager;
 extern struct space_manager g_space_manager;
@@ -3084,6 +3086,12 @@ static void *message_loop_run(void *context)
     while (g_message_loop.is_running) {
         int sockfd = accept(g_message_loop.sockfd, NULL, 0);
         if (sockfd == -1) continue;
+
+        if (!daemon_message_admission_acquire(&g_daemon_message_admission)) {
+            daemon_message_send_overloaded(sockfd);
+            socket_close(sockfd);
+            continue;
+        }
 
         event_loop_post(&g_event_loop, DAEMON_MESSAGE, NULL, sockfd);
     }

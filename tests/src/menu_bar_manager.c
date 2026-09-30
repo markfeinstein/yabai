@@ -289,6 +289,45 @@ TEST_FUNC(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_gener
     menu_bar_manager_test_reset();
 });
 
+TEST_FUNC(menu_bar_manager_preserves_action_focus_during_async_menu_open, {
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_set_enabled_snapshot(7, 7);
+
+    // AppKit captured display 1 from its source snapshot before this action
+    // crossed the event queue; native/current focus has since moved to display 2.
+    g_display_manager.current_display_id = 2;
+    struct menu_bar_action *open = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 7);
+    open->data.menu_tracking.is_tracking = true;
+    open->data.menu_tracking.focused_display_id = 1;
+    menu_bar_manager_handle_action(open);
+    TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, 1);
+    TEST_CHECK(g_menu_bar_manager.pre_menu_focused_display_id, 1);
+    TEST_CHECK(menu_bar_manager_focused_display_id(), 1);
+
+    struct menu_bar_action *close = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 7);
+    close->data.menu_tracking.is_tracking = false;
+    menu_bar_manager_handle_action(close);
+    TEST_CHECK(g_menu_bar_manager.pre_menu_focused_display_id, 0);
+
+    // Unresolved source focus must remain unresolved while tracking rather than
+    // falling back to the now-current native display.
+    struct menu_bar_action *unresolved = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 7);
+    unresolved->data.menu_tracking.is_tracking = true;
+    unresolved->data.menu_tracking.focused_display_id = 0;
+    menu_bar_manager_handle_action(unresolved);
+    TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, 1);
+    TEST_CHECK(menu_bar_manager_focused_display_id(), 0);
+
+    close = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 7);
+    close->data.menu_tracking.is_tracking = false;
+    menu_bar_manager_handle_action(close);
+
+    g_display_manager.current_display_id = 0;
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
 TEST_FUNC(menu_bar_manager_late_close_after_disable_does_not_overemit, {
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();

@@ -45,6 +45,11 @@ uint32_t window_display_id(uint32_t wid)
     if (!uuid_string) return 0;
 
     CFUUIDRef uuid = CFUUIDCreateFromString(NULL, uuid_string);
+    if (!uuid) {
+        CFRelease(uuid_string);
+        return 0;
+    }
+
     int id = CGDisplayGetDisplayIDFromUUID(uuid);
 
     CFRelease(uuid);

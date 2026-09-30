@@ -6,6 +6,11 @@ inline uint32_t space_display_id(uint64_t sid)
     if (!uuid_string) return 0;
 
     CFUUIDRef uuid = CFUUIDCreateFromString(NULL, uuid_string);
+    if (!uuid) {
+        CFRelease(uuid_string);
+        return 0;
+    }
+
     uint32_t id = CGDisplayGetDisplayIDFromUUID(uuid);
 
     CFRelease(uuid);
@@ -16,12 +21,15 @@ inline uint32_t space_display_id(uint64_t sid)
 
 uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized)
 {
+    *count = 0;
     uint32_t *window_list = NULL;
     uint64_t set_tags = 0;
     uint64_t clear_tags = 0;
     uint32_t options = include_minimized ? 0x7 : 0x2;
 
     CFArrayRef space_list_ref = cfarray_of_cfnumbers(space_list, sizeof(uint64_t), space_count, kCFNumberSInt64Type);
+    if (!space_list_ref) return NULL;
+
     CFArrayRef window_list_ref = SLSCopyWindowsWithOptionsAndTags(g_connection, cid, space_list_ref, options, &set_tags, &clear_tags);
     if (!window_list_ref) goto err;
 
@@ -29,7 +37,10 @@ uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count
     if (!*count) goto out;
 
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_list_ref, *count);
+    if (!query) goto query_failed;
+
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+    if (!iterator) goto iterator_failed;
 
     int window_count = 0;
     window_list = ts_alloc_list(uint32_t, *count);
@@ -71,8 +82,13 @@ uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count
     window_list = ts_resize(window_list, sizeof(uint32_t) * *count, sizeof(uint32_t) * window_count);
     *count = window_count;
 
-    CFRelease(query);
     CFRelease(iterator);
+    CFRelease(query);
+    goto out;
+iterator_failed:
+    CFRelease(query);
+query_failed:
+    *count = 0;
 out:
     CFRelease(window_list_ref);
 err:

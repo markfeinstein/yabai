@@ -194,8 +194,12 @@ static bool event_queue_check_full_closes_daemon_message_fd_once(char *test_name
     TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, scalar_pair), 0);
 
     if (daemon_pair[0] != -1 && scalar_pair[0] != -1) {
+        TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 0);
+        TEST_CHECK(daemon_message_admission_acquire(&g_daemon_message_admission), true);
+        TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 1);
         g_event_queue_test_fail_allocation = true;
         event_loop_post(&event_loop, DAEMON_MESSAGE, NULL, daemon_pair[0]);
+        TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 0);
         TEST_CHECK(event_queue_fd_is_open(daemon_pair[0]), false);
         TEST_CHECK(event_queue_fd_is_open(daemon_pair[1]), true);
         TEST_CHECK(event_loop.queue.count, 1);
@@ -280,4 +284,22 @@ TEST_FUNC(event_queue_full_closes_daemon_message_fd_once, {
 
 TEST_FUNC(event_queue_full_failstops_destructive_events, {
     result = event_queue_check_full_failstops_destructive_events(test_name);
+});
+
+TEST_FUNC(daemon_message_admission_bounds_and_reuses_slots, {
+    struct daemon_message_admission admission = { 0 };
+
+    daemon_message_admission_release(&admission);
+    TEST_CHECK(daemon_message_admission_count(&admission), 0);
+
+    for (uint32_t i = 0; i < DAEMON_MESSAGE_ADMISSION_MAX; ++i) {
+        TEST_CHECK(daemon_message_admission_acquire(&admission), true);
+    }
+    TEST_CHECK(daemon_message_admission_count(&admission), DAEMON_MESSAGE_ADMISSION_MAX);
+    TEST_CHECK(daemon_message_admission_acquire(&admission), false);
+
+    daemon_message_admission_release(&admission);
+    TEST_CHECK(daemon_message_admission_count(&admission), DAEMON_MESSAGE_ADMISSION_MAX - 1);
+    TEST_CHECK(daemon_message_admission_acquire(&admission), true);
+    TEST_CHECK(daemon_message_admission_count(&admission), DAEMON_MESSAGE_ADMISSION_MAX);
 });

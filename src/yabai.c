@@ -20,6 +20,8 @@
 #define HELP_OPT_LONG           "--help"
 #define HELP_OPT_SHRT           "-h"
 
+#define CLIENT_RESPONSE_INACTIVITY_TIMEOUT_MS 30000
+
 #define MAJOR  7
 #define MINOR  1
 #define PATCH 25
@@ -50,6 +52,42 @@ mach_port_t g_bs_port;
 int g_connection;
 bool g_verbose;
 pid_t g_pid;
+
+static int client_read_response_fd(int sockfd, FILE *standard_output, FILE *standard_error,
+                                   uint32_t inactivity_timeout_ms)
+{
+    int result = EXIT_SUCCESS;
+    bool first_byte = true;
+    FILE *output = standard_output;
+    char rsp[BUFSIZ];
+    uint64_t deadline = socket_io_deadline_after_ms(inactivity_timeout_ms);
+
+    for (;;) {
+        size_t bytes_read;
+        enum socket_io_read_result read_result = socket_io_read_some_until(sockfd, rsp, sizeof(rsp),
+                                                                           deadline, &bytes_read);
+        if (read_result == SOCKET_IO_READ_EOF) return result;
+        if (read_result != SOCKET_IO_READ_DATA) return EXIT_FAILURE;
+
+        deadline = socket_io_deadline_after_ms(inactivity_timeout_ms);
+
+        size_t offset = 0;
+        if (first_byte) {
+            first_byte = false;
+            if (rsp[0] == FAILURE_MESSAGE[0]) {
+                result = EXIT_FAILURE;
+                output = standard_error;
+                offset = 1;
+            }
+        }
+
+        size_t output_length = bytes_read - offset;
+        if ((output_length && fwrite(rsp + offset, 1, output_length, output) != output_length) ||
+            fflush(output) != 0) {
+            return EXIT_FAILURE;
+        }
+    }
+}
 
 static int client_send_message(int argc, char **argv)
 {
@@ -93,32 +131,16 @@ static int client_send_message(int argc, char **argv)
         error("yabai-msg: failed to connect to socket..\n");
     }
 
-    if (send(sockfd, message, sizeof(int)+message_length, 0) == -1) {
+    uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
+    if (!socket_io_write_all_until(sockfd, message, sizeof(int)+message_length, deadline)) {
         error("yabai-msg: failed to send data..\n");
     }
 
     shutdown(sockfd, SHUT_WR);
     free(message);
 
-    int result = EXIT_SUCCESS;
-    FILE *output = stdout;
-    int bytes_read = 0;
-    char rsp[BUFSIZ];
-
-    while ((bytes_read = read(sockfd, rsp, sizeof(rsp)-1)) > 0) {
-        rsp[bytes_read] = '\0';
-
-        if (rsp[0] == FAILURE_MESSAGE[0]) {
-            result = EXIT_FAILURE;
-            output = stderr;
-            fprintf(output, "%s", rsp + 1);
-            fflush(output);
-        } else {
-            fprintf(output, "%s", rsp);
-            fflush(output);
-        }
-    }
-
+    int result = client_read_response_fd(sockfd, stdout, stderr,
+                                         CLIENT_RESPONSE_INACTIVITY_TIMEOUT_MS);
     socket_close(sockfd);
     return result;
 }
