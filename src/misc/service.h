@@ -1,6 +1,8 @@
 #ifndef SERVICE_H
 #define SERVICE_H
 
+#include <limits.h>
+
 #define _PATH_LAUNCHCTL   "/bin/launchctl"
 #define _NAME_YABAI_PLIST "com.asmvik.yabai"
 #define _PATH_YABAI_PLIST "%s/Library/LaunchAgents/"_NAME_YABAI_PLIST".plist"
@@ -40,6 +42,56 @@
     "    <integer>-20</integer>\n" \
     "</dict>\n" \
     "</plist>"
+
+static inline bool plist_xml_add_size(size_t *size, size_t increment)
+{
+    if (*size > SIZE_MAX - increment) return false;
+    *size += increment;
+    return true;
+}
+
+static char *plist_xml_escape(char *s)
+{
+    size_t size = 0;
+    for (char *cursor = s; *cursor; ++cursor) {
+        switch (*cursor) {
+        case '&':  if (!plist_xml_add_size(&size, 5)) return NULL; break;
+        case '<':  if (!plist_xml_add_size(&size, 4)) return NULL; break;
+        case '>':  if (!plist_xml_add_size(&size, 4)) return NULL; break;
+        case '"': if (!plist_xml_add_size(&size, 6)) return NULL; break;
+        case '\'': if (!plist_xml_add_size(&size, 6)) return NULL; break;
+        default:   if (!plist_xml_add_size(&size, 1)) return NULL; break;
+        }
+    }
+
+    if (size == SIZE_MAX) return NULL;
+    char *result = malloc(size + 1);
+    if (!result) return NULL;
+
+    for (char *dst = result, *cursor = s; *cursor; ++cursor) {
+        if (*cursor == '&') {
+            memcpy(dst, "&amp;", 5);
+            dst += 5;
+        } else if (*cursor == '<') {
+            memcpy(dst, "&lt;", 4);
+            dst += 4;
+        } else if (*cursor == '>') {
+            memcpy(dst, "&gt;", 4);
+            dst += 4;
+        } else if (*cursor == '"') {
+            memcpy(dst, "&quot;", 6);
+            dst += 6;
+        } else if (*cursor == '\'') {
+            memcpy(dst, "&apos;", 6);
+            dst += 6;
+        } else {
+            *dst++ = *cursor;
+        }
+    }
+
+    result[size] = '\0';
+    return result;
+}
 
 //
 // NOTE(asmvik): A launchd service has the following states:
@@ -116,15 +168,44 @@ static char *populate_plist(int *length)
         error("yabai: unable to retrieve path of executable! abort..\n");
     }
 
-    int size = strlen(_YABAI_PLIST)-8 + strlen(exe_path) + strlen(path_env) + (2*strlen(user)) + 1;
+    char *escaped_exe_path = plist_xml_escape(exe_path);
+    char *escaped_path_env = plist_xml_escape(path_env);
+    char *escaped_user     = plist_xml_escape(user);
+    if (!escaped_exe_path || !escaped_path_env || !escaped_user) {
+        free(escaped_exe_path);
+        free(escaped_path_env);
+        free(escaped_user);
+        error("yabai: could not allocate memory for plist contents! abort..\n");
+    }
+
+    size_t size = strlen(_YABAI_PLIST)-8;
+    if (!plist_xml_add_size(&size, strlen(escaped_exe_path)) ||
+        !plist_xml_add_size(&size, strlen(escaped_path_env)) ||
+        !plist_xml_add_size(&size, strlen(escaped_user)) ||
+        !plist_xml_add_size(&size, strlen(escaped_user)) ||
+        !plist_xml_add_size(&size, 1) ||
+        size-1 > INT_MAX) {
+        free(escaped_exe_path);
+        free(escaped_path_env);
+        free(escaped_user);
+        error("yabai: plist contents exceed supported length! abort..\n");
+    }
+
     char *result = malloc(size);
     if (!result) {
+        free(escaped_exe_path);
+        free(escaped_path_env);
+        free(escaped_user);
         error("yabai: could not allocate memory for plist contents! abort..\n");
     }
 
     memset(result, 0, size);
-    snprintf(result, size, _YABAI_PLIST, exe_path, path_env, user, user);
-    *length = size-1;
+    snprintf(result, size, _YABAI_PLIST, escaped_exe_path, escaped_path_env, escaped_user, escaped_user);
+    *length = (int) size-1;
+
+    free(escaped_exe_path);
+    free(escaped_path_env);
+    free(escaped_user);
 
     return result;
 }

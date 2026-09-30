@@ -401,10 +401,12 @@ static void event_signal_serialize(FILE *rsp, struct signal *signal, enum signal
 {
     TIME_FUNCTION;
 
+    char *label = signal->label;
     char *app   = signal->app;
     char *title = signal->title;
     char *cmd   = signal->command;
 
+    char *escaped_label = label ? ts_string_escape(label) : NULL;
     char *escaped_app   = app   ? ts_string_escape(app)   : NULL;
     char *escaped_title = title ? ts_string_escape(title) : NULL;
     char *escaped_cmd   = cmd   ? ts_string_escape(cmd)   : NULL;
@@ -420,7 +422,7 @@ static void event_signal_serialize(FILE *rsp, struct signal *signal, enum signal
             "\t\"action\":\"%s\"\n"
             "}",
             index,
-            signal->label ? signal->label : "",
+            escaped_label ? escaped_label : label ? label : "",
             escaped_app ? escaped_app : app ? app : "",
             escaped_title ? escaped_title : title ? title : "",
             json_optional_bool(signal->active),
