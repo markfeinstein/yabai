@@ -118,6 +118,32 @@ void insert_feedback_destroy(struct window_node *node)
     }
 }
 
+void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id)
+{
+    if (node->feedback_window.id && prev_window_id != node->window_order[0]) {
+        table_remove(&g_window_manager.insert_feedback, &prev_window_id);
+        table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
+
+        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+            update_window_notifications();
+        }
+    }
+}
+
+static void insert_feedback_adopt(struct window_node *parent, struct window_node *child)
+{
+    if (child->feedback_window.id) {
+        table_remove(&g_window_manager.insert_feedback, &child->window_order[0]);
+        parent->feedback_window = child->feedback_window;
+        memset(&child->feedback_window, 0, sizeof(struct feedback_window));
+        table_add(&g_window_manager.insert_feedback, &parent->window_order[0], parent);
+
+        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+            update_window_notifications();
+        }
+    }
+}
+
 static inline struct area area_from_cgrect(CGRect rect)
 {
     return (struct area) { rect.origin.x, rect.origin.y, rect.size.width, rect.size.height };
@@ -396,8 +422,26 @@ int window_node_index_of_window(struct window_node *node, uint32_t window_id)
     return 0;
 }
 
+bool window_node_make_window_order_head(struct window_node *node, uint32_t window_id)
+{
+    uint32_t prev_order_head = node->window_order[0];
+
+    for (int i = 0; i < node->window_count; ++i) {
+        if (node->window_order[i] != window_id) continue;
+
+        memmove(node->window_order + 1, node->window_order, sizeof(uint32_t) * i);
+        node->window_order[0] = window_id;
+        insert_feedback_rekey(node, prev_order_head);
+        return true;
+    }
+
+    return false;
+}
+
 void window_node_swap_window_list(struct window_node *a_node, struct window_node *b_node)
 {
+    uint32_t a_prev_order_head = a_node->window_order[0];
+    uint32_t b_prev_order_head = b_node->window_order[0];
     uint32_t tmp_window_list[NODE_MAX_WINDOW_COUNT];
     uint32_t tmp_window_order[NODE_MAX_WINDOW_COUNT];
     uint32_t tmp_window_count;
@@ -416,6 +460,17 @@ void window_node_swap_window_list(struct window_node *a_node, struct window_node
 
     a_node->zoom = NULL;
     b_node->zoom = NULL;
+
+    if (a_node->feedback_window.id || b_node->feedback_window.id) {
+        if (a_node->feedback_window.id) table_remove(&g_window_manager.insert_feedback, &a_prev_order_head);
+        if (b_node->feedback_window.id) table_remove(&g_window_manager.insert_feedback, &b_prev_order_head);
+        if (a_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &a_node->window_order[0], a_node);
+        if (b_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &b_node->window_order[0], b_node);
+
+        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+            update_window_notifications();
+        }
+    }
 }
 
 struct window_node *window_node_find_first_leaf(struct window_node *root)
@@ -624,6 +679,7 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     if (!node) return NULL;
 
     if (node->window_count > 1) {
+        uint32_t prev_order_head = node->window_order[0];
         bool removed_entry = false;
         bool removed_order = false;
 
@@ -642,6 +698,7 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
         assert(removed_entry);
         assert(removed_order);
         --node->window_count;
+        insert_feedback_rekey(node, prev_order_head);
 
         if (view->insertion_point == window->id) {
             view->insertion_point = node->window_order[0];
@@ -679,7 +736,7 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
                       : view->root;
 
     if (child->insert_dir) {
-        parent->feedback_window = child->feedback_window;
+        insert_feedback_adopt(parent, child);
         parent->insert_dir      = child->insert_dir;
         parent->split           = child->split;
         parent->child           = child->child;
@@ -727,8 +784,11 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     return parent;
 }
 
-void view_stack_window_node(struct window_node *node, struct window *window)
+bool view_stack_window_node(struct window_node *node, struct window *window)
 {
+    if (node->window_count >= NODE_MAX_WINDOW_COUNT) return false;
+
+    uint32_t prev_order_head = node->window_order[0];
     int insert_index = node->window_count;
 
     for (int i = 0; i < node->window_count; ++i) {
@@ -746,6 +806,9 @@ void view_stack_window_node(struct window_node *node, struct window *window)
     memmove(node->window_order + 1, node->window_order, sizeof(uint32_t) * node->window_count);
     node->window_order[0] = window->id;
     ++node->window_count;
+    insert_feedback_rekey(node, prev_order_head);
+
+    return true;
 }
 
 struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point)
@@ -772,13 +835,16 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
             if (leaf) {
                 bool do_stack = leaf->insert_dir == STACK;
 
-                leaf->insert_dir = 0;
-                insert_feedback_destroy(leaf);
-
                 if (do_stack) {
-                    view_stack_window_node(leaf, window);
+                    if (!view_stack_window_node(leaf, window)) return NULL;
+
+                    leaf->insert_dir = 0;
+                    insert_feedback_destroy(leaf);
                     return leaf;
                 }
+
+                leaf->insert_dir = 0;
+                insert_feedback_destroy(leaf);
             }
         }
 
@@ -804,8 +870,7 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
 
         return leaf;
     } else if (view->layout == VIEW_STACK) {
-        view_stack_window_node(view->root, window);
-        return view->root;
+        return view_stack_window_node(view->root, window) ? view->root : NULL;
     }
 
     return NULL;
@@ -824,8 +889,8 @@ uint32_t *view_find_window_list(struct view *view, int *window_count)
     uint32_t *window_list = ts_alloc_list(uint32_t, capacity);
 
     for (struct window_node *node = window_node_find_first_leaf(view->root); node; node = window_node_find_next_leaf(node)) {
-        if (*window_count + node->window_count >= capacity) {
-            ts_expand(window_list, sizeof(uint32_t) * capacity, sizeof(uint32_t) * capacity);
+        while (*window_count + node->window_count > capacity) {
+            window_list = ts_expand(window_list, sizeof(uint32_t) * capacity, sizeof(uint32_t) * capacity);
             capacity *= 2;
         }
 

@@ -130,23 +130,87 @@ enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struc
     return MOUSE_DROP_ACTION_NONE;
 }
 
+static uint32_t mouse_drop_action_restore_insertion_point(struct window_node *src_node, struct window *src_window)
+{
+    for (int i = 0; i < src_node->window_count; ++i) {
+        if (src_node->window_order[i] != src_window->id) {
+            return src_node->window_order[i];
+        }
+    }
+
+    if (!src_node->parent) return 0;
+
+    struct window_node *sibling = window_node_is_right_child(src_node)
+                               ? src_node->parent->left
+                               : src_node->parent->right;
+
+    if (!sibling || sibling->window_count == 0) return 0;
+    return sibling->window_order[0];
+}
+
+static struct window_node *mouse_drop_action_restore_window(struct view *src_view, struct window *src_window, uint32_t insertion_point)
+{
+    struct window_node *node = view_add_window_node_with_insertion_point(src_view, src_window, insertion_point);
+    if (!node && insertion_point) {
+        node = view_add_window_node_with_insertion_point(src_view, src_window, 0);
+    }
+
+    return node;
+}
+
+static bool mouse_drop_action_warp_capacity_available(struct view *dst_view, struct window *dst_window)
+{
+    struct window_node *dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node) return false;
+
+    if (dst_view->layout == VIEW_STACK && dst_view->root->window_count >= NODE_MAX_WINDOW_COUNT) {
+        return false;
+    }
+
+    if (dst_view->layout == VIEW_BSP && dst_node->insert_dir == STACK && dst_node->window_count >= NODE_MAX_WINDOW_COUNT) {
+        return false;
+    }
+
+    return true;
+}
+
+static __attribute__((noreturn)) void mouse_drop_action_fail_rollback(char *operation)
+{
+    error("fatal error: mouse-drop rollback failed for %s\n", operation);
+    __builtin_unreachable();
+}
+
 void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, struct window *src_window, struct view *dst_view, struct window *dst_window)
 {
-    space_manager_untile_window(src_view, src_window);
-    window_manager_remove_managed_window(wm, src_window->id);
-
     struct window_node *dst_node = view_find_window_node(dst_view, dst_window->id);
-    if (dst_node->window_count+1 < NODE_MAX_WINDOW_COUNT) {
-        view_stack_window_node(dst_node, src_window);
-        window_manager_add_managed_window(wm, src_window, dst_view);
-        window_manager_adjust_layer(src_window, LAYER_BELOW);
-        scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
+    if (!dst_node || dst_node->window_count >= NODE_MAX_WINDOW_COUNT) return;
 
-        if (dst_node->zoom) {
-            window_manager_animate_window((struct window_capture) { src_window, dst_node->zoom->area.x, dst_node->zoom->area.y, dst_node->zoom->area.w, dst_node->zoom->area.h });
-        } else {
-            window_manager_animate_window((struct window_capture) { src_window, dst_node->area.x, dst_node->area.y, dst_node->area.w, dst_node->area.h });
+    struct window_node *src_node = view_find_window_node(src_view, src_window->id);
+    if (!src_node) return;
+
+    uint32_t src_restore_insertion_point = mouse_drop_action_restore_insertion_point(src_node, src_window);
+
+    space_manager_untile_window(src_view, src_window);
+
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node || !view_stack_window_node(dst_node, src_window)) {
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("stack");
         }
+
+        window_manager_adjust_layer(src_window, LAYER_BELOW);
+        return;
+    }
+
+    window_manager_remove_managed_window(wm, src_window->id);
+    window_manager_add_managed_window(wm, src_window, dst_view);
+    window_manager_adjust_layer(src_window, LAYER_BELOW);
+    scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
+
+    if (dst_node->zoom) {
+        window_manager_animate_window((struct window_capture) { src_window, dst_node->zoom->area.x, dst_node->zoom->area.y, dst_node->zoom->area.w, dst_node->zoom->area.h });
+    } else {
+        window_manager_animate_window((struct window_capture) { src_window, dst_node->area.x, dst_node->area.y, dst_node->area.w, dst_node->area.h });
     }
 }
 
@@ -180,26 +244,56 @@ void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, st
 
 void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window, enum window_node_split split, enum window_node_child child)
 {
-    if ((src_node->parent && dst_node->parent) &&
-        (src_node->parent == dst_node->parent) &&
-        (src_node->window_count == 1)) {
-        if (dst_node->parent->split == split) {
-            mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
-            return;
-        } else {
-            dst_node->parent->split = split;
-            dst_node->parent->child = child;
-        }
-    } else {
-        dst_node->split = split;
-        dst_node->child = child;
+    if (!mouse_drop_action_warp_capacity_available(dst_view, dst_window)) return;
+
+    src_node = view_find_window_node(src_view, src_window->id);
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!src_node || !dst_node) return;
+
+    bool sibling_collapse = (src_node->parent && dst_node->parent) &&
+                            (src_node->parent == dst_node->parent) &&
+                            (src_node->window_count == 1);
+
+    if (sibling_collapse && dst_node->parent->split == split) {
+        mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
+        return;
     }
+
+    uint32_t src_restore_insertion_point = mouse_drop_action_restore_insertion_point(src_node, src_window);
 
     struct window_node *src_node_rm = view_remove_window_node(src_view, src_window);
     window_manager_remove_managed_window(wm, src_window->id);
     window_manager_purify_window(wm, src_window);
 
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node) {
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("warp destination re-resolve");
+        }
+
+        window_manager_add_managed_window(wm, src_window, src_view);
+        return;
+    }
+
+    enum window_node_split dst_prev_split = dst_node->split;
+    enum window_node_child dst_prev_child = dst_node->child;
+
+    dst_node->split = split;
+    dst_node->child = child;
+
     struct window_node *src_node_add = view_add_window_node_with_insertion_point(dst_view, src_window, dst_window->id);
+    if (!src_node_add) {
+        dst_node->split = dst_prev_split;
+        dst_node->child = dst_prev_child;
+
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("warp insertion");
+        }
+
+        window_manager_add_managed_window(wm, src_window, src_view);
+        return;
+    }
+
     window_manager_add_managed_window(wm, src_window, dst_view);
 
     struct window_capture *window_list = NULL;
@@ -281,6 +375,7 @@ bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask)
     if (!CGEventTapIsEnabled(mouse_state->handle)) {
         CFMachPortInvalidate(mouse_state->handle);
         CFRelease(mouse_state->handle);
+        mouse_state->handle = NULL;
         return false;
     }
 

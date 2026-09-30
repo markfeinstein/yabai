@@ -2359,6 +2359,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "the selected window is not managed.\n");
                 } else if (result == WINDOW_OP_ERROR_SAME_STACK) {
                     daemon_fail(rsp, "cannot warp a window with a window in the same stack.\n");
+                } else if (result == WINDOW_OP_ERROR_MAX_STACK) {
+                    daemon_fail(rsp, "cannot stack window, max capacity of %d reached.\n", NODE_MAX_WINDOW_COUNT);
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot warp a window onto itself.\n");
                 } else {

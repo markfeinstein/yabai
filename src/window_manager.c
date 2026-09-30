@@ -293,7 +293,9 @@ void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wi
 
 void window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view)
 {
-    if (view->layout == VIEW_FLOAT) return;
+    if (!view || view->layout == VIEW_FLOAT) return;
+    if (!view_find_window_node(view, window->id)) return;
+
     table_add(&wm->managed_window, &window->id, view);
     window_manager_purify_window(wm, window);
 }
@@ -484,6 +486,7 @@ static inline void window_manager_notify_jankyborders(struct window_animation *a
         }
 
         mach_send(port, &data, sizeof(data));
+        mach_port_deallocate(mach_task_self(), port);
         if (wait) usleep(20000);
     }
 }
@@ -1862,6 +1865,10 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
     struct view *a_view = window_manager_find_managed_window(wm, a);
     if (!a_view) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
 
+    struct window_node *a_node = view_find_window_node(a_view, a->id);
+    if (!a_node) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
+    if (a_node->window_count >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
+
     struct view *b_view = window_manager_find_managed_window(wm, b);
     if (b_view) {
         space_manager_untile_window(b_view, b);
@@ -1873,10 +1880,11 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
         if (window_check_flag(b, WINDOW_STICKY)) window_manager_make_window_sticky(sm, wm, b, false);
     }
 
-    struct window_node *a_node = view_find_window_node(a_view, a->id);
-    if (a_node->window_count+1 >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
+    a_node = view_find_window_node(a_view, a->id);
+    if (!a_node) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
+    if (a_node->window_count >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
+    if (!view_stack_window_node(a_node, b)) return WINDOW_OP_ERROR_MAX_STACK;
 
-    view_stack_window_node(a_node, b);
     window_manager_add_managed_window(wm, b, a_view);
     window_manager_adjust_layer(b, LAYER_BELOW);
     scripting_addition_order_window(b->id, 1, a_node->window_order[1]);
@@ -1907,6 +1915,7 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
     if (!b_node) return WINDOW_OP_ERROR_INVALID_DST_NODE;
 
     if (a_node == b_node) return WINDOW_OP_ERROR_SAME_STACK;
+    if (b_node->insert_dir == STACK && b_node->window_count >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
 
     if (a_node->parent && b_node->parent &&
         a_node->parent == b_node->parent &&
@@ -1917,8 +1926,8 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
 
             view_remove_window_node(a_view, a);
             window_manager_remove_managed_window(wm, a->id);
-            window_manager_add_managed_window(wm, a, b_view);
             struct window_node *a_node_add = view_add_window_node_with_insertion_point(b_view, a, b->id);
+            window_manager_add_managed_window(wm, a, b_view);
 
             struct window_capture *window_list = NULL;
             window_node_capture_windows(a_node_add, &window_list);
@@ -1995,9 +2004,9 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
 
             space_manager_untile_window(a_view, a);
             window_manager_remove_managed_window(wm, a->id);
-            window_manager_add_managed_window(wm, a, b_view);
             space_manager_move_window_to_space(b_view->sid, a);
             space_manager_tile_window_on_space_with_insertion_point(sm, a, b_view->sid, b->id);
+            window_manager_add_managed_window(wm, a, b_view);
         }
     }
 
@@ -2677,7 +2686,9 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
             // This is necessary to make sure that we do not call the AX API for each modification to the tree.
             //
 
-            view_add_window_node(view, window);
+            struct window_node *node = view_add_window_node(view, window);
+            if (!node) continue;
+
             window_manager_adjust_layer(window, LAYER_BELOW);
             window_manager_add_managed_window(wm, window, view);
             view_set_flag(view, VIEW_IS_DIRTY);
