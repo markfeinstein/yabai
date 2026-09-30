@@ -13,24 +13,51 @@ volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
 
+static bool update_window_notifications_append(uint32_t **window_list, size_t *window_count, size_t *window_capacity, uint32_t wid)
+{
+    if (*window_count == *window_capacity) {
+        size_t new_capacity = *window_capacity ? *window_capacity * 2 : 128;
+        if (new_capacity <= *window_capacity || new_capacity > (SIZE_MAX / sizeof(uint32_t))) return false;
+
+        uint32_t *new_window_list = realloc(*window_list, sizeof(uint32_t) * new_capacity);
+        if (!new_window_list) return false;
+
+        *window_list = new_window_list;
+        *window_capacity = new_capacity;
+    }
+
+    (*window_list)[(*window_count)++] = wid;
+    return true;
+}
+
 static void update_window_notifications(void)
 {
-    int window_count = 0;
-    uint32_t window_list[1024] = {0};
+    size_t window_count = 0;
+    size_t window_capacity = 0;
+    uint32_t *window_list = NULL;
+    bool success = true;
 
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         // NOTE(asmvik): Subscribe to all windows because of window_destroyed (and ordered) notifications
         table_for (struct window *window, g_window_manager.window, {
-            window_list[window_count++] = window->id;
+            if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, window->id)) {
+                success = false;
+            }
         })
     } else {
         // NOTE(asmvik): Subscribe to windows that have a feedback_border because of window_ordered notifications
         table_for (struct window_node *node, g_window_manager.insert_feedback, {
-            window_list[window_count++] = node->window_order[0];
+            if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, node->window_order[0])) {
+                success = false;
+            }
         })
     }
 
-    SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+    if (success && window_count <= 2147483647u) {
+        SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count);
+    }
+
+    free(window_list);
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
@@ -1472,7 +1499,6 @@ static EVENT_HANDLER(MOUSE_MOVED)
                     if (!role) continue;
 
                     bool valid = CFEqual(role, kAXSheetRole) || CFEqual(role, kAXDrawerRole);
-                    CFRelease(role);
 
                     if (valid) {
                         window = child;

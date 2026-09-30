@@ -20,10 +20,15 @@ bool window_observe(struct window *window)
 
 void window_unobserve(struct window *window)
 {
+    AXObserverRef observer_ref = window->application ? window->application->observer_ref : NULL;
+
     for (int i = 0; i < array_count(ax_window_notification); ++i) {
         if (!(window->notification & (1 << i))) continue;
 
-        AXObserverRemoveNotification(window->application->observer_ref, window->ref, ax_window_notification[i]);
+        if (observer_ref) {
+            AXObserverRemoveNotification(observer_ref, window->ref, ax_window_notification[i]);
+        }
+
         window->notification &= ~(1 << i);
     }
 }
