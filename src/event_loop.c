@@ -60,14 +60,7 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     struct window_node *node = view_find_window_node(view, window->id);
     if (node->window_count <= 1) return;
 
-    for (int i = 0; i < node->window_count; ++i) {
-        if (node->window_order[i] != window->id) continue;
-
-        memmove(node->window_order + 1, node->window_order, sizeof(uint32_t) * i);
-        node->window_order[0] = window->id;
-
-        break;
-    }
+    window_node_make_window_order_head(node, window->id);
 }
 
 static bool application_window_collection_changed_inventory(int previous_window_count, int window_count)
@@ -222,13 +215,17 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
                 //
 
                 window_manager_adjust_layer(window, LAYER_BELOW);
-                view_add_window_node_with_insertion_point(view, window, prev_window_id);
-                window_manager_add_managed_window(&g_window_manager, window, view);
+                struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
+                if (!node) {
+                    window_manager_adjust_layer(window, LAYER_NORMAL);
+                } else {
+                    window_manager_add_managed_window(&g_window_manager, window, view);
 
-                view_set_flag(view, VIEW_IS_DIRTY);
-                view_list[view_count++] = view;
+                    view_set_flag(view, VIEW_IS_DIRTY);
+                    view_list[view_count++] = view;
 
-                prev_window_id = window->id;
+                    prev_window_id = window->id;
+                }
             }
         }
 
@@ -477,7 +474,12 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
             //
 
             window_manager_adjust_layer(window, LAYER_BELOW);
-            view_add_window_node_with_insertion_point(view, window, prev_window_id);
+            struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
+            if (!node) {
+                window_manager_adjust_layer(window, LAYER_NORMAL);
+                continue;
+            }
+
             window_manager_add_managed_window(&g_window_manager, window, view);
 
             view_set_flag(view, VIEW_IS_DIRTY);

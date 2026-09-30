@@ -221,11 +221,13 @@ struct view
 
 void insert_feedback_show(struct window_node *node);
 void insert_feedback_destroy(struct window_node *node);
+void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id);
 
 void window_node_flush(struct window_node *node);
 void window_node_update(struct view *view, struct window_node *node);
 bool window_node_contains_window(struct window_node *node, uint32_t window_id);
 int window_node_index_of_window(struct window_node *node, uint32_t window_id);
+bool window_node_make_window_order_head(struct window_node *node, uint32_t window_id);
 void window_node_swap_window_list(struct window_node *a_node, struct window_node *b_node);
 struct window_node *window_node_find_first_leaf(struct window_node *root);
 struct window_node *window_node_find_last_leaf(struct window_node *root);
@@ -235,7 +237,7 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
 
 struct window_node *view_find_window_node_in_direction(struct view *view, struct window_node *source, int direction);
 struct window_node *view_find_window_node(struct view *view, uint32_t window_id);
-void view_stack_window_node(struct window_node *node, struct window *window);
+bool view_stack_window_node(struct window_node *node, struct window *window);
 struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point);
 struct window_node *view_add_window_node(struct view *view, struct window *window);
 struct window_node *view_remove_window_node(struct view *view, struct window *window);
