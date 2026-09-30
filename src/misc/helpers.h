@@ -448,7 +448,7 @@ static inline bool file_can_execute(char *filename)
         return false;
     }
 
-    return (buffer.st_mode & S_IXUSR);
+    return S_ISREG(buffer.st_mode) && access(filename, X_OK) == 0;
 }
 
 static bool get_config_file(char *restrict filename, char *restrict buffer, int buffer_size)
@@ -469,6 +469,34 @@ static bool get_config_file(char *restrict filename, char *restrict buffer, int 
     return file_exists(buffer);
 }
 
+static void config_file_exec_argv(char *config_file, bool executable, char **argv)
+{
+    if (executable) {
+        argv[0] = config_file;
+        argv[1] = NULL;
+    } else {
+        argv[0] = "/usr/bin/env";
+        argv[1] = "sh";
+        argv[2] = config_file;
+        argv[3] = NULL;
+    }
+}
+
+static int config_file_spawn(char *config_file, bool executable, pid_t *pid)
+{
+    extern char **environ;
+    char *argv[4];
+    config_file_exec_argv(config_file, executable, argv);
+    int status = posix_spawn(pid, argv[0], NULL, NULL, argv, environ);
+
+    if (status == ENOEXEC && executable) {
+        config_file_exec_argv(config_file, false, argv);
+        status = posix_spawn(pid, argv[0], NULL, NULL, argv, environ);
+    }
+
+    return status;
+}
+
 static void exec_config_file(char *config_file, int config_file_size)
 {
     if (config_file[0] == '\0' && !get_config_file("yabairc", config_file, config_file_size)) {
@@ -483,14 +511,10 @@ static void exec_config_file(char *config_file, int config_file_size)
         return;
     }
 
-    int pid = fork();
-    if (pid == 0) {
-        char **exec = file_can_execute(config_file)
-                    ? (char*[]){ "/usr/bin/env", "sh", "-c", config_file, NULL}
-                    : (char*[]){ "/usr/bin/env", "sh", config_file, NULL};
-        exit(execvp(exec[0], exec));
-    } else if (pid == -1) {
-        warn("yabai: failed to load config file '%s'\n", config_file);
+    pid_t pid;
+    int status = config_file_spawn(config_file, file_can_execute(config_file), &pid);
+    if (status != 0) {
+        warn("yabai: failed to load config file '%s': %s\n", config_file, strerror(status));
         notify("configuration", "failed to load file '%s'", config_file);
     }
 }

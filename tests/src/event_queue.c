@@ -84,6 +84,55 @@ static bool event_queue_check_grows_past_512k_fifo_and_release_once(char *test_n
     return result;
 }
 
+static bool event_queue_check_wrapped_growth_preserves_fifo_and_release_once(char *test_name)
+{
+    bool result = true;
+    struct event_queue_test_context contexts[7] = { 0 };
+    struct event replaced = { 0 };
+    uint32_t capacity = 0;
+
+    if (!event_queue_test_reset(4)) return false;
+
+    for (int i = 0; i < 4; ++i) {
+        contexts[i].index = i + 1;
+        struct event event = { .type = WINDOW_CREATED, .param1 = i + 1, .context = &contexts[i] };
+        TEST_CHECK(event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity), EVENT_QUEUE_ADDED);
+    }
+
+    for (int expected = 1; expected <= 2; ++expected) {
+        struct event event = { 0 };
+        TEST_CHECK(event_queue_pop(&event_queue_test_queue, &event), true);
+        TEST_CHECK(event.param1, expected);
+        event_queue_test_release(event.context);
+    }
+
+    for (int i = 4; i < 7; ++i) {
+        contexts[i].index = i + 1;
+        struct event event = { .type = WINDOW_CREATED, .param1 = i + 1, .context = &contexts[i] };
+        enum event_queue_result queue_result = event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity);
+        TEST_CHECK(queue_result, i == 6 ? EVENT_QUEUE_GREW : EVENT_QUEUE_ADDED);
+    }
+    TEST_CHECK(capacity, 8U);
+
+    for (int expected = 3; expected <= 7; ++expected) {
+        struct event event = { 0 };
+        TEST_CHECK(event_queue_pop(&event_queue_test_queue, &event), true);
+        TEST_CHECK(event.type, WINDOW_CREATED);
+        TEST_CHECK(event.param1, expected);
+        TEST_CHECK(((struct event_queue_test_context *) event.context)->index, expected);
+        event_queue_test_release(event.context);
+    }
+
+    struct event event = { 0 };
+    TEST_CHECK(event_queue_pop(&event_queue_test_queue, &event), false);
+    for (int i = 0; i < 7; ++i) {
+        TEST_CHECK(contexts[i].releases, 1);
+    }
+
+    event_queue_test_destroy();
+    return result;
+}
+
 static bool event_queue_check_merge_releases_replaced_mouse_move_once(char *test_name)
 {
     bool result = true;
@@ -268,6 +317,10 @@ static bool event_queue_check_full_failstops_destructive_events(char *test_name)
 
 TEST_FUNC(event_queue_grows_past_512k_fifo_and_release_once, {
     result = event_queue_check_grows_past_512k_fifo_and_release_once(test_name);
+});
+
+TEST_FUNC(event_queue_wrapped_growth_preserves_fifo_and_release_once, {
+    result = event_queue_check_wrapped_growth_preserves_fifo_and_release_once(test_name);
 });
 
 TEST_FUNC(event_queue_merge_releases_replaced_mouse_move_once, {

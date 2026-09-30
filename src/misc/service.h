@@ -106,27 +106,27 @@ static int safe_exec(char *const argv[], bool suppress_output)
 {
     pid_t pid;
     posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
+    int status = posix_spawn_file_actions_init(&actions);
+    if (status != 0) return 1;
 
-    if (suppress_output) {
-        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0);
-        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0);
-    }
-
-    int status = posix_spawn(&pid, argv[0], &actions, NULL, argv, NULL);
-    if (status) return 1;
-
-    while ((waitpid(pid, &status, 0) == -1) && (errno == EINTR)) {
-        usleep(1000);
-    }
-
-    if (WIFSIGNALED(status)) {
+    if (suppress_output &&
+        (posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0) != 0 ||
+         posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0) != 0)) {
+        posix_spawn_file_actions_destroy(&actions);
         return 1;
-    } else if (WIFSTOPPED(status)) {
-        return 1;
-    } else {
-        return WEXITSTATUS(status);
     }
+
+    status = posix_spawn(&pid, argv[0], &actions, NULL, argv, NULL);
+    posix_spawn_file_actions_destroy(&actions);
+    if (status != 0) return 1;
+
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited == -1 && errno == EINTR);
+
+    if (waited != pid || !WIFEXITED(status)) return 1;
+    return WEXITSTATUS(status);
 }
 
 static char *populate_plist_path(void)
@@ -235,17 +235,40 @@ static inline void ensure_directory_exists(char *yabai_plist_path)
 
 static int service_install_internal(char *yabai_plist_path)
 {
+    int result = 1;
     int yabai_plist_length;
     char *yabai_plist = populate_plist(&yabai_plist_length);
     ensure_directory_exists(yabai_plist_path);
 
-    FILE *handle = fopen(yabai_plist_path, "w");
-    if (!handle) return 1;
+    char temporary_path[PATH_MAX];
+    int temporary_path_length = snprintf(temporary_path, sizeof(temporary_path), "%s.XXXXXX", yabai_plist_path);
+    if (temporary_path_length < 0 || temporary_path_length >= (int) sizeof(temporary_path)) goto cleanup;
 
-    size_t bytes = fwrite(yabai_plist, yabai_plist_length, 1, handle);
-    int result = bytes == 1 ? 0 : 1;
-    fclose(handle);
+    int fd = mkstemp(temporary_path);
+    if (fd == -1) goto cleanup;
 
+    FILE *handle = fdopen(fd, "w");
+    if (!handle) {
+        close(fd);
+        unlink(temporary_path);
+        goto cleanup;
+    }
+
+    bool write_succeeded = fwrite(yabai_plist, 1, (size_t) yabai_plist_length, handle) == (size_t) yabai_plist_length;
+    bool flush_succeeded = fflush(handle) == 0;
+    bool mode_succeeded = fchmod(fd, 0644) == 0;
+    bool sync_succeeded = fsync(fd) == 0;
+    bool close_succeeded = fclose(handle) == 0;
+
+    if (write_succeeded && flush_succeeded && mode_succeeded && sync_succeeded && close_succeeded &&
+        rename(temporary_path, yabai_plist_path) == 0) {
+        result = 0;
+    } else {
+        unlink(temporary_path);
+    }
+
+cleanup:
+    free(yabai_plist);
     return result;
 }
 

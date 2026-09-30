@@ -16,6 +16,24 @@ TEST_FUNC(daemon_message_signed_boundaries_and_suffixes,
     TEST_CHECK(daemon_message_body_is_valid(bad, sizeof(bad)), false);
 });
 
+TEST_FUNC(daemon_message_incomplete_frame_has_failure_response,
+{
+    int fd[2] = { -1, -1 };
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
+        result = false;
+    } else {
+        static const char expected[] = { DAEMON_MESSAGE_FAILURE_MARKER,
+                                         'i','n','c','o','m','p','l','e','t','e',' ','m','e','s','s','a','g','e','.','\n' };
+        char response[sizeof(expected)] = { 0 };
+        daemon_message_send_incomplete_until(fd[0], socket_io_deadline_after_ms(500));
+        TEST_CHECK(socket_io_read_exact_until(fd[1], response, sizeof(response),
+                                              socket_io_deadline_after_ms(500)), true);
+        TEST_CHECK(memcmp(response, expected, sizeof(expected)), 0);
+        close(fd[0]);
+        close(fd[1]);
+    }
+});
+
 TEST_FUNC(daemon_message_complete_invalid_frames_have_failure_responses,
 {
     int fd[2] = { -1, -1 };

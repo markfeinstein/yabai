@@ -72,6 +72,140 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_CHECK(right.zoom == NULL, true);
 });
 
+TEST_FUNC(config_file_execution_preserves_literal_path,
+{
+    char directory[] = "/tmp/yabai-config-test.XXXXXX";
+    char *created_directory = mkdtemp(directory);
+    TEST_CHECK(created_directory != NULL, true);
+
+    if (created_directory) {
+        char config_path[PATH_MAX];
+        snprintf(config_path, sizeof(config_path), "%s/config path;literal", created_directory);
+
+        char *old_test_env = getenv("YABAI_CONFIG_TEST_ENV") ? strdup(getenv("YABAI_CONFIG_TEST_ENV")) : NULL;
+        TEST_CHECK(setenv("YABAI_CONFIG_TEST_ENV", "inherited-value", 1), 0);
+
+        FILE *config_file = fopen(config_path, "w");
+        TEST_CHECK(config_file != NULL, true);
+        if (config_file) {
+            static const char script[] = "#!/bin/sh\n[ \"$YABAI_CONFIG_TEST_ENV\" = inherited-value ]\n";
+            TEST_CHECK(fwrite(script, 1, sizeof(script) - 1, config_file), sizeof(script) - 1);
+            TEST_CHECK(fclose(config_file), 0);
+        }
+
+        char *argv[4] = { 0 };
+        config_file_exec_argv(config_path, true, argv);
+        TEST_CHECK(argv[0] == config_path, true);
+        TEST_CHECK(argv[1] == NULL, true);
+
+        pid_t pid = -1;
+        int status = 0;
+        TEST_CHECK(chmod(config_path, 0700), 0);
+        TEST_CHECK(file_can_execute(config_path), true);
+        TEST_CHECK(config_file_spawn(config_path, true, &pid), 0);
+        TEST_CHECK(waitpid(pid, &status, 0), pid);
+        TEST_CHECK(WIFEXITED(status), true);
+        if (WIFEXITED(status)) TEST_CHECK(WEXITSTATUS(status), 0);
+
+        config_file = fopen(config_path, "w");
+        TEST_CHECK(config_file != NULL, true);
+        if (config_file) {
+            static const char script[] = "[ \"$YABAI_CONFIG_TEST_ENV\" = inherited-value ]\n";
+            TEST_CHECK(fwrite(script, 1, sizeof(script) - 1, config_file), sizeof(script) - 1);
+            TEST_CHECK(fclose(config_file), 0);
+        }
+
+        pid = -1;
+        status = 0;
+        TEST_CHECK(file_can_execute(config_path), true);
+        TEST_CHECK(config_file_spawn(config_path, true, &pid), 0);
+        TEST_CHECK(waitpid(pid, &status, 0), pid);
+        TEST_CHECK(WIFEXITED(status), true);
+        if (WIFEXITED(status)) TEST_CHECK(WEXITSTATUS(status), 0);
+
+        memset(argv, 0, sizeof(argv));
+        config_file_exec_argv(config_path, false, argv);
+        TEST_CHECK(strcmp(argv[0], "/usr/bin/env"), 0);
+        TEST_CHECK(strcmp(argv[1], "sh"), 0);
+        TEST_CHECK(argv[2] == config_path, true);
+        TEST_CHECK(argv[3] == NULL, true);
+
+        pid = -1;
+        status = 0;
+        TEST_CHECK(chmod(config_path, 0600), 0);
+        TEST_CHECK(file_can_execute(config_path), false);
+        TEST_CHECK(config_file_spawn(config_path, false, &pid), 0);
+        TEST_CHECK(waitpid(pid, &status, 0), pid);
+        TEST_CHECK(WIFEXITED(status), true);
+        if (WIFEXITED(status)) TEST_CHECK(WEXITSTATUS(status), 0);
+
+        if (old_test_env) {
+            setenv("YABAI_CONFIG_TEST_ENV", old_test_env, 1);
+            free(old_test_env);
+        } else {
+            unsetenv("YABAI_CONFIG_TEST_ENV");
+        }
+        unlink(config_path);
+        rmdir(created_directory);
+    }
+});
+
+TEST_FUNC(safe_exec_reports_child_outcomes,
+{
+    char *success[] = { "/usr/bin/true", NULL };
+    char *failure[] = { "/usr/bin/false", NULL };
+    char *signaled[] = { "/bin/sh", "-c", "kill -TERM $$", NULL };
+
+    TEST_CHECK(safe_exec(success, false), 0);
+    TEST_CHECK(safe_exec(success, true), 0);
+    TEST_CHECK(safe_exec(failure, false), 1);
+    TEST_CHECK(safe_exec(signaled, false), 1);
+});
+
+TEST_FUNC(service_install_publishes_complete_plist_atomically,
+{
+    char directory[] = "/tmp/yabai-service-test.XXXXXX";
+    char *created_directory = mkdtemp(directory);
+    TEST_CHECK(created_directory != NULL, true);
+
+    if (created_directory) {
+        char plist_path[PATH_MAX];
+        snprintf(plist_path, sizeof(plist_path), "%s/com.asmvik.yabai.plist", created_directory);
+        TEST_CHECK(service_install_internal(plist_path), 0);
+
+        struct stat plist_stat = { 0 };
+        TEST_CHECK(stat(plist_path, &plist_stat), 0);
+        TEST_CHECK(plist_stat.st_mode & 0777, 0644);
+
+        FILE *plist_file = fopen(plist_path, "r");
+        TEST_CHECK(plist_file != NULL, true);
+        if (plist_file) {
+            char contents[8192] = { 0 };
+            size_t length = fread(contents, 1, sizeof(contents) - 1, plist_file);
+            TEST_CHECK(ferror(plist_file), 0);
+            TEST_CHECK(length > 0, true);
+            TEST_CHECK(strstr(contents, "<key>Label</key>") != NULL, true);
+            TEST_CHECK(strstr(contents, "<string>com.asmvik.yabai</string>") != NULL, true);
+            fclose(plist_file);
+        }
+
+        DIR *dir = opendir(created_directory);
+        TEST_CHECK(dir != NULL, true);
+        if (dir) {
+            struct dirent *entry;
+            int temporary_files = 0;
+            while ((entry = readdir(dir))) {
+                if (strncmp(entry->d_name, "com.asmvik.yabai.plist.", strlen("com.asmvik.yabai.plist.")) == 0) ++temporary_files;
+            }
+            TEST_CHECK(temporary_files, 0);
+            closedir(dir);
+        }
+
+        unlink(plist_path);
+        rmdir(created_directory);
+    }
+});
+
 TEST_FUNC(serialization_string_escaping_is_strict,
 {
     char xml_input[] = "amp& lt< gt> quote\" apos'";
@@ -426,6 +560,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
+    TEST_ENTRY(config_file_execution_preserves_literal_path)     \
+    TEST_ENTRY(safe_exec_reports_child_outcomes)                 \
+    TEST_ENTRY(service_install_publishes_complete_plist_atomically) \
     TEST_ENTRY(serialization_string_escaping_is_strict)          \
     TEST_ENTRY(view_stack_window_node_rejects_full_node_without_mutation) \
     TEST_ENTRY(view_find_window_list_expands_for_full_stack_node) \
@@ -446,6 +583,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
     TEST_ENTRY(macos_version_newer_than_listed)                 \
     TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
+    TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
     TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
@@ -471,6 +609,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_rule_grid_numeric_validation)                      \
     TEST_ENTRY(message_direct_float_components_reject_non_finite)         \
     TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
+    TEST_ENTRY(daemon_message_incomplete_frame_has_failure_response)      \
     TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
     TEST_ENTRY(daemon_response_buffer_preserves_exact_bytes)              \
     TEST_ENTRY(daemon_response_buffer_accepts_empty_and_boundary_responses) \

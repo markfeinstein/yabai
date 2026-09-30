@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <sys/socket.h>
 
+#include "misc/socket_io.h"
+
 #define DAEMON_MESSAGE_FAILURE_MARKER '\x07'
 
 #define DAEMON_MESSAGE_MAX_LENGTH (1024 * 1024)
@@ -18,6 +20,13 @@ static inline bool daemon_message_body_is_valid(const char *body, size_t length)
 {
     return body && length >= 2 &&
            body[length - 2] == '\0' && body[length - 1] == '\0';
+}
+
+static inline void daemon_message_send_incomplete_until(int fd, uint64_t deadline)
+{
+    static const char response[] = { DAEMON_MESSAGE_FAILURE_MARKER,
+                                     'i','n','c','o','m','p','l','e','t','e',' ','m','e','s','s','a','g','e','.','\n' };
+    (void) socket_io_write_all_until(fd, response, sizeof(response), deadline);
 }
 
 static inline void daemon_message_send_invalid_length(int fd)

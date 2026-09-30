@@ -1755,6 +1755,7 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
     uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
 
     if (!socket_io_read_exact_until(param1, &bytes_to_read, sizeof(bytes_to_read), deadline)) {
+        daemon_message_send_incomplete_until(param1, socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS));
         goto cleanup;
     }
     if (!daemon_message_length_is_valid(bytes_to_read)) {
@@ -1763,7 +1764,9 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
     }
 
     char *message = ts_alloc_unaligned((size_t) bytes_to_read);
-    if (!message || !socket_io_read_exact_until(param1, message, (size_t) bytes_to_read, deadline)) {
+    if (!message) goto cleanup;
+    if (!socket_io_read_exact_until(param1, message, (size_t) bytes_to_read, deadline)) {
+        daemon_message_send_incomplete_until(param1, socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS));
         goto cleanup;
     }
     if (!daemon_message_body_is_valid(message, (size_t) bytes_to_read)) {
