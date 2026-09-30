@@ -11,10 +11,26 @@
 
 static bool event_queue_init(struct event_queue *queue, uint32_t capacity)
 {
-    *queue = (struct event_queue) { .capacity = capacity };
-    queue->events = EVENT_QUEUE_ALLOCATE(capacity * sizeof(struct event));
+    *queue = (struct event_queue) { 0 };
+    struct event *events = EVENT_QUEUE_ALLOCATE(capacity * sizeof(struct event));
+    if (!events) return false;
 
-    return queue->events && pthread_mutex_init(&queue->lock, NULL) == 0;
+    if (pthread_mutex_init(&queue->lock, NULL) != 0) {
+        free(events);
+        *queue = (struct event_queue) { 0 };
+        return false;
+    }
+
+    queue->events = events;
+    queue->capacity = capacity;
+    return true;
+}
+
+static void event_queue_destroy(struct event_queue *queue)
+{
+    pthread_mutex_destroy(&queue->lock);
+    free(queue->events);
+    *queue = (struct event_queue) { 0 };
 }
 
 static uint32_t event_queue_slot(struct event_queue *queue, uint32_t offset)

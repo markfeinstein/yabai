@@ -27,7 +27,7 @@ static void test_ordered_window_init(struct window *window, struct application *
 }
 
 // Two tiled windows on a bsp view of a space that is not visible, as the event loop leaves them.
-static void test_ordered_init(struct test_ordered *t)
+static bool test_ordered_init(struct test_ordered *t)
 {
     static bool tables_initialized;
     if (!tables_initialized) {
@@ -39,15 +39,19 @@ static void test_ordered_init(struct test_ordered *t)
         tables_initialized = true;
     }
 
-    memset(&t->application, 0, sizeof(struct application));
+    memset(t, 0, sizeof(*t));
     t->application.name = "test";
 
     // view_create() asks the window server about the space; a made-up space would come back as float.
     uint64_t sid = TEST_ORDERED_SID;
-    t->view = malloc(sizeof(struct view));
-    memset(t->view, 0, sizeof(struct view));
-    t->view->root = malloc(sizeof(struct window_node));
-    memset(t->view->root, 0, sizeof(struct window_node));
+    t->view = calloc(1, sizeof(struct view));
+    if (!t->view) return false;
+    t->view->root = calloc(1, sizeof(struct window_node));
+    if (!t->view->root) {
+        free(t->view);
+        t->view = NULL;
+        return false;
+    }
     t->view->sid = sid;
     t->view->layout = VIEW_BSP;
     table_remove(&g_space_manager.view, &sid);
@@ -59,8 +63,21 @@ static void test_ordered_init(struct test_ordered *t)
         test_ordered_window_init(windows[i], &t->application, wids[i]);
         window_manager_add_window(&g_window_manager, windows[i]);
         struct view *view = space_manager_tile_window_on_space(&g_space_manager, windows[i], sid);
+        if (!view) {
+            for (int j = 0; j <= i; ++j) {
+                window_manager_remove_managed_window(&g_window_manager, windows[j]->id);
+                window_manager_remove_window(&g_window_manager, windows[j]->id);
+            }
+            table_remove(&g_space_manager.view, &sid);
+            view_destroy(t->view);
+            free(t->view);
+            t->view = NULL;
+            return false;
+        }
         window_manager_add_managed_window(&g_window_manager, windows[i], view);
     }
+
+    return true;
 }
 
 static void test_ordered_free(struct test_ordered *t)
@@ -70,12 +87,19 @@ static void test_ordered_free(struct test_ordered *t)
         window_manager_remove_managed_window(&g_window_manager, windows[i]->id);
         window_manager_remove_window(&g_window_manager, windows[i]->id);
     }
+
+    table_remove(&g_space_manager.view, &t->view->sid);
+    view_destroy(t->view);
+    free(t->view);
+    t->view = NULL;
 }
 
 TEST_FUNC(window_ordered_out_leaves_the_tree,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
     TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
     TEST_CHECK(view_find_window_node(t.view, t.b.id) != NULL, true);
 
@@ -92,7 +116,9 @@ TEST_FUNC(window_ordered_out_leaves_the_tree,
 TEST_FUNC(window_ordered_out_stays_unmanaged,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
     TEST_CHECK(window_manager_should_manage_window(&t.a), true);
 
     EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
@@ -105,7 +131,9 @@ TEST_FUNC(window_ordered_out_stays_unmanaged,
 TEST_FUNC(window_ordered_in_is_tiled_again,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
     EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
     TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
 
@@ -126,7 +154,9 @@ TEST_FUNC(window_ordered_in_is_tiled_again,
 TEST_FUNC(window_reordered_stays_tiled,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
 
     EVENT_HANDLER_SLS_WINDOW_ORDERED((void *)(intptr_t) t.a.id, 0);
 
@@ -139,7 +169,9 @@ TEST_FUNC(window_reordered_stays_tiled,
 TEST_FUNC(window_visible_event_while_still_ordered_out,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
     EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
 
     EVENT_HANDLER_SLS_WINDOW_IS_VISIBLE((void *)(intptr_t) t.a.id, 0);
@@ -153,7 +185,9 @@ TEST_FUNC(window_visible_event_while_still_ordered_out,
 TEST_FUNC(window_ordered_in_keeps_float,
 {
     struct test_ordered t;
-    test_ordered_init(&t);
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
     EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
     window_set_flag(&t.a, WINDOW_FLOAT);
 

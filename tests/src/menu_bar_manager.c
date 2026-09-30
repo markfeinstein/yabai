@@ -193,43 +193,184 @@ static void menu_bar_manager_test_set_enabled_snapshot(uint64_t generation, uint
 }
 
 TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
+    bool saved_tahoe = _workspace_is_macos_version_tahoe;
+    bool saved_sequoia = _workspace_is_macos_version_sequoia;
+    bool saved_sonoma = _workspace_is_macos_version_sonoma;
+    bool saved_ventura = _workspace_is_macos_version_ventura;
+    bool saved_monterey = _workspace_is_macos_version_monterey;
+    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
+
+    workspace_set_macos_version(15);
+    g_window_notification_rebuild_count = 0;
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();
     menu_bar_manager_test_set_enabled_snapshot(1, 1);
 
     // Terminating an application with no tracked windows must not dirty inventory.
-    if (application_window_collection_changed_inventory(0, 0)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(0, 0);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0);
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+    TEST_CHECK(g_window_notification_rebuild_count, 0);
 
     // An unresolved retry returning false with no progress must not dirty inventory.
-    if (application_window_collection_changed_inventory(2, 2)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(2, 2);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0);
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+    TEST_CHECK(g_window_notification_rebuild_count, 0);
 
     // A partial retry returning false can still add a tracked window and dirty inventory.
-    if (application_window_collection_changed_inventory(2, 3)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(2, 3);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW);
+    TEST_CHECK(g_window_notification_rebuild_count, 1);
+
+    // Newer-than-listed macOS releases use the Tahoe notification path.
+    workspace_set_macos_version(27);
 
     // A fully resolved retry returning true that adds a window also dirties and coalesces.
-    if (application_window_collection_changed_inventory(3, 4)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(3, 4);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW);
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+    TEST_CHECK(g_window_notification_rebuild_count, 2);
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
+    _workspace_is_macos_version_tahoe = saved_tahoe;
+    _workspace_is_macos_version_sequoia = saved_sequoia;
+    _workspace_is_macos_version_sonoma = saved_sonoma;
+    _workspace_is_macos_version_ventura = saved_ventura;
+    _workspace_is_macos_version_monterey = saved_monterey;
+    _workspace_is_macos_version_bigsur = saved_bigsur;
+    g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
+});
+
+static bool g_scratchpad_test_has_window_list;
+static bool g_scratchpad_test_order_succeeds;
+static bool g_scratchpad_test_refresh_changes_inventory;
+static int g_scratchpad_test_window_list_calls;
+static int g_scratchpad_test_order_calls;
+static int g_scratchpad_test_refresh_calls;
+static struct application *g_scratchpad_test_list_application;
+static uint32_t *g_scratchpad_test_order_window_list;
+static int g_scratchpad_test_order_window_count;
+static struct space_manager *g_scratchpad_test_refresh_space_manager;
+static uint32_t g_scratchpad_test_window_list[] = { 1001, 1002 };
+
+static uint32_t *menu_bar_manager_test_scratchpad_window_list(struct application *application, int *window_count)
+{
+    ++g_scratchpad_test_window_list_calls;
+    g_scratchpad_test_list_application = application;
+    if (!g_scratchpad_test_has_window_list) return NULL;
+
+    *window_count = 2;
+    return g_scratchpad_test_window_list;
+}
+
+static bool menu_bar_manager_test_scratchpad_order_window_in(uint32_t *window_list, int window_count)
+{
+    ++g_scratchpad_test_order_calls;
+    g_scratchpad_test_order_window_list = window_list;
+    g_scratchpad_test_order_window_count = window_count;
+    return g_scratchpad_test_order_succeeds;
+}
+
+static bool menu_bar_manager_test_scratchpad_refresh_application_windows(struct space_manager *space_manager)
+{
+    ++g_scratchpad_test_refresh_calls;
+    g_scratchpad_test_refresh_space_manager = space_manager;
+    return g_scratchpad_test_refresh_changes_inventory;
+}
+
+TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
+    bool saved_tahoe = _workspace_is_macos_version_tahoe;
+    bool saved_sequoia = _workspace_is_macos_version_sequoia;
+    bool saved_sonoma = _workspace_is_macos_version_sonoma;
+    bool saved_ventura = _workspace_is_macos_version_ventura;
+    bool saved_monterey = _workspace_is_macos_version_monterey;
+    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
+    __auto_type saved_window_list = window_manager_scratchpad_existing_application_window_list;
+    __auto_type saved_order_window_in = window_manager_scratchpad_order_window_in;
+    __auto_type saved_refresh_application_windows = window_manager_scratchpad_refresh_application_windows;
+
+    workspace_set_macos_version(15);
+    g_window_notification_rebuild_count = 0;
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_set_enabled_snapshot(1, 1);
+    window_manager_scratchpad_existing_application_window_list = menu_bar_manager_test_scratchpad_window_list;
+    window_manager_scratchpad_order_window_in = menu_bar_manager_test_scratchpad_order_window_in;
+    window_manager_scratchpad_refresh_application_windows = menu_bar_manager_test_scratchpad_refresh_application_windows;
+    g_scratchpad_test_has_window_list = false;
+    g_scratchpad_test_order_succeeds = false;
+    g_scratchpad_test_refresh_changes_inventory = false;
+    g_scratchpad_test_window_list_calls = 0;
+    g_scratchpad_test_order_calls = 0;
+    g_scratchpad_test_refresh_calls = 0;
+    g_scratchpad_test_list_application = (struct application *) 1;
+    g_scratchpad_test_order_window_list = NULL;
+    g_scratchpad_test_order_window_count = 0;
+    g_scratchpad_test_refresh_space_manager = NULL;
+
+    window_manager_scratchpad_recover_windows();
+    TEST_CHECK(g_scratchpad_test_window_list_calls, 1);
+    TEST_CHECK(g_scratchpad_test_list_application == NULL, true);
+    TEST_CHECK(g_scratchpad_test_order_calls, 0);
+    TEST_CHECK(g_scratchpad_test_refresh_calls, 0);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+    TEST_CHECK(g_window_notification_rebuild_count, 0);
+
+    g_scratchpad_test_has_window_list = true;
+    window_manager_scratchpad_recover_windows();
+    TEST_CHECK(g_scratchpad_test_window_list_calls, 2);
+    TEST_CHECK(g_scratchpad_test_order_calls, 1);
+    TEST_CHECK(g_scratchpad_test_order_window_list == g_scratchpad_test_window_list, true);
+    TEST_CHECK(g_scratchpad_test_order_window_count, 2);
+    TEST_CHECK(g_scratchpad_test_refresh_calls, 0);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+    TEST_CHECK(g_window_notification_rebuild_count, 0);
+
+    g_scratchpad_test_order_succeeds = true;
+    window_manager_scratchpad_recover_windows();
+    TEST_CHECK(g_scratchpad_test_window_list_calls, 3);
+    TEST_CHECK(g_scratchpad_test_order_calls, 2);
+    TEST_CHECK(g_scratchpad_test_refresh_calls, 1);
+    TEST_CHECK(g_scratchpad_test_refresh_space_manager == &g_space_manager, true);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+    TEST_CHECK(g_window_notification_rebuild_count, 0);
+
+    g_scratchpad_test_refresh_changes_inventory = true;
+    window_manager_scratchpad_recover_windows();
+    TEST_CHECK(g_scratchpad_test_window_list_calls, 4);
+    TEST_CHECK(g_scratchpad_test_order_calls, 3);
+    TEST_CHECK(g_scratchpad_test_refresh_calls, 2);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+    TEST_CHECK(g_window_notification_rebuild_count, 1);
+
+    window_manager_scratchpad_existing_application_window_list = saved_window_list;
+    window_manager_scratchpad_order_window_in = saved_order_window_in;
+    window_manager_scratchpad_refresh_application_windows = saved_refresh_application_windows;
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+    _workspace_is_macos_version_tahoe = saved_tahoe;
+    _workspace_is_macos_version_sequoia = saved_sequoia;
+    _workspace_is_macos_version_sonoma = saved_sonoma;
+    _workspace_is_macos_version_ventura = saved_ventura;
+    _workspace_is_macos_version_monterey = saved_monterey;
+    _workspace_is_macos_version_bigsur = saved_bigsur;
+    g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
 TEST_FUNC(menu_bar_manager_ignores_setting_actions_after_disable, {
@@ -351,6 +492,8 @@ TEST_FUNC(menu_bar_manager_late_close_after_disable_does_not_overemit, {
 TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
     menu_bar_manager_test_reset();
     menu_bar_manager_test_install_native_seams();
+    struct table saved_managed_window = g_window_manager.managed_window;
+    g_window_manager.managed_window = (struct table) {0};
     table_init(&g_window_manager.managed_window, 8, hash_wm, compare_wm);
 
     struct application application;
@@ -413,5 +556,7 @@ TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
 
     free(builders[0].windows);
     table_free(&g_window_manager.managed_window);
+    memset(&g_window_manager.managed_window, 0, sizeof(g_window_manager.managed_window));
+    g_window_manager.managed_window = saved_managed_window;
     menu_bar_manager_test_reset();
 });

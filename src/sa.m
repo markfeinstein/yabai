@@ -120,21 +120,18 @@ static bool scripting_addition_write_file(char *buffer, unsigned int size, char 
     return result;
 }
 
-static void scripting_addition_prepare_binaries(void)
+static bool scripting_addition_prepare_binary(char *path)
 {
-    char cmd[MAXLEN];
+    if (chmod(path, 0755) != 0) return false;
 
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_loader);
-    system(cmd);
+    const char *const args[] = { "/usr/bin/codesign", "-f", "-s", "-", path, NULL };
+    return safe_exec((char *const *) args, true) == 0;
+}
 
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_loader, "2>/dev/null");
-    system(cmd);
-
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_payload);
-    system(cmd);
-
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_payload, "2>/dev/null");
-    system(cmd);
+static bool scripting_addition_prepare_binaries(void)
+{
+    return scripting_addition_prepare_binary(osax_bin_loader) &&
+           scripting_addition_prepare_binary(osax_bin_payload);
 }
 
 static void scripting_addition_restart_dock(void)
@@ -143,21 +140,32 @@ static void scripting_addition_restart_dock(void)
     [dock makeObjectsPerformSelector:@selector(terminate)];
 }
 
+static bool scripting_addition_socket_path_for_sudo_uid(const char *sudo_uid, char *socket_path, size_t socket_path_size)
+{
+    if (!sudo_uid || !*sudo_uid || !socket_path || !socket_path_size) return false;
+
+    uintmax_t uid_value = 0;
+    uintmax_t uid_max = (uintmax_t) ((uid_t) -1);
+    for (const unsigned char *cursor = (const unsigned char *) sudo_uid; *cursor; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return false;
+
+        unsigned int digit = *cursor - '0';
+        if (uid_value > (uid_max - digit) / 10) return false;
+        uid_value = uid_value * 10 + digit;
+    }
+
+    if (uid_value == 0) return false;
+
+    struct passwd *pw = getpwuid((uid_t) uid_value);
+    if (!pw || !pw->pw_name || !*pw->pw_name) return false;
+
+    int length = snprintf(socket_path, socket_path_size, SA_SOCKET_PATH_FMT, pw->pw_name);
+    return length >= 0 && (size_t) length < socket_path_size;
+}
+
 static bool scripting_addition_set_socket_path(void)
 {
-    const char *sudo_uid = getenv("SUDO_UID");
-
-    uid_t uid = getuid();
-    assert(uid == 0);
-
-    if (sudo_uid == NULL)                  return false;
-    if (sscanf(sudo_uid, "%u", &uid) != 1) return false;
-
-    struct passwd *pw = getpwuid(uid);
-    if (!pw) return false;
-
-    snprintf(g_sa_socket_file, sizeof(g_sa_socket_file), SA_SOCKET_PATH_FMT, pw->pw_name);
-    return true;
+    return scripting_addition_socket_path_for_sudo_uid(getenv("SUDO_UID"), g_sa_socket_file, sizeof(g_sa_socket_file));
 }
 
 static bool scripting_addition_is_installed(void)
@@ -191,13 +199,15 @@ static int scripting_addition_check(void)
     return result;
 }
 
+static bool scripting_addition_remove_path(char *path)
+{
+    const char *const args[] = { "/bin/rm", "-rf", path, NULL };
+    return safe_exec((char *const *) args, true) == 0;
+}
+
 static bool scripting_addition_remove(void)
 {
-    char cmd[MAXLEN];
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "rm -rf", osax_base_dir, "2>/dev/null");
-
-    int code = system(cmd);
-    return code == 0;
+    return scripting_addition_remove_path(osax_base_dir);
 }
 
 static int scripting_addition_install(void)
@@ -228,7 +238,10 @@ static int scripting_addition_install(void)
         goto cleanup;
     }
 
-    scripting_addition_prepare_binaries();
+    if (!scripting_addition_prepare_binaries()) {
+        goto cleanup;
+    }
+
     scripting_addition_restart_dock();
     return 0;
 
@@ -379,6 +392,13 @@ int scripting_addition_load(void)
         goto out;
     }
 
+    if (!scripting_addition_set_socket_path()) {
+        warn("yabai: scripting-addition could not determine socket path from SUDO_UID!\n");
+        notify("scripting-addition", "could not determine socket path from SUDO_UID!");
+        result = 1;
+        goto out;
+    }
+
     if (!scripting_addition_is_sip_friendly()) {
         warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
         notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
@@ -407,9 +427,7 @@ int scripting_addition_load(void)
         goto out;
     }
 
-    if (scripting_addition_set_socket_path()) {
-        result = scripting_addition_perform_validation();
-    }
+    result = scripting_addition_perform_validation();
 
 out:
     [pool drain];

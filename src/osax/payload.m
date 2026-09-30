@@ -91,7 +91,7 @@ static uint64_t animation_time_addr;
 static bool macOSSequoia;
 
 static pthread_t daemon_thread;
-static int daemon_sockfd;
+static int daemon_sockfd = -1;
 
 static void dump_class_info(Class c)
 {
@@ -954,6 +954,12 @@ static void do_window_opacity_fade(char *message)
         pthread_mutex_unlock(&window_fade_lock);
     } else {
         context = malloc(sizeof(struct window_fade_context));
+        if (!context) {
+            pthread_mutex_unlock(&window_fade_lock);
+            SLSSetWindowAlpha(SLSMainConnectionID(), wid, alpha);
+            return;
+        }
+
         context->wid = wid;
         context->alpha = alpha;
         context->duration = duration;
@@ -961,9 +967,16 @@ static void do_window_opacity_fade(char *message)
         __asm__ __volatile__ ("" ::: "memory");
 
         table_add(&window_fade_table, &wid, context);
-        pthread_mutex_unlock(&window_fade_lock);
-        pthread_create(&context->thread, NULL, &window_fade_thread_proc, context);
+        if (pthread_create(&context->thread, NULL, &window_fade_thread_proc, context) != 0) {
+            table_remove(&window_fade_table, &wid);
+            pthread_mutex_unlock(&window_fade_lock);
+            free(context);
+            SLSSetWindowAlpha(SLSMainConnectionID(), wid, alpha);
+            return;
+        }
+
         pthread_detach(context->thread);
+        pthread_mutex_unlock(&window_fade_lock);
     }
 }
 
@@ -1303,6 +1316,10 @@ static void *handle_connection(void *unused)
     for (;;) {
         int sockfd = accept(daemon_sockfd, NULL, 0);
         if (sockfd == -1) continue;
+        if (!socket_set_cloexec(sockfd)) {
+            close(sockfd);
+            continue;
+        }
 
         // Unlike yabai, Dock does not install a process-wide SIGPIPE handler.
         int no_sigpipe = 1;
@@ -1336,33 +1353,40 @@ static TABLE_COMPARE_FUNC(compare_wid)
 
 static bool start_daemon(char *socket_path)
 {
+    bool bound = false;
+    bool fade_lock_initialized = false;
+    bool fade_table_initialized = false;
     struct sockaddr_un socket_address;
-    socket_address.sun_family = AF_UNIX;
-    snprintf(socket_address.sun_path, sizeof(socket_address.sun_path), "%s", socket_path);
-    unlink(socket_path);
+    if (!socket_address_init(&socket_address, socket_path)) return false;
 
-    if ((daemon_sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-        return false;
-    }
+    daemon_sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (daemon_sockfd == -1) return false;
+    if (!socket_set_cloexec(daemon_sockfd)) goto fail;
 
-    if (bind(daemon_sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1) {
-        return false;
-    }
+    unlink(socket_address.sun_path);
+    if (bind(daemon_sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1) goto fail;
+    bound = true;
 
-    if (chmod(socket_path, 0600) != 0) {
-        return false;
-    }
-
-    if (listen(daemon_sockfd, SOMAXCONN) == -1) {
-        return false;
-    }
+    if (chmod(socket_address.sun_path, 0600) != 0) goto fail;
+    if (listen(daemon_sockfd, SOMAXCONN) == -1) goto fail;
 
     init_instances();
-    pthread_mutex_init(&window_fade_lock, NULL);
+    if (pthread_mutex_init(&window_fade_lock, NULL) != 0) goto fail;
+    fade_lock_initialized = true;
     table_init(&window_fade_table, 150, hash_wid, compare_wid);
-    pthread_create(&daemon_thread, NULL, &handle_connection, NULL);
+    fade_table_initialized = true;
 
+    if (pthread_create(&daemon_thread, NULL, &handle_connection, NULL) != 0) goto fail;
     return true;
+
+fail:
+    if (fade_table_initialized) {
+        table_free(&window_fade_table);
+        memset(&window_fade_table, 0, sizeof(window_fade_table));
+    }
+    if (fade_lock_initialized) pthread_mutex_destroy(&window_fade_lock);
+    socket_listener_cleanup(&daemon_sockfd, socket_address.sun_path, bound);
+    return false;
 }
 
 __attribute__((constructor))

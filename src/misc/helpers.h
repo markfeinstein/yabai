@@ -1,6 +1,8 @@
 #ifndef HELPERS_H
 #define HELPERS_H
 
+#include "socket_io.h"
+
 #define ANIMATION_EASING_TYPE_LIST \
     ANIMATION_EASING_TYPE_ENTRY(ease_in_sine) \
     ANIMATION_EASING_TYPE_ENTRY(ease_out_sine) \
@@ -185,6 +187,12 @@ static inline bool socket_open(int *sockfd)
     *sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (*sockfd == -1) return false;
 
+    if (!socket_set_cloexec(*sockfd)) {
+        close(*sockfd);
+        *sockfd = -1;
+        return false;
+    }
+
     int no_sigpipe = 1;
     if (setsockopt(*sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) != 0) {
         close(*sockfd);
@@ -197,9 +205,8 @@ static inline bool socket_open(int *sockfd)
 static inline bool socket_connect(int sockfd, char *socket_path)
 {
     struct sockaddr_un socket_address;
-    socket_address.sun_family = AF_UNIX;
+    if (!socket_address_init(&socket_address, socket_path)) return false;
 
-    snprintf(socket_address.sun_path, sizeof(socket_address.sun_path), "%s", socket_path);
     return connect(sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) != -1;
 }
 
@@ -264,65 +271,145 @@ static inline bool string_equals(const char *a, const char *b)
     return a && b && strcmp(a, b) == 0;
 }
 
+static inline size_t utf8_valid_sequence_length(const unsigned char *bytes, size_t length)
+{
+    if (length == 0) return 0;
+
+    unsigned char fst = bytes[0];
+    if (fst <= 0x7f) return 1;
+
+    if (fst >= 0xc2 && fst <= 0xdf) {
+        return length >= 2 && bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 2 : 0;
+    }
+
+    if (fst >= 0xe0 && fst <= 0xef) {
+        if (length < 3 || bytes[2] < 0x80 || bytes[2] > 0xbf) return 0;
+        if (fst == 0xe0) return bytes[1] >= 0xa0 && bytes[1] <= 0xbf ? 3 : 0;
+        if (fst == 0xed) return bytes[1] >= 0x80 && bytes[1] <= 0x9f ? 3 : 0;
+        return bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 3 : 0;
+    }
+
+    if (fst >= 0xf0 && fst <= 0xf4) {
+        if (length < 4 ||
+            bytes[2] < 0x80 || bytes[2] > 0xbf ||
+            bytes[3] < 0x80 || bytes[3] > 0xbf) return 0;
+        if (fst == 0xf0) return bytes[1] >= 0x90 && bytes[1] <= 0xbf ? 4 : 0;
+        if (fst == 0xf4) return bytes[1] >= 0x80 && bytes[1] <= 0x8f ? 4 : 0;
+        return bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 4 : 0;
+    }
+
+    return 0;
+}
+
+static inline bool utf8_validate_bytes(const void *data, size_t length)
+{
+    const unsigned char *bytes = data;
+    for (size_t offset = 0; offset < length;) {
+        size_t sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+        if (sequence_length == 0) return false;
+        offset += sequence_length;
+    }
+    return true;
+}
+
+static inline bool utf8_validate_string(const char *s)
+{
+    return utf8_validate_bytes(s, strlen(s));
+}
+
 static inline char *ts_string_escape(char *s)
 {
-    char *cursor = s;
-    int num_replacements = 0;
+    const unsigned char *bytes = (const unsigned char *) s;
+    size_t length = strlen(s);
+    size_t extra = 0;
 
-    while (*cursor) {
-        if ((*cursor == '"') ||
-            (*cursor == '\\') ||
-            (*cursor == '\b') ||
-            (*cursor == '\f') ||
-            (*cursor == '\n') ||
-            (*cursor == '\r') ||
-            (*cursor == '\t')) {
-            ++num_replacements;
-        } else if (*cursor >= 0x00 && *cursor <= 0x1f) {
-            num_replacements += 5;
+    for (size_t offset = 0; offset < length;) {
+        unsigned char c = bytes[offset];
+        size_t increment = 0;
+        size_t sequence_length = 1;
+
+        if (c >= 0x80) {
+            sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+            if (sequence_length == 0) {
+                increment = 5;
+                sequence_length = 1;
+            }
+        } else if (c == '"' || c == '\\' || c == '\b' || c == '\f' ||
+                   c == '\n' || c == '\r' || c == '\t') {
+            increment = 1;
+        } else if (c <= 0x1f) {
+            increment = 5;
         }
 
-        ++cursor;
+        if (extra > SIZE_MAX - increment) {
+            fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
+            exit(EXIT_FAILURE);
+        }
+        extra += increment;
+        offset += sequence_length;
     }
 
-    if (num_replacements == 0) return NULL;
+    if (extra == 0) return NULL;
+    if (extra == SIZE_MAX || length > SIZE_MAX - extra - 1) {
+        fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
+        exit(EXIT_FAILURE);
+    }
 
-    int size_in_bytes = (int)(cursor - s) + num_replacements;
-    char *result = ts_alloc_unaligned(sizeof(char) * (size_in_bytes+1));
-    result[size_in_bytes] = '\0';
+    size_t size_in_bytes = length + extra;
+    char *result = ts_alloc_unaligned(size_in_bytes + 1);
+    char *dst = result;
 
-    for (char *dst = result, *cursor = s; *cursor; ++cursor) {
-        if (*cursor == '"') {
-            *dst++ = '\\';
-            *dst++ = '"';
-        } else if (*cursor == '\\') {
-            *dst++ = '\\';
-            *dst++ = '\\';
-        } else if (*cursor == '\b') {
-            *dst++ = '\\';
-            *dst++ = 'b';
-        } else if (*cursor == '\f') {
-            *dst++ = '\\';
-            *dst++ = 'f';
-        } else if (*cursor == '\n') {
-            *dst++ = '\\';
-            *dst++ = 'n';
-        } else if (*cursor == '\r') {
-            *dst++ = '\\';
-            *dst++ = 'r';
-        } else if (*cursor == '\t') {
-            *dst++ = '\\';
-            *dst++ = 't';
-        } else if (*cursor >= 0x00 && *cursor <= 0x1f) {
-            *dst++ = '\\';
-            *dst++ = 'u';
-            sprintf(dst, "%04x", (int)*cursor);
-            dst += 4;
+    for (size_t offset = 0; offset < length;) {
+        unsigned char c = bytes[offset];
+        if (c >= 0x80) {
+            size_t sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+            if (sequence_length != 0) {
+                memcpy(dst, bytes + offset, sequence_length);
+                dst += sequence_length;
+                offset += sequence_length;
+            } else {
+                memcpy(dst, "\\ufffd", 6);
+                dst += 6;
+                ++offset;
+            }
         } else {
-            *dst++ = *cursor;
+            ++offset;
+            if (c == '"') {
+                *dst++ = '\\';
+                *dst++ = '"';
+            } else if (c == '\\') {
+                *dst++ = '\\';
+                *dst++ = '\\';
+            } else if (c == '\b') {
+                *dst++ = '\\';
+                *dst++ = 'b';
+            } else if (c == '\f') {
+                *dst++ = '\\';
+                *dst++ = 'f';
+            } else if (c == '\n') {
+                *dst++ = '\\';
+                *dst++ = 'n';
+            } else if (c == '\r') {
+                *dst++ = '\\';
+                *dst++ = 'r';
+            } else if (c == '\t') {
+                *dst++ = '\\';
+                *dst++ = 't';
+            } else if (c <= 0x1f) {
+                static const char hex[] = "0123456789abcdef";
+                *dst++ = '\\';
+                *dst++ = 'u';
+                *dst++ = '0';
+                *dst++ = '0';
+                *dst++ = hex[c >> 4];
+                *dst++ = hex[c & 0x0f];
+            } else {
+                *dst++ = (char) c;
+            }
         }
     }
 
+    *dst = '\0';
     return result;
 }
 

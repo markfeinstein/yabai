@@ -2,11 +2,14 @@
 #define SOCKET_IO_H
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -18,6 +21,42 @@ enum socket_io_read_result {
     SOCKET_IO_READ_TIMEOUT,
     SOCKET_IO_READ_ERROR,
 };
+
+static inline bool socket_address_init(struct sockaddr_un *address, const char *socket_path)
+{
+    if (!address) return false;
+    memset(address, 0, sizeof(*address));
+    if (!socket_path || !*socket_path) return false;
+
+    size_t path_length = strlen(socket_path);
+    if (path_length >= sizeof(address->sun_path)) return false;
+
+    address->sun_family = AF_UNIX;
+    memcpy(address->sun_path, socket_path, path_length + 1);
+    return true;
+}
+
+static inline bool socket_set_cloexec(int fd)
+{
+    int flags;
+    do {
+        flags = fcntl(fd, F_GETFD);
+    } while (flags == -1 && errno == EINTR);
+    if (flags == -1) return false;
+
+    int result;
+    do {
+        result = fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    } while (result == -1 && errno == EINTR);
+    return result != -1;
+}
+
+static inline void socket_listener_cleanup(int *fd, const char *socket_path, bool bound)
+{
+    if (*fd != -1) close(*fd);
+    *fd = -1;
+    if (bound && socket_path) unlink(socket_path);
+}
 
 static inline uint64_t socket_io_monotonic_ns(void)
 {

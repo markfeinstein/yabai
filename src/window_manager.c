@@ -216,17 +216,13 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
     if (match) window_manager_apply_rule_effects_to_window(sm, wm, window, &effects);
 }
 
-void window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode)
+bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode)
 {
-    mouse_handler_end(&g_mouse_state);
-
-    if (mode == FFM_DISABLED) {
-        mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK);
-    } else {
-        mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK_FFM);
-    }
+    uint32_t mask = mode == FFM_DISABLED ? MOUSE_EVENT_MASK : MOUSE_EVENT_MASK_FFM;
+    if (!mouse_handler_reconfigure(&g_mouse_state, mask)) return false;
 
     wm->ffm_mode = mode;
+    return true;
 }
 
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled)
@@ -2598,14 +2594,25 @@ bool window_manager_remove_scratchpad_for_window(struct window_manager *wm, stru
     return false;
 }
 
+#ifdef TESTS
+static uint32_t *(*window_manager_scratchpad_existing_application_window_list)(struct application *, int *) = window_manager_existing_application_window_list;
+static bool (*window_manager_scratchpad_order_window_in)(uint32_t *, int) = scripting_addition_order_window_in;
+static bool (*window_manager_scratchpad_refresh_application_windows)(struct space_manager *) = space_manager_refresh_application_windows;
+#else
+#define window_manager_scratchpad_existing_application_window_list window_manager_existing_application_window_list
+#define window_manager_scratchpad_order_window_in scripting_addition_order_window_in
+#define window_manager_scratchpad_refresh_application_windows space_manager_refresh_application_windows
+#endif
+
 void window_manager_scratchpad_recover_windows(void)
 {
     int window_count;
-    uint32_t *window_list = window_manager_existing_application_window_list(NULL, &window_count);
+    uint32_t *window_list = window_manager_scratchpad_existing_application_window_list(NULL, &window_count);
     if (!window_list) return;
 
-    if (scripting_addition_order_window_in(window_list, window_count)) {
-        space_manager_refresh_application_windows(&g_space_manager);
+    if (window_manager_scratchpad_order_window_in(window_list, window_count) &&
+        window_manager_scratchpad_refresh_application_windows(&g_space_manager)) {
+        event_loop_window_inventory_did_change();
     }
 }
 

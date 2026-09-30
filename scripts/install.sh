@@ -2,7 +2,7 @@
 
 #
 # This script will install the latest pre-built yabai release from GitHub.
-# Depends on curl, shasum, tar, cp, cut, mktemp, mv.
+# Depends on curl, shasum, tar, cp, cut, id, mktemp, mv.
 #
 # ARG1:   Directory in which to store the yabai binary; must be an absolutepath.
 #         Fallback: /usr/local/bin
@@ -234,6 +234,30 @@ echo "If you are using the scripting-addition; remember to update your sudoers f
 echo "  sudo visudo -f /private/etc/sudoers.d/yabai"
 echo ""
 echo "Sudoers file configuration row:"
-echo "  $(whoami) ALL=(root) NOPASSWD: sha256:$(shasum -a 256 "$BIN_DIR/yabai" | cut -d " " -f 1) $BIN_DIR/yabai --load-sa"
+SUDOERS_USER=
+EFFECTIVE_UID=$(id -u)
+if [ "$EFFECTIVE_UID" = 0 ]; then
+    case ${SUDO_USER:-} in
+        ""|*[!A-Za-z0-9_.-]*|[0-9.-]*) ;;
+        *)
+            SUDOERS_UID=$(id -u "$SUDO_USER" 2>/dev/null) || SUDOERS_UID=
+            case $SUDOERS_UID in
+                ""|0|*[!0-9]*) ;;
+                *)
+                    RESOLVED_SUDO_USER=$(id -un "$SUDOERS_UID" 2>/dev/null) || RESOLVED_SUDO_USER=
+                    [ "$RESOLVED_SUDO_USER" = "$SUDO_USER" ] && SUDOERS_USER=$RESOLVED_SUDO_USER
+                    ;;
+            esac
+            ;;
+    esac
+else
+    SUDOERS_USER=$(id -un 2>/dev/null) || SUDOERS_USER=
+fi
+
+if [ -n "$SUDOERS_USER" ]; then
+    echo "  $SUDOERS_USER ALL=(root) NOPASSWD: sha256:$(shasum -a 256 "$BIN_DIR/yabai" | cut -d " " -f 1) $BIN_DIR/yabai --load-sa"
+else
+    echo "  Unable to determine a non-root invoking user; no sudoers row was generated."
+fi
 echo ""
 echo "README: https://github.com/asmvik/yabai/wiki/Installing-yabai-%28latest-release%29#configure-scripting-addition"

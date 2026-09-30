@@ -81,6 +81,7 @@ enum event_queue_result
 };
 
 static bool event_queue_init(struct event_queue *queue, uint32_t capacity);
+static void event_queue_destroy(struct event_queue *queue);
 static enum event_queue_result event_queue_push(struct event_queue *queue, struct event event, bool merge,
                                                 struct event *replaced, uint32_t *capacity);
 static bool event_queue_pop(struct event_queue *queue, struct event *event);
@@ -95,5 +96,6 @@ struct event_loop
 
 bool event_loop_begin(struct event_loop *event_loop);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
+void event_loop_window_inventory_did_change(void);
 
 #endif

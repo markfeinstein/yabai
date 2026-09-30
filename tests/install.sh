@@ -147,6 +147,24 @@ if [ "${MOCK_TAR_MODE:-complete}" != missing-man ]; then
 fi
 EOF
 
+cat > "$MOCK_BIN/id" <<'EOF'
+#!/bin/sh
+set -eu
+case "$#:$1" in
+    1:-u) printf '%s\n' "${MOCK_EUID:-501}" ;;
+    1:-un) printf '%s\n' "${MOCK_CURRENT_USER:-tester}" ;;
+    2:-u)
+        [ "$2" = "${MOCK_SUDO_USER:-alice}" ] || exit 1
+        printf '%s\n' "${MOCK_SUDO_UID:-502}"
+        ;;
+    2:-un)
+        [ "$2" = "${MOCK_SUDO_UID:-502}" ] || exit 1
+        printf '%s\n' "${MOCK_SUDO_USER:-alice}"
+        ;;
+    *) exit 64 ;;
+esac
+EOF
+
 cat > "$MOCK_BIN/mv" <<'EOF'
 #!/bin/sh
 set -eu
@@ -211,7 +229,7 @@ cat > "$TMPDIR_MOCK_BIN/curl" <<'EOF'
 #!/bin/sh
 exit 67
 EOF
-chmod +x "$MOCK_BIN/curl" "$MOCK_BIN/shasum" "$MOCK_BIN/tar" "$MOCK_BIN/mv" "$MOCK_BIN/rm" \
+chmod +x "$MOCK_BIN/curl" "$MOCK_BIN/shasum" "$MOCK_BIN/tar" "$MOCK_BIN/id" "$MOCK_BIN/mv" "$MOCK_BIN/rm" \
     "$TMPDIR_MOCK_BIN/mktemp" "$TMPDIR_MOCK_BIN/curl"
 
 installer_template='asmvik-yabai-v7.1.25-installer.XXXXXX'
@@ -376,4 +394,48 @@ for mode in fail-before fail-after; do
     assert_no_owned_paths
 done
 
-printf 'installer regression tests passed (18 cases)\n'
+identity_output="$TEST_ROOT/identity-output"
+(
+    cd "$WORK_DIR"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=501 MOCK_CURRENT_USER=developer SUDO_USER=root \
+        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+)
+grep -F "  developer ALL=(root) NOPASSWD:" "$identity_output" >/dev/null || \
+    fail 'normal invocation did not use the current user in the sudoers row'
+
+(
+    cd "$WORK_DIR"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 MOCK_SUDO_USER=alice MOCK_SUDO_UID=502 SUDO_USER=alice \
+        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+)
+grep -F "  alice ALL=(root) NOPASSWD:" "$identity_output" >/dev/null || \
+    fail 'sudo invocation did not use the validated invoking user'
+if grep -F "  root ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
+    fail 'sudo invocation emitted a root sudoers row'
+fi
+
+(
+    cd "$WORK_DIR"
+    unset SUDO_USER
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 \
+        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+)
+grep -F 'Unable to determine a non-root invoking user; no sudoers row was generated.' "$identity_output" >/dev/null || \
+    fail 'root invocation without SUDO_USER did not omit the sudoers row'
+if grep -F "ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
+    fail 'root invocation without SUDO_USER emitted a sudoers row'
+fi
+
+(
+    cd "$WORK_DIR"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 SUDO_USER='invalid;name' \
+        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+)
+grep -F 'Unable to determine a non-root invoking user; no sudoers row was generated.' "$identity_output" >/dev/null || \
+    fail 'invalid SUDO_USER did not omit the sudoers row'
+if grep -F "ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
+    fail 'invalid SUDO_USER emitted a sudoers row'
+fi
+assert_no_owned_paths
+
+printf 'installer regression tests passed (22 cases)\n'

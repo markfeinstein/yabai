@@ -416,6 +416,11 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     fprintf(rsp, "\n}");
 }
 
+static bool window_serialize_is_hidden(struct window *window)
+{
+    return window->application ? window->application->is_hidden : false;
+}
+
 void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
 {
     TIME_FUNCTION;
@@ -476,17 +481,17 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_PID) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"pid\":%d", window->application->pid);
+        fprintf(rsp, "\t\"pid\":%d", window->application ? window->application->pid : 0);
         did_output = true;
     }
 
     if (flags & WINDOW_PROPERTY_APP) {
         if (did_output) fprintf(rsp, ",\n");
 
-        char *app = window->application->name;
+        char *app = window->application ? window->application->name : "<unknown>";
         char *escaped_app = ts_string_escape(app);
 
-        fprintf(rsp, "\t\"app\":\"%s\"", escaped_app ? escaped_app : app);
+        fprintf(rsp, "\t\"app\":\"%s\"", escaped_app ? escaped_app : (window->application ? app : "<unknown>"));
         did_output = true;
     }
 
@@ -503,7 +508,9 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_SCRATCHPAD) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"scratchpad\":\"%s\"", window->scratchpad ? window->scratchpad : "");
+        char *scratchpad = window->scratchpad;
+        char *escaped_scratchpad = scratchpad ? ts_string_escape(scratchpad) : NULL;
+        fprintf(rsp, "\t\"scratchpad\":\"%s\"", escaped_scratchpad ? escaped_scratchpad : scratchpad ? scratchpad : "");
         did_output = true;
     }
 
@@ -518,7 +525,8 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         char *role = window_role_ts(window);
-        fprintf(rsp, "\t\"role\":\"%s\"", role);
+        char *escaped_role = role ? ts_string_escape(role) : NULL;
+        fprintf(rsp, "\t\"role\":\"%s\"", escaped_role ? escaped_role : role ? role : "");
         did_output = true;
     }
 
@@ -526,7 +534,8 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         char *subrole = window_subrole_ts(window);
-        fprintf(rsp, "\t\"subrole\":\"%s\"", subrole);
+        char *escaped_subrole = subrole ? ts_string_escape(subrole) : NULL;
+        fprintf(rsp, "\t\"subrole\":\"%s\"", escaped_subrole ? escaped_subrole : subrole ? subrole : "");
         did_output = true;
     }
 
@@ -677,7 +686,7 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         uint8_t ordered_in = 0;
         SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in);
 
-        bool visible = ordered_in && !is_minimized && !window->application->is_hidden && (is_sticky || space_is_visible(sid));
+        bool visible = ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || space_is_visible(sid));
         fprintf(rsp, "\t\"is-visible\":%s", json_bool(visible));
         did_output = true;
     }
@@ -692,7 +701,7 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_IS_HIDDEN) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"is-hidden\":%s", json_bool(window->application->is_hidden));
+        fprintf(rsp, "\t\"is-hidden\":%s", json_bool(window_serialize_is_hidden(window)));
         did_output = true;
     }
 

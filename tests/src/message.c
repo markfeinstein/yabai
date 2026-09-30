@@ -20,6 +20,97 @@ static bool message_test_parse_rule_grid(char *grid)
     return result;
 }
 
+TEST_FUNC(message_utf8_ingress_validation,
+{
+    char malformed_label_bytes[] = { (char) 0xc0, (char) 0xaf, 0 };
+    struct token malformed_label_token = {
+        .text = malformed_label_bytes,
+        .length = (int) sizeof(malformed_label_bytes) - 1
+    };
+    char *label = NULL;
+    FILE *label_response = tmpfile();
+    TEST_CHECK(label_response != NULL, true);
+    if (label_response) {
+        TEST_CHECK(parse_label(label_response, malformed_label_token, LABEL_SPACE, &label), false);
+        TEST_CHECK(label == NULL, true);
+        rewind(label_response);
+        char response[512] = {0};
+        size_t response_length = fread(response, 1, sizeof(response) - 1, label_response);
+        fclose(label_response);
+        TEST_CHECK(strstr(response, "label is not valid UTF-8") != NULL, true);
+        TEST_CHECK(memchr(response, 0xc0, response_length) == NULL, true);
+        TEST_CHECK(memchr(response, 0xaf, response_length) == NULL, true);
+    }
+
+    char valid_label_bytes[] = { (char) 0xe6, (char) 0xb5, (char) 0x8b,
+                                 (char) 0xe8, (char) 0xaf, (char) 0x95, 0 };
+    TEST_CHECK(parse_label(NULL, message_test_token(valid_label_bytes), LABEL_SPACE, &label), true);
+    TEST_CHECK(label != NULL, true);
+    if (label) {
+        TEST_CHECK(strcmp(label, valid_label_bytes), 0);
+        free(label);
+        label = NULL;
+    }
+
+    char malformed_rule[] = { 'a', 'p', 'p', '=', 'x', (char) 0xc0, (char) 0xaf, 0, 0 };
+    char *rule_message = malformed_rule + sizeof(malformed_rule) - 2;
+    struct rule rule = {0};
+    FILE *rule_response = tmpfile();
+    TEST_CHECK(rule_response != NULL, true);
+    if (rule_response) {
+        TEST_CHECK(parse_rule(rule_response, &rule_message, &rule, message_test_token(malformed_rule)), false);
+        rewind(rule_response);
+        char response[512] = {0};
+        size_t response_length = fread(response, 1, sizeof(response) - 1, rule_response);
+        fclose(rule_response);
+        TEST_CHECK(strstr(response, "value is not valid UTF-8") != NULL, true);
+        TEST_CHECK(memchr(response, 0xc0, response_length) == NULL, true);
+        TEST_CHECK(memchr(response, 0xaf, response_length) == NULL, true);
+    }
+    rule_destroy(&rule);
+
+    char valid_rule[] = "label=\xe6\xb5\x8b\xe8\xaf\x95\0app=.*\0";
+    rule_message = valid_rule + strlen(valid_rule) + 1;
+    memset(&rule, 0, sizeof(rule));
+    TEST_CHECK(parse_rule(NULL, &rule_message, &rule, message_test_token(valid_rule)), true);
+    TEST_CHECK(rule.label != NULL, true);
+    if (rule.label) TEST_CHECK(strcmp(rule.label, valid_label_bytes), 0);
+    rule_destroy(&rule);
+
+    struct signal *original_signal_buffer = g_signal_event[SIGNAL_APPLICATION_LAUNCHED];
+    int original_signal_count = buf_len(original_signal_buffer);
+    char malformed_signal[] = "--add\0event=application_launched\0action=x\xc0\xaf\0label=utf8-malformed-signal\0";
+    FILE *signal_response = tmpfile();
+    TEST_CHECK(signal_response != NULL, true);
+    if (signal_response) {
+        handle_domain_signal(signal_response, message_test_token("signal"), malformed_signal);
+        rewind(signal_response);
+        char response[512] = {0};
+        size_t response_length = fread(response, 1, sizeof(response) - 1, signal_response);
+        fclose(signal_response);
+        TEST_CHECK(strstr(response, "value is not valid UTF-8") != NULL, true);
+        TEST_CHECK(memchr(response, 0xc0, response_length) == NULL, true);
+        TEST_CHECK(memchr(response, 0xaf, response_length) == NULL, true);
+    }
+    TEST_CHECK(buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]), original_signal_count);
+
+    char valid_signal[] = "--add\0event=application_launched\0action=echo-\xe6\xb5\x8b\xe8\xaf\x95\0label=utf8-signal-\xe6\xb5\x8b\xe8\xaf\x95\0";
+    char valid_signal_label[] = "utf8-signal-\xe6\xb5\x8b\xe8\xaf\x95";
+    handle_domain_signal(NULL, message_test_token("signal"), valid_signal);
+    TEST_CHECK(buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]), original_signal_count + 1);
+    if (buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]) == original_signal_count + 1) {
+        struct signal *signal = &g_signal_event[SIGNAL_APPLICATION_LAUNCHED][original_signal_count];
+        TEST_CHECK(strcmp(signal->label, valid_signal_label), 0);
+        TEST_CHECK(strcmp(signal->command, "echo-\xe6\xb5\x8b\xe8\xaf\x95"), 0);
+    }
+    TEST_CHECK(event_signal_remove(valid_signal_label), true);
+    TEST_CHECK(buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]), original_signal_count);
+    if (!original_signal_buffer) {
+        buf_free(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]);
+        g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = NULL;
+    }
+});
+
 TEST_FUNC(message_numeric_token_boundaries,
 {
     struct token_value value = token_to_value(message_test_token("2147483647"));

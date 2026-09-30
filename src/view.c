@@ -2,11 +2,21 @@ extern int g_connection;
 extern struct display_manager g_display_manager;
 extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
+extern struct mouse_state g_mouse_state;
 
 #define INSERT_FEEDBACK_WIDTH 2
 #define INSERT_FEEDBACK_RADIUS 9
 void insert_feedback_show(struct window_node *node)
 {
+    if (node->insert_dir != DIR_NORTH &&
+        node->insert_dir != DIR_EAST &&
+        node->insert_dir != DIR_SOUTH &&
+        node->insert_dir != DIR_WEST &&
+        node->insert_dir != STACK) {
+        insert_feedback_destroy(node);
+        return;
+    }
+
     CFTypeRef frame_region;
     CGRect frame = {{node->area.x, node->area.y},{node->area.w, node->area.h}};
     CGSNewRegionWithRect(&frame, &frame_region);
@@ -104,6 +114,10 @@ void insert_feedback_show(struct window_node *node)
 
 void insert_feedback_destroy(struct window_node *node)
 {
+    if (g_mouse_state.feedback_node == node) {
+        g_mouse_state.feedback_node = NULL;
+    }
+
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
 
@@ -141,6 +155,10 @@ static void insert_feedback_adopt(struct window_node *parent, struct window_node
         if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
             update_window_notifications();
         }
+    }
+
+    if (g_mouse_state.feedback_node == child) {
+        g_mouse_state.feedback_node = parent;
     }
 }
 
@@ -955,7 +973,9 @@ void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         struct space_label *space_label = space_manager_get_label_for_space(&g_space_manager, view->sid);
-        fprintf(rsp, "\t\"label\":\"%s\"", space_label ? space_label->label : "");
+        char *label = space_label ? space_label->label : NULL;
+        char *escaped_label = label ? ts_string_escape(label) : NULL;
+        fprintf(rsp, "\t\"label\":\"%s\"", escaped_label ? escaped_label : label ? label : "");
         did_output = true;
     }
 

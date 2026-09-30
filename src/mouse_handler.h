@@ -19,6 +19,7 @@
                              (1 << /* kCGSEventDockControl */ 30)
 
 #define MOUSE_HANDLER(name) CGEventRef name(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *context)
+#define MOUSE_BUTTON_NONE   -1
 
 enum mouse_drop_action
 {
@@ -59,18 +60,25 @@ struct mouse_window_info
     bool changed_size;
 };
 
+struct mouse_click_state
+{
+    bool consume;
+    bool drag_detected;
+    CGEventRef down_event;
+};
+
 struct mouse_state
 {
     CFMachPortRef handle;
     CFRunLoopSourceRef runloop_source;
-    bool consume_mouse_click;
-    bool drag_detected;
-    CGEventRef consumed_event;
+    struct mouse_click_state left_click;
+    struct mouse_click_state right_click;
     enum mouse_mode action1;
     enum mouse_mode action2;
-    volatile uint8_t modifier;
+    uint8_t modifier;
     enum mouse_mode drop_action;
     enum mouse_mode current_action;
+    int64_t active_button;
     CGPoint down_location;
     uint64_t last_moved_time;
     struct window *window;
@@ -107,8 +115,13 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
 void mouse_drop_no_target(struct space_manager *sm, struct window_manager *wm, struct view *src_view, struct view *dst_view, struct window *window, struct window_node *node);
 void mouse_drop_try_adjust_bsp_grid(struct window_manager *wm, struct view *view, struct window *window, struct mouse_window_info *info);
 
+enum mouse_mode mouse_action_for_event(CGEventType type, CGEventFlags flags, uint8_t modifier, enum mouse_mode action1, enum mouse_mode action2);
 void mouse_state_init(struct mouse_state *mouse_state);
+void mouse_state_set_modifier(struct mouse_state *mouse_state, uint8_t modifier);
+void mouse_state_set_action1(struct mouse_state *mouse_state, enum mouse_mode action);
+void mouse_state_set_action2(struct mouse_state *mouse_state, enum mouse_mode action);
 bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask);
+bool mouse_handler_reconfigure(struct mouse_state *mouse_state, uint32_t mask);
 void mouse_handler_end(struct mouse_state *mouse_state);
 
 #endif

@@ -30,8 +30,26 @@ static bool update_window_notifications_append(uint32_t **window_list, size_t *w
     return true;
 }
 
+#ifdef TESTS
+static int g_window_notification_rebuild_count;
+
+static void event_loop_test_mouse_drag_move_window_direct(struct window *window, float x, float y)
+{
+    if (!scripting_addition_move_window(window->id, x, y)) {
+        window_manager_move_window(window, x, y);
+    }
+}
+
+static void (*event_loop_test_mouse_drag_move_window)(struct window *, float, float) = event_loop_test_mouse_drag_move_window_direct;
+#endif
+
 static void update_window_notifications(void)
 {
+#ifdef TESTS
+    ++g_window_notification_rebuild_count;
+    return;
+#endif
+
     size_t window_count = 0;
     size_t window_capacity = 0;
     uint32_t *window_list = NULL;
@@ -90,14 +108,20 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     window_node_make_window_order_head(node, window->id);
 }
 
-static bool application_window_collection_changed_inventory(int previous_window_count, int window_count)
-{
-    return previous_window_count != window_count;
-}
-
-static void application_window_inventory_did_change(void)
+void event_loop_window_inventory_did_change(void)
 {
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+        update_window_notifications();
+    }
+}
+
+static void application_window_collection_update_inventory(int previous_window_count, int window_count)
+{
+    if (previous_window_count != window_count) {
+        event_loop_window_inventory_did_change();
+    }
 }
 
 #pragma clang diagnostic push
@@ -204,9 +228,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
     int window_count;
     struct window **window_list = window_manager_add_application_windows(&g_space_manager, &g_window_manager, application, &window_count);
-    if (application_window_collection_changed_inventory(0, window_count)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(0, window_count);
     uint32_t prev_window_id = g_window_manager.focused_window_id;
 
     uint64_t sid;
@@ -277,10 +299,6 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
         window_node_flush(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
-    }
-
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
-        update_window_notifications();
     }
 }
 
@@ -354,9 +372,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
 
     application_unobserve(application);
     application_destroy(application);
-    if (application_window_collection_changed_inventory(window_count, 0)) {
-        application_window_inventory_did_change();
-    }
+    application_window_collection_update_inventory(window_count, 0);
 
     //
     // @cleanup
@@ -374,10 +390,6 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
 
         window_node_flush(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
-    }
-
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
-        update_window_notifications();
     }
 
 out:
@@ -430,9 +442,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
             int previous_window_count = g_window_manager.window.count;
             window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, i);
             // Resolution controls retry state independently: a false result can still add windows.
-            if (application_window_collection_changed_inventory(previous_window_count, g_window_manager.window.count)) {
-                application_window_inventory_did_change();
-            }
+            application_window_collection_update_inventory(previous_window_count, g_window_manager.window.count);
             break;
         }
     }
@@ -647,11 +657,7 @@ static EVENT_HANDLER(WINDOW_CREATED)
         event_signal_push(SIGNAL_WINDOW_CREATED, window);
     }
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
-        update_window_notifications();
-    }
-
-    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    event_loop_window_inventory_did_change();
 }
 
 static EVENT_HANDLER(WINDOW_DESTROYED)
@@ -682,11 +688,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     window_unobserve(window);
     window_destroy(window);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
-        update_window_notifications();
-    }
-
-    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    event_loop_window_inventory_did_change();
 }
 
 static EVENT_HANDLER(WINDOW_FOCUSED)
@@ -1118,6 +1120,8 @@ static EVENT_HANDLER(SPACE_CHANGED)
     struct view *view = space_manager_find_view(&g_space_manager, g_space_manager.current_space_id);
 
     if (space_manager_refresh_application_windows(&g_space_manager)) {
+        event_loop_window_inventory_did_change();
+
         struct window *focused_window = window_manager_focused_window(&g_window_manager);
         if (focused_window && window_manager_find_lost_focused_event(&g_window_manager, focused_window->id)) {
             window_did_receive_focus(&g_window_manager, &g_mouse_state, focused_window);
@@ -1171,6 +1175,8 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
     struct view *view = space_manager_find_view(&g_space_manager, g_space_manager.current_space_id);
 
     if (space_manager_refresh_application_windows(&g_space_manager)) {
+        event_loop_window_inventory_did_change();
+
         struct window *focused_window = window_manager_focused_window(&g_window_manager);
         if (focused_window && window_manager_find_lost_focused_event(&g_window_manager, focused_window->id)) {
             window_did_receive_focus(&g_window_manager, &g_mouse_state, focused_window);
@@ -1233,10 +1239,72 @@ static EVENT_HANDLER(DISPLAY_RESIZED)
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
 }
 
+static bool mouse_drag_action_is_valid(enum mouse_mode action)
+{
+    return action == MOUSE_MODE_MOVE || action == MOUSE_MODE_RESIZE;
+}
+
+static bool mouse_drag_button_is_valid(int64_t button)
+{
+    return button == kCGMouseButtonLeft || button == kCGMouseButtonRight;
+}
+
+static bool mouse_drag_begin(struct mouse_state *mouse_state, enum mouse_mode action, int64_t button, struct window *window, CGPoint point)
+{
+    if (!mouse_drag_action_is_valid(action) || !mouse_drag_button_is_valid(button)) return false;
+
+    mouse_state->window = window;
+    mouse_state->window_frame = window->frame;
+    mouse_state->down_location = point;
+    mouse_state->direction = 0;
+    mouse_state->current_action = action;
+    mouse_state->active_button = button;
+
+    if (action == MOUSE_MODE_RESIZE) {
+        CGPoint frame_mid = { CGRectGetMidX(mouse_state->window_frame), CGRectGetMidY(mouse_state->window_frame) };
+        if (point.x < frame_mid.x) mouse_state->direction |= HANDLE_LEFT;
+        if (point.y < frame_mid.y) mouse_state->direction |= HANDLE_TOP;
+        if (point.x > frame_mid.x) mouse_state->direction |= HANDLE_RIGHT;
+        if (point.y > frame_mid.y) mouse_state->direction |= HANDLE_BOTTOM;
+    }
+
+    return true;
+}
+
+static bool mouse_drag_event_is_owner(struct mouse_state *mouse_state, int64_t button)
+{
+    return mouse_state->active_button != MOUSE_BUTTON_NONE && mouse_state->active_button == button;
+}
+
+static void mouse_drag_reset(struct mouse_state *mouse_state)
+{
+    if (mouse_state->feedback_node) {
+        mouse_state->feedback_node->insert_dir = 0;
+        insert_feedback_destroy(mouse_state->feedback_node);
+        mouse_state->feedback_node = NULL;
+    }
+
+    mouse_state->window = NULL;
+    mouse_state->current_action = MOUSE_MODE_NONE;
+    mouse_state->active_button = MOUSE_BUTTON_NONE;
+}
+
+static bool mouse_drag_reset_if_owner(struct mouse_state *mouse_state, int64_t button)
+{
+    if (!mouse_drag_event_is_owner(mouse_state, button)) return false;
+    mouse_drag_reset(mouse_state);
+    return true;
+}
+
 static EVENT_HANDLER(MOUSE_DOWN)
 {
-    if (mission_control_is_active())                     goto out;
-    if (g_mouse_state.current_action != MOUSE_MODE_NONE) goto out;
+    enum mouse_mode action = (enum mouse_mode) param1;
+    if (!mouse_drag_action_is_valid(action))              goto out;
+    if (mission_control_is_active())                      goto out;
+    if (g_mouse_state.current_action != MOUSE_MODE_NONE)  goto out;
+
+    int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
+    if (!mouse_drag_button_is_valid(button)) goto out;
 
     CGPoint point = CGEventGetLocation(context);
     debug("%s: %.2f, %.2f\n", __FUNCTION__, point.x, point.y);
@@ -1244,27 +1312,7 @@ static EVENT_HANDLER(MOUSE_DOWN)
     struct window *window = window_manager_find_window_at_point(&g_window_manager, point);
     if (!window || window_check_flag(window, WINDOW_FULLSCREEN)) goto out;
 
-    g_mouse_state.window = window;
-    g_mouse_state.window_frame = g_mouse_state.window->frame;
-    g_mouse_state.down_location = point;
-    g_mouse_state.direction = 0;
-
-    int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
-    uint8_t mod = (uint8_t) param1;
-
-    if (button == kCGMouseButtonLeft && g_mouse_state.modifier == mod) {
-        g_mouse_state.current_action = g_mouse_state.action1;
-    } else if (button == kCGMouseButtonRight && g_mouse_state.modifier == mod) {
-        g_mouse_state.current_action = g_mouse_state.action2;
-    }
-
-    if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
-        CGPoint frame_mid = { CGRectGetMidX(g_mouse_state.window_frame), CGRectGetMidY(g_mouse_state.window_frame) };
-        if (point.x < frame_mid.x) g_mouse_state.direction |= HANDLE_LEFT;
-        if (point.y < frame_mid.y) g_mouse_state.direction |= HANDLE_TOP;
-        if (point.x > frame_mid.x) g_mouse_state.direction |= HANDLE_RIGHT;
-        if (point.y > frame_mid.y) g_mouse_state.direction |= HANDLE_BOTTOM;
-    }
+    mouse_drag_begin(&g_mouse_state, action, button, window, point);
 
 out:
     CFRelease(context);
@@ -1272,24 +1320,26 @@ out:
 
 static EVENT_HANDLER(MOUSE_UP)
 {
-    if (mission_control_is_active()) goto out;
-    if (!g_mouse_state.window)       goto res;
+    int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
+    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
+    if (mission_control_is_active())                        goto reset;
+    if (!g_mouse_state.window)                             goto reset;
 
     if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
-        goto err;
+        goto reset;
     }
 
     if (window_check_flag(g_mouse_state.window, WINDOW_FULLSCREEN)) {
         debug("%s: %d is transitioning into native-fullscreen mode, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
-        goto err;
+        goto reset;
     }
 
     CGPoint point = CGEventGetLocation(context);
     debug("%s: %.2f, %.2f\n", __FUNCTION__, point.x, point.y);
 
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
-    if (!src_view) goto err;
+    if (!src_view) goto reset;
 
     struct mouse_window_info info;
     mouse_window_info_populate(&g_mouse_state, &info);
@@ -1343,25 +1393,27 @@ static EVENT_HANDLER(MOUSE_UP)
         mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
     }
 
-err:
-    g_mouse_state.window = NULL;
-res:
-    g_mouse_state.current_action = MOUSE_MODE_NONE;
+reset:
+    mouse_drag_reset_if_owner(&g_mouse_state, button);
 out:
     CFRelease(context);
 }
 
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
-    if (mission_control_is_active()) goto out;
-    if (!g_mouse_state.window)       goto out;
+    int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
+    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
+    if (mission_control_is_active())                        goto abort;
+    if (!g_mouse_state.window)                             goto abort;
 
     if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
-        g_mouse_state.window = NULL;
-        g_mouse_state.current_action = MOUSE_MODE_NONE;
-        CFRelease(context);
-        return;
+        goto abort;
+    }
+
+    if (window_check_flag(g_mouse_state.window, WINDOW_FULLSCREEN)) {
+        debug("%s: %d is transitioning into native-fullscreen mode, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
+        goto abort;
     }
 
     CGPoint point = CGEventGetLocation(context);
@@ -1377,9 +1429,13 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             if (new_point.y < bounds.origin.y) new_point.y = bounds.origin.y;
         }
 
+#ifdef TESTS
+        event_loop_test_mouse_drag_move_window(g_mouse_state.window, new_point.x, new_point.y);
+#else
         if (!scripting_addition_move_window(g_mouse_state.window->id, new_point.x, new_point.y)) {
             window_manager_move_window(g_mouse_state.window, new_point.x, new_point.y);
         }
+#endif
     } else if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
         uint64_t event_time = read_os_timer();
         float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float)read_os_freq());
@@ -1439,11 +1495,16 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
                 insert_dir = DIR_WEST;
             } break;
             case MOUSE_DROP_ACTION_NONE: {
-                /* silence compiler warning.. */
+                if (g_mouse_state.feedback_node) {
+                    g_mouse_state.feedback_node->insert_dir = 0;
+                    insert_feedback_destroy(g_mouse_state.feedback_node);
+                }
+                b_node->insert_dir = 0;
+                insert_feedback_destroy(b_node);
             } break;
             }
 
-            if (b_node->insert_dir != insert_dir) {
+            if (insert_dir && b_node->insert_dir != insert_dir) {
                 b_node->insert_dir = insert_dir;
                 insert_feedback_show(b_node);
                 g_mouse_state.feedback_node = b_node;
@@ -1457,6 +1518,10 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         }
     }
 
+    goto out;
+
+abort:
+    mouse_drag_reset_if_owner(&g_mouse_state, button);
 out:
     CFRelease(context);
 }
@@ -1891,16 +1956,34 @@ void event_loop_post(struct event_loop *event_loop, enum event_type type, void *
     sem_post(event_loop->semaphore);
 }
 
+#ifdef TESTS
+static int (*event_loop_thread_create)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *) = pthread_create;
+#else
+#define event_loop_thread_create pthread_create
+#endif
+
 bool event_loop_begin(struct event_loop *event_loop)
 {
+    *event_loop = (struct event_loop) { 0 };
     if (!event_queue_init(&event_loop->queue, EVENT_QUEUE_CAPACITY)) return false;
 
     event_loop->semaphore = sem_open("yabai_event_loop_semaphore", O_CREAT, 0600, 0);
     sem_unlink("yabai_event_loop_semaphore");
-    if (event_loop->semaphore == SEM_FAILED) return false;
+    if (event_loop->semaphore == SEM_FAILED) {
+        event_loop->semaphore = NULL;
+        event_queue_destroy(&event_loop->queue);
+        return false;
+    }
 
     event_loop->is_running = true;
-    pthread_create(&event_loop->thread, NULL, &event_loop_run, event_loop);
+    if (event_loop_thread_create(&event_loop->thread, NULL, &event_loop_run, event_loop) != 0) {
+        event_loop->is_running = false;
+        memset(&event_loop->thread, 0, sizeof(event_loop->thread));
+        sem_close(event_loop->semaphore);
+        event_loop->semaphore = NULL;
+        event_queue_destroy(&event_loop->queue);
+        return false;
+    }
 
     return true;
 }

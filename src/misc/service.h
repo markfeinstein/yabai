@@ -50,6 +50,56 @@ static inline bool plist_xml_add_size(size_t *size, size_t increment)
     return true;
 }
 
+static bool plist_xml_string_is_valid(const char *s)
+{
+    if (!s) return false;
+
+    size_t byte_length = strlen(s);
+    if (byte_length > LONG_MAX) return false;
+
+    CFStringRef string = CFStringCreateWithBytes(kCFAllocatorDefault,
+                                                  (const UInt8 *) s,
+                                                  (CFIndex) byte_length,
+                                                  kCFStringEncodingUTF8,
+                                                  false);
+    if (!string) return false;
+
+    bool result = true;
+    CFIndex length = CFStringGetLength(string);
+    for (CFIndex i = 0; i < length; ++i) {
+        UniChar character = CFStringGetCharacterAtIndex(string, i);
+        if (CFStringIsSurrogateHighCharacter(character)) {
+            if (++i >= length) {
+                result = false;
+                break;
+            }
+
+            UniChar low_character = CFStringGetCharacterAtIndex(string, i);
+            if (!CFStringIsSurrogateLowCharacter(low_character)) {
+                result = false;
+                break;
+            }
+
+            UTF32Char scalar = CFStringGetLongCharacterForSurrogatePair(character, low_character);
+            if (scalar < 0x10000 || scalar > 0x10ffff) {
+                result = false;
+                break;
+            }
+        } else if (CFStringIsSurrogateLowCharacter(character) ||
+                   !((character == 0x09) ||
+                     (character == 0x0a) ||
+                     (character == 0x0d) ||
+                     (character >= 0x20 && character <= 0xd7ff) ||
+                     (character >= 0xe000 && character <= 0xfffd))) {
+            result = false;
+            break;
+        }
+    }
+
+    CFRelease(string);
+    return result;
+}
+
 static char *plist_xml_escape(char *s)
 {
     size_t size = 0;
@@ -166,6 +216,16 @@ static char *populate_plist(int *length)
     unsigned int exe_path_size = sizeof(exe_path);
     if (_NSGetExecutablePath(exe_path, &exe_path_size) < 0) {
         error("yabai: unable to retrieve path of executable! abort..\n");
+    }
+
+    if (!plist_xml_string_is_valid(exe_path)) {
+        error("yabai: executable path is not valid XML 1.0 text! abort..\n");
+    }
+    if (!plist_xml_string_is_valid(path_env)) {
+        error("yabai: 'env PATH' is not valid XML 1.0 text! abort..\n");
+    }
+    if (!plist_xml_string_is_valid(user)) {
+        error("yabai: 'env USER' is not valid XML 1.0 text! abort..\n");
     }
 
     char *escaped_exe_path = plist_xml_escape(exe_path);
@@ -408,7 +468,8 @@ static int service_stop(void)
         //
 
         const char *const args[] = { _PATH_LAUNCHCTL, "bootout", domain_target, yabai_plist_path, NULL };
-        safe_exec((char *const*)args, false);
+        int result = safe_exec((char *const*)args, false);
+        if (result != 0) return result;
 
         const char *const args2[] = { _PATH_LAUNCHCTL, "disable", service_target, NULL };
         return safe_exec((char *const*)args2, false);

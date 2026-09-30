@@ -656,6 +656,11 @@ static char *reserved_window_identifiers[] =
 
 static bool parse_label(FILE *rsp, struct token token, enum label_type type, char **label)
 {
+    if (token_is_valid(token) && !utf8_validate_bytes(token.text, (size_t) token.length)) {
+        daemon_fail(rsp, "label is not valid UTF-8.\n");
+        return false;
+    }
+
     struct token_value value = token_to_value(token);
 
     if (value.type == TOKEN_TYPE_INVALID) {
@@ -1297,11 +1302,17 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", ffm_mode_str[g_window_manager.ffm_mode]);
             } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED);
+                if (!window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED)) {
+                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
+                }
             } else if (token_equals(value, ARGUMENT_CONFIG_FFM_AUTOFOCUS)) {
-                window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
+                if (!window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS)) {
+                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
+                }
             } else if (token_equals(value, ARGUMENT_CONFIG_FFM_AUTORAISE)) {
-                window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTORAISE);
+                if (!window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTORAISE)) {
+                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
+                }
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1762,15 +1773,15 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", mouse_mod_str[g_mouse_state.modifier]);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_ALT)) {
-                g_mouse_state.modifier = MOUSE_MOD_ALT;
+                mouse_state_set_modifier(&g_mouse_state, MOUSE_MOD_ALT);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_SHIFT)) {
-                g_mouse_state.modifier = MOUSE_MOD_SHIFT;
+                mouse_state_set_modifier(&g_mouse_state, MOUSE_MOD_SHIFT);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_CMD)) {
-                g_mouse_state.modifier = MOUSE_MOD_CMD;
+                mouse_state_set_modifier(&g_mouse_state, MOUSE_MOD_CMD);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_CTRL)) {
-                g_mouse_state.modifier = MOUSE_MOD_CTRL;
+                mouse_state_set_modifier(&g_mouse_state, MOUSE_MOD_CTRL);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_FN)) {
-                g_mouse_state.modifier = MOUSE_MOD_FN;
+                mouse_state_set_modifier(&g_mouse_state, MOUSE_MOD_FN);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1779,9 +1790,9 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", mouse_mode_str[g_mouse_state.action1]);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_MOVE)) {
-                g_mouse_state.action1 = MOUSE_MODE_MOVE;
+                mouse_state_set_action1(&g_mouse_state, MOUSE_MODE_MOVE);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_RESIZE)) {
-                g_mouse_state.action1 = MOUSE_MODE_RESIZE;
+                mouse_state_set_action1(&g_mouse_state, MOUSE_MODE_RESIZE);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1790,9 +1801,9 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", mouse_mode_str[g_mouse_state.action2]);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_MOVE)) {
-                g_mouse_state.action2 = MOUSE_MODE_MOVE;
+                mouse_state_set_action2(&g_mouse_state, MOUSE_MODE_MOVE);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_RESIZE)) {
-                g_mouse_state.action2 = MOUSE_MODE_RESIZE;
+                mouse_state_set_action2(&g_mouse_state, MOUSE_MODE_RESIZE);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -2794,6 +2805,12 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             continue;
         }
 
+        if (!utf8_validate_string(value)) {
+            daemon_fail(rsp, "value is not valid UTF-8.\n");
+            did_parse = false;
+            continue;
+        }
+
         if (string_equals(key, ARGUMENT_RULE_KEY_LABEL)) {
             if (exclusion) unsupported_exclusion = key;
             rule->label = string_copy(value);
@@ -3067,6 +3084,12 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
                 continue;
             }
 
+            if (!utf8_validate_string(value)) {
+                daemon_fail(rsp, "value is not valid UTF-8.\n");
+                did_parse = false;
+                continue;
+            }
+
             if (string_equals(key, ARGUMENT_SIGNAL_KEY_LABEL)) {
                 if (exclusion) unsupported_exclusion = key;
                 signal.label = string_copy(value);
@@ -3186,6 +3209,10 @@ static void *message_loop_run(void *context)
     while (g_message_loop.is_running) {
         int sockfd = accept(g_message_loop.sockfd, NULL, 0);
         if (sockfd == -1) continue;
+        if (!socket_set_cloexec(sockfd)) {
+            socket_close(sockfd);
+            continue;
+        }
 
         if (!daemon_message_admission_acquire(&g_daemon_message_admission)) {
             daemon_message_send_overloaded(sockfd);
@@ -3202,31 +3229,32 @@ static void *message_loop_run(void *context)
 
 bool message_loop_begin(char *socket_path)
 {
+    bool bound = false;
+    g_message_loop.is_running = false;
     struct sockaddr_un socket_address;
-    socket_address.sun_family = AF_UNIX;
-    snprintf(socket_address.sun_path, sizeof(socket_address.sun_path), "%s", socket_path);
-    unlink(socket_path);
+    if (!socket_address_init(&socket_address, socket_path)) return false;
 
-    if ((g_message_loop.sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-        return false;
-    }
+    g_message_loop.sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (g_message_loop.sockfd == -1) return false;
+    if (!socket_set_cloexec(g_message_loop.sockfd)) goto fail;
 
-    if (bind(g_message_loop.sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1) {
-        return false;
-    }
+    unlink(socket_address.sun_path);
+    if (bind(g_message_loop.sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1) goto fail;
+    bound = true;
 
-    if (chmod(socket_path, 0600) != 0) {
-        return false;
-    }
-
-    if (listen(g_message_loop.sockfd, SOMAXCONN) == -1) {
-        return false;
-    }
-
-    fcntl(g_message_loop.sockfd, F_SETFD, FD_CLOEXEC | fcntl(g_message_loop.sockfd, F_GETFD));
+    if (chmod(socket_address.sun_path, 0600) != 0) goto fail;
+    if (listen(g_message_loop.sockfd, SOMAXCONN) == -1) goto fail;
 
     g_message_loop.is_running = true;
-    pthread_create(&g_message_loop.thread, NULL, &message_loop_run, NULL);
+    if (pthread_create(&g_message_loop.thread, NULL, &message_loop_run, NULL) != 0) {
+        g_message_loop.is_running = false;
+        goto fail;
+    }
 
     return true;
+
+fail:
+    g_message_loop.is_running = false;
+    socket_listener_cleanup(&g_message_loop.sockfd, socket_address.sun_path, bound);
+    return false;
 }
