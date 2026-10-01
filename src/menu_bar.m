@@ -15,7 +15,7 @@
 #define YB_MENU_BAR_GAP                  5.0
 #define YB_MENU_BAR_DISPLAY_GAP          9.0
 #define YB_MENU_BAR_OUTER_INSET          2.0
-#define YB_MENU_BAR_CELL_WIDTH          28.0
+#define YB_MENU_BAR_CELL_WIDTH          25.0
 #define YB_MENU_BAR_SCREEN_WIDTH        22.0
 #define YB_MENU_BAR_SCREEN_HEIGHT       18.0
 #define YB_MENU_BAR_SCREEN_RADIUS        3.0

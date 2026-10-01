@@ -581,7 +581,7 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(NSWidth([active frame]) == YB_MENU_BAR_CELL_WIDTH);
     TEST_CHECK(NSHeight([active frame]) == YB_MENU_BAR_STATUS_HEIGHT);
     TEST_CHECK(YB_MENU_BAR_STATUS_HEIGHT == 22.0);
-    TEST_CHECK(YB_MENU_BAR_CELL_WIDTH == 28.0);
+    TEST_CHECK(YB_MENU_BAR_CELL_WIDTH == 25.0);
     TEST_CHECK(YB_MENU_BAR_SCREEN_WIDTH == 22.0);
     TEST_CHECK(YB_MENU_BAR_SCREEN_HEIGHT == 18.0);
     TEST_CHECK(YB_MENU_BAR_SCREEN_RADIUS == 3.0);
@@ -729,7 +729,7 @@ test_screen_number_visual_states_are_centered_monochrome_and_unfilled(void)
 
     NSRect bounds = [cell bounds];
     NSRect screen = yb_screen_rect(bounds, cell->yb_index);
-    TEST_CHECK(NSEqualRects(screen, NSMakeRect(3.0, 2.0, 22.0, 18.0)));
+    TEST_CHECK(NSEqualRects(screen, NSMakeRect(1.5, 2.0, 22.0, 18.0)));
     TEST_CHECK(NSMidX(screen) == NSMidX(bounds));
     TEST_CHECK(NSMidY(screen) == NSMidY(bounds));
 
@@ -869,7 +869,7 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     struct yb_screen_selection expected = yb_select_screen_interval(entries, total, active);
     TEST_CHECK(YB_MENU_BAR_MAX_EXPANDED_WIDTH == 520.0);
     TEST_CHECK(expected.start == 15);
-    TEST_CHECK(expected.count == 10);
+    TEST_CHECK(expected.count == 11);
     [controller testSetSnapshot:snapshot];
 
     NSView *expanded = [controller testBuildExpandedStrip];
@@ -879,8 +879,8 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     TEST_CHECK(count > 1 && count < total);
     TEST_CHECK(count == expected.count);
     TEST_CHECK(indexes[0] == 116);
-    TEST_CHECK(indexes[count - 1] == 125);
-    TEST_CHECK(omitted == 30);
+    TEST_CHECK(indexes[count - 1] == 126);
+    TEST_CHECK(omitted == 29);
     TEST_CHECK(omitted == total - count);
     TEST_CHECK(NSWidth([expanded frame]) == yb_screen_interval_width(entries, expected.start,
                                                                      expected.count, omitted));
