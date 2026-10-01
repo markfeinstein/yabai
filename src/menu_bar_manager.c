@@ -926,7 +926,9 @@ void menu_bar_manager_mark_dirty(uint32_t reason)
     if (g_menu_bar_manager.refresh_pending) return;
 
     g_menu_bar_manager.refresh_pending = true;
-    event_loop_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0);
+    if (!event_loop_try_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0)) {
+        g_menu_bar_manager.refresh_pending = false;
+    }
 }
 
 void menu_bar_manager_refresh(void)

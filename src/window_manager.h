@@ -209,6 +209,8 @@ bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct 
 bool window_manager_remove_scratchpad_for_window(struct window_manager *wm, struct window *window, bool unfloat);
 void window_manager_scratchpad_recover_windows(void);
 void window_manager_wait_for_native_fullscreen_transition(struct window *window);
+bool window_manager_reconcile_windows_on_space_with_storage(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, bool inventory_succeeded, struct view **mutated_views, int mutated_capacity);
+bool window_manager_reconcile_windows_on_space(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, bool inventory_succeeded);
 void window_manager_validate_and_check_for_windows_on_space(struct space_manager *sm, struct window_manager *wm, uint64_t sid);
 void window_manager_correct_for_mission_control_changes(struct space_manager *sm, struct window_manager *wm);
 void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did);

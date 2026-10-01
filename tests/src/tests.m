@@ -46,6 +46,8 @@ typedef TEST_SIG(function);
 #include "message.c"
 #include "message_frame.c"
 #include "sa_message.c"
+#include "deferred_convergence.c"
+#include "animation_failure.c"
 #undef TEST_ENTRY
 
 static bool test_temp_storage_ensure(uint64_t size)
@@ -69,8 +71,15 @@ static void test_table_free_and_zero(struct table *table)
     memset(table, 0, sizeof(*table));
 }
 
+static bool g_test_window_animations_lock_initialized;
+
 static void test_suite_teardown(void)
 {
+    if (g_test_window_animations_lock_initialized) {
+        pthread_mutex_destroy(&g_window_manager.window_animations_lock);
+        g_test_window_animations_lock_initialized = false;
+    }
+
     test_table_free_and_zero(&g_window_manager.window);
     test_table_free_and_zero(&g_window_manager.managed_window);
     test_table_free_and_zero(&g_window_manager.insert_feedback);
@@ -81,6 +90,136 @@ static void test_suite_teardown(void)
     }
     memset(&g_temp_storage, 0, sizeof(g_temp_storage));
 }
+
+TEST_FUNC(managed_space_topology_parsing_is_type_safe_and_ordered,
+{
+    int checked_count = -1;
+    TEST_CHECK(cfindex_to_int(-1, &checked_count), false);
+    TEST_CHECK(cfindex_to_int((CFIndex) INT_MAX + 1, &checked_count), false);
+    TEST_CHECK(cfindex_to_int(3, &checked_count), true);
+    TEST_CHECK(checked_count, 3);
+    TEST_CHECK(managed_space_first(NULL), 0ULL);
+    TEST_CHECK(managed_space_last(NULL), 0ULL);
+    TEST_CHECK(managed_space_select(NULL, 1), 0ULL);
+    TEST_CHECK(managed_space_index(NULL, 1), 0);
+
+    NSArray *empty = @[];
+    TEST_CHECK(managed_space_first((CFArrayRef) empty), 0ULL);
+    TEST_CHECK(managed_space_last((CFArrayRef) empty), 0ULL);
+
+    NSDictionary *missing_spaces = @{ @"Display Identifier": @"A" };
+    NSDictionary *wrong_spaces = @{ @"Display Identifier": @"B", @"Spaces": @"wrong" };
+    NSDictionary *malformed_space = @{ @"id64": @"wrong" };
+    NSDictionary *valid_space_10 = @{ @"id64": @10 };
+    NSDictionary *valid_space_20 = @{ @"id64": @20 };
+    NSDictionary *valid_space_30 = @{ @"id64": @30 };
+    NSDictionary *first_display = @{ @"Display Identifier": @"C",
+                                     @"Spaces": @[ malformed_space, valid_space_10, @"wrong", valid_space_20 ] };
+    NSDictionary *second_display = @{ @"Display Identifier": @"D",
+                                      @"Spaces": @[ valid_space_30 ] };
+    NSArray *topology = @[ @"wrong", missing_spaces, wrong_spaces, first_display, second_display ];
+
+    TEST_CHECK(managed_space_first((CFArrayRef) topology), 10ULL);
+    TEST_CHECK(managed_space_last((CFArrayRef) topology), 30ULL);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 1), 10ULL);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 2), 20ULL);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 3), 30ULL);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 4), 0ULL);
+    TEST_CHECK(managed_space_index((CFArrayRef) topology, 20), 2);
+    TEST_CHECK(managed_space_previous((CFArrayRef) topology, 20), 10ULL);
+    TEST_CHECK(managed_space_next((CFArrayRef) topology, 20), 30ULL);
+    TEST_CHECK(managed_space_previous((CFArrayRef) topology, 10), 0ULL);
+    TEST_CHECK(managed_space_next((CFArrayRef) topology, 30), 0ULL);
+    TEST_CHECK(managed_space_previous((CFArrayRef) topology, 99), 0ULL);
+    TEST_CHECK(managed_space_next((CFArrayRef) topology, 99), 0ULL);
+});
+
+TEST_FUNC(managed_display_space_extraction_skips_malformed_entries,
+{
+    NSDictionary *missing_spaces = @{ @"Display Identifier": @"missing" };
+    NSDictionary *wrong_spaces = @{ @"Display Identifier": @"wrong", @"Spaces": @1 };
+    NSDictionary *empty_spaces = @{ @"Display Identifier": @"empty", @"Spaces": @[] };
+    NSDictionary *mixed_spaces = @{ @"Display Identifier": @"mixed",
+                                     @"Spaces": @[ @{ @"id64": @1 }, @{ @"id64": @"bad" }, @{}, @{ @"id64": @3 } ] };
+    NSArray *topology = @[ @1, missing_spaces, wrong_spaces, empty_spaces, mixed_spaces ];
+
+    TEST_CHECK(managed_space_spaces_for_display(NULL, CFSTR("mixed")) == NULL, true);
+    TEST_CHECK(managed_space_spaces_for_display((CFArrayRef) topology, NULL) == NULL, true);
+    TEST_CHECK(managed_space_spaces_for_display((CFArrayRef) topology, CFSTR("missing")) == NULL, true);
+    TEST_CHECK(managed_space_spaces_for_display((CFArrayRef) topology, CFSTR("wrong")) == NULL, true);
+
+    CFArrayRef spaces = managed_space_spaces_for_display((CFArrayRef) topology, CFSTR("empty"));
+    TEST_CHECK(spaces != NULL, true);
+    TEST_CHECK(managed_space_count_valid(spaces), 0);
+
+    spaces = managed_space_spaces_for_display((CFArrayRef) topology, CFSTR("mixed"));
+    TEST_CHECK(spaces != NULL, true);
+    TEST_CHECK(managed_space_count_valid(spaces), 2);
+    uint64_t list[2] = { 0 };
+    TEST_CHECK(managed_space_copy_valid(spaces, list), 2);
+    TEST_CHECK(list[0], 1ULL);
+    TEST_CHECK(list[1], 3ULL);
+});
+
+TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
+{
+    TEST_CHECK(display_manager_display_id_for_uuid(NULL), 0U);
+    CFTypeRef wrong_uuid = kCFBooleanTrue;
+    TEST_CHECK(display_manager_display_id_for_uuid((CFStringRef) wrong_uuid), 0U);
+    TEST_CHECK(display_id((CFStringRef) wrong_uuid), 0U);
+    TEST_CHECK(display_manager_uuid_at_index(NULL, 0) == NULL, true);
+    TEST_CHECK(display_manager_copy_valid_display_uuids(NULL, DISPLAY_ARRANGEMENT_ORDER_DEFAULT) == NULL, true);
+
+    NSArray *displays = @[ @1, @"display-a", @{}, @"display-b" ];
+    TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, -1) == NULL, true);
+    TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, 0) == NULL, true);
+    TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, 4) == NULL, true);
+
+    CFMutableArrayRef filtered = display_manager_copy_valid_display_uuids((CFArrayRef) displays, DISPLAY_ARRANGEMENT_ORDER_DEFAULT);
+    TEST_CHECK(filtered != NULL, true);
+    if (filtered) {
+        TEST_CHECK(CFArrayGetCount(filtered), 2L);
+        TEST_CHECK(CFEqual(CFArrayGetValueAtIndex(filtered, 0), CFSTR("display-a")), true);
+        TEST_CHECK(CFEqual(CFArrayGetValueAtIndex(filtered, 1), CFSTR("display-b")), true);
+        CFRelease(filtered);
+    }
+
+    filtered = display_manager_copy_valid_display_uuids((CFArrayRef) displays, DISPLAY_ARRANGEMENT_ORDER_X);
+    TEST_CHECK(filtered != NULL, true);
+    if (filtered) {
+        TEST_CHECK(CFArrayGetCount(filtered), 2L);
+        TEST_CHECK(cf_is_type(CFArrayGetValueAtIndex(filtered, 0), CFStringGetTypeID()), true);
+        TEST_CHECK(cf_is_type(CFArrayGetValueAtIndex(filtered, 1), CFStringGetTypeID()), true);
+        CFRelease(filtered);
+    }
+});
+
+TEST_FUNC(display_space_empty_allocation_preserves_flattened_adjacency,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    NSArray *populated_a = @[ @{ @"id64": @11 }, @{ @"id64": @22 } ];
+    NSArray *empty = @[];
+    NSArray *populated_b = @[ @{ @"id64": @33 } ];
+    int count_a = -1;
+    int count_empty = -1;
+    int count_b = -1;
+    uint64_t *list_a = display_space_list_from_spaces((CFArrayRef) populated_a, &count_a);
+    uint64_t *list_empty = display_space_list_from_spaces((CFArrayRef) empty, &count_empty);
+    uint64_t *list_b = display_space_list_from_spaces((CFArrayRef) populated_b, &count_b);
+
+    TEST_CHECK(count_a, 2);
+    TEST_CHECK(count_empty, 0);
+    TEST_CHECK(count_b, 1);
+    TEST_CHECK(list_empty == list_a + count_a, true);
+    TEST_CHECK(list_b == list_empty, true);
+    TEST_CHECK(list_a[0], 11ULL);
+    TEST_CHECK(list_a[1], 22ULL);
+    TEST_CHECK(list_a[2], 33ULL);
+});
 
 TEST_FUNC(add_and_clamp_to_zero_saturates,
 {
@@ -1504,6 +1643,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mouse_drop_action_rollback_failstop_exits) \
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \
+    TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
+    TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
+    TEST_ENTRY(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory) \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
     TEST_ENTRY(window_ordered_out_stays_unmanaged)              \
     TEST_ENTRY(window_ordered_in_is_tiled_again)                \
@@ -1511,6 +1653,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_reordered_stays_tiled)                    \
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
     TEST_ENTRY(macos_version_newer_than_listed)                 \
+    TEST_ENTRY(managed_space_topology_parsing_is_type_safe_and_ordered) \
+    TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
+    TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
+    TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
     TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
     TEST_ENTRY(event_loop_begin_thread_creation_failure_is_atomic) \
     TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
@@ -1519,6 +1665,20 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
     TEST_ENTRY(event_queue_full_failstops_destructive_events)    \
+    TEST_ENTRY(event_queue_binary_wake_converges_after_merges)   \
+    TEST_ENTRY(focus_pending_accounting_is_saturating_and_owned) \
+    TEST_ENTRY(producer_pending_state_rolls_back_and_retries_after_rejection) \
+    TEST_ENTRY(mach_send_uses_bounded_timeout) \
+    TEST_ENTRY(animation_payload_packers_bound_batches_and_preserve_order) \
+    TEST_ENTRY(jankyborders_generations_supersede_stale_retries) \
+    TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
+    TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
+    TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
+    TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
+    TEST_ENTRY(animation_context_setup_allocation_and_connection_failures_cleanup) \
+    TEST_ENTRY(animation_teardown_has_single_non_callback_owner) \
+    TEST_ENTRY(animation_out_failure_retains_resources_until_confirmed) \
+    TEST_ENTRY(animation_teardown_skips_replaced_ownership) \
     TEST_ENTRY(daemon_message_admission_bounds_and_reuses_slots) \
     TEST_ENTRY(menu_bar_model_defaults_and_zero_counts)          \
     TEST_ENTRY(menu_bar_model_classification_cases)              \
@@ -1585,6 +1745,12 @@ static struct {
 
 int main(int argc, char **argv)
 {
+    if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize animation test mutex\n");
+        return EXIT_FAILURE;
+    }
+    g_test_window_animations_lock_initialized = true;
+
     int succeeded = 0;
     int failed = 0;
     int total = array_count(tests);

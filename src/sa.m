@@ -577,16 +577,54 @@ bool scripting_addition_scale_window(uint32_t wid, float x, float y, float w, fl
     return scripting_addition_send_payload(&builder);
 }
 
+static int scripting_addition_pack_swap_window_proxy_batch(uint8_t op, struct window_animation *animation_list,
+                                                            int animation_count, int start,
+                                                            uint8_t bytes[SA_SOCKET_BUFF_LEN],
+                                                            struct sa_payload_builder *builder)
+{
+    if (!animation_list || animation_count < 0 || start < 0 || start > animation_count ||
+        !sa_payload_builder_init(builder, bytes, SA_SOCKET_BUFF_LEN, op)) return -1;
+
+    size_t count_offset = builder->length;
+    int count = 0;
+    if (!sa_payload_builder_append_count(builder, count)) return -1;
+
+    int i = start;
+    while (i < animation_count && count < 1022) {
+        bool skip = __atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED);
+        size_t record_size = skip ? sizeof(uint32_t) : 2 * sizeof(uint32_t);
+        if (record_size > builder->capacity - builder->length) break;
+        if (!sa_payload_builder_append_swap_record(builder, skip, animation_list[i].wid,
+                                                   animation_list[i].proxy.id)) return -1;
+        ++count;
+        ++i;
+    }
+
+    if (i == start && i < animation_count) return -1;
+    memcpy(builder->bytes + count_offset, &count, sizeof(count));
+    return i;
+}
+
+#ifdef TESTS
+static bool (*scripting_addition_swap_send_payload)(struct sa_payload_builder *) = scripting_addition_send_payload;
+#else
+#define scripting_addition_swap_send_payload scripting_addition_send_payload
+#endif
+
 static bool scripting_addition_swap_window_proxy(uint8_t op, struct window_animation *animation_list, int animation_count)
 {
-    SA_PAYLOAD_BEGIN(op);
-    if (!sa_payload_builder_append_count_max(&builder, animation_count, 1022)) return false;
-    for (int i = 0; i < animation_count; ++i) {
-        bool skip = __atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED);
-        if (!sa_payload_builder_append_swap_record(&builder, skip, animation_list[i].wid,
-                                                   animation_list[i].proxy.id)) return false;
-    }
-    return scripting_addition_send_payload(&builder);
+    if (!animation_list || animation_count < 0 || animation_count > SA_SWAP_PROXY_ACTIVE_RECORD_LIMIT) return false;
+
+    int cursor = 0;
+    do {
+        uint8_t bytes[SA_SOCKET_BUFF_LEN];
+        struct sa_payload_builder builder;
+        int next = scripting_addition_pack_swap_window_proxy_batch(op, animation_list, animation_count,
+                                                                   cursor, bytes, &builder);
+        if (next < 0 || !scripting_addition_swap_send_payload(&builder)) return false;
+        cursor = next;
+    } while (cursor < animation_count);
+    return true;
 }
 
 bool scripting_addition_swap_window_proxy_in(struct window_animation *animation_list, int animation_count)

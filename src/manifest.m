@@ -78,6 +78,7 @@
 #include "process_manager.h"
 #include "application.h"
 #include "display_manager.h"
+#include "managed_space.h"
 #include "space_manager.h"
 #include "window_manager.h"
 #include "mouse_handler.h"

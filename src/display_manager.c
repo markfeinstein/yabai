@@ -12,10 +12,10 @@ bool display_manager_query_displays(FILE *rsp, uint64_t flags)
 
     fprintf(rsp, "[");
     for (int i = 0; i < count; ++i) {
+        if (i) fprintf(rsp, ",");
         display_serialize(rsp, display_list[i], flags);
-        fprintf(rsp, "%c", i < count - 1 ? ',' : ']');
     }
-    fprintf(rsp, "\n");
+    fprintf(rsp, "]\n");
 
     return true;
 }
@@ -93,14 +93,17 @@ CFStringRef display_manager_active_display_uuid(void)
     return SLSCopyActiveMenuBarDisplayIdentifier(g_connection);
 }
 
+static uint32_t display_manager_display_id_for_uuid(CFStringRef uuid)
+{
+    return uuid && cf_is_type(uuid, CFStringGetTypeID()) ? display_id(uuid) : 0;
+}
+
 uint32_t display_manager_active_display_id(void)
 {
     CFStringRef uuid = display_manager_active_display_uuid();
-    assert(uuid);
-
-    uint32_t result = display_id(uuid);
+    if (!uuid) return 0;
+    uint32_t result = display_manager_display_id_for_uuid(uuid);
     CFRelease(uuid);
-
     return result;
 }
 
@@ -162,58 +165,63 @@ static CFComparisonResult display_manager_coordinate_comparator(CFTypeRef a, CFT
     return kCFCompareEqualTo;
 }
 
+static CFMutableArrayRef display_manager_copy_valid_display_uuids(CFTypeRef value, enum display_arrangement_order order)
+{
+    if (!cf_is_type(value, CFArrayGetTypeID())) return NULL;
+
+    CFArrayRef displays = (CFArrayRef) value;
+    CFMutableArrayRef result = CFArrayCreateMutable(NULL, CFArrayGetCount(displays), &kCFTypeArrayCallBacks);
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
+        CFTypeRef uuid = CFArrayGetValueAtIndex(displays, i);
+        if (cf_is_type(uuid, CFStringGetTypeID())) CFArrayAppendValue(result, uuid);
+    }
+
+    if (order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT && CFArrayGetCount(result)) {
+        CFArraySortValues(result, CFRangeMake(0, CFArrayGetCount(result)), &display_manager_coordinate_comparator, (void *)(uintptr_t) order);
+    }
+    return result;
+}
+
 int display_manager_display_id_arrangement(uint32_t did)
 {
     int result = 0;
-
     CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    if (!uuid) return 0;
 
-    CFArrayRef displays = SLSCopyManagedDisplays(g_connection);
-    if (!displays) goto err;
+    CFTypeRef native_displays = SLSCopyManagedDisplays(g_connection);
+    CFMutableArrayRef displays = display_manager_copy_valid_display_uuids(native_displays, g_display_manager.order);
+    if (native_displays) CFRelease(native_displays);
+    if (!displays) goto out;
 
-    int count = CFArrayGetCount(displays);
-    if (!count) goto empty;
-
-    if (g_display_manager.order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT) {
-        CFMutableArrayRef mut_displays = CFArrayCreateMutableCopy(NULL, count, displays);
-        CFArraySortValues(mut_displays, CFRangeMake(0, count), &display_manager_coordinate_comparator, (void *)(uintptr_t) g_display_manager.order);
-        CFRelease(displays); displays = mut_displays;
-    }
-
-    for (int i = 0; i < count; ++i) {
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
         if (CFEqual(CFArrayGetValueAtIndex(displays, i), uuid)) {
-            result = i + 1;
+            if (i >= INT_MAX) break;
+            result = (int) i + 1;
             break;
         }
     }
-
-empty:
     CFRelease(displays);
-err:
-    CFRelease(uuid);
 out:
+    CFRelease(uuid);
     return result;
+}
+
+static CFStringRef display_manager_uuid_at_index(CFArrayRef displays, int index)
+{
+    if (!cf_is_type(displays, CFArrayGetTypeID()) || index < 0 || index >= CFArrayGetCount(displays)) return NULL;
+    CFTypeRef uuid = CFArrayGetValueAtIndex(displays, index);
+    return cf_is_type(uuid, CFStringGetTypeID()) ? CFRetain(uuid) : NULL;
 }
 
 CFStringRef display_manager_arrangement_display_uuid(int arrangement)
 {
-    CFStringRef result = NULL;
-    CFArrayRef displays = SLSCopyManagedDisplays(g_connection);
+    if (arrangement < 1) return NULL;
+    CFTypeRef native_displays = SLSCopyManagedDisplays(g_connection);
+    CFMutableArrayRef displays = display_manager_copy_valid_display_uuids(native_displays, g_display_manager.order);
+    if (native_displays) CFRelease(native_displays);
+    if (!displays) return NULL;
 
-    int count = CFArrayGetCount(displays);
-    int index = arrangement - 1;
-
-    if (in_range_ie(index, 0, count)) {
-        if (g_display_manager.order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT) {
-            CFMutableArrayRef mut_displays = CFArrayCreateMutableCopy(NULL, count, displays);
-            CFArraySortValues(mut_displays, CFRangeMake(0, count), &display_manager_coordinate_comparator, (void *)(uintptr_t) g_display_manager.order);
-            CFRelease(displays); displays = mut_displays;
-        }
-
-        result = CFRetain(CFArrayGetValueAtIndex(displays, index));
-    }
-
+    CFStringRef result = display_manager_uuid_at_index(displays, arrangement - 1);
     CFRelease(displays);
     return result;
 }
@@ -359,7 +367,11 @@ bool display_manager_active_display_is_animating(void)
         workspace_is_macos_ventura())
     {
         CFStringRef uuid = display_manager_active_display_uuid();
-        assert(uuid);
+        if (!uuid) return false;
+        if (!cf_is_type(uuid, CFStringGetTypeID())) {
+            CFRelease(uuid);
+            return false;
+        }
 
         bool result = SLSManagedDisplayIsAnimating(g_connection, uuid);
         CFRelease(uuid);
@@ -457,6 +469,7 @@ out:
 void display_manager_set_active_display_id(uint32_t did)
 {
     CFStringRef uuid = display_uuid(did);
+    if (!uuid) return;
     SLSSetActiveMenuBarDisplayIdentifier(g_connection, uuid, uuid);
     CFRelease(uuid);
 }

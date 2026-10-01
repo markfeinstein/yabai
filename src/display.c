@@ -77,7 +77,7 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
         uint64_t *space_list = display_space_list(did, &count);
 
         fprintf(rsp, "\t\"spaces\":[");
-        if (space_list) {
+        if (space_list && count > 0) {
             int first_mci = space_manager_mission_control_index(space_list[0]);
             for (int i = 0; i < count; ++i) {
                 if (i < count - 1) {
@@ -113,6 +113,7 @@ inline CFStringRef display_uuid(uint32_t did)
 
 inline uint32_t display_id(CFStringRef uuid)
 {
+    if (!cf_is_type(uuid, CFStringGetTypeID())) return 0;
     CFUUIDRef uuid_ref = CFUUIDCreateFromString(NULL, uuid);
     if (!uuid_ref) return 0;
 
@@ -191,64 +192,47 @@ inline uint64_t display_space_id(uint32_t did)
 
 int display_space_count(uint32_t did)
 {
-    int space_count = 0;
-
+    int result = 0;
     CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    if (!uuid) return 0;
 
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) goto err;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFStringRef identifier = CFDictionaryGetValue(display_ref, CFSTR("Display Identifier"));
-        if (!CFEqual(uuid, identifier)) continue;
-
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        space_count = CFArrayGetCount(spaces_ref);
-        break;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (topology) {
+        CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+        managed_space_count_valid_checked(spaces, &result);
+        CFRelease(topology);
     }
-
-    CFRelease(display_spaces_ref);
-err:
     CFRelease(uuid);
-out:
-    return space_count;
+    return result;
+}
+
+static uint64_t *display_space_list_from_spaces(CFArrayRef spaces, int *count)
+{
+    if (count) *count = 0;
+    if (!count || !cf_is_type(spaces, CFArrayGetTypeID())) return NULL;
+
+    int valid_count = 0;
+    if (!managed_space_count_valid_checked(spaces, &valid_count)) return NULL;
+    uint64_t *result = ts_alloc_list(uint64_t, valid_count);
+    if (result) *count = managed_space_copy_valid(spaces, result);
+    return result;
 }
 
 uint64_t *display_space_list(uint32_t did, int *count)
 {
-    uint64_t *space_list = NULL;
+    if (count) *count = 0;
+    if (!count) return NULL;
 
+    uint64_t *result = NULL;
     CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    if (!uuid) return NULL;
 
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) goto err;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFStringRef identifier = CFDictionaryGetValue(display_ref, CFSTR("Display Identifier"));
-        if (!CFEqual(uuid, identifier)) continue;
-
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        space_list = ts_alloc_list(uint64_t, spaces_count);
-        *count = spaces_count;
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &space_list[j]);
-        }
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (topology) {
+        CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+        result = display_space_list_from_spaces(spaces, count);
+        CFRelease(topology);
     }
-
-    CFRelease(display_spaces_ref);
-err:
     CFRelease(uuid);
-out:
-    return space_list;
+    return result;
 }

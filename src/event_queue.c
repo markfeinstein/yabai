@@ -60,10 +60,11 @@ static bool event_queue_grow(struct event_queue *queue)
 }
 
 static enum event_queue_result event_queue_push(struct event_queue *queue, struct event event, bool merge,
-                                                struct event *replaced, uint32_t *capacity)
+                                                struct event *replaced, uint32_t *capacity, bool *post_wake)
 {
     enum event_queue_result result = EVENT_QUEUE_ADDED;
 
+    *post_wake = false;
     pthread_mutex_lock(&queue->lock);
 
     if (merge && queue->count) {
@@ -88,6 +89,10 @@ static enum event_queue_result event_queue_push(struct event_queue *queue, struc
 
     queue->events[event_queue_slot(queue, queue->count)] = event;
     ++queue->count;
+    if (!queue->wake_pending) {
+        queue->wake_pending = true;
+        *post_wake = true;
+    }
 
 out:
     pthread_mutex_unlock(&queue->lock);
@@ -103,6 +108,8 @@ static bool event_queue_pop(struct event_queue *queue, struct event *event)
         *event = queue->events[queue->head];
         queue->head = event_queue_slot(queue, 1);
         --queue->count;
+    } else {
+        queue->wake_pending = false;
     }
 
     pthread_mutex_unlock(&queue->lock);

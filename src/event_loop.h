@@ -3,6 +3,26 @@
 
 #define EVENT_HANDLER(event_type) void EVENT_HANDLER_##event_type(void *context, int param1)
 
+static inline bool event_loop_pending_reserve(volatile uint32_t *pending)
+{
+    uint32_t value = __atomic_load_n(pending, __ATOMIC_ACQUIRE);
+    while (value != UINT32_MAX) {
+        if (__atomic_compare_exchange_n(pending, &value, value + 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return true;
+    }
+    return false;
+}
+
+static inline bool event_loop_pending_consume(volatile uint32_t *pending)
+{
+    uint32_t value = __atomic_load_n(pending, __ATOMIC_ACQUIRE);
+    while (value != 0) {
+        if (__atomic_compare_exchange_n(pending, &value, value - 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return true;
+    }
+    return false;
+}
+
 #define EVENT_TYPE_LIST \
     EVENT_TYPE_ENTRY(APPLICATION_LAUNCHED) \
     EVENT_TYPE_ENTRY(APPLICATION_TERMINATED) \
@@ -70,6 +90,7 @@ struct event_queue
     uint32_t capacity;
     uint32_t head;
     uint32_t count;
+    bool wake_pending;
 };
 
 enum event_queue_result
@@ -83,7 +104,7 @@ enum event_queue_result
 static bool event_queue_init(struct event_queue *queue, uint32_t capacity);
 static void event_queue_destroy(struct event_queue *queue);
 static enum event_queue_result event_queue_push(struct event_queue *queue, struct event event, bool merge,
-                                                struct event *replaced, uint32_t *capacity);
+                                                struct event *replaced, uint32_t *capacity, bool *post_wake);
 static bool event_queue_pop(struct event_queue *queue, struct event *event);
 
 struct event_loop
@@ -95,6 +116,7 @@ struct event_loop
 };
 
 bool event_loop_begin(struct event_loop *event_loop);
+bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_window_inventory_did_change(void);
 

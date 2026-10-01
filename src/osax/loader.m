@@ -3,283 +3,255 @@
 #include <mach/mach_vm.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+#include "loader_protocol.h"
 
 #ifdef __arm64__
 #include <ptrauth.h>
-kern_return_t (*_thread_convert_thread_state)(thread_act_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_stateCnt, thread_state_t out_state, mach_msg_type_number_t *out_stateCnt);
+static kern_return_t (*thread_convert_thread_state_fn)(thread_act_t, int, thread_state_flavor_t, thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
 #endif
 
-static char *payload_path = "/Library/ScriptingAdditions/yabai.osax/Contents/Resources/payload.bundle/Contents/MacOS/payload";
+extern const unsigned char loader_shellcode_start[];
+extern const unsigned char loader_shellcode_end[];
+extern const unsigned char loader_shellcode_pthread_create_slot[];
+extern const unsigned char loader_shellcode_pthread_threadid_slot[];
+extern const unsigned char loader_shellcode_pthread_join_slot[];
+extern const unsigned char loader_shellcode_dlopen_slot[];
+extern const unsigned char loader_shellcode_control_slot[];
+extern const unsigned char loader_shellcode_path_slot[];
 
-//
-// :Attribution
-//
-// The arm64e injection path is based on work by Jeremy Legendre (https://github.com/jslegendre)
-//
-
-static char shell_code[] =
-#ifdef __x86_64__
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\x48\x83\xEC\x10"                 // sub        rsp, 0x10
-"\x48\x8D\x7D\xF8"                 // lea        rdi, qword [rbp+var_8]
-"\x31\xC0"                         // xor        eax, eax
-"\x89\xC1"                         // mov        ecx, eax
-"\x48\x8D\x15\x1E\x00\x00\x00"     // lea        rdx, qword ptr [rip+0x1E]
-"\x48\x89\xCE"                     // mov        rsi, rcx
-"\x48\xB8"                         // movabs     rax, pthread_create_from_mach_thread
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x48\x83\xC4\x10"                 // add        rsp, 0x10
-"\x5D"                             // pop        rbp
-"\x48\xC7\xC0\x65\x62\x61\x79"     // mov        rax, 0x79616265
-"\xEB\xFE"                         // jmp        0x0
-"\xC3"                             // ret
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\xBE\x01\x00\x00\x00"             // mov        esi, 0x1
-"\x48\x8D\x3D\x16\x00\x00\x00"     // lea        rdi, qword ptr [rip+0x16]
-"\x48\xB8"                         // movabs     rax, dlopen
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x31\xF6"                         // xor        esi, esi
-"\x89\xF7"                         // mov        edi, esi
-"\x48\x89\xF8"                     // mov        rax, rdi
-"\x5D"                             // pop        rbp
-"\xC3"                             // ret
-#elif __arm64__
-"\xFF\xC3\x00\xD1"                 // sub        sp, sp, #0x30
-"\xFD\x7B\x02\xA9"                 // stp        x29, x30, [sp, #0x20]
-"\xFD\x83\x00\x91"                 // add        x29, sp, #0x20
-"\xA0\xC3\x1F\xB8"                 // stur       w0, [x29, #-0x4]
-"\xE1\x0B\x00\xF9"                 // str        x1, [sp, #0x10]
-"\xE0\x23\x00\x91"                 // add        x0, sp, #0x8
-"\x08\x00\x80\xD2"                 // mov        x8, #0
-"\xE8\x07\x00\xF9"                 // str        x8, [sp, #0x8]
-"\xE1\x03\x08\xAA"                 // mov        x1, x8
-"\xE2\x01\x00\x10"                 // adr        x2, #0x3C
-"\xE2\x23\xC1\xDA"                 // paciza     x2
-"\xE3\x03\x08\xAA"                 // mov        x3, x8
-"\x49\x01\x00\x10"                 // adr        x9, #0x28 ; pthread_create_from_mach_thread
-"\x29\x01\x40\xF9"                 // ldr        x9, [x9]
-"\x20\x01\x3F\xD6"                 // blr        x9
-"\xA0\x4C\x8C\xD2"                 // movz       x0, #0x6265
-"\x20\x2C\xAF\xF2"                 // movk       x0, #0x7961, lsl #16
-"\x09\x00\x00\x10"                 // adr        x9, #0
-"\x20\x01\x1F\xD6"                 // br         x9
-"\xFD\x7B\x42\xA9"                 // ldp        x29, x30, [sp, #0x20]
-"\xFF\xC3\x00\x91"                 // add        sp, sp, #0x30
-"\xC0\x03\x5F\xD6"                 // ret
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\x7F\x23\x03\xD5"                 // pacibsp
-"\xFF\xC3\x00\xD1"                 // sub        sp, sp, #0x30
-"\xFD\x7B\x02\xA9"                 // stp        x29, x30, [sp, #0x20]
-"\xFD\x83\x00\x91"                 // add        x29, sp, #0x20
-"\xA0\xC3\x1F\xB8"                 // stur       w0, [x29, #-0x4]
-"\xE1\x0B\x00\xF9"                 // str        x1, [sp, #0x10]
-"\x21\x00\x80\xD2"                 // mov        x1, #1
-"\x60\x01\x00\x10"                 // adr        x0, #0x2c ; payload_path
-"\x09\x01\x00\x10"                 // adr        x9, #0x20 ; dlopen
-"\x29\x01\x40\xF9"                 // ldr        x9, [x9]
-"\x20\x01\x3F\xD6"                 // blr        x9
-"\x09\x00\x80\x52"                 // mov        w9, #0
-"\xE0\x03\x09\xAA"                 // mov        x0, x9
-"\xFD\x7B\x42\xA9"                 // ldp        x29, x30, [sp, #0x20]
-"\xFF\xC3\x00\x91"                 // add        sp, sp, #0x30
-"\xFF\x0F\x5F\xD6"                 // retab
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-#endif
-"\x00\x00\x00\x00\x00\x00\x00\x00" // empty space for payload_path
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00"
-"\x00\x00\x00\x00\x00\x00\x00\x00";
+static const char payload_path[] = "/Library/ScriptingAdditions/yabai.osax/Contents/Resources/payload.bundle/Contents/MacOS/payload";
+static const uint64_t loader_timeout_ns = 2000000000ull;
 
 static pid_t get_dock_pid(void)
 {
     NSArray *list = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
-
-    if (list.count == 1) {
-        NSRunningApplication *dock = list[0];
-        if ([dock isFinishedLaunching] == YES) {
-            return [dock processIdentifier];
-        }
-    }
-
+    if (list.count == 1 && [list[0] isFinishedLaunching] == YES) return [list[0] processIdentifier];
     return 0;
+}
+
+static uint64_t monotonic_ns(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+}
+
+static bool blob_offset(const unsigned char *symbol, size_t blob_size, size_t width, size_t *offset)
+{
+    if (symbol < loader_shellcode_start || symbol > loader_shellcode_end) return false;
+    size_t value = (size_t)(symbol - loader_shellcode_start);
+    if (value > blob_size || width > blob_size - value) return false;
+    *offset = value;
+    return true;
+}
+
+static uint64_t callable_address(void *symbol)
+{
+#ifdef __arm64__
+    return (uint64_t)ptrauth_strip(symbol, ptrauth_key_function_pointer);
+#else
+    return (uint64_t)symbol;
+#endif
 }
 
 int main(int argc, char **argv)
 {
-    int result = 0;
-    mach_port_t task = 0;
-    thread_act_t thread = 0;
-    mach_vm_address_t code = 0;
+    (void)argc;
+    (void)argv;
+    int result = 1;
+    task_t task = MACH_PORT_NULL;
+    thread_act_t bootstrap = MACH_PORT_NULL;
     mach_vm_address_t stack = 0;
-    vm_size_t stack_size = 16 * 1024;
-    uint64_t stack_contents = 0x00000000CAFEBABE;
-    pid_t pid = get_dock_pid();
+    mach_vm_address_t code = 0;
+    const mach_vm_size_t stack_size = 16 * 1024;
+    bool stack_allocated = false;
+    bool code_allocated = false;
+    bool launched = false;
+    bool control_observed = false;
+    bool bootstrap_stopped = false;
+    bool completion_success = false;
+    bool reclaim_success = true;
+    loader_control_t control = { .magic = LOADER_CONTROL_MAGIC };
 
+    size_t blob_size = (size_t)(loader_shellcode_end - loader_shellcode_start);
+    size_t create_offset, threadid_offset, join_offset, dlopen_offset, control_offset, path_offset;
+    if (blob_size == 0 ||
+        !blob_offset(loader_shellcode_pthread_create_slot, blob_size, sizeof(uint64_t), &create_offset) ||
+        !blob_offset(loader_shellcode_pthread_threadid_slot, blob_size, sizeof(uint64_t), &threadid_offset) ||
+        !blob_offset(loader_shellcode_pthread_join_slot, blob_size, sizeof(uint64_t), &join_offset) ||
+        !blob_offset(loader_shellcode_dlopen_slot, blob_size, sizeof(uint64_t), &dlopen_offset) ||
+        !blob_offset(loader_shellcode_control_slot, blob_size, sizeof(uint64_t), &control_offset) ||
+        !blob_offset(loader_shellcode_path_slot, blob_size, sizeof(payload_path), &path_offset) ||
+        path_offset + LOADER_PAYLOAD_PATH_CAPACITY > blob_size) {
+        fprintf(stderr, "invalid loader shellcode layout\n");
+        goto cleanup;
+    }
+
+    void *pthread_create_symbol = dlsym(RTLD_DEFAULT, "pthread_create_from_mach_thread");
+    void *pthread_threadid_symbol = dlsym(RTLD_DEFAULT, "pthread_threadid_np");
+    void *pthread_join_symbol = dlsym(RTLD_DEFAULT, "pthread_join");
+    void *dlopen_symbol = dlsym(RTLD_DEFAULT, "dlopen");
+    if (!pthread_create_symbol || !pthread_threadid_symbol || !pthread_join_symbol || !dlopen_symbol) {
+        fprintf(stderr, "could not resolve loader runtime symbols\n");
+        goto cleanup;
+    }
+
+#ifdef __arm64__
+    void *kernel = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_GLOBAL | RTLD_LAZY);
+    if (kernel) {
+        thread_convert_thread_state_fn = dlsym(kernel, "thread_convert_thread_state");
+        dlclose(kernel);
+    }
+    if (!thread_convert_thread_state_fn) {
+        fprintf(stderr, "could not resolve thread_convert_thread_state\n");
+        goto cleanup;
+    }
+#endif
+
+    pid_t pid = get_dock_pid();
     if (!pid) {
         fprintf(stderr, "could not locate Dock.app pid\n");
-        return 1;
+        goto cleanup;
     }
-
     if (task_for_pid(mach_task_self(), pid, &task) != KERN_SUCCESS) {
         fprintf(stderr, "could not retrieve task port for pid: %d\n", pid);
-        return 1;
+        goto cleanup;
     }
-
     if (mach_vm_allocate(task, &stack, stack_size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
         fprintf(stderr, "could not allocate stack segment\n");
-        return 1;
+        goto cleanup;
     }
-
-    if (mach_vm_write(task, stack, (vm_address_t) &stack_contents, sizeof(uint64_t)) != KERN_SUCCESS) {
-        fprintf(stderr, "could not copy dummy return address into stack segment\n");
-        return 1;
+    stack_allocated = true;
+    if ((stack & 7) != 0 || sizeof(control) > stack_size / 4 ||
+        mach_vm_write(task, stack, (vm_address_t)&control, sizeof(control)) != KERN_SUCCESS ||
+        vm_protect(task, stack, stack_size, false, VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
+        fprintf(stderr, "could not initialize stack/control segment\n");
+        goto cleanup;
     }
-
-    if (vm_protect(task, stack, stack_size, 1, VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
-        fprintf(stderr, "could not change protection for stack segment\n");
-        return 1;
-    }
-
-    if (mach_vm_allocate(task, &code, sizeof(shell_code), VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+    if (mach_vm_allocate(task, &code, blob_size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
         fprintf(stderr, "could not allocate code segment\n");
-        return 1;
+        goto cleanup;
+    }
+    code_allocated = true;
+
+    unsigned char *blob = malloc(blob_size);
+    if (!blob) goto cleanup;
+    memcpy(blob, loader_shellcode_start, blob_size);
+    uint64_t value = callable_address(pthread_create_symbol); memcpy(blob + create_offset, &value, sizeof(value));
+    value = callable_address(pthread_threadid_symbol); memcpy(blob + threadid_offset, &value, sizeof(value));
+    value = callable_address(pthread_join_symbol); memcpy(blob + join_offset, &value, sizeof(value));
+    value = callable_address(dlopen_symbol); memcpy(blob + dlopen_offset, &value, sizeof(value));
+    value = stack; memcpy(blob + control_offset, &value, sizeof(value));
+    memcpy(blob + path_offset, payload_path, sizeof(payload_path));
+    kern_return_t kr = mach_vm_write(task, code, (vm_address_t)blob, (mach_msg_type_number_t)blob_size);
+    free(blob);
+    if (kr != KERN_SUCCESS || vm_protect(task, code, blob_size, false, VM_PROT_EXECUTE | VM_PROT_READ) != KERN_SUCCESS) {
+        fprintf(stderr, "could not initialize code segment\n");
+        goto cleanup;
     }
 
 #ifdef __x86_64__
-    uint64_t pcfmt_address = (uint64_t) dlsym(RTLD_DEFAULT, "pthread_create_from_mach_thread");
-    uint64_t dlopen_address = (uint64_t) dlsym(RTLD_DEFAULT, "dlopen");
-
-    memcpy(shell_code + 28, &pcfmt_address, sizeof(uint64_t));
-    memcpy(shell_code + 71, &dlopen_address, sizeof(uint64_t));
-    memcpy(shell_code + 90, payload_path, strlen(payload_path));
+    x86_thread_state64_t state = {};
+    state.__rip = code;
+    state.__rsp = (stack + stack_size / 2) & ~0xfull;
+    kr = thread_create_running(task, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT, &bootstrap);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "could not spawn remote thread: %s\n", mach_error_string(kr));
+        goto cleanup;
+    }
+    launched = true;
 #elif __arm64__
-    uint64_t pcfmt_address = (uint64_t) ptrauth_strip(dlsym(RTLD_DEFAULT, "pthread_create_from_mach_thread"), ptrauth_key_function_pointer);
-    uint64_t dlopen_address = (uint64_t) ptrauth_strip(dlsym(RTLD_DEFAULT, "dlopen"), ptrauth_key_function_pointer);
-
-    memcpy(shell_code + 88, &pcfmt_address, sizeof(uint64_t));
-    memcpy(shell_code + 160, &dlopen_address, sizeof(uint64_t));
-    memcpy(shell_code + 168, payload_path, strlen(payload_path));
-#endif
-
-    if (mach_vm_write(task, code, (vm_address_t) shell_code, sizeof(shell_code)) != KERN_SUCCESS) {
-        fprintf(stderr, "could not copy shellcode into code segment\n");
-        return 1;
+    arm_thread_state64_t state = {}, machine_state = {};
+    mach_msg_type_number_t machine_count = ARM_THREAD_STATE64_COUNT;
+    __darwin_arm_thread_state64_set_pc_fptr(state, ptrauth_sign_unauthenticated((void *)code, ptrauth_key_asia, 0));
+    __darwin_arm_thread_state64_set_sp(state, (stack + stack_size / 2) & ~0xfull);
+    kr = thread_create(task, &bootstrap);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "could not create remote thread: %s\n", mach_error_string(kr));
+        goto cleanup;
     }
-
-    if (vm_protect(task, code, sizeof(shell_code), 0, VM_PROT_EXECUTE | VM_PROT_READ) != KERN_SUCCESS) {
-        fprintf(stderr, "could not change protection for code segment\n");
-        return 1;
+    kr = thread_convert_thread_state_fn(bootstrap, 2, ARM_THREAD_STATE64, (thread_state_t)&state,
+                                         ARM_THREAD_STATE64_COUNT, (thread_state_t)&machine_state, &machine_count);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "could not convert thread state: %s\n", mach_error_string(kr));
+        goto cleanup;
     }
-
-#ifdef __x86_64__
-    x86_thread_state64_t thread_state = {};
-    thread_state_flavor_t thread_flavor = x86_THREAD_STATE64;
-    mach_msg_type_number_t thread_flavor_count = x86_THREAD_STATE64_COUNT;
-
-    thread_state.__rip = (uint64_t) code;
-    thread_state.__rsp = (uint64_t) stack + (stack_size / 2);
-
-    kern_return_t error = thread_create_running(task, thread_flavor, (thread_state_t)&thread_state, thread_flavor_count, &thread);
-    if (error != KERN_SUCCESS) {
-        fprintf(stderr, "could not spawn remote thread: %s\n", mach_error_string(error));
-        return 1;
-    }
-#elif __arm64__
-    void *handle = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_GLOBAL | RTLD_LAZY);
-    if (handle) {
-        _thread_convert_thread_state = dlsym(handle, "thread_convert_thread_state");
-        dlclose(handle);
-    }
-
-    if (!_thread_convert_thread_state) {
-        fprintf(stderr, "could not load symbol: thread_convert_thread_state\n");
-        return 1;
-    }
-
-    arm_thread_state64_t thread_state = {}, machine_thread_state = {};
-    thread_state_flavor_t thread_flavor = ARM_THREAD_STATE64;
-    mach_msg_type_number_t thread_flavor_count = ARM_THREAD_STATE64_COUNT, machine_thread_flavor_count = ARM_THREAD_STATE64_COUNT;
-
-    __darwin_arm_thread_state64_set_pc_fptr(thread_state, ptrauth_sign_unauthenticated((void *) code, ptrauth_key_asia, 0));
-    __darwin_arm_thread_state64_set_sp(thread_state, stack + (stack_size / 2));
-
-    kern_return_t error = thread_create(task, &thread);
-    if (error != KERN_SUCCESS) {
-        fprintf(stderr, "could not create remote thread: %s\n", mach_error_string(error));
-        return 1;
-    }
-
-    error = _thread_convert_thread_state(thread, 2, thread_flavor, (thread_state_t) &thread_state, thread_flavor_count, (thread_state_t) &machine_thread_state, &machine_thread_flavor_count);
-    if (error != KERN_SUCCESS) {
-        fprintf(stderr, "could not convert thread state: %s\n", mach_error_string(error));
-        return 1;
-    }
-
-    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-    if ((os_version.majorVersion == 14 && os_version.minorVersion >= 4) ||
-        (os_version.majorVersion >= 15)) {
-        thread_terminate(thread);
-        error = thread_create_running(task, thread_flavor, (thread_state_t)&machine_thread_state, machine_thread_flavor_count, &thread);
-        if (error != KERN_SUCCESS) {
-            fprintf(stderr, "could not spawn remote thread: %s\n", mach_error_string(error));
-            return 1;
+    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    if ((version.majorVersion == 14 && version.minorVersion >= 4) || version.majorVersion >= 15) {
+        thread_act_t old_bootstrap = bootstrap;
+        kr = thread_terminate(old_bootstrap);
+        if (kr != KERN_SUCCESS) {
+            fprintf(stderr, "could not terminate initial remote thread: %s\n", mach_error_string(kr));
+            goto cleanup;
+        }
+        mach_port_deallocate(mach_task_self(), old_bootstrap);
+        bootstrap = MACH_PORT_NULL;
+        kr = thread_create_running(task, ARM_THREAD_STATE64, (thread_state_t)&machine_state, machine_count, &bootstrap);
+        if (kr != KERN_SUCCESS) {
+            fprintf(stderr, "could not spawn replacement remote thread: %s\n", mach_error_string(kr));
+            goto cleanup;
         }
     } else {
-        error = thread_set_state(thread, thread_flavor, (thread_state_t)&machine_thread_state, machine_thread_flavor_count);
-        if (error != KERN_SUCCESS) {
-            fprintf(stderr, "could not set thread state: %s\n", mach_error_string(error));
-            return 1;
-        }
-
-        error = thread_resume(thread);
-        if (error != KERN_SUCCESS) {
-            fprintf(stderr, "could not resume remote thread: %s\n", mach_error_string(error));
-            return 1;
+        kr = thread_set_state(bootstrap, ARM_THREAD_STATE64, (thread_state_t)&machine_state, machine_count);
+        if (kr == KERN_SUCCESS) kr = thread_resume(bootstrap);
+        if (kr != KERN_SUCCESS) {
+            fprintf(stderr, "could not start remote thread: %s\n", mach_error_string(kr));
+            goto cleanup;
         }
     }
+    launched = true;
 #endif
 
-    usleep(10000);
-
-    for (int i = 0; i < 10; ++i) {
-        kern_return_t error = thread_get_state(thread, thread_flavor, (thread_state_t)&thread_state, &thread_flavor_count);
-
-        if (error != KERN_SUCCESS) {
-            result = 1;
-            goto terminate;
+    uint64_t start = monotonic_ns();
+    for (;;) {
+        mach_vm_size_t read_size = 0;
+        kr = mach_vm_read_overwrite(task, stack, sizeof(control), (mach_vm_address_t)&control, &read_size);
+        if (kr != KERN_SUCCESS || read_size != sizeof(control)) {
+            control_observed = false;
+            fprintf(stderr, "could not read loader control block\n");
+            break;
         }
-
-#ifdef __x86_64__
-        if (thread_state.__rax == 0x79616265) {
-#elif __arm64__
-        if (thread_state.__x[0] == 0x79616265) {
-#endif
-            result = 0;
-            goto terminate;
+        control_observed = true;
+        uint64_t now = monotonic_ns();
+        bool timed_out = start == 0 || now == 0 || now - start >= loader_timeout_ns;
+        loader_poll_decision_t decision = loader_control_decision(&control, timed_out);
+        if (decision != LOADER_POLL_WAIT) {
+            completion_success = decision == LOADER_POLL_SUCCESS;
+            if (timed_out) fprintf(stderr, "loader timed out\n");
+            break;
         }
-
-        usleep(20000);
+        struct timespec delay = { .tv_nsec = 10000000 };
+        nanosleep(&delay, NULL);
     }
 
-terminate:
-    error = thread_terminate(thread);
-    if (error != KERN_SUCCESS) {
-        fprintf(stderr, "failed to terminate remote thread: %s\n", mach_error_string(error));
+cleanup:
+    ;
+    loader_cleanup_plan_t cleanup_plan = loader_cleanup_plan(&control, launched, control_observed);
+    if (bootstrap != MACH_PORT_NULL) {
+        if (cleanup_plan.terminate_bootstrap) {
+            kr = thread_terminate(bootstrap);
+            bootstrap_stopped = kr == KERN_SUCCESS;
+            if (!bootstrap_stopped) fprintf(stderr, "failed to terminate bootstrap: %s\n", mach_error_string(kr));
+        }
+        mach_port_deallocate(mach_task_self(), bootstrap);
+    } else {
+        bootstrap_stopped = !launched;
     }
 
+    bool reclaim = cleanup_plan.reclaim_remote_vm && bootstrap_stopped;
+    if (reclaim && task != MACH_PORT_NULL) {
+        if (code_allocated && mach_vm_deallocate(task, code, blob_size) != KERN_SUCCESS) reclaim_success = false;
+        if (stack_allocated && mach_vm_deallocate(task, stack, stack_size) != KERN_SUCCESS) reclaim_success = false;
+    } else if (code_allocated || stack_allocated) {
+        fprintf(stderr, "retaining remote VM because injected execution could not be disproved\n");
+    }
+    if (task != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), task);
+
+    if (completion_success && reclaim && reclaim_success) result = 0;
     return result;
 }

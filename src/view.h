@@ -82,7 +82,12 @@ struct window_animation_context
     float animation_duration;
     uint64_t animation_clock;
     struct window_animation *animation_list;
+    CVDisplayLinkRef display_link;
     int animation_count;
+    volatile bool completion_claimed;
+    bool display_link_may_be_running;
+    bool proxies_may_be_installed;
+    uint8_t teardown_attempts;
 };
 
 struct balance_node

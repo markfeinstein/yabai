@@ -8,7 +8,7 @@ extern enum mission_control_mode g_mission_control_mode;
 extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
-volatile bool __pending_window_focus;
+volatile uint32_t __pending_window_focus;
 volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
@@ -542,7 +542,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
             AXUIElementCopyAttributeValue(application->ref, CFSTR("__fence"), &dummy);
         }
 
-        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_RELAXED) == false) {
+        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) == 0) {
             if (psn_sid && !space_is_visible(psn_sid)) {
                 SLSSpaceSetFrontPSN(g_connection, psn_sid, event.psn);
                 space_manager_focus_space_using_gesture(space_display_id(psn_sid), psn_sid);
@@ -594,7 +594,6 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
 
     window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
     event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
-    __atomic_store_n(&__pending_window_focus, false, __ATOMIC_RELEASE);
 }
 #pragma clang diagnostic pop
 
@@ -811,9 +810,14 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     event_loop_window_inventory_did_change();
 }
 
+static void event_loop_consume_window_focus(int ownership)
+{
+    if (ownership == 1) (void) event_loop_pending_consume(&__pending_window_focus);
+}
+
 static EVENT_HANDLER(WINDOW_FOCUSED)
 {
-    __atomic_store_n(&__pending_window_focus, false, __ATOMIC_RELEASE);
+    event_loop_consume_window_focus(param1);
     uint32_t window_id = (uint32_t)(intptr_t) context;
 
     struct window *window = window_manager_find_window(&g_window_manager, window_id);
@@ -1981,8 +1985,10 @@ static void *event_loop_run(void *context)
     struct event_loop *event_loop = context;
 
     while (event_loop->is_running) {
-        NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+        while (sem_wait(event_loop->semaphore) == -1 && errno == EINTR) {}
+        if (!event_loop->is_running) break;
 
+        NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
         while (event_queue_pop(&event_loop->queue, &event)) {
             profile_begin();
 
@@ -1999,7 +2005,6 @@ static void *event_loop_run(void *context)
         }
 
         [pool drain];
-        sem_wait(event_loop->semaphore);
     }
 
     return NULL;
@@ -2062,9 +2067,10 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
 {
     struct event replaced;
     uint32_t capacity = 0;
+    bool post_wake = false;
     struct event event = { .type = type, .param1 = param1, .context = context };
     bool merge = type == MOUSE_MOVED || type == MENU_BAR_REFRESH;
-    enum event_queue_result result = event_queue_push(&event_loop->queue, event, merge, &replaced, &capacity);
+    enum event_queue_result result = event_queue_push(&event_loop->queue, event, merge, &replaced, &capacity, &post_wake);
 
     if (result == EVENT_QUEUE_MERGED) {
         event_loop_release_event_context(replaced.type, replaced.context);
@@ -2076,13 +2082,18 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
         return false;
     }
 
-    sem_post(event_loop->semaphore);
+    if (post_wake) sem_post(event_loop->semaphore);
     return true;
+}
+
+bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
+{
+    return event_loop_enqueue(event_loop, type, context, param1);
 }
 
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
-    event_loop_enqueue(event_loop, type, context, param1);
+    (void) event_loop_try_post(event_loop, type, context, param1);
 }
 
 #ifdef TESTS

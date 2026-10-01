@@ -19,9 +19,10 @@ inline uint32_t space_display_id(uint64_t sid)
     return id;
 }
 
-uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized)
+uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized, bool *success)
 {
     *count = 0;
+    if (success) *success = false;
     uint32_t *window_list = NULL;
     uint64_t set_tags = 0;
     uint64_t clear_tags = 0;
@@ -31,10 +32,16 @@ uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count
     if (!space_list_ref) return NULL;
 
     CFArrayRef window_list_ref = SLSCopyWindowsWithOptionsAndTags(g_connection, cid, space_list_ref, options, &set_tags, &clear_tags);
-    if (!window_list_ref) goto err;
+    if (!cf_is_type(window_list_ref, CFArrayGetTypeID())) {
+        if (window_list_ref) CFRelease(window_list_ref);
+        goto err;
+    }
 
-    *count = CFArrayGetCount(window_list_ref);
-    if (!*count) goto out;
+    if (!cfindex_to_int(CFArrayGetCount(window_list_ref), count)) goto query_failed;
+    if (!*count) {
+        if (success) *success = true;
+        goto out;
+    }
 
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_list_ref, *count);
     if (!query) goto query_failed;
@@ -81,6 +88,7 @@ uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count
 
     window_list = ts_resize(window_list, sizeof(uint32_t) * *count, sizeof(uint32_t) * window_count);
     *count = window_count;
+    if (success) *success = true;
 
     CFRelease(iterator);
     CFRelease(query);
@@ -94,6 +102,11 @@ out:
 err:
     CFRelease(space_list_ref);
     return window_list;
+}
+
+uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized)
+{
+    return space_window_list_for_connection_with_status(space_list, space_count, cid, count, include_minimized, NULL);
 }
 
 inline uint32_t *space_window_list(uint64_t sid, int *count, bool include_minimized)

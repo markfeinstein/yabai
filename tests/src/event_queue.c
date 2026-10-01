@@ -42,13 +42,14 @@ static bool event_queue_check_grows_past_512k_fifo_and_release_once(char *test_n
 
     for (int i = 0; i < event_count; ++i) {
         uint32_t capacity = 0;
+        bool post_wake = false;
         struct event replaced = { 0 };
         struct event event;
         contexts[i].index = i;
         event.type = WINDOW_CREATED;
         event.param1 = i;
         event.context = &contexts[i];
-        enum event_queue_result queue_result = event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity);
+        enum event_queue_result queue_result = event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity, &post_wake);
 
         TEST_CHECK(queue_result != EVENT_QUEUE_FULL, true);
         if (queue_result == EVENT_QUEUE_GREW) {
@@ -90,13 +91,14 @@ static bool event_queue_check_wrapped_growth_preserves_fifo_and_release_once(cha
     struct event_queue_test_context contexts[7] = { 0 };
     struct event replaced = { 0 };
     uint32_t capacity = 0;
+    bool post_wake = false;
 
     if (!event_queue_test_reset(4)) return false;
 
     for (int i = 0; i < 4; ++i) {
         contexts[i].index = i + 1;
         struct event event = { .type = WINDOW_CREATED, .param1 = i + 1, .context = &contexts[i] };
-        TEST_CHECK(event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity), EVENT_QUEUE_ADDED);
+        TEST_CHECK(event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
     }
 
     for (int expected = 1; expected <= 2; ++expected) {
@@ -109,7 +111,7 @@ static bool event_queue_check_wrapped_growth_preserves_fifo_and_release_once(cha
     for (int i = 4; i < 7; ++i) {
         contexts[i].index = i + 1;
         struct event event = { .type = WINDOW_CREATED, .param1 = i + 1, .context = &contexts[i] };
-        enum event_queue_result queue_result = event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity);
+        enum event_queue_result queue_result = event_queue_push(&event_queue_test_queue, event, false, &replaced, &capacity, &post_wake);
         TEST_CHECK(queue_result, i == 6 ? EVENT_QUEUE_GREW : EVENT_QUEUE_ADDED);
     }
     TEST_CHECK(capacity, 8U);
@@ -141,6 +143,7 @@ static bool event_queue_check_merge_releases_replaced_mouse_move_once(char *test
     struct event first;
     struct event second;
     uint32_t capacity = 0;
+    bool post_wake = false;
 
     contexts[0].index = 0;
     contexts[1].index = 1;
@@ -154,8 +157,8 @@ static bool event_queue_check_merge_releases_replaced_mouse_move_once(char *test
     second.param1 = 1;
     second.context = &contexts[1];
 
-    TEST_CHECK(event_queue_push(&event_queue_test_queue, first, true, &replaced, &capacity), EVENT_QUEUE_ADDED);
-    TEST_CHECK(event_queue_push(&event_queue_test_queue, second, true, &replaced, &capacity), EVENT_QUEUE_MERGED);
+    TEST_CHECK(event_queue_push(&event_queue_test_queue, first, true, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&event_queue_test_queue, second, true, &replaced, &capacity, &post_wake), EVENT_QUEUE_MERGED);
     TEST_CHECK(((struct event_queue_test_context *) replaced.context)->index, 0);
     event_queue_test_release(replaced.context);
 
@@ -178,6 +181,7 @@ static bool event_queue_check_full_releases_owned_context_once(char *test_name)
     bool result = true;
     struct event replaced = { 0 };
     uint32_t capacity = 0;
+    bool post_wake = false;
     struct event first;
     struct event_loop event_loop = { 0 };
     CFMutableArrayRef owned_context = CFArrayCreateMutable(NULL, 0, NULL);
@@ -194,7 +198,7 @@ static bool event_queue_check_full_releases_owned_context_once(char *test_name)
     first.type = WINDOW_MOVED;
     first.param1 = 1;
     first.context = (void *)(intptr_t) 1;
-    TEST_CHECK(event_queue_push(&event_loop.queue, first, false, &replaced, &capacity), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&event_loop.queue, first, false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
 
     TEST_CHECK((int) CFGetRetainCount(owned_context), 2);
     g_event_queue_test_fail_allocation = true;
@@ -227,6 +231,7 @@ static bool event_queue_check_full_closes_daemon_message_fd_once(char *test_name
     bool result = true;
     struct event replaced = { 0 };
     uint32_t capacity = 0;
+    bool post_wake = false;
     struct event first;
     struct event_loop event_loop = { 0 };
     int daemon_pair[2] = { -1, -1 };
@@ -237,7 +242,7 @@ static bool event_queue_check_full_closes_daemon_message_fd_once(char *test_name
     first.type = WINDOW_MOVED;
     first.param1 = 1;
     first.context = (void *)(intptr_t) 1;
-    TEST_CHECK(event_queue_push(&event_loop.queue, first, false, &replaced, &capacity), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&event_loop.queue, first, false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
 
     TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, daemon_pair), 0);
     TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, scalar_pair), 0);
@@ -274,6 +279,7 @@ static void event_queue_child_rejects_destructive_event(enum event_type type)
 {
     struct event replaced = { 0 };
     uint32_t capacity = 0;
+    bool post_wake = false;
     struct event first;
     struct event_loop event_loop = { 0 };
 
@@ -282,7 +288,7 @@ static void event_queue_child_rejects_destructive_event(enum event_type type)
     first.type = WINDOW_MOVED;
     first.param1 = 1;
     first.context = (void *)(intptr_t) 1;
-    if (event_queue_push(&event_loop.queue, first, false, &replaced, &capacity) != EVENT_QUEUE_ADDED) _exit(3);
+    if (event_queue_push(&event_loop.queue, first, false, &replaced, &capacity, &post_wake) != EVENT_QUEUE_ADDED) _exit(3);
 
     g_event_queue_test_fail_allocation = true;
     event_loop_post(&event_loop, type, (void *)(intptr_t) 1, 0);

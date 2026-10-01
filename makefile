@@ -29,9 +29,9 @@ tsan: clean-build $(BINS)
 install: BUILD_FLAGS=-std=c11 -Wall -Wextra -DNDEBUG -O3 -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
 install: clean-build $(BINS)
 
-$(OSAX_SRC): makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
+$(OSAX_SRC): makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
 	xcrun clang $(OSAX_PATH)/payload.m -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/payload $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon
-	xcrun clang $(OSAX_PATH)/loader.m -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/loader -framework Cocoa
+	xcrun clang $(OSAX_PATH)/loader.m -x assembler-with-cpp $(OSAX_PATH)/loader_shellcode.s -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/loader -framework Cocoa
 	xxd -i -a $(OSAX_PATH)/payload $(OSAX_PATH)/payload_bin.c
 	xxd -i -a $(OSAX_PATH)/loader $(OSAX_PATH)/loader_bin.c
 	rm -f $(OSAX_PATH)/payload

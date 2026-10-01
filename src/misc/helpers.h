@@ -216,7 +216,17 @@ static inline void socket_close(int sockfd)
     close(sockfd);
 }
 
-static inline void mach_send(mach_port_t port, void *data, uint32_t size)
+#define MACH_SEND_SHORT_TIMEOUT_MS 50
+
+#ifdef TESTS
+static mach_msg_return_t (*mach_send_message)(mach_msg_header_t *, mach_msg_option_t, mach_msg_size_t,
+                                               mach_msg_size_t, mach_port_name_t, mach_msg_timeout_t,
+                                               mach_port_name_t) = mach_msg;
+#else
+#define mach_send_message mach_msg
+#endif
+
+static inline kern_return_t mach_send(mach_port_t port, void *data, uint32_t size)
 {
     struct {
         mach_msg_header_t header;
@@ -234,7 +244,8 @@ static inline void mach_send(mach_port_t port, void *data, uint32_t size)
     msg.descriptor.deallocate   = false;
     msg.descriptor.type         = MACH_MSG_OOL_DESCRIPTOR;
 
-    mach_msg(&msg.header, MACH_SEND_MSG, sizeof(msg), 0, 0, 0, 0);
+    return mach_send_message(&msg.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof(msg), 0, 0,
+                             MACH_SEND_SHORT_TIMEOUT_MS, 0);
 }
 
 static inline char *json_optional_bool(int value)

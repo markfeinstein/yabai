@@ -32,14 +32,16 @@ bool space_manager_query_spaces_for_window(FILE *rsp, struct window *window, uin
     if (!space_list) return false;
 
     fprintf(rsp, "[");
+    bool first = true;
     for (int i = 0; i < space_count; ++i) {
         struct view *view = space_manager_query_view(&g_space_manager, space_list[i]);
         if (!view) continue;
 
+        if (!first) fprintf(rsp, ",");
         view_serialize(rsp, view, flags);
-        fprintf(rsp, "%c", i < space_count - 1 ? ',' : ']');
+        first = false;
     }
-    fprintf(rsp, "\n");
+    fprintf(rsp, "]\n");
 
     return true;
 }
@@ -53,14 +55,16 @@ bool space_manager_query_spaces_for_display(FILE *rsp, uint32_t did, uint64_t fl
     if (!space_list) return false;
 
     fprintf(rsp, "[");
+    bool first = true;
     for (int i = 0; i < space_count; ++i) {
         struct view *view = space_manager_query_view(&g_space_manager, space_list[i]);
         if (!view) continue;
 
+        if (!first) fprintf(rsp, ",");
         view_serialize(rsp, view, flags);
-        fprintf(rsp, "%c", i < space_count - 1 ? ',' : ']');
+        first = false;
     }
-    fprintf(rsp, "\n");
+    fprintf(rsp, "]\n");
 
     return true;
 }
@@ -74,6 +78,7 @@ bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
     if (!display_list) return false;
 
     fprintf(rsp, "[");
+    bool first = true;
     for (int i = 0; i < display_count; ++i) {
         int space_count;
         uint64_t *space_list = display_space_list(display_list[i], &space_count);
@@ -83,13 +88,12 @@ bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
             struct view *view = space_manager_query_view(&g_space_manager, space_list[j]);
             if (!view) continue;
 
+            if (!first) fprintf(rsp, ",");
             view_serialize(rsp, view, flags);
-            if (j < space_count - 1) fprintf(rsp, ",");
+            first = false;
         }
-
-        fprintf(rsp, "%c", i < display_count - 1 ? ',' : ']');
     }
-    fprintf(rsp, "\n");
+    fprintf(rsp, "]\n");
 
     return true;
 }
@@ -199,15 +203,56 @@ void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, c
     }));
 }
 
-void space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type layout)
+static bool space_manager_layout_inventory_is_valid(struct window_manager *wm, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded)
 {
-    struct view *view = space_manager_find_view(sm, sid);
+    if (layout == VIEW_FLOAT) return true;
+    if (!inventory_succeeded || window_count < 0 || window_count == INT_MAX || (window_count && !window_list)) return false;
+    if (layout == VIEW_STACK) {
+        int manageable_count = 0;
+        for (int i = 0; i < window_count; ++i) {
+            struct window *window = window_manager_find_window(wm, window_list[i]);
+            if (window && window_manager_should_manage_window(window) && ++manageable_count > NODE_MAX_WINDOW_COUNT) return false;
+        }
+    }
+    return true;
+}
+
+static void space_manager_commit_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, struct view **mutated_views, int mutated_capacity)
+{
     view->layout = layout;
     view_clear(view);
-
-    if (view->layout != VIEW_FLOAT) {
-        window_manager_validate_and_check_for_windows_on_space(sm, &g_window_manager, sid);
+    if (layout != VIEW_FLOAT) {
+        window_manager_reconcile_windows_on_space_with_storage(wm, view, window_list, window_count, true, mutated_views, mutated_capacity);
     }
+}
+
+bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded)
+{
+    if (!space_manager_layout_inventory_is_valid(wm, layout, window_list, window_count, inventory_succeeded)) return false;
+    if (layout == VIEW_FLOAT) {
+        space_manager_commit_layout_with_inventory(wm, view, layout, NULL, 0, NULL, 0);
+        return true;
+    }
+
+    int capacity = window_count + 1;
+    struct view **mutated_views = calloc((size_t) capacity, sizeof(struct view *));
+    if (!mutated_views) return false;
+    space_manager_commit_layout_with_inventory(wm, view, layout, window_list, window_count, mutated_views, capacity);
+    free(mutated_views);
+    return true;
+}
+
+bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type layout)
+{
+    struct view *view = space_manager_find_view(sm, sid);
+    if (layout == VIEW_FLOAT) {
+        return space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, NULL, 0, false);
+    }
+
+    int window_count = 0;
+    bool inventory_succeeded = false;
+    uint32_t *window_list = space_window_list_for_connection_with_status(&sid, 1, 0, &window_count, false, &inventory_succeeded);
+    return space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, window_list, window_count, inventory_succeeded);
 }
 
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap)
@@ -256,21 +301,63 @@ void space_manager_toggle_show_desktop(uint64_t sid)
     CoreDockSendNotification(CFSTR("com.apple.showdesktop.awake"), 0);
 }
 
-void space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view_type layout)
+bool space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view_type layout)
 {
-    sm->layout = layout;
-    table_for (struct view *view, sm->view, {
-        if (!view_check_flag(view, VIEW_LAYOUT)) {
-            if (space_is_user(view->sid)) {
-                view->layout = layout;
-                view_clear(view);
+    if (layout == VIEW_FLOAT) {
+        sm->layout = layout;
+        table_for (struct view *view, sm->view, {
+            if (!view_check_flag(view, VIEW_LAYOUT) && space_is_user(view->sid)) {
+                space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, NULL, 0, false);
+            }
+        })
+        return true;
+    }
 
-                if (view->layout != VIEW_FLOAT) {
-                    window_manager_validate_and_check_for_windows_on_space(sm, &g_window_manager, view->sid);
-                }
+    struct layout_inventory {
+        struct view *view;
+        uint32_t *window_list;
+        int window_count;
+        struct view **mutated_views;
+        int mutated_capacity;
+    };
+
+    int inventory_capacity = sm->view.count;
+    struct layout_inventory *inventories = inventory_capacity ? calloc((size_t) inventory_capacity, sizeof(struct layout_inventory)) : NULL;
+    if (inventory_capacity && !inventories) return false;
+
+    int inventory_count = 0;
+    bool success = true;
+    table_for (struct view *view, sm->view, {
+        if (success && !view_check_flag(view, VIEW_LAYOUT) && space_is_user(view->sid)) {
+            struct layout_inventory *inventory = &inventories[inventory_count++];
+            inventory->view = view;
+            uint64_t sid = view->sid;
+            bool inventory_succeeded = false;
+            inventory->window_list = space_window_list_for_connection_with_status(&sid, 1, 0, &inventory->window_count, false, &inventory_succeeded);
+            if (!space_manager_layout_inventory_is_valid(&g_window_manager, layout, inventory->window_list, inventory->window_count, inventory_succeeded)) {
+                success = false;
+                break;
+            }
+            inventory->mutated_capacity = inventory->window_count + 1;
+            inventory->mutated_views = calloc((size_t) inventory->mutated_capacity, sizeof(struct view *));
+            if (!inventory->mutated_views) {
+                success = false;
+                break;
             }
         }
     })
+
+    if (success) {
+        sm->layout = layout;
+        for (int i = 0; i < inventory_count; ++i) {
+            struct layout_inventory *inventory = &inventories[i];
+            space_manager_commit_layout_with_inventory(&g_window_manager, inventory->view, layout, inventory->window_list, inventory->window_count, inventory->mutated_views, inventory->mutated_capacity);
+        }
+    }
+
+    for (int i = 0; i < inventory_count; ++i) free(inventories[i].mutated_views);
+    free(inventories);
+    return success;
 }
 
 void space_manager_set_window_gap_for_all_spaces(struct space_manager *sm, int window_gap)
@@ -493,61 +580,19 @@ void space_manager_toggle_window_split(struct space_manager *sm, struct window *
 
 int space_manager_mission_control_index(uint64_t sid)
 {
-    uint64_t result = 0;
-    int desktop_cnt = 1;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &result);
-            if (sid == result) goto out;
-
-            ++desktop_cnt;
-        }
-    }
-
-    desktop_cnt = 0;
-out:
-    CFRelease(display_spaces_ref);
-    return desktop_cnt;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    int result = managed_space_index(topology, sid);
+    CFRelease(topology);
+    return result;
 }
 
 uint64_t space_manager_mission_control_space(int desktop_id)
 {
-    uint64_t result = 0;
-    int desktop_cnt = 1;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &result);
-            if (desktop_cnt == desktop_id) goto out;
-
-            ++desktop_cnt;
-        }
-    }
-
-    result = 0;
-out:
-    CFRelease(display_spaces_ref);
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    uint64_t result = managed_space_select(topology, desktop_id);
+    CFRelease(topology);
     return result;
 }
 
@@ -559,98 +604,38 @@ uint64_t space_manager_cursor_space(void)
 
 uint64_t space_manager_prev_space(uint64_t sid)
 {
-    uint64_t p_sid = 0;
-    uint64_t n_sid = 0;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &n_sid);
-            if (n_sid == sid) goto out;
-
-            p_sid = n_sid;
-        }
-    }
-
-out:
-    CFRelease(display_spaces_ref);
-    return p_sid != sid ? p_sid : 0;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    uint64_t result = managed_space_previous(topology, sid);
+    CFRelease(topology);
+    return result;
 }
 
 uint64_t space_manager_next_space(uint64_t sid)
 {
-    uint64_t n_sid = 0;
-    bool found_sid = false;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &n_sid);
-            if (found_sid) goto out;
-
-            found_sid = n_sid == sid;
-        }
-    }
-
-out:
-    CFRelease(display_spaces_ref);
-    return n_sid != sid ? n_sid : 0;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    uint64_t result = managed_space_next(topology, sid);
+    CFRelease(topology);
+    return result;
 }
 
 uint64_t space_manager_first_space(void)
 {
-    uint64_t sid = 0;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, 0);
-    CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-
-    CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, 0);
-    CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-    CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &sid);
-
-    CFRelease(display_spaces_ref);
-    return sid;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    uint64_t result = managed_space_first(topology);
+    CFRelease(topology);
+    return result;
 }
 
 uint64_t space_manager_last_space(void)
 {
-    uint64_t sid = 0;
-
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) return 0;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, display_spaces_count-1);
-    CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-    int spaces_count = CFArrayGetCount(spaces_ref);
-
-    CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, spaces_count-1);
-    CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-    CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &sid);
-
-    CFRelease(display_spaces_ref);
-    return sid;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return 0;
+    uint64_t result = managed_space_last(topology);
+    CFRelease(topology);
+    return result;
 }
 
 uint64_t space_manager_active_space(void)

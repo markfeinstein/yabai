@@ -159,8 +159,9 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     g_event_loop = (struct event_loop) {0};
     struct event replaced = {0};
     uint32_t capacity = 0;
+    bool post_wake = false;
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
-    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED }, false, &replaced, &capacity), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED }, false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
     g_event_queue_test_fail_allocation = true;
     uint64_t generation_before_rejection = g_process_manager.front_switch_generation;
     uint64_t psn_before_rejection = g_process_manager.front_switch_psn;

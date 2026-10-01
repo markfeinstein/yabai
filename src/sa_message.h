@@ -8,6 +8,9 @@
 
 #include "osax/common.h"
 
+#define SA_SWAP_PROXY_ACTIVE_RECORD_LIMIT \
+    ((int) ((SA_SOCKET_BUFF_LEN - sizeof(int16_t) - sizeof(uint8_t) - sizeof(int)) / (2 * sizeof(uint32_t))))
+
 struct sa_payload_builder {
     uint8_t *bytes;
     size_t capacity;

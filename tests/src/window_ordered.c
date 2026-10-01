@@ -6,6 +6,7 @@
 #define TEST_ORDERED_SID   0x7ffffff0ULL
 #define TEST_ORDERED_WID_A 0x7ffffff1
 #define TEST_ORDERED_WID_B 0x7ffffff2
+#define TEST_ORDERED_EXTRA_WID_BASE UINT32_C(0x70000000)
 
 struct test_ordered
 {
@@ -93,6 +94,95 @@ static void test_ordered_free(struct test_ordered *t)
     free(t->view);
     t->view = NULL;
 }
+
+TEST_FUNC(window_inventory_failure_preserves_and_empty_success_clears_membership,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    TEST_CHECK(window_manager_reconcile_windows_on_space(&g_window_manager, t.view, NULL, 0, false), false);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
+    TEST_CHECK(view_find_window_node(t.view, t.b.id) != NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == t.view, true);
+
+    TEST_CHECK(window_manager_reconcile_windows_on_space(&g_window_manager, t.view, NULL, 0, true), true);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
+    TEST_CHECK(view_find_window_node(t.view, t.b.id) == NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == NULL, true);
+    test_ordered_free(&t);
+});
+
+TEST_FUNC(layout_inventory_failure_is_transactional_and_empty_success_applies,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, NULL, 0, false), false);
+    TEST_CHECK(t.view->layout, VIEW_BSP);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
+    TEST_CHECK(view_find_window_node(t.view, t.b.id) != NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == t.view, true);
+
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, NULL, 0, true), true);
+    TEST_CHECK(t.view->layout, VIEW_STACK);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
+    TEST_CHECK(view_find_window_node(t.view, t.b.id) == NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == NULL, true);
+    test_ordered_free(&t);
+});
+
+TEST_FUNC(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    enum { window_count = NODE_MAX_WINDOW_COUNT + 1 };
+    struct window *windows[window_count] = {0};
+    uint32_t window_list[window_count] = {0};
+    windows[0] = &t.a;
+    windows[1] = &t.b;
+    window_list[0] = t.a.id;
+    window_list[1] = t.b.id;
+    for (int i = 2; i < window_count; ++i) {
+        windows[i] = calloc(1, sizeof(struct window));
+        TEST_CHECK(windows[i] != NULL, true);
+        if (!windows[i]) continue;
+        test_ordered_window_init(windows[i], &t.application, TEST_ORDERED_EXTRA_WID_BASE + (uint32_t) i);
+        window_list[i] = windows[i]->id;
+        window_manager_add_window(&g_window_manager, windows[i]);
+    }
+
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, window_list, window_count, true), false);
+    TEST_CHECK(t.view->layout, VIEW_BSP);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
+    TEST_CHECK(view_find_window_node(t.view, t.b.id) != NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == t.view, true);
+
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, window_list, NODE_MAX_WINDOW_COUNT, true), true);
+    TEST_CHECK(t.view->layout, VIEW_STACK);
+    TEST_CHECK(t.view->root->window_count, NODE_MAX_WINDOW_COUNT);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == t.view, true);
+
+    for (int i = 2; i < window_count; ++i) {
+        if (!windows[i]) continue;
+        window_manager_remove_managed_window(&g_window_manager, windows[i]->id);
+        window_manager_remove_window(&g_window_manager, windows[i]->id);
+        free(windows[i]);
+    }
+    test_ordered_free(&t);
+});
 
 TEST_FUNC(window_ordered_out_leaves_the_tree,
 {
