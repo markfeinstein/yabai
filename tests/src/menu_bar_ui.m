@@ -650,6 +650,30 @@ test_expanded_screen_cells_and_compact_option(void)
 }
 
 static bool
+test_expanded_render_uses_independent_status_items(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+
+    [controller testSetSnapshot:menu_bar_ui_default_layout_snapshot(72)];
+    [controller testRebuildMenu];
+    [controller renderExpandedStatusItem];
+
+    TEST_CHECK([controller testStatusItemCount] == 4);
+    TEST_CHECK([controller testStatusViewCount] == 4);
+    TEST_CHECK([controller testStatusItemsOwnIndependentViews]);
+
+    [controller clearStatusItem];
+    TEST_CHECK([controller testStatusItemCount] == 0);
+    TEST_CHECK([controller testStatusViewCount] == 0);
+    TEST_CHECK(log.count == 0);
+
+    [controller release];
+    return true;
+}
+
+static bool
 test_invalid_index_placeholder_has_transparent_interior(void)
 {
     YBMenuBarScreenCell *cell = [[YBMenuBarScreenCell alloc] initWithFrame:NSMakeRect(0.0, 0.0,
@@ -962,6 +986,7 @@ int main(void)
             { "lifecycle_reinit_ignores_stale_delivery", test_lifecycle_reinit_ignores_stale_delivery },
             { "read_only_rendered_paths_emit_only_setting_actions", test_read_only_rendered_paths_emit_only_setting_actions },
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
+            { "expanded_render_uses_independent_status_items", test_expanded_render_uses_independent_status_items },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
             { "multi_digit_number_geometry_stays_compact_and_within_bounds", test_multi_digit_number_geometry_stays_compact_and_within_bounds },
