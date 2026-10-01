@@ -526,6 +526,8 @@ bool scripting_addition_move_window(uint32_t wid, int x, int y)
 
 bool scripting_addition_set_opacity(uint32_t wid, float opacity, float duration)
 {
+    if (!sa_opacity_duration_is_safe(duration)) return false;
+
     SA_PAYLOAD_BEGIN(duration > 0.0f ? SA_OPCODE_WINDOW_OPACITY_FADE : SA_OPCODE_WINDOW_OPACITY);
     SA_PAYLOAD_APPEND(wid);
     SA_PAYLOAD_APPEND(opacity);

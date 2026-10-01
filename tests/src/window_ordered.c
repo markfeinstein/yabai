@@ -199,6 +199,13 @@ TEST_FUNC(window_ordered_in_keeps_float,
 // A release newer than any listed must take the newest listed code paths, not the pre-Ventura ones.
 TEST_FUNC(macos_version_newer_than_listed,
 {
+    bool saved_tahoe = _workspace_is_macos_version_tahoe;
+    bool saved_sequoia = _workspace_is_macos_version_sequoia;
+    bool saved_sonoma = _workspace_is_macos_version_sonoma;
+    bool saved_ventura = _workspace_is_macos_version_ventura;
+    bool saved_monterey = _workspace_is_macos_version_monterey;
+    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+
     workspace_set_macos_version(27);
     TEST_CHECK(workspace_is_macos_tahoe(), true);
     TEST_CHECK(workspace_is_macos_sequoia(), false);
@@ -213,4 +220,11 @@ TEST_FUNC(macos_version_newer_than_listed,
     workspace_set_macos_version(10);
     TEST_CHECK(workspace_is_macos_bigsur(), false);
     TEST_CHECK(workspace_is_macos_tahoe(), false);
+
+    _workspace_is_macos_version_tahoe = saved_tahoe;
+    _workspace_is_macos_version_sequoia = saved_sequoia;
+    _workspace_is_macos_version_sonoma = saved_sonoma;
+    _workspace_is_macos_version_ventura = saved_ventura;
+    _workspace_is_macos_version_monterey = saved_monterey;
+    _workspace_is_macos_version_bigsur = saved_bigsur;
 });

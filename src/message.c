@@ -91,7 +91,6 @@ extern bool g_verbose;
 #define ARGUMENT_CONFIG_MOUSE_ACTION_STACK    "stack"
 #define ARGUMENT_CONFIG_EXTERNAL_BAR_MAIN     "main"
 #define ARGUMENT_CONFIG_EXTERNAL_BAR_ALL      "all"
-#define ARGUMENT_CONFIG_EXTERNAL_BAR          "%5[^:]:%d:%d"
 /* ----------------------------------------------------------------------------- */
 
 /* --------------------------------DOMAIN DISPLAY------------------------------- */
@@ -121,8 +120,6 @@ extern bool g_verbose;
 #define ARGUMENT_SPACE_ROTATE_90    "90"
 #define ARGUMENT_SPACE_ROTATE_180   "180"
 #define ARGUMENT_SPACE_ROTATE_270   "270"
-#define ARGUMENT_SPACE_PADDING      "%255[^:]:%d:%d:%d:%d"
-#define ARGUMENT_SPACE_GAP          "%255[^:]:%d"
 #define ARGUMENT_SPACE_TGL_PADDING  "padding"
 #define ARGUMENT_SPACE_TGL_GAP      "gap"
 #define ARGUMENT_SPACE_TGL_MC       "mission-control"
@@ -163,9 +160,6 @@ extern bool g_verbose;
 #define ARGUMENT_WINDOW_SEL_FCOUSIN     "first_cousin"
 #define ARGUMENT_WINDOW_SEL_SCOUSIN     "second_cousin"
 #define ARGUMENT_WINDOW_GRID            "%d:%d:%d:%d:%d:%d"
-#define ARGUMENT_WINDOW_MOVE            "%255[^:]:%f:%f"
-#define ARGUMENT_WINDOW_RESIZE          "%255[^:]:%f:%f"
-#define ARGUMENT_WINDOW_RATIO           "%255[^:]:%f"
 #define ARGUMENT_WINDOW_LAYER_BELOW     "below"
 #define ARGUMENT_WINDOW_LAYER_NORMAL    "normal"
 #define ARGUMENT_WINDOW_LAYER_ABOVE     "above"
@@ -598,9 +592,133 @@ static bool parse_window_grid_command(char *text, unsigned *r, unsigned *c, unsi
     return *r > 0 && *c > 0;
 }
 
-static bool floats_are_finite(float a, float b)
+static bool parse_string_component(char **cursor, char *value, size_t capacity)
 {
-    return __builtin_isfinite(a) && __builtin_isfinite(b);
+    char *separator = strchr(*cursor, ':');
+    if (!separator) return false;
+
+    size_t length = (size_t) (separator - *cursor);
+    if (!length || length >= capacity) return false;
+
+    memcpy(value, *cursor, length);
+    value[length] = '\0';
+    *cursor = separator + 1;
+    return true;
+}
+
+static bool parse_window_discriminator(char **cursor, uint8_t (*parser)(char *), uint8_t *value)
+{
+    char discriminator[MAXLEN];
+    if (!parse_string_component(cursor, discriminator, sizeof(discriminator))) return false;
+
+    *value = parser(discriminator);
+    return *value != 0;
+}
+
+static bool parse_signed_component(char **cursor, int *value, char terminator)
+{
+    char *end;
+    errno = 0;
+    long parsed = strtol(*cursor, &end, 10);
+    if (end == *cursor || errno == ERANGE || parsed < INT_MIN || parsed > INT_MAX) return false;
+
+    if (terminator) {
+        if (*end != terminator) return false;
+        *cursor = end + 1;
+    } else {
+        if (*end) return false;
+        *cursor = end;
+    }
+
+    *value = (int) parsed;
+    return true;
+}
+
+static bool parse_float_component(char **cursor, float *value, char terminator)
+{
+    char *end;
+    errno = 0;
+    *value = strtof(*cursor, &end);
+    if (end == *cursor || errno == ERANGE || !__builtin_isfinite(*value)) return false;
+
+    if (terminator) {
+        if (*end != terminator) return false;
+        *cursor = end + 1;
+    } else {
+        if (*end) return false;
+        *cursor = end;
+    }
+
+    return true;
+}
+
+static bool parse_external_bar_command(char *text, enum external_bar_mode *mode, int *top, int *bottom)
+{
+    char *cursor = text;
+    char mode_name[MAXLEN];
+    if (!parse_string_component(&cursor, mode_name, sizeof(mode_name)) ||
+        !parse_signed_component(&cursor, top, ':') ||
+        !parse_signed_component(&cursor, bottom, '\0')) {
+        return false;
+    }
+
+    if (string_equals(mode_name, ARGUMENT_CONFIG_EXTERNAL_BAR_MAIN)) {
+        *mode = EXTERNAL_BAR_MAIN;
+    } else if (string_equals(mode_name, ARGUMENT_CONFIG_EXTERNAL_BAR_ALL)) {
+        *mode = EXTERNAL_BAR_ALL;
+    } else if (string_equals(mode_name, ARGUMENT_COMMON_VAL_OFF)) {
+        *mode = EXTERNAL_BAR_OFF;
+    } else {
+        return false;
+    }
+
+    return true;
+}
+
+static bool parse_space_padding_command(char *text, uint8_t *type, int *top, int *bottom, int *left, int *right)
+{
+    char *cursor = text;
+    return parse_window_discriminator(&cursor, parse_value_type, type) &&
+           parse_signed_component(&cursor, top, ':') &&
+           parse_signed_component(&cursor, bottom, ':') &&
+           parse_signed_component(&cursor, left, ':') &&
+           parse_signed_component(&cursor, right, '\0');
+}
+
+static bool parse_space_gap_command(char *text, uint8_t *type, int *gap)
+{
+    char *cursor = text;
+    return parse_window_discriminator(&cursor, parse_value_type, type) &&
+           parse_signed_component(&cursor, gap, '\0');
+}
+
+static bool parse_window_move_command(char *text, uint8_t *type, float *x, float *y)
+{
+    char *cursor = text;
+    return parse_window_discriminator(&cursor, parse_value_type, type) &&
+           parse_float_component(&cursor, x, ':') &&
+           parse_float_component(&cursor, y, '\0');
+}
+
+static bool parse_window_resize_command(char *text, uint8_t *handle, float *w, float *h)
+{
+    char *cursor = text;
+    return parse_window_discriminator(&cursor, parse_resize_handle, handle) &&
+           parse_float_component(&cursor, w, ':') &&
+           parse_float_component(&cursor, h, '\0');
+}
+
+static bool parse_window_ratio_command(char *text, uint8_t *type, float *ratio)
+{
+    char *cursor = text;
+    return parse_window_discriminator(&cursor, parse_value_type, type) &&
+           parse_float_component(&cursor, ratio, '\0');
+}
+
+static bool parse_rule_opacity(char *text, float *opacity)
+{
+    char *cursor = text;
+    return parse_float_component(&cursor, opacity, '\0') && in_range_ii(*opacity, 0.0f, 1.0f);
 }
 
 static bool token_value_is_nonnegative_float(struct token_value value)
@@ -1406,7 +1524,8 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             struct token_value value = token_to_value(get_token(&message));
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%f\n", g_window_manager.window_opacity_duration);
-            } else if (token_value_is_nonnegative_float(value)) {
+            } else if (token_value_is_nonnegative_float(value) &&
+                       sa_opacity_duration_is_safe(value.float_value)) {
                 g_window_manager.window_opacity_duration = value.float_value;
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
@@ -1820,29 +1939,17 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_CONFIG_EXTERNAL_BAR)) {
             int t, b;
-            char mode[6];
+            enum external_bar_mode mode;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_CONFIG_EXTERNAL_BAR, mode, &t, &b) == 3)) {
-                if (string_equals(mode, ARGUMENT_CONFIG_EXTERNAL_BAR_MAIN)) {
-                    g_display_manager.mode = EXTERNAL_BAR_MAIN;
-                    g_display_manager.top_padding = t;
-                    g_display_manager.bottom_padding = b;
-                    space_manager_mark_spaces_invalid(&g_space_manager);
-                } else if (string_equals(mode, ARGUMENT_CONFIG_EXTERNAL_BAR_ALL)) {
-                    g_display_manager.mode = EXTERNAL_BAR_ALL;
-                    g_display_manager.top_padding = t;
-                    g_display_manager.bottom_padding = b;
-                    space_manager_mark_spaces_invalid(&g_space_manager);
-                } else if (string_equals(mode, ARGUMENT_COMMON_VAL_OFF)) {
-                    g_display_manager.mode = EXTERNAL_BAR_OFF;
-                    g_display_manager.top_padding = t;
-                    g_display_manager.bottom_padding = b;
-                    space_manager_mark_spaces_invalid(&g_space_manager);
-                } else {
-                    daemon_fail(rsp, "unknown mode '%s' specified in value '%.*s' given to command '%.*s' for domain '%.*s'\n", mode, value.length, value.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
+            if (!token_is_valid(value)) {
                 fprintf(rsp, "%s:%d:%d\n", external_bar_mode_str[g_display_manager.mode], g_display_manager.top_padding, g_display_manager.bottom_padding);
+            } else if (parse_external_bar_command(value.text, &mode, &t, &b)) {
+                g_display_manager.mode = mode;
+                g_display_manager.top_padding = t;
+                g_display_manager.bottom_padding = b;
+                space_manager_mark_spaces_invalid(&g_space_manager);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else {
             daemon_fail(rsp, "unknown command '%.*s' for domain '%.*s'\n", command.length, command.text, domain.length, domain.text);
@@ -2142,10 +2249,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_SPACE_PADDING)) {
             int t, b, l, r;
-            char type[MAXLEN];
+            uint8_t type;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_SPACE_PADDING, type, &t, &b, &l, &r) == 5)) {
-                if (!space_manager_set_padding_for_space(&g_space_manager, acting_sid, parse_value_type(type), t, b, l, r)) {
+            if (parse_space_padding_command(value.text, &type, &t, &b, &l, &r)) {
+                if (!space_manager_set_padding_for_space(&g_space_manager, acting_sid, type, t, b, l, r)) {
                     daemon_fail(rsp, "cannot set padding for a non-managed space.\n");
                 }
             } else {
@@ -2153,10 +2260,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_SPACE_GAP)) {
             int gap;
-            char type[MAXLEN];
+            uint8_t type;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_SPACE_GAP, type, &gap) == 2)) {
-                if (!space_manager_set_gap_for_space(&g_space_manager, acting_sid, parse_value_type(type), gap)) {
+            if (parse_space_gap_command(value.text, &type, &gap)) {
+                if (!space_manager_set_gap_for_space(&g_space_manager, acting_sid, type, gap)) {
                     daemon_fail(rsp, "cannot set gap for a non-managed space.\n");
                 }
             } else {
@@ -2415,10 +2522,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_WINDOW_MOVE)) {
             float x, y;
-            char type[MAXLEN];
+            uint8_t type;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_MOVE, type, &x, &y) == 3) && floats_are_finite(x, y)) {
-                enum window_op_error result = window_manager_move_window_relative(&g_window_manager, acting_window, parse_value_type(type), x, y);
+            if (parse_window_move_command(value.text, &type, &x, &y)) {
+                enum window_op_error result = window_manager_move_window_relative(&g_window_manager, acting_window, type, x, y);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_VIEW) {
                     daemon_fail(rsp, "cannot move a managed window.\n");
                 }
@@ -2427,10 +2534,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_WINDOW_RESIZE)) {
             float w, h;
-            char handle[MAXLEN];
+            uint8_t handle;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_RESIZE, handle, &w, &h) == 3) && floats_are_finite(w, h)) {
-                enum window_op_error result = window_manager_resize_window_relative(&g_window_manager, acting_window, parse_resize_handle(handle), w, h, true);
+            if (parse_window_resize_command(value.text, &handle, &w, &h)) {
+                enum window_op_error result = window_manager_resize_window_relative(&g_window_manager, acting_window, handle, w, h, true);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_NODE) {
                     daemon_fail(rsp, "cannot locate bsp node for the managed window.\n");
                 } else if (result == WINDOW_OP_ERROR_INVALID_DST_NODE) {
@@ -2443,10 +2550,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_WINDOW_RATIO)) {
             float r;
-            char type[MAXLEN];
+            uint8_t type;
             struct token value = get_token(&message);
-            if ((sscanf(value.text, ARGUMENT_WINDOW_RATIO, type, &r) == 2) && __builtin_isfinite(r)) {
-                enum window_op_error result = window_manager_adjust_window_ratio(&g_window_manager, acting_window, parse_value_type(type), r);
+            if (parse_window_ratio_command(value.text, &type, &r)) {
+                enum window_op_error result = window_manager_adjust_window_ratio(&g_window_manager, acting_window, type, r);
                 if (result == WINDOW_OP_ERROR_INVALID_SRC_VIEW) {
                     daemon_fail(rsp, "cannot adjust ratio of a non-managed window.\n");
                 } else if (result == WINDOW_OP_ERROR_INVALID_SRC_NODE) {
@@ -2913,7 +3020,7 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
         } else if (string_equals(key, ARGUMENT_RULE_KEY_OPACITY)) {
             if (exclusion) unsupported_exclusion = key;
 
-            if ((sscanf(value, "%f", &rule->effects.opacity) == 1) && (in_range_ii(rule->effects.opacity, 0.0f, 1.0f))) {
+            if (parse_rule_opacity(value, &rule->effects.opacity)) {
                 rule_effects_set_flag(&rule->effects, RULE_OPACITY);
             } else {
                 daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);

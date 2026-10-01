@@ -120,6 +120,30 @@ TEST_FUNC(sa_message_fixed_sender_layouts_are_strict,
     TEST_CHECK(sa_message_is_valid(message, 1), false);
 });
 
+TEST_FUNC(sa_message_opacity_fade_duration_is_validated,
+{
+    uint8_t message[13] = { SA_OPCODE_WINDOW_OPACITY_FADE };
+    size_t length = 1;
+    uint32_t wid = 7;
+    float opacity = 0.5f;
+    float duration = 2147483.5f;
+    sa_test_append(message, &length, &wid, sizeof(wid));
+    sa_test_append(message, &length, &opacity, sizeof(opacity));
+    sa_test_append(message, &length, &duration, sizeof(duration));
+    TEST_CHECK(sa_test_strict_shape(message, length), true);
+
+    duration = 2147483.75f;
+    memcpy(message + 9, &duration, sizeof(duration));
+    TEST_CHECK(sa_message_is_valid(message, sizeof(message)), false);
+
+    duration = NAN;
+    memcpy(message + 9, &duration, sizeof(duration));
+    TEST_CHECK(sa_message_is_valid(message, sizeof(message)), false);
+
+    message[0] = SA_OPCODE_WINDOW_OPACITY;
+    TEST_CHECK(sa_message_is_valid(message, sizeof(message)), true);
+});
+
 TEST_FUNC(sa_message_swap_sparse_and_mixed_records_are_strict,
 {
     for (uint8_t op = SA_OPCODE_WINDOW_SWAP_PROXY_IN; op <= SA_OPCODE_WINDOW_SWAP_PROXY_OUT; ++op) {

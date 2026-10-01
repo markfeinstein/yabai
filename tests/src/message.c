@@ -162,6 +162,11 @@ TEST_FUNC(message_duration_values_must_be_finite_and_nonnegative,
 
     value = token_to_value(message_test_token("nan"));
     TEST_CHECK(token_value_is_nonnegative_float(value), false);
+
+    TEST_CHECK(sa_opacity_duration_is_safe(2147483.5f), true);
+    TEST_CHECK(sa_opacity_duration_is_safe(2147483.75f), false);
+    TEST_CHECK(sa_opacity_duration_is_safe(-0.25f), false);
+    TEST_CHECK(sa_opacity_duration_is_safe(INFINITY), false);
 });
 
 TEST_FUNC(message_window_grid_numeric_validation,
@@ -194,13 +199,153 @@ TEST_FUNC(message_rule_grid_numeric_validation,
     TEST_CHECK(message_test_parse_rule_grid("4294967296:2:3:4:5:6"), false);
 });
 
-TEST_FUNC(message_direct_float_components_reject_non_finite,
+TEST_FUNC(message_rule_opacity_numeric_validation,
 {
-    float x, y, ratio;
-    char type[MAXLEN];
-    TEST_CHECK(sscanf("abs:-1.5:2.5", ARGUMENT_WINDOW_MOVE, type, &x, &y) == 3 && floats_are_finite(x, y), true);
-    TEST_CHECK(sscanf("abs:nan:2.5", ARGUMENT_WINDOW_MOVE, type, &x, &y) == 3 && floats_are_finite(x, y), false);
-    TEST_CHECK(sscanf("abs:1.5:inf", ARGUMENT_WINDOW_RESIZE, type, &x, &y) == 3 && floats_are_finite(x, y), false);
-    TEST_CHECK(sscanf("rel:0.25", ARGUMENT_WINDOW_RATIO, type, &ratio) == 2 && __builtin_isfinite(ratio), true);
-    TEST_CHECK(sscanf("rel:nan", ARGUMENT_WINDOW_RATIO, type, &ratio) == 2 && __builtin_isfinite(ratio), false);
+    float opacity;
+    TEST_CHECK(parse_rule_opacity("0", &opacity), true);
+    TEST_CHECK(opacity == 0.0f, true);
+    TEST_CHECK(parse_rule_opacity("0.5", &opacity), true);
+    TEST_CHECK(opacity == 0.5f, true);
+    TEST_CHECK(parse_rule_opacity("1", &opacity), true);
+    TEST_CHECK(opacity == 1.0f, true);
+
+    char *invalid[] = { "-0.1", "1.1", "nan", "inf", "1e-1000", "0.5junk", "0.5:1", "" };
+    for (int i = 0; i < array_count(invalid); ++i) {
+        TEST_CHECK(parse_rule_opacity(invalid[i], &opacity), false);
+    }
+});
+
+TEST_FUNC(message_external_bar_parser_is_strict,
+{
+    enum external_bar_mode mode;
+    int top, bottom;
+
+    TEST_CHECK(parse_external_bar_command("main:2147483647:-2147483648", &mode, &top, &bottom), true);
+    TEST_CHECK(mode, EXTERNAL_BAR_MAIN);
+    TEST_CHECK(top, INT_MAX);
+    TEST_CHECK(bottom, INT_MIN);
+    TEST_CHECK(parse_external_bar_command("all:+12:-34", &mode, &top, &bottom), true);
+    TEST_CHECK(mode, EXTERNAL_BAR_ALL);
+    TEST_CHECK(parse_external_bar_command("off:0:0", &mode, &top, &bottom), true);
+    TEST_CHECK(mode, EXTERNAL_BAR_OFF);
+
+    char *invalid[] = {
+        "unknown:1:2", "main:1", "main:1:2:3", "main:1:2junk",
+        "main:2147483648:0", "main:-2147483649:0"
+    };
+    for (int i = 0; i < array_count(invalid); ++i) {
+        TEST_CHECK(parse_external_bar_command(invalid[i], &mode, &top, &bottom), false);
+    }
+});
+
+TEST_FUNC(message_space_padding_parser_is_strict,
+{
+    uint8_t type;
+    int top, bottom, left, right;
+
+    TEST_CHECK(parse_space_padding_command("abs:2147483647:-2147483648:+3:-4", &type, &top, &bottom, &left, &right), true);
+    TEST_CHECK(type, TYPE_ABS);
+    TEST_CHECK(top, INT_MAX);
+    TEST_CHECK(bottom, INT_MIN);
+    TEST_CHECK(left, 3);
+    TEST_CHECK(right, -4);
+    TEST_CHECK(parse_space_padding_command("rel:-1:2:-3:4", &type, &top, &bottom, &left, &right), true);
+    TEST_CHECK(type, TYPE_REL);
+
+    char *invalid[] = {
+        "unknown:1:2:3:4", "abs:1:2:3", "abs:1:2:3:4:5", "abs:1:2:3:4junk",
+        "abs:2147483648:2:3:4", "abs:-2147483649:2:3:4"
+    };
+    for (int i = 0; i < array_count(invalid); ++i) {
+        TEST_CHECK(parse_space_padding_command(invalid[i], &type, &top, &bottom, &left, &right), false);
+    }
+});
+
+TEST_FUNC(message_space_gap_parser_is_strict,
+{
+    uint8_t type;
+    int gap;
+
+    TEST_CHECK(parse_space_gap_command("abs:2147483647", &type, &gap), true);
+    TEST_CHECK(type, TYPE_ABS);
+    TEST_CHECK(gap, INT_MAX);
+    TEST_CHECK(parse_space_gap_command("rel:-2147483648", &type, &gap), true);
+    TEST_CHECK(type, TYPE_REL);
+    TEST_CHECK(gap, INT_MIN);
+
+    char *invalid[] = {
+        "unknown:1", "abs", "abs:", "abs:1:2", "rel:1junk",
+        "abs:2147483648", "rel:-2147483649"
+    };
+    for (int i = 0; i < array_count(invalid); ++i) {
+        TEST_CHECK(parse_space_gap_command(invalid[i], &type, &gap), false);
+    }
+});
+
+TEST_FUNC(message_window_float_commands_are_strict,
+{
+    struct {
+        char *text;
+        uint8_t type;
+        float x;
+        float y;
+    } valid_move[] = {
+        { "abs:-1.5:2.5", TYPE_ABS, -1.5f, 2.5f },
+        { "rel:0.25:-0.75", TYPE_REL, 0.25f, -0.75f },
+    };
+    for (int i = 0; i < array_count(valid_move); ++i) {
+        uint8_t type;
+        float x, y;
+        TEST_CHECK(parse_window_move_command(valid_move[i].text, &type, &x, &y), true);
+        TEST_CHECK(type, valid_move[i].type);
+        TEST_CHECK(x == valid_move[i].x, true);
+        TEST_CHECK(y == valid_move[i].y, true);
+    }
+
+    struct {
+        char *text;
+        uint8_t handle;
+    } valid_resize[] = {
+        { "abs:-1.5:2.5", HANDLE_ABS },
+        { "top_left:0.25:-0.75", HANDLE_TOP | HANDLE_LEFT },
+    };
+    for (int i = 0; i < array_count(valid_resize); ++i) {
+        uint8_t handle;
+        float w, h;
+        TEST_CHECK(parse_window_resize_command(valid_resize[i].text, &handle, &w, &h), true);
+        TEST_CHECK(handle, valid_resize[i].handle);
+    }
+
+    uint8_t type;
+    float ratio;
+    TEST_CHECK(parse_window_ratio_command("rel:-0.25", &type, &ratio), true);
+    TEST_CHECK(type, TYPE_REL);
+    TEST_CHECK(ratio == -0.25f, true);
+
+    char *invalid_move[] = {
+        "unknown:1:2", "abs:nan:2", "rel:1:inf", "abs:1e-1000:2",
+        "abs:1", "abs:1:2:3", "abs:1:2junk"
+    };
+    for (int i = 0; i < array_count(invalid_move); ++i) {
+        float x, y;
+        TEST_CHECK(parse_window_move_command(invalid_move[i], &type, &x, &y), false);
+    }
+
+    char *invalid_resize[] = {
+        "unknown:1:2", "top:nan:2", "abs:1:inf", "top:1e-1000:2",
+        "left:1", "right:1:2:3", "bottom:1:2junk"
+    };
+    for (int i = 0; i < array_count(invalid_resize); ++i) {
+        uint8_t handle;
+        float w, h;
+        TEST_CHECK(parse_window_resize_command(invalid_resize[i], &handle, &w, &h), false);
+    }
+
+    char *invalid_ratio[] = {
+        "unknown:1", "abs:nan", "rel:inf", "abs:1e-1000",
+        "abs:", "rel:1:2", "abs:0.5junk"
+    };
+    for (int i = 0; i < array_count(invalid_ratio); ++i) {
+        TEST_CHECK(parse_window_ratio_command(invalid_ratio[i], &type, &ratio), false);
+    }
 });

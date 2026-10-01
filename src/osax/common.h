@@ -1,6 +1,10 @@
 #ifndef SA_COMMON_H
 #define SA_COMMON_H
 
+#include <limits.h>
+#include <math.h>
+#include <stdbool.h>
+
 #define SA_SOCKET_PATH_FMT "/tmp/yabai-sa_%s.socket"
 #define SA_SOCKET_BUFF_LEN 0x1000
 
@@ -21,6 +25,12 @@
                                      OSAX_ATTRIB_MOV_SPACE | \
                                      OSAX_ATTRIB_SET_WINDOW | \
                                      OSAX_ATTRIB_ANIM_TIME)
+
+static inline bool sa_opacity_duration_is_safe(float duration)
+{
+    return isfinite(duration) && duration >= 0.0f &&
+           (double) duration * 1000.0 <= (double) INT_MAX;
+}
 
 enum sa_opcode
 {

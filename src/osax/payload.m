@@ -73,9 +73,9 @@ struct window_fade_context
 {
     pthread_t thread;
     uint32_t wid;
-    volatile float alpha;
-    volatile float duration;
-    volatile bool skip;
+    float alpha;
+    float duration;
+    bool skip;
 };
 
 pthread_mutex_t window_fade_lock;
@@ -883,13 +883,11 @@ static void do_window_opacity(char *message)
     if (context) {
         context->alpha = alpha;
         context->duration = 0.0f;
-        __asm__ __volatile__ ("" ::: "memory");
-
         context->skip = true;
         pthread_mutex_unlock(&window_fade_lock);
     } else {
-        SLSSetWindowAlpha(SLSMainConnectionID(), wid, alpha);
         pthread_mutex_unlock(&window_fade_lock);
+        SLSSetWindowAlpha(SLSMainConnectionID(), wid, alpha);
     }
 }
 
@@ -897,18 +895,38 @@ static void *window_fade_thread_proc(void *data)
 {
 entry:;
     struct window_fade_context *context = (struct window_fade_context *) data;
-    context->skip  = false;
+    pthread_mutex_lock(&window_fade_lock);
+    context->skip = false;
+    float end_alpha = context->alpha;
+    float duration = context->duration;
+    pthread_mutex_unlock(&window_fade_lock);
+
+    if (!sa_opacity_duration_is_safe(duration)) {
+        SLSSetWindowAlpha(SLSMainConnectionID(), context->wid, end_alpha);
+
+        pthread_mutex_lock(&window_fade_lock);
+        if (!context->skip) {
+            table_remove(&window_fade_table, &context->wid);
+            pthread_mutex_unlock(&window_fade_lock);
+            free(context);
+            return NULL;
+        }
+        pthread_mutex_unlock(&window_fade_lock);
+        goto entry;
+    }
 
     float start_alpha;
-    float end_alpha = context->alpha;
     SLSGetWindowAlpha(SLSMainConnectionID(), context->wid, &start_alpha);
 
     int frame_duration = 8;
-    int total_duration = (int)(context->duration * 1000.0f);
+    int total_duration = (int) ((double) duration * 1000.0);
     int frame_count = (int)(((float) total_duration / (float) frame_duration) + 1.0f);
 
     for (int frame_index = 1; frame_index <= frame_count; ++frame_index) {
-        if (context->skip) goto entry;
+        pthread_mutex_lock(&window_fade_lock);
+        bool skip = context->skip;
+        pthread_mutex_unlock(&window_fade_lock);
+        if (skip) goto entry;
 
         float t = (float) frame_index / (float) frame_count;
         if (t < 0.0f) t = 0.0f;
@@ -948,8 +966,6 @@ static void do_window_opacity_fade(char *message)
     if (context) {
         context->alpha = alpha;
         context->duration = duration;
-        __asm__ __volatile__ ("" ::: "memory");
-
         context->skip = true;
         pthread_mutex_unlock(&window_fade_lock);
     } else {
@@ -964,7 +980,6 @@ static void do_window_opacity_fade(char *message)
         context->alpha = alpha;
         context->duration = duration;
         context->skip = false;
-        __asm__ __volatile__ ("" ::: "memory");
 
         table_add(&window_fade_table, &wid, context);
         if (pthread_create(&context->thread, NULL, &window_fade_thread_proc, context) != 0) {

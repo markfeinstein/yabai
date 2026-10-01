@@ -80,6 +80,15 @@ static void test_suite_teardown(void)
     memset(&g_temp_storage, 0, sizeof(g_temp_storage));
 }
 
+TEST_FUNC(add_and_clamp_to_zero_saturates,
+{
+    TEST_CHECK(add_and_clamp_to_zero(10, -3), 7);
+    TEST_CHECK(add_and_clamp_to_zero(1, -2), 0);
+    TEST_CHECK(add_and_clamp_to_zero(INT_MIN, INT_MIN), 0);
+    TEST_CHECK(add_and_clamp_to_zero(INT_MAX, -1), INT_MAX - 1);
+    TEST_CHECK(add_and_clamp_to_zero(INT_MAX, 1), INT_MAX);
+});
+
 static int g_event_loop_test_thread_create_calls;
 
 static int event_loop_test_fail_thread_create(pthread_t *thread, const pthread_attr_t *attr,
@@ -1497,6 +1506,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_reordered_stays_tiled)                    \
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
     TEST_ENTRY(macos_version_newer_than_listed)                 \
+    TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
     TEST_ENTRY(event_loop_begin_thread_creation_failure_is_atomic) \
     TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
     TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
@@ -1525,7 +1535,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \
     TEST_ENTRY(message_rule_grid_numeric_validation)                      \
-    TEST_ENTRY(message_direct_float_components_reject_non_finite)         \
+    TEST_ENTRY(message_rule_opacity_numeric_validation)                   \
+    TEST_ENTRY(message_external_bar_parser_is_strict)                     \
+    TEST_ENTRY(message_space_padding_parser_is_strict)                    \
+    TEST_ENTRY(message_space_gap_parser_is_strict)                        \
+    TEST_ENTRY(message_window_float_commands_are_strict)                 \
     TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
     TEST_ENTRY(daemon_message_incomplete_frame_has_failure_response)      \
     TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
@@ -1553,6 +1567,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(sa_request_without_status_observes_total_timeout)          \
     TEST_ENTRY(sa_payload_builder_boundaries_and_variable_counts)         \
     TEST_ENTRY(sa_message_fixed_sender_layouts_are_strict)                \
+    TEST_ENTRY(sa_message_opacity_fade_duration_is_validated)             \
     TEST_ENTRY(sa_message_swap_sparse_and_mixed_records_are_strict)       \
     TEST_ENTRY(sa_message_variable_counts_and_entries_are_strict)
 

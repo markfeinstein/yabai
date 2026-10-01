@@ -61,6 +61,12 @@ static inline bool sa_message_is_valid(const void *message, size_t length)
 
     const uint8_t *bytes = message;
     uint8_t op = bytes[0];
+    if (op == SA_OPCODE_WINDOW_OPACITY_FADE) {
+        if (length != 13) return false;
+        float duration;
+        memcpy(&duration, bytes + 9, sizeof(duration));
+        return sa_opacity_duration_is_safe(duration);
+    }
     if (sa_message_fixed_length(op, length)) return true;
 
     struct sa_message_cursor cursor = { bytes + 1, bytes + length };
