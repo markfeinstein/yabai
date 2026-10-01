@@ -74,10 +74,7 @@ enum yb_menu_bar_control_kind
 @implementation YBMenuBarActionTarget
 @end
 
-@interface YBMenuBarStripView : NSView {
-@public
-    YBMenuBarController *yb_controller;
-}
+@interface YBMenuBarStripView : NSView
 @end
 
 @interface YBMenuBarController : NSObject <NSMenuDelegate> {
@@ -113,10 +110,10 @@ enum yb_menu_bar_control_kind
 @end
 
 @implementation YBMenuBarStripView
-- (void)mouseDown:(NSEvent *)event
+- (NSView *)hitTest:(NSPoint)point
 {
-    (void) event;
-    [yb_controller openMenu:self];
+    NSView *target = [super hitTest:point];
+    return target == self ? nil : target;
 }
 @end
 
@@ -785,26 +782,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [_menu addItem:style_root];
 }
 
-- (NSString *)compactToolTip
-{
-    NSMutableString *tooltip = [NSMutableString stringWithString:@"yabai Spaces — Read-only indicator"];
-    NSString *failure = yb_nsstring(_snapshot ? _snapshot->action_failure_text : NULL);
-    if ([failure length]) [tooltip appendFormat:@"\nLast action failed: %@", failure];
-
-    size_t display_index = 0;
-    const struct menu_bar_display *display = yb_find_focused_display(_snapshot, &display_index);
-    if (!display && _snapshot && _snapshot->display_count == 1) display = &_snapshot->displays[0];
-    if (!display) {
-        [tooltip appendString:@"\nFocused display unresolved"];
-        return tooltip;
-    }
-
-    const struct menu_bar_space *space = yb_find_visible_space(display, _snapshot->settings.space_filter);
-    [tooltip appendFormat:@"\n%@", yb_display_accessibility_title(display, display_index)];
-    if (space) [tooltip appendFormat:@"\n%@", yb_space_accessibility_title(display, display_index, space)];
-    return tooltip;
-}
-
 - (YBMenuBarScreenCell *)screenCellForDisplay:(const struct menu_bar_display *)display
                                  displayIndex:(size_t)display_index
                                         space:(const struct menu_bar_space *)space
@@ -843,9 +820,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     CGFloat cell_width = yb_screen_cell_width(space ? space->mission_control_index : 0);
     CGFloat width = YB_MENU_BAR_OUTER_INSET * 2.0 + cell_width;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
-    strip->yb_controller = self;
-    [strip setMenu:_menu];
-    [strip setToolTip:[self compactToolTip]];
 
     YBMenuBarScreenCell *cell = [self screenCellForDisplay:display
                                               displayIndex:display_index
@@ -916,11 +890,19 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
                         ? yb_screen_interval_width(entries, selection.start, selection.count, omitted)
                         : YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, strip_width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
-    strip->yb_controller = self;
-    [strip setMenu:_menu];
-    [strip setToolTip:[self compactToolTip]];
 
     CGFloat x = YB_MENU_BAR_OUTER_INSET;
+    if (!selection.count) {
+        YBMenuBarScreenCell *placeholder = [self screenCellForDisplay:NULL
+                                                         displayIndex:0
+                                                                space:NULL
+                                                                frame:NSMakeRect(x, 0.0,
+                                                                                 YB_MENU_BAR_CELL_WIDTH,
+                                                                                 YB_MENU_BAR_STATUS_HEIGHT)];
+        [strip addSubview:placeholder];
+        x += YB_MENU_BAR_CELL_WIDTH;
+    }
+
     for (size_t i = 0; i < selection.count; ++i) {
         size_t entry_index = selection.start + i;
         const struct yb_screen_entry *entry = &entries[entry_index];

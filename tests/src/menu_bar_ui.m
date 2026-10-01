@@ -600,6 +600,16 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(NSMinX([active frame]) - NSMaxX([occupied_two frame]) == YB_MENU_BAR_GAP);
 
     for (NSView *view in [expanded subviews]) {
+        TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == view);
+    }
+    CGFloat same_display_gap = (NSMaxX([visible_other frame]) + NSMinX([occupied_one frame])) * 0.5;
+    CGFloat display_gap = (NSMaxX([occupied_one frame]) + NSMinX([occupied_two frame])) * 0.5;
+    TEST_CHECK([expanded hitTest:NSMakePoint(same_display_gap, NSMidY([expanded bounds]))] == nil);
+    TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == nil);
+    TEST_CHECK([expanded hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
+                                             NSMidY([expanded bounds]))] == nil);
+
+    for (NSView *view in [expanded subviews]) {
         TEST_CHECK([view isKindOfClass:[YBMenuBarScreenCell class]]);
         YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
         TEST_CHECK([cell action] == @selector(performStripAction:));
@@ -616,8 +626,23 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(compact_cell->yb_index == 5);
     TEST_CHECK(compact_cell->yb_state == YB_MENU_BAR_SCREEN_ACTIVE);
     TEST_CHECK(NSWidth([compact frame]) == YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH);
+    TEST_CHECK([compact hitTest:NSMakePoint(NSMidX([compact_cell frame]), NSMidY([compact_cell frame]))] == compact_cell);
+    TEST_CHECK([compact hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
+                                            NSMidY([compact bounds]))] == nil);
     [controller performStripAction:compact_cell];
     TEST_CHECK(controller->yb_open_count == 5);
+
+    struct menu_bar_snapshot *unresolved_snapshot = menu_bar_ui_snapshot(71, MENU_BAR_ENABLED);
+    unresolved_snapshot->settings.style = MENU_BAR_STYLE_EXPANDED;
+    [controller testSetSnapshot:unresolved_snapshot];
+    NSView *unresolved = [controller testBuildExpandedStrip];
+    TEST_CHECK([[unresolved subviews] count] == 1);
+    YBMenuBarScreenCell *placeholder = [[unresolved subviews] objectAtIndex:0];
+    TEST_CHECK(placeholder->yb_state == YB_MENU_BAR_SCREEN_PLACEHOLDER);
+    TEST_CHECK([unresolved hitTest:NSMakePoint(NSMidX([placeholder frame]),
+                                               NSMidY([placeholder frame]))] == placeholder);
+    [controller performStripAction:placeholder];
+    TEST_CHECK(controller->yb_open_count == 6);
     TEST_CHECK(log.count == 0);
 
     [controller release];
