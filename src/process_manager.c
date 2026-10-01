@@ -11,6 +11,37 @@ static TABLE_COMPARE_FUNC(compare_psn)
     return psn_equals(key_a, key_b);
 }
 
+static uint64_t process_manager_pack_psn(ProcessSerialNumber psn)
+{
+    return ((uint64_t)(uint32_t) psn.highLongOfPSN << 32) | (uint32_t) psn.lowLongOfPSN;
+}
+
+static uint64_t process_manager_advance_front_switch_generation(struct process_manager *pm)
+{
+    uint64_t generation = __atomic_add_fetch(&pm->front_switch_generation, 1, __ATOMIC_ACQ_REL);
+    if (!generation) generation = __atomic_add_fetch(&pm->front_switch_generation, 1, __ATOMIC_ACQ_REL);
+    return generation;
+}
+
+static uint64_t process_manager_publish_tracked_front_switch_locked(struct process_manager *pm, ProcessSerialNumber psn)
+{
+    uint64_t generation = process_manager_advance_front_switch_generation(pm);
+    __atomic_store_n(&pm->front_switch_psn, process_manager_pack_psn(psn), __ATOMIC_RELEASE);
+    return generation;
+}
+
+static void process_manager_invalidate_tracked_front_switch_if_matches(struct process_manager *pm, ProcessSerialNumber psn)
+{
+    uint64_t identity = process_manager_pack_psn(psn);
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    if (__atomic_load_n(&pm->front_switch_psn, __ATOMIC_ACQUIRE) == identity) {
+        process_manager_advance_front_switch_generation(pm);
+        __atomic_store_n(&pm->front_switch_psn, 0, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+}
+
 static const char *process_name_blacklist[] =
 {
     "Übersicht",
@@ -194,6 +225,7 @@ static PROCESS_EVENT_HANDLER(process_handler)
         struct process *process = process_manager_find_process(pm, &psn);
         if (!process) return noErr;
 
+        process_manager_invalidate_tracked_front_switch_if_matches(pm, psn);
         __atomic_store_n(&process->terminated, true, __ATOMIC_RELEASE);
         table_remove(&pm->process, &psn);
         workspace_application_unobserve(g_workspace_context, process);
@@ -205,7 +237,7 @@ static PROCESS_EVENT_HANDLER(process_handler)
         struct process *process = process_manager_find_process(pm, &psn);
         if (!process) return noErr;
 
-        event_loop_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, process, 0);
+        event_loop_post_tracked_application_front_switched(process);
     } break;
     }
 
@@ -246,6 +278,8 @@ bool process_manager_begin(struct process_manager *pm)
     pm->type[2].eventClass = kEventClassApplication;
     pm->type[2].eventKind  = kEventAppFrontSwitched;
     table_init(&pm->process, 125, hash_psn, compare_psn);
+    __atomic_store_n(&pm->front_switch_generation, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&pm->front_switch_psn, 0, __ATOMIC_RELEASE);
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     process_manager_add_running_processes(pm);
@@ -254,7 +288,9 @@ bool process_manager_begin(struct process_manager *pm)
     ProcessSerialNumber front_psn;
     _SLPSGetFrontProcess(&front_psn);
     GetProcessPID(&front_psn, &pm->front_pid);
+    pm->front_psn = front_psn;
     pm->last_front_pid = pm->front_pid;
+    pm->last_front_psn = front_psn;
     pm->switch_event_time = GetCurrentEventTime();
     return InstallEventHandler(pm->target, pm->handler, 3, pm->type, pm, &pm->ref) == noErr;
 }

@@ -96,6 +96,17 @@ void event_signal_flush(void)
     exit(EXIT_SUCCESS);
 }
 
+static bool event_signal_application_is_processed_front(struct application *application, bool recent)
+{
+    if (recent) {
+        return g_process_manager.last_front_pid == application->pid &&
+               psn_equals(&g_process_manager.last_front_psn, &application->psn);
+    }
+
+    return g_process_manager.front_pid == application->pid &&
+           psn_equals(&g_process_manager.front_psn, &application->psn);
+}
+
 void event_signal_push(enum signal_type type, void *context)
 {
     int signal_count = buf_len(g_signal_event[type]);
@@ -154,11 +165,7 @@ void event_signal_push(enum signal_type type, void *context)
         //
 
         EventTime dt = GetCurrentEventTime() - g_process_manager.switch_event_time;
-        if (dt >= 0.05f) {
-            es->active = g_process_manager.front_pid == application->pid;
-        } else {
-            es->active = g_process_manager.last_front_pid == application->pid;
-        }
+        es->active = event_signal_application_is_processed_front(application, dt < 0.05f);
     } break;
     case SIGNAL_APPLICATION_FRONT_SWITCHED: {
         es->arg_name[0]  = ts_alloc_unaligned(arg_size);
@@ -181,7 +188,7 @@ void event_signal_push(enum signal_type type, void *context)
         snprintf(es->arg_value[0], arg_size, "%d", application->pid);
 
         es->app = application->name;
-        es->active = g_process_manager.front_pid == application->pid;
+        es->active = event_signal_application_is_processed_front(application, false);
     } break;
     case SIGNAL_WINDOW_CREATED:
     case SIGNAL_WINDOW_FOCUSED:

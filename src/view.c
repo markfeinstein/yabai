@@ -595,20 +595,27 @@ struct window_node *window_node_fence(struct window_node *node, int dir)
     return NULL;
 }
 
-struct window_node *view_find_min_depth_leaf_node(struct window_node *node)
+static void view_find_min_depth_leaf_node_recursive(struct window_node *node, size_t depth, struct window_node **leaf, size_t *leaf_depth)
 {
-    struct window_node *list[256] = { node };
+    if (!node || depth >= *leaf_depth) return;
 
-    for (int i = 0, j = 0; i < 256; ++i) {
-        if (window_node_is_leaf(list[i])) {
-            return list[i];
-        }
-
-        list[++j] = list[i]->left;
-        list[++j] = list[i]->right;
+    if (window_node_is_leaf(node)) {
+        *leaf = node;
+        *leaf_depth = depth;
+        return;
     }
 
-    return NULL;
+    view_find_min_depth_leaf_node_recursive(node->left, depth + 1, leaf, leaf_depth);
+    view_find_min_depth_leaf_node_recursive(node->right, depth + 1, leaf, leaf_depth);
+}
+
+struct window_node *view_find_min_depth_leaf_node(struct window_node *node)
+{
+    struct window_node *leaf = NULL;
+    size_t leaf_depth = SIZE_MAX;
+
+    view_find_min_depth_leaf_node_recursive(node, 0, &leaf, &leaf_depth);
+    return leaf;
 }
 
 static inline bool area_is_in_direction(struct area *r1, CGPoint r1_max, struct area *r2, CGPoint r2_max, int direction)

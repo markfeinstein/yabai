@@ -155,9 +155,9 @@ void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wi
 void window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view);
 void window_manager_window_did_order_out(struct window_manager *wm, struct window *window);
 void window_manager_window_did_order_in(struct window_manager *wm, struct window *window, uint64_t sid);
-bool window_manager_find_lost_front_switched_event(struct window_manager *wm, pid_t pid);
-void window_manager_remove_lost_front_switched_event(struct window_manager *wm, pid_t pid);
-void window_manager_add_lost_front_switched_event(struct window_manager *wm, pid_t pid);
+uint64_t window_manager_find_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn);
+void window_manager_remove_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn);
+void window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation);
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);

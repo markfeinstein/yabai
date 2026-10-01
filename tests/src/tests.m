@@ -35,6 +35,8 @@ typedef TEST_SIG(function);
 
 #include "area.c"
 #include "window.c"
+#include "view.c"
+#include "window_manager.c"
 #include "event_loop.c"
 #include "space_gesture.c"
 #include "window_ordered.c"
@@ -1463,6 +1465,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
+    TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
+    TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
+    TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
     TEST_ENTRY(config_file_execution_preserves_literal_path)     \
     TEST_ENTRY(safe_exec_reports_child_outcomes)                 \

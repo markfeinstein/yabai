@@ -12,6 +12,7 @@ volatile bool __pending_window_focus;
 volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
+static pthread_mutex_t g_process_manager_front_switch_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static bool update_window_notifications_append(uint32_t **window_list, size_t *window_count, size_t *window_capacity, uint32_t wid)
 {
@@ -124,6 +125,78 @@ static void application_window_collection_update_inventory(int previous_window_c
     }
 }
 
+static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type type, void *context, int param1);
+static uint64_t process_manager_pack_psn(ProcessSerialNumber psn);
+static uint64_t process_manager_advance_front_switch_generation(struct process_manager *pm);
+static uint64_t process_manager_publish_tracked_front_switch_locked(struct process_manager *pm, ProcessSerialNumber psn);
+
+struct application_front_switched_event
+{
+    ProcessSerialNumber psn;
+    pid_t pid;
+    uint64_t generation;
+    bool replay;
+};
+
+static struct application_front_switched_event *event_loop_create_application_front_switched(struct process *process, uint64_t generation, bool replay)
+{
+    struct application_front_switched_event *event = malloc(sizeof(struct application_front_switched_event));
+    if (!event) return NULL;
+
+    event->psn = process->psn;
+    event->pid = process->pid;
+    event->generation = generation;
+    event->replay = replay;
+    return event;
+}
+
+static bool event_loop_post_application_front_switched(struct process *process, uint64_t generation, bool replay)
+{
+    struct application_front_switched_event *event = event_loop_create_application_front_switched(process, generation, replay);
+    if (!event) return false;
+    return event_loop_enqueue(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
+}
+
+static bool event_loop_post_tracked_application_front_switched(struct process *process)
+{
+    struct application_front_switched_event *event = event_loop_create_application_front_switched(process, 0, false);
+    if (!event) return false;
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    uint64_t previous_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
+    uint64_t previous_psn = __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE);
+
+    event->generation = process_manager_publish_tracked_front_switch_locked(&g_process_manager, process->psn);
+    bool accepted = event_loop_enqueue(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
+    if (!accepted) {
+        __atomic_store_n(&g_process_manager.front_switch_generation, previous_generation, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_process_manager.front_switch_psn, previous_psn, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    return accepted;
+}
+
+static void event_loop_replay_lost_front_switched(struct process *process)
+{
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+
+    uint64_t generation = window_manager_find_lost_front_switched_event(&g_window_manager, &process->psn);
+    if (!generation) goto out;
+
+    uint64_t current_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&process->terminated, __ATOMIC_RELAXED) || generation != current_generation) {
+        window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
+        goto out;
+    }
+
+    if (event_loop_post_application_front_switched(process, generation, true)) {
+        window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
+    }
+
+out:
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
@@ -132,7 +205,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
     if (__atomic_load_n(&process->terminated, __ATOMIC_RELAXED)) {
         debug("%s: %s (%d) terminated during launch\n", __FUNCTION__, process->name, process->pid);
-        window_manager_remove_lost_front_switched_event(&g_window_manager, process->pid);
+        window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
         return;
     }
 
@@ -217,10 +290,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         return;
     }
 
-    if (window_manager_find_lost_front_switched_event(&g_window_manager, process->pid)) {
-        event_loop_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, process, 0);
-        window_manager_remove_lost_front_switched_event(&g_window_manager, process->pid);
-    }
+    event_loop_replay_lost_front_switched(process);
 
     debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
     window_manager_add_application(&g_window_manager, application);
@@ -302,18 +372,34 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     }
 }
 
+static void event_loop_clear_terminated_front_identity(struct process *process)
+{
+    if (psn_equals(&g_process_manager.front_psn, &process->psn)) {
+        g_process_manager.front_pid = 0;
+        g_process_manager.front_psn = (ProcessSerialNumber) {0};
+    }
+    if (psn_equals(&g_process_manager.last_front_psn, &process->psn)) {
+        g_process_manager.last_front_pid = 0;
+        g_process_manager.last_front_psn = (ProcessSerialNumber) {0};
+    }
+}
+
 static EVENT_HANDLER(APPLICATION_TERMINATED)
 {
     struct process *process = context;
+    window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
+
     struct application *application = window_manager_find_application(&g_window_manager, process->pid);
 
     if (!application) {
         debug("%s: %s (%d) (not observed)\n", __FUNCTION__, process->name, process->pid);
+        event_loop_clear_terminated_front_identity(process);
         goto out;
     }
 
     debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
     event_signal_push(SIGNAL_APPLICATION_TERMINATED, application);
+    event_loop_clear_terminated_front_identity(process);
     window_manager_remove_application(&g_window_manager, application->pid);
 
     for (int i = 0; i < buf_len(g_window_manager.applications_to_refresh); ++i) {
@@ -396,18 +482,56 @@ out:
     process_destroy(process);
 }
 
+static struct application *event_loop_find_processed_front_application(void)
+{
+    struct application *application = window_manager_find_application(&g_window_manager, g_process_manager.front_pid);
+    if (!application || !psn_equals(&application->psn, &g_process_manager.front_psn)) return NULL;
+    return application;
+}
+
+static bool event_loop_commit_application_front_switched(struct application_front_switched_event *event, struct application **application, struct application **deactivated_application)
+{
+    *application = NULL;
+    *deactivated_application = NULL;
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    uint64_t current_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
+    if (event->generation != current_generation) goto fail;
+
+    *application = window_manager_find_application(&g_window_manager, event->pid);
+    if (!*application) {
+        if (!event->replay) window_manager_add_lost_front_switched_event(&g_window_manager, &event->psn, event->generation);
+        goto fail;
+    }
+    if (!psn_equals(&(*application)->psn, &event->psn)) goto fail;
+
+    window_manager_remove_lost_front_switched_event(&g_window_manager, &event->psn);
+    *deactivated_application = event_loop_find_processed_front_application();
+    g_process_manager.switch_event_time = GetCurrentEventTime();
+    g_process_manager.last_front_pid = g_process_manager.front_pid;
+    g_process_manager.last_front_psn = g_process_manager.front_psn;
+    g_process_manager.front_pid = event->pid;
+    g_process_manager.front_psn = event->psn;
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    return true;
+
+fail:
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    return false;
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
 {
-    struct process *process = context;
-    struct application *application = window_manager_find_application(&g_window_manager, process->pid);
+    struct application_front_switched_event event = *(struct application_front_switched_event *) context;
+    free(context);
 
-    if (!application) {
-        window_manager_add_lost_front_switched_event(&g_window_manager, process->pid);
-        return;
-    }
+    struct application *application;
+    struct application *deactivated_application;
+    if (!event_loop_commit_application_front_switched(&event, &application, &deactivated_application)) return;
 
+    // Application destruction is serialized on this event-loop worker, so both captured pointers remain valid here.
     if (g_space_manager.skip_window_focus_animation) {
         uint64_t psn_sid = process_manager_active_space_for_psn(application->connection);
 
@@ -420,20 +544,16 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
 
         if (__atomic_load_n(&__pending_window_focus, __ATOMIC_RELAXED) == false) {
             if (psn_sid && !space_is_visible(psn_sid)) {
-                SLSSpaceSetFrontPSN(g_connection, psn_sid, process->psn);
+                SLSSpaceSetFrontPSN(g_connection, psn_sid, event.psn);
                 space_manager_focus_space_using_gesture(space_display_id(psn_sid), psn_sid);
             }
         }
     }
 
-    struct application *deactivated_application = window_manager_find_application(&g_window_manager, g_process_manager.front_pid);
     if (deactivated_application) event_signal_push(SIGNAL_APPLICATION_DEACTIVATED, deactivated_application);
 
-    debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
+    debug("%s: %s (%d)\n", __FUNCTION__, application->name, event.pid);
     event_signal_push(SIGNAL_APPLICATION_ACTIVATED, application);
-    g_process_manager.switch_event_time = GetCurrentEventTime();
-    g_process_manager.last_front_pid = g_process_manager.front_pid;
-    g_process_manager.front_pid = process->pid;
     event_signal_push(SIGNAL_APPLICATION_FRONT_SWITCHED, NULL);
 
     for (int i = 0; i < buf_len(g_window_manager.applications_to_refresh); ++i) {
@@ -1890,6 +2010,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     if (!context) return;
 
     switch (type) {
+    case APPLICATION_FRONT_SWITCHED: {
+        free(context);
+    } break;
     case WINDOW_CREATED:
     case MOUSE_DOWN:
     case MOUSE_UP:
@@ -1935,7 +2058,7 @@ static void event_loop_release_rejected_event(enum event_type type, void *contex
     }
 }
 
-void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
+static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
     struct event replaced;
     uint32_t capacity = 0;
@@ -1950,10 +2073,16 @@ void event_loop_post(struct event_loop *event_loop, enum event_type type, void *
     } else if (result == EVENT_QUEUE_FULL) {
         warn("%s: could not grow the event queue, event %d dropped\n", __FUNCTION__, type);
         event_loop_release_rejected_event(type, context, param1);
-        return;
+        return false;
     }
 
     sem_post(event_loop->semaphore);
+    return true;
+}
+
+void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
+{
+    event_loop_enqueue(event_loop, type, context, param1);
 }
 
 #ifdef TESTS

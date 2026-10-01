@@ -581,6 +581,8 @@ static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef 
 #undef ANIMATION_EASING_TYPE_ENTRY
     }
 
+    pthread_mutex_lock(&g_window_manager.window_animations_lock);
+
     CFTypeRef transaction = SLSTransactionCreate(context->animation_connection);
     for (int i = 0; i < animation_count; ++i) {
         if (__atomic_load_n(&context->animation_list[i].skip, __ATOMIC_RELAXED)) continue;
@@ -600,9 +602,12 @@ static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef 
     }
     SLSTransactionCommit(transaction, 0);
     CFRelease(transaction);
-    if (t != 1.0f) goto out;
 
-    pthread_mutex_lock(&g_window_manager.window_animations_lock);
+    if (t != 1.0f) {
+        pthread_mutex_unlock(&g_window_manager.window_animations_lock);
+        goto out;
+    }
+
     SLSDisableUpdate(context->animation_connection);
     window_manager_notify_jankyborders(context->animation_list, context->animation_count, 1326, true, true);
     scripting_addition_swap_window_proxy_out(context->animation_list, context->animation_count);
@@ -1404,19 +1409,20 @@ struct window *window_manager_focused_window(struct window_manager *wm)
 }
 #pragma clang diagnostic pop
 
-bool window_manager_find_lost_front_switched_event(struct window_manager *wm, pid_t pid)
+uint64_t window_manager_find_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn)
 {
-    return table_find(&wm->application_lost_front_switched_event, &pid) != NULL;
+    return (uint64_t)(uintptr_t) table_find(&wm->application_lost_front_switched_event, psn);
 }
 
-void window_manager_remove_lost_front_switched_event(struct window_manager *wm, pid_t pid)
+void window_manager_remove_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn)
 {
-    table_remove(&wm->application_lost_front_switched_event, &pid);
+    table_remove(&wm->application_lost_front_switched_event, psn);
 }
 
-void window_manager_add_lost_front_switched_event(struct window_manager *wm, pid_t pid)
+void window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation)
 {
-    table_add(&wm->application_lost_front_switched_event, &pid, (void *)(intptr_t) 1);
+    table_remove(&wm->application_lost_front_switched_event, psn);
+    table_add(&wm->application_lost_front_switched_event, psn, (void *)(uintptr_t) generation);
 }
 
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id)
@@ -2009,6 +2015,38 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
     return WINDOW_OP_ERROR_SUCCESS;
 }
 
+static void window_manager_remap_node_windows(struct window_manager *wm, struct window_node *node, struct view *view)
+{
+    for (int i = 0; i < node->window_count; ++i) {
+        struct window *window = window_manager_find_window(wm, node->window_list[i]);
+        window_manager_add_managed_window(wm, window, view);
+    }
+}
+
+static void window_manager_update_swap_insertion_points(struct view *a_view, struct window_node *a_node, uint32_t a_window_id, struct view *b_view, struct window_node *b_node, uint32_t b_window_id)
+{
+    if (a_view == b_view) {
+        if (window_node_contains_window(a_node, a_view->insertion_point)) {
+            a_view->insertion_point = b_window_id;
+        } else if (window_node_contains_window(b_node, b_view->insertion_point)) {
+            b_view->insertion_point = a_window_id;
+        }
+    } else {
+        if (window_node_contains_window(a_node, a_view->insertion_point)) a_view->insertion_point = b_window_id;
+        if (window_node_contains_window(b_node, b_view->insertion_point)) b_view->insertion_point = a_window_id;
+    }
+}
+
+static void window_manager_swap_node_window_lists_and_remap(struct window_manager *wm, struct window_node *a_node, struct view *a_view, struct window_node *b_node, struct view *b_view)
+{
+    window_node_swap_window_list(a_node, b_node);
+
+    if (a_view->sid != b_view->sid) {
+        window_manager_remap_node_windows(wm, a_node, a_view);
+        window_manager_remap_node_windows(wm, b_node, b_view);
+    }
+}
+
 enum window_op_error window_manager_swap_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b)
 {
     TIME_FUNCTION;
@@ -2066,11 +2104,7 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
     if (a_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
     if (b_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_DST_VIEW;
 
-    if (window_node_contains_window(a_node, a_view->insertion_point)) {
-        a_view->insertion_point = b->id;
-    } else if (window_node_contains_window(b_node, b_view->insertion_point)) {
-        b_view->insertion_point = a->id;
-    }
+    window_manager_update_swap_insertion_points(a_view, a_node, a->id, b_view, b_node, b->id);
 
     bool a_visible = space_is_visible(a_view->sid);
     bool b_visible = space_is_visible(b_view->sid);
@@ -2080,14 +2114,12 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
             struct window *window = window_manager_find_window(wm, a_node->window_list[i]);
             window_manager_remove_managed_window(wm, a_node->window_list[i]);
             space_manager_move_window_to_space(b_view->sid, window);
-            window_manager_add_managed_window(wm, window, b_view);
         }
 
         for (int i = 0; i < b_node->window_count; ++i) {
             struct window *window = window_manager_find_window(wm, b_node->window_list[i]);
             window_manager_remove_managed_window(wm, b_node->window_list[i]);
             space_manager_move_window_to_space(a_view->sid, window);
-            window_manager_add_managed_window(wm, window, a_view);
         }
 
         if (a_visible && !b_visible && a->id == wm->focused_window_id) {
@@ -2097,7 +2129,8 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
         }
     }
 
-    window_node_swap_window_list(a_node, b_node);
+    window_manager_swap_node_window_lists_and_remap(wm, a_node, a_view, b_node, b_view);
+
     struct window_capture *window_list = NULL;
 
     if (a_visible) {
@@ -2809,7 +2842,7 @@ void window_manager_init(struct window_manager *wm)
     table_init(&wm->window, 150, hash_wm, compare_wm);
     table_init(&wm->managed_window, 150, hash_wm, compare_wm);
     table_init(&wm->window_lost_focused_event, 150, hash_wm, compare_wm);
-    table_init(&wm->application_lost_front_switched_event, 150, hash_wm, compare_wm);
+    table_init(&wm->application_lost_front_switched_event, 150, hash_psn, compare_psn);
     table_init(&wm->window_animations_table, 150, hash_wm, compare_wm);
     table_init(&wm->insert_feedback, 150, hash_wm, compare_wm);
     pthread_mutex_init(&wm->window_animations_lock, NULL);
