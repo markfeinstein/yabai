@@ -71,6 +71,10 @@ struct mouse_state
 {
     CFMachPortRef handle;
     CFRunLoopSourceRef runloop_source;
+    CFRunLoopRef runloop;
+    pthread_t thread;
+    bool thread_started;
+    void *handler_context;
     struct mouse_click_state left_click;
     struct mouse_click_state right_click;
     enum mouse_mode action1;

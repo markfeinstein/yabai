@@ -30,6 +30,12 @@ struct mouse_click_state_up_result
     bool repost;
 };
 
+struct mouse_handler_context
+{
+    struct mouse_state *mouse_state;
+    CFMachPortRef handle;
+};
+
 static struct mouse_click_state *mouse_click_state_for_event(struct mouse_state *mouse_state, CGEventType type)
 {
     switch (type) {
@@ -83,18 +89,22 @@ static void mouse_click_state_release(struct mouse_click_state *click_state)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 static MOUSE_HANDLER(mouse_handler)
 {
-    struct mouse_state *mouse_state = context;
+    struct mouse_handler_context *handler_context = context;
+    struct mouse_state *mouse_state = handler_context->mouse_state;
 
     switch (type) {
     case kCGEventTapDisabledByTimeout:
     case kCGEventTapDisabledByUserInput: {
-        CFMachPortRef handle = mouse_state->handle;
+        CFMachPortRef handle = handler_context->handle;
         if (handle) CGEventTapEnable(handle, true);
     } break;
     case kCGEventLeftMouseDown:
     case kCGEventRightMouseDown: {
         struct mouse_click_state *click_state = mouse_click_state_for_event(mouse_state, type);
-        enum mouse_mode action = mouse_action_for_event(type, CGEventGetFlags(event), mouse_state->modifier, mouse_state->action1, mouse_state->action2);
+        uint8_t modifier = __atomic_load_n(&mouse_state->modifier, __ATOMIC_ACQUIRE);
+        enum mouse_mode action1 = __atomic_load_n(&mouse_state->action1, __ATOMIC_ACQUIRE);
+        enum mouse_mode action2 = __atomic_load_n(&mouse_state->action2, __ATOMIC_ACQUIRE);
+        enum mouse_mode action = mouse_action_for_event(type, CGEventGetFlags(event), modifier, action1, action2);
         mouse_click_state_release(click_state);
         mouse_click_state_mouse_down(click_state, action != MOUSE_MODE_NONE);
         event_loop_post(&g_event_loop, MOUSE_DOWN, (void *) CFRetain(event), action);
@@ -128,7 +138,8 @@ static MOUSE_HANDLER(mouse_handler)
     } break;
     case kCGEventMouseMoved: {
         uint8_t mod = mouse_mod_from_cgflags(CGEventGetFlags(event));
-        if (mod == mouse_state->modifier) return event;
+        uint8_t modifier = __atomic_load_n(&mouse_state->modifier, __ATOMIC_ACQUIRE);
+        if (mod == modifier) return event;
 
         event_loop_post(&g_event_loop, MOUSE_MOVED, (void *) CFRetain(event), mod);
     } break;
@@ -244,6 +255,20 @@ static __attribute__((noreturn)) void mouse_drop_action_fail_rollback(char *oper
 {
     error("fatal error: mouse-drop rollback failed for %s\n", operation);
     __builtin_unreachable();
+}
+
+static bool mouse_drop_action_warp_node_contains(struct window_node *ancestor, struct window_node *node)
+{
+    for (struct window_node *cursor = node; cursor; cursor = cursor->parent) {
+        if (cursor == ancestor) return true;
+    }
+
+    return false;
+}
+
+static bool mouse_drop_action_warp_should_capture_add(struct window_node *src_node_rm, struct window_node *src_node_add)
+{
+    return !src_node_rm || !mouse_drop_action_warp_node_contains(src_node_rm, src_node_add);
 }
 
 void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, struct window *src_window, struct view *dst_view, struct window *dst_window)
@@ -368,7 +393,7 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
         window_node_capture_windows(src_node_rm, &window_list);
     }
 
-    if (src_node_rm != src_node_add && src_node_rm != src_node_add->parent) {
+    if (mouse_drop_action_warp_should_capture_add(src_node_rm, src_node_add)) {
         window_node_capture_windows(src_node_add, &window_list);
     }
 
@@ -425,7 +450,7 @@ end:
 
 static void mouse_state_set_modifier_on_main_thread(struct mouse_state *mouse_state, uint8_t modifier)
 {
-    mouse_state->modifier = modifier;
+    __atomic_store_n(&mouse_state->modifier, modifier, __ATOMIC_RELEASE);
 }
 
 void mouse_state_set_modifier(struct mouse_state *mouse_state, uint8_t modifier)
@@ -441,7 +466,7 @@ void mouse_state_set_modifier(struct mouse_state *mouse_state, uint8_t modifier)
 
 static void mouse_state_set_action1_on_main_thread(struct mouse_state *mouse_state, enum mouse_mode action)
 {
-    mouse_state->action1 = action;
+    __atomic_store_n(&mouse_state->action1, action, __ATOMIC_RELEASE);
 }
 
 void mouse_state_set_action1(struct mouse_state *mouse_state, enum mouse_mode action)
@@ -457,7 +482,7 @@ void mouse_state_set_action1(struct mouse_state *mouse_state, enum mouse_mode ac
 
 static void mouse_state_set_action2_on_main_thread(struct mouse_state *mouse_state, enum mouse_mode action)
 {
-    mouse_state->action2 = action;
+    __atomic_store_n(&mouse_state->action2, action, __ATOMIC_RELEASE);
 }
 
 void mouse_state_set_action2(struct mouse_state *mouse_state, enum mouse_mode action)
@@ -484,6 +509,19 @@ struct mouse_handler_resources
 {
     CFMachPortRef handle;
     CFRunLoopSourceRef runloop_source;
+    CFRunLoopRef runloop;
+    pthread_t thread;
+    bool thread_started;
+    struct mouse_handler_context *context;
+};
+
+struct mouse_handler_thread_start
+{
+    struct mouse_handler_resources *resources;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool ready;
+    bool live;
 };
 
 static void mouse_handler_release_uninstalled_resources(struct mouse_handler_resources resources)
@@ -498,12 +536,23 @@ static void mouse_handler_release_uninstalled_resources(struct mouse_handler_res
         CFMachPortInvalidate(resources.handle);
         CFRelease(resources.handle);
     }
+
+    free(resources.context);
 }
 
 static bool mouse_handler_create_resources(struct mouse_state *mouse_state, uint32_t mask, struct mouse_handler_resources *resources)
 {
-    resources->handle = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, mouse_handler, mouse_state);
-    if (!resources->handle) return false;
+    resources->context = calloc(1, sizeof(*resources->context));
+    if (!resources->context) return false;
+    resources->context->mouse_state = mouse_state;
+
+    resources->handle = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, mouse_handler, resources->context);
+    if (!resources->handle) {
+        mouse_handler_release_uninstalled_resources(*resources);
+        *resources = (struct mouse_handler_resources) {0};
+        return false;
+    }
+    resources->context->handle = resources->handle;
 
     if (!CGEventTapIsEnabled(resources->handle)) {
         mouse_handler_release_uninstalled_resources(*resources);
@@ -522,33 +571,148 @@ static bool mouse_handler_create_resources(struct mouse_state *mouse_state, uint
     return true;
 }
 
+static void mouse_handler_signal_thread_start(struct mouse_handler_thread_start *start, CFRunLoopRef runloop, bool live)
+{
+    pthread_mutex_lock(&start->mutex);
+    start->resources->runloop = runloop;
+    start->live = live;
+    start->ready = true;
+    pthread_cond_signal(&start->cond);
+    pthread_mutex_unlock(&start->mutex);
+}
+
+static void *mouse_handler_thread_proc(void *context)
+{
+    struct mouse_handler_thread_start *start = context;
+    struct mouse_handler_resources *resources = start->resources;
+    CFRunLoopRef runloop = CFRunLoopGetCurrent();
+    CFRetain(runloop);
+
+    CFRunLoopAddSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+    bool live = CFRunLoopContainsSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+
+    if (!live) {
+        CFRunLoopRemoveSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRelease(runloop);
+        mouse_handler_signal_thread_start(start, NULL, false);
+        return NULL;
+    }
+
+    mouse_handler_signal_thread_start(start, runloop, true);
+    CFRunLoopRun();
+    CFRelease(runloop);
+    return NULL;
+}
+
+static bool mouse_handler_start_resources(struct mouse_handler_resources *resources)
+{
+    struct mouse_handler_thread_start start = {
+        .resources = resources
+    };
+
+    if (pthread_mutex_init(&start.mutex, NULL) != 0) return false;
+    if (pthread_cond_init(&start.cond, NULL) != 0) {
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+
+    if (pthread_create(&resources->thread, NULL, mouse_handler_thread_proc, &start) != 0) {
+        pthread_cond_destroy(&start.cond);
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+
+    pthread_mutex_lock(&start.mutex);
+    while (!start.ready) {
+        pthread_cond_wait(&start.cond, &start.mutex);
+    }
+    bool live = start.live;
+    pthread_mutex_unlock(&start.mutex);
+    pthread_cond_destroy(&start.cond);
+    pthread_mutex_destroy(&start.mutex);
+
+    if (!live) {
+        pthread_join(resources->thread, NULL);
+        resources->thread_started = false;
+        return false;
+    }
+
+    resources->thread_started = true;
+    return true;
+}
+
+static bool mouse_handler_enable_resources(struct mouse_handler_resources resources)
+{
+    if (!resources.handle) return false;
+    CGEventTapEnable(resources.handle, true);
+    return CGEventTapIsEnabled(resources.handle);
+}
+
+static void mouse_handler_stop_resources(struct mouse_handler_resources *resources)
+{
+    if (resources->handle) CGEventTapEnable(resources->handle, false);
+    if (resources->runloop && resources->runloop_source) {
+        CFRunLoopRemoveSource(resources->runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRunLoopStop(resources->runloop);
+        CFRunLoopWakeUp(resources->runloop);
+    }
+    if (resources->thread_started) pthread_join(resources->thread, NULL);
+
+    resources->runloop = NULL;
+    resources->thread = (pthread_t) {0};
+    resources->thread_started = false;
+}
+
+static void mouse_handler_dispose_resources(struct mouse_handler_resources resources)
+{
+    if (resources.runloop_source) {
+        CFRunLoopSourceInvalidate(resources.runloop_source);
+        CFRelease(resources.runloop_source);
+    }
+    if (resources.handle) {
+        CGEventTapEnable(resources.handle, false);
+        CFMachPortInvalidate(resources.handle);
+        CFRelease(resources.handle);
+    }
+    free(resources.context);
+}
+
 static void mouse_handler_remove_installed_resources(struct mouse_handler_resources resources)
 {
-    if (resources.handle) CGEventTapEnable(resources.handle, false);
-    if (resources.runloop_source) {
-        CFRunLoopRemoveSource(CFRunLoopGetMain(), resources.runloop_source, kCFRunLoopCommonModes);
-        CFRunLoopSourceInvalidate(resources.runloop_source);
-    }
-    if (resources.handle) CFMachPortInvalidate(resources.handle);
+    mouse_handler_stop_resources(&resources);
+    mouse_handler_dispose_resources(resources);
+}
 
-    if (resources.runloop_source) CFRelease(resources.runloop_source);
-    if (resources.handle) CFRelease(resources.handle);
+static void mouse_handler_clear_resources(struct mouse_state *mouse_state)
+{
+    __atomic_store_n(&mouse_state->handle, NULL, __ATOMIC_RELEASE);
+    mouse_state->runloop_source = NULL;
+    mouse_state->runloop = NULL;
+    mouse_state->thread = (pthread_t) {0};
+    mouse_state->thread_started = false;
+    mouse_state->handler_context = NULL;
 }
 
 static void mouse_handler_install_resources(struct mouse_state *mouse_state, struct mouse_handler_resources resources)
 {
-    mouse_state->handle = resources.handle;
+    __atomic_store_n(&mouse_state->handle, resources.handle, __ATOMIC_RELEASE);
     mouse_state->runloop_source = resources.runloop_source;
-    CFRunLoopAddSource(CFRunLoopGetMain(), resources.runloop_source, kCFRunLoopCommonModes);
-    CGEventTapEnable(resources.handle, true);
+    mouse_state->runloop = resources.runloop;
+    mouse_state->thread = resources.thread;
+    mouse_state->thread_started = resources.thread_started;
+    mouse_state->handler_context = resources.context;
 }
 
 static bool mouse_handler_begin_on_main_thread(struct mouse_state *mouse_state, uint32_t mask)
 {
-    if (mouse_state->handle) return true;
+    if (__atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE)) return true;
 
     struct mouse_handler_resources resources = {0};
     if (!mouse_handler_create_resources(mouse_state, mask, &resources)) return false;
+    if (!mouse_handler_start_resources(&resources) || !mouse_handler_enable_resources(resources)) {
+        mouse_handler_remove_installed_resources(resources);
+        return false;
+    }
 
     mouse_handler_install_resources(mouse_state, resources);
     return true;
@@ -569,14 +733,39 @@ static bool mouse_handler_reconfigure_on_main_thread(struct mouse_state *mouse_s
 {
     struct mouse_handler_resources replacement = {0};
     if (!mouse_handler_create_resources(mouse_state, mask, &replacement)) return false;
+    if (!mouse_handler_start_resources(&replacement)) {
+        mouse_handler_remove_installed_resources(replacement);
+        return false;
+    }
 
     struct mouse_handler_resources previous = {
-        .handle = mouse_state->handle,
-        .runloop_source = mouse_state->runloop_source
+        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
+        .runloop_source = mouse_state->runloop_source,
+        .runloop = mouse_state->runloop,
+        .thread = mouse_state->thread,
+        .thread_started = mouse_state->thread_started,
+        .context = mouse_state->handler_context
     };
 
-    mouse_handler_remove_installed_resources(previous);
+    mouse_handler_stop_resources(&previous);
+
+    if (!mouse_handler_enable_resources(replacement)) {
+        mouse_handler_remove_installed_resources(replacement);
+
+        if (previous.handle && previous.runloop_source &&
+            mouse_handler_start_resources(&previous) &&
+            mouse_handler_enable_resources(previous)) {
+            mouse_handler_install_resources(mouse_state, previous);
+        } else {
+            mouse_handler_remove_installed_resources(previous);
+            mouse_handler_clear_resources(mouse_state);
+        }
+
+        return false;
+    }
+
     mouse_handler_install_resources(mouse_state, replacement);
+    mouse_handler_dispose_resources(previous);
     return true;
 }
 
@@ -594,12 +783,15 @@ bool mouse_handler_reconfigure(struct mouse_state *mouse_state, uint32_t mask)
 static void mouse_handler_end_on_main_thread(struct mouse_state *mouse_state)
 {
     struct mouse_handler_resources resources = {
-        .handle = mouse_state->handle,
-        .runloop_source = mouse_state->runloop_source
+        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
+        .runloop_source = mouse_state->runloop_source,
+        .runloop = mouse_state->runloop,
+        .thread = mouse_state->thread,
+        .thread_started = mouse_state->thread_started,
+        .context = mouse_state->handler_context
     };
 
-    mouse_state->handle = NULL;
-    mouse_state->runloop_source = NULL;
+    mouse_handler_clear_resources(mouse_state);
     mouse_handler_remove_installed_resources(resources);
 
     mouse_click_state_release(&mouse_state->left_click);

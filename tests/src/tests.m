@@ -1366,6 +1366,23 @@ TEST_FUNC(mouse_drop_action_restore_insertion_point_prefers_sibling_for_singleto
     TEST_CHECK(mouse_drop_action_restore_insertion_point(&src_node, &src_window), 72);
 });
 
+TEST_FUNC(mouse_drop_action_warp_capture_includes_added_root_after_source_collapse,
+{
+    struct window_node removed = {0};
+    struct window_node added = {0};
+    struct window_node parent = {0};
+    struct window_node grandparent = {0};
+
+    added.parent = &parent;
+    parent.parent = &grandparent;
+
+    TEST_CHECK(mouse_drop_action_warp_should_capture_add(NULL, &added), true);
+    TEST_CHECK(mouse_drop_action_warp_should_capture_add(&removed, &added), true);
+    TEST_CHECK(mouse_drop_action_warp_should_capture_add(&added, &added), false);
+    TEST_CHECK(mouse_drop_action_warp_should_capture_add(&parent, &added), false);
+    TEST_CHECK(mouse_drop_action_warp_should_capture_add(&grandparent, &added), false);
+});
+
 TEST_FUNC(mouse_drop_action_warp_capacity_preflight_rejects_full_stack_destinations,
 {
     struct view dst_view = {0};
@@ -1467,6 +1484,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(insert_feedback_rekeys_collapsed_child_before_free) \
     TEST_ENTRY(view_remove_window_node_sibling_collapse_requires_destination_reresolve) \
     TEST_ENTRY(mouse_drop_action_restore_insertion_point_prefers_sibling_for_singleton_source) \
+    TEST_ENTRY(mouse_drop_action_warp_capture_includes_added_root_after_source_collapse) \
     TEST_ENTRY(mouse_drop_action_warp_capacity_preflight_rejects_full_stack_destinations) \
     TEST_ENTRY(mouse_drop_action_warp_capacity_preflight_rejects_full_stack_insert_nodes) \
     TEST_ENTRY(mouse_drop_action_rollback_failstop_exits) \
