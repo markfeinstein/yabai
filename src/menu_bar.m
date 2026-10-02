@@ -59,7 +59,9 @@ enum yb_menu_bar_control_kind
 @public
     enum yb_menu_bar_screen_state yb_state;
     uint32_t yb_index;
+    bool yb_pressed;
 }
+- (void)setYBPressed:(bool)pressed;
 @end
 
 @interface YBMenuBarActionTarget : NSObject {
@@ -87,6 +89,10 @@ enum yb_menu_bar_control_kind
     bool _is_tracking_menu;
     bool _is_tearing_down_status_item;
     uint64_t _tracking_generation;
+#if defined(YB_MENU_BAR_TEST)
+    bool _test_has_strip_action_point;
+    NSPoint _test_strip_action_point;
+#endif
 }
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
@@ -105,6 +111,8 @@ enum yb_menu_bar_control_kind
 - (NSUInteger)testStatusItemCount;
 - (NSUInteger)testStatusButtonCount;
 - (bool)testStatusItemOwnsStripView;
+- (NSView *)testStripView;
+- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point;
 - (bool)testIsTrackingMenu;
 - (uint64_t)testTrackingGeneration;
 - (NSView *)testBuildCompactStrip;
@@ -244,6 +252,13 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
     [self setNeedsDisplay:YES];
 }
 
+- (void)setYBPressed:(bool)pressed
+{
+    if (yb_pressed == pressed) return;
+    yb_pressed = pressed;
+    [self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirty_rect
 {
     (void) dirty_rect;
@@ -259,7 +274,7 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
             [outline setLineDash:pattern count:2 phase:0.0];
         }
 
-        bool pressed = [self isHighlighted];
+        bool pressed = yb_pressed;
         NSColor *pressed_ink = yb_screen_pressed_color();
         if (pressed) {
             [[pressed_ink colorWithAlphaComponent:yb_screen_pressed_fill_alpha()] setFill];
@@ -1015,12 +1030,77 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
                      filter:target->yb_filter];
 }
 
+- (YBMenuBarButton *)resolvedStripButtonForSender:(id)sender usedLocation:(bool *)used_location
+{
+    if (used_location) *used_location = false;
+    if (!_strip_view) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
+
+    NSPoint strip_point = NSZeroPoint;
+    bool has_point = false;
+#if defined(YB_MENU_BAR_TEST)
+    if (_test_has_strip_action_point) {
+        strip_point = _test_strip_action_point;
+        has_point = true;
+    } else
+#endif
+    {
+        NSEvent *event = [NSApp currentEvent];
+        NSEventType type = event ? [event type] : 0;
+        bool mouse_event = type == NSEventTypeLeftMouseDown ||
+                           type == NSEventTypeLeftMouseUp ||
+                           type == NSEventTypeRightMouseDown ||
+                           type == NSEventTypeRightMouseUp ||
+                           type == NSEventTypeOtherMouseDown ||
+                           type == NSEventTypeOtherMouseUp;
+        NSWindow *window = [_strip_view window];
+        if (mouse_event && window) {
+            NSPoint window_point = [window convertPointFromScreen:[NSEvent mouseLocation]];
+            strip_point = [_strip_view convertPoint:window_point fromView:nil];
+            has_point = true;
+        }
+    }
+
+    if (!has_point) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
+    if (used_location) *used_location = true;
+
+    NSView *hit = [_strip_view hitTest:strip_point];
+    return [hit isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) hit : nil;
+}
+
 - (void)performStripAction:(id)sender
 {
     if (![sender isKindOfClass:[YBMenuBarButton class]]) return;
-    YBMenuBarButton *button = sender;
+
+    bool used_location = false;
+    YBMenuBarButton *button = [self resolvedStripButtonForSender:sender usedLocation:&used_location];
+    if (!button) {
+        if (used_location) [self openMenu:_strip_view];
+        return;
+    }
+
     if (button->yb_kind == YB_MENU_BAR_CONTROL_OPEN_MENU) {
-        [self openMenu:sender];
+        YBMenuBarScreenCell *pressed_cell = [button isKindOfClass:[YBMenuBarScreenCell class]]
+                                          ? (YBMenuBarScreenCell *) button
+                                          : nil;
+        if (pressed_cell) {
+            for (NSView *view in [[pressed_cell superview] subviews]) {
+                if ([view isKindOfClass:[YBMenuBarScreenCell class]] && view != pressed_cell) {
+                    [(YBMenuBarScreenCell *) view setYBPressed:false];
+                }
+            }
+            [pressed_cell retain];
+            @try {
+                [pressed_cell setYBPressed:true];
+                [pressed_cell displayIfNeeded];
+                [self openMenu:button];
+            } @finally {
+                [pressed_cell setYBPressed:false];
+                [pressed_cell setNeedsDisplay:YES];
+                [pressed_cell release];
+            }
+        } else {
+            [self openMenu:button];
+        }
         return;
     }
 
@@ -1109,6 +1189,22 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (bool)testStatusItemOwnsStripView
 {
     return _status_item && [_status_item view] == _strip_view;
+}
+
+- (NSView *)testStripView
+{
+    return _strip_view;
+}
+
+- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point
+{
+    _test_has_strip_action_point = true;
+    _test_strip_action_point = point;
+    @try {
+        [self performStripAction:sender];
+    } @finally {
+        _test_has_strip_action_point = false;
+    }
 }
 
 - (bool)testIsTrackingMenu
