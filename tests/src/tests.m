@@ -44,6 +44,21 @@ typedef TEST_SIG(function);
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
 #include "message.c"
+#include "declarative_config.c"
+#include "declarative_startup.c"
+#include "declarative_runtime.c"
+#include "declarative_rules.c"
+#include "declarative_topology.c"
+#include "declarative_install.c"
+#include "declarative_reload.c"
+#include "declarative_reporter.c"
+#include "declarative_startup_completion.c"
+#include "declarative_space.c"
+#include "declarative_space_phase3a.c"
+#include "declarative_space_phase3a_matrix.c"
+#include "declarative_space_phase3b.c"
+#include "declarative_space_phase3c.c"
+#include "ffm.c"
 #include "message_frame.c"
 #include "sa_message.c"
 #include "deferred_convergence.c"
@@ -1650,6 +1665,19 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
+    TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
+    TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
+    TEST_ENTRY(declarative_dock_restart_and_system_wake_coalesce_reconcile) \
+    TEST_ENTRY(declarative_reconcile_reserves_before_post_and_coalesces) \
+    TEST_ENTRY(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result) \
+    TEST_ENTRY(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close) \
+    TEST_ENTRY(event_loop_front_switch_helpers_use_admission_and_rollback) \
+    TEST_ENTRY(event_loop_late_pre_admission_post_after_cleanup_releases_context) \
+    TEST_ENTRY(event_loop_worker_guards_reject_sync_and_self_shutdown) \
+    TEST_ENTRY(event_loop_worker_identity_is_scoped_to_the_supplied_loop) \
+    TEST_ENTRY(event_loop_sync_during_thread_create_interval_completes_on_success_and_failure) \
+    TEST_ENTRY(event_loop_sync_submission_concurrent_with_shutdown_completes) \
+    TEST_ENTRY(event_loop_bootstrap_failure_drains_queued_daemon_messages) \
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
@@ -1743,6 +1771,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
     TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
+    TEST_ENTRY(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh) \
+    TEST_ENTRY(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers) \
+    TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
     TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
     TEST_ENTRY(window_manager_scratchpad_refresh_routes_inventory_changes) \
     TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
@@ -1751,6 +1782,136 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
     TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
     TEST_ENTRY(message_utf8_ingress_validation)                            \
+    TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
+    TEST_ENTRY(message_space_create_destroy_success_requests_one_reconcile) \
+    TEST_ENTRY(declarative_inventory_is_canonical)                         \
+    TEST_ENTRY(declarative_jsonc_normalization_preserves_source)           \
+    TEST_ENTRY(declarative_jsonc_rejects_encoding_duplicates_and_surrogates) \
+    TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
+    TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
+    TEST_ENTRY(declarative_file_loader_enforces_descriptor_contract)       \
+    TEST_ENTRY(declarative_primary_action_classifier_is_exclusive)         \
+    TEST_ENTRY(declarative_startup_paths_are_absolute_lexical_and_bounded)  \
+    TEST_ENTRY(declarative_check_subprocess_has_exact_streams_and_grammar)  \
+    TEST_ENTRY(declarative_help_lists_native_jsonc_actions)                 \
+    TEST_ENTRY(declarative_daemon_flags_preserve_legacy_and_native_independence) \
+    TEST_ENTRY(declarative_startup_selection_obeys_discovery_and_missing_policy) \
+    TEST_ENTRY(declarative_enums_are_runtime_values)                       \
+    TEST_ENTRY(declarative_follow_presence_is_validated)                   \
+    TEST_ENTRY(declarative_model_allocator_is_transactional)               \
+    TEST_ENTRY(declarative_file_ops_cover_detectable_changes)              \
+    TEST_ENTRY(declarative_public_paths_are_checked_and_escaped)           \
+    TEST_ENTRY(declarative_rule_inventory_drives_runtime_surfaces)         \
+    TEST_ENTRY(declarative_generated_limit_boundaries)                     \
+    TEST_ENTRY(declarative_schema_paths_are_exact_and_redacted)            \
+    TEST_ENTRY(declarative_exact_integral_lexemes_are_enforced)            \
+    TEST_ENTRY(declarative_signed_integer_boundaries_are_overflow_safe)     \
+    TEST_ENTRY(declarative_positive_integer_boundaries_are_overflow_safe)   \
+    TEST_ENTRY(declarative_source_positions_handle_cr_and_crlf)            \
+    TEST_ENTRY(declarative_numeric_field_matrix)                           \
+    TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
+    TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
+    TEST_ENTRY(declarative_command_matrix_covers_all_35_query_invalid_and_mutation_paths) \
+    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_35_typed_setters)   \
+    TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
+    TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
+    TEST_ENTRY(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership) \
+    TEST_ENTRY(declarative_space_layout_message_surfaces_use_single_authority_and_preserve_failures) \
+    TEST_ENTRY(declarative_non_user_space_layout_boundary_preserves_target_and_ownership) \
+    TEST_ENTRY(declarative_imperative_failures_preserve_target_and_ownership_with_exact_errors) \
+    TEST_ENTRY(declarative_imperative_animation_denial_requests_permission_with_exact_error) \
+    TEST_ENTRY(declarative_per_space_ownership_follows_retained_view_identity) \
+    TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
+    TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
+    TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
+    TEST_ENTRY(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates) \
+    TEST_ENTRY(declarative_space_root_validation_rejects_shape_order_parent_and_zoom_corruption) \
+    TEST_ENTRY(declarative_space_root_validation_accepts_retained_split_child_and_rejects_invalid_domain) \
+    TEST_ENTRY(declarative_space_preparation_classifies_removals_and_owns_clear_images_without_live_writes) \
+    TEST_ENTRY(declarative_space_target_and_old_table_validation_is_bijective) \
+    TEST_ENTRY(declarative_space_before_image_zero_topology_and_window_identity_guards) \
+    TEST_ENTRY(declarative_space_heap_root_and_table_topology_negatives) \
+    TEST_ENTRY(declarative_space_generated_precedence_matrix_covers_all_fields_and_layer_pairs) \
+    TEST_ENTRY(declarative_space_generated_full_chain_and_native_overlap_are_fieldwise) \
+    TEST_ENTRY(declarative_space_generated_ownership_matrix_preserves_clears_and_detects_each_mutation) \
+    TEST_ENTRY(declarative_space_generated_multi_target_allocator_matrix_is_transactional) \
+    TEST_ENTRY(declarative_space_phase3b_same_layout_reconciles_detached_and_preserves_structure) \
+    TEST_ENTRY(declarative_space_phase3b_zero_view_insertion_uses_focused_leaf) \
+    TEST_ENTRY(declarative_space_phase3b_empty_leaf_collapse_matches_live_parent_semantics) \
+    TEST_ENTRY(declarative_space_phase3b_internal_collapse_reparents_and_remaps_zoom) \
+    TEST_ENTRY(declarative_space_phase3b_auto_balance_uses_effective_axis_after_same_layout_split) \
+    TEST_ENTRY(declarative_space_phase3b_converted_bsp_balances_each_constructed_split) \
+    TEST_ENTRY(declarative_space_phase3b_cross_view_owner_table_and_scalar_only_reuse) \
+    TEST_ENTRY(declarative_space_phase3b_capacity_is_positive_and_overflow_checked) \
+    TEST_ENTRY(declarative_space_phase3b_bsp_split_matches_captured_live_semantics) \
+    TEST_ENTRY(declarative_space_phase3b_dynamic_capture_supports_maximum_and_detects_limit_plus_one_duplicate) \
+    TEST_ENTRY(declarative_space_phase3b_complete_pipeline_has_indexed_operation_bound) \
+    TEST_ENTRY(declarative_space_phase3b_large_changed_layout_is_index_bounded) \
+    TEST_ENTRY(declarative_space_phase3b_large_same_layout_reconciliation_is_index_bounded) \
+    TEST_ENTRY(declarative_space_phase3b_replacement_table_collision_matrix) \
+    TEST_ENTRY(declarative_space_phase3b_detached_destructor_isolation_matrix) \
+    TEST_ENTRY(declarative_space_phase3b_large_inventory_has_indexed_operation_bound) \
+    TEST_ENTRY(declarative_space_phase3b_generated_production_scenario_matrix) \
+    TEST_ENTRY(declarative_space_phase3b_allocation_ordinal_matrix_e) \
+    TEST_ENTRY(declarative_space_phase3c_publication_postcommit_and_retirement_are_ordered) \
+    TEST_ENTRY(declarative_space_phase3c_stale_scalar_and_event_turn_reject_before_publication) \
+    TEST_ENTRY(declarative_space_phase3c_rejects_shared_empty_roots_across_views) \
+    TEST_ENTRY(declarative_space_phase3c_generated_stale_before_image_matrix) \
+    TEST_ENTRY(declarative_space_phase3c_generated_postcommit_outcome_matrix) \
+    TEST_ENTRY(declarative_space_phase3c_ownership_modes_zero_one_multi_view_matrix) \
+    TEST_ENTRY(declarative_space_phase3c_lifecycle_rejects_every_repeated_transition) \
+    TEST_ENTRY(declarative_space_phase3c_default_view_flush_visible_and_hidden) \
+    TEST_ENTRY(declarative_space_phase3c_aliasing_and_retirement_guards) \
+    TEST_ENTRY(declarative_space_phase3c_foreign_thread_precommit_is_rejected) \
+    TEST_ENTRY(ffm_configured_and_effective_state_handles_nested_suspension_and_latest_updates) \
+    TEST_ENTRY(declarative_topology_capture_is_owned_strict_and_coherent) \
+    TEST_ENTRY(declarative_topology_rejects_malformed_incomplete_zero_and_ambiguous_observations) \
+    TEST_ENTRY(declarative_topology_active_pair_is_strict_parented_and_stable) \
+    TEST_ENTRY(declarative_topology_query_failures_leave_no_partial_capture) \
+    TEST_ENTRY(declarative_topology_rejects_duplicates_and_changed_second_observation) \
+    TEST_ENTRY(declarative_topology_system_active_display_count_fill_contract_is_strict) \
+    TEST_ENTRY(declarative_topology_candidate_bounds_wrapper_preserves_platform_constraints) \
+    TEST_ENTRY(declarative_topology_candidate_external_bar_bounds_match_view_constraints) \
+    TEST_ENTRY(declarative_detached_views_use_only_capture_identity_bounds_kind_and_defaults) \
+    TEST_ENTRY(declarative_topology_startup_preparation_is_worker_confined_and_transactional) \
+    TEST_ENTRY(declarative_topology_production_bootstrap_retains_no_early_candidate) \
+    TEST_ENTRY(declarative_topology_allocation_failures_leave_no_owned_state) \
+    TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
+    TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
+    TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
+    TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
+    TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
+    TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
+    TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
+    TEST_ENTRY(declarative_reload_generation_zero_rediscovers_then_pins_installed_path) \
+    TEST_ENTRY(declarative_reporter_bounds_redacts_and_escapes_structural_fields) \
+    TEST_ENTRY(declarative_reporter_isolates_sinks_and_uses_literal_bounded_payloads) \
+    TEST_ENTRY(declarative_reporter_client_marker_is_inside_the_primary_bound) \
+    TEST_ENTRY(declarative_stale_warning_acknowledges_after_sink_failure_and_rearms_by_generation) \
+    TEST_ENTRY(declarative_startup_completion_orders_inventory_notifications_menu_socket_and_legacy) \
+    TEST_ENTRY(declarative_startup_production_ops_observe_bootstrap_install_before_inventory) \
+    TEST_ENTRY(declarative_startup_completion_failure_cutoffs_are_exact) \
+    TEST_ENTRY(declarative_rule_topology_is_strict_and_cross_linked) \
+    TEST_ENTRY(declarative_rule_maximum_topology_validates_once_and_folds_are_bounded) \
+    TEST_ENTRY(declarative_rule_preparation_resolves_orders_fingerprints_and_effects) \
+    TEST_ENTRY(declarative_rule_preparation_supports_each_matcher_independently) \
+    TEST_ENTRY(declarative_rule_preparation_rejects_labels_regex_and_preserves_manager) \
+    TEST_ENTRY(declarative_rule_preparation_cleans_every_allocator_failure) \
+    TEST_ENTRY(declarative_rule_fold_context_creation_cleans_every_allocator_failure) \
+    TEST_ENTRY(declarative_rule_maximum_preparation_and_destruction_tracks_every_allocation) \
+    TEST_ENTRY(declarative_native_one_shot_template_survives_live_destruction_and_rearms) \
+    TEST_ENTRY(declarative_rule_folding_is_provenance_aware_and_warns_once) \
+    TEST_ENTRY(declarative_rule_warning_state_survives_rearm_acknowledges_and_fails_closed) \
+    TEST_ENTRY(declarative_rule_reapply_index_and_label_use_provenance_fold) \
+    TEST_ENTRY(declarative_rule_owned_context_is_immutable_and_rejects_stale_targets) \
+    TEST_ENTRY(rule_protected_label_messages_are_exact_and_ordered) \
+    TEST_ENTRY(rule_label_ownership_results_preserve_runtime_order_and_protect_native) \
+    TEST_ENTRY(ffm_menu_suspension_saturates_and_extra_close_is_safe) \
+    TEST_ENTRY(ffm_config_query_reports_configured_mode_while_effective_is_suspended) \
+    TEST_ENTRY(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change) \
+    TEST_ENTRY(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves) \
+    TEST_ENTRY(ffm_menu_bar_tracking_transitions_count_once_without_derived_events) \
+    TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
     TEST_ENTRY(message_numeric_token_boundaries)                          \
     TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \

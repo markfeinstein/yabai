@@ -182,7 +182,8 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
                 }
 
                 match = true;
-                rule_combine_effects(&wm->rules[i].effects, &effects);
+                enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
+                rule_report_fold_warning(&wm->rules[i], fold);
 
                 if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
             }
@@ -190,6 +191,7 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
     }
 
     if (match) window_manager_apply_manage_rule_effects_to_window(sm, wm, window, &effects);
+    free(effects.scratchpad);
 }
 
 void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules)
@@ -206,7 +208,8 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
                 }
 
                 match = true;
-                rule_combine_effects(&wm->rules[i].effects, &effects);
+                enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
+                rule_report_fold_warning(&wm->rules[i], fold);
 
                 if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
             }
@@ -214,15 +217,45 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
     }
 
     if (match) window_manager_apply_rule_effects_to_window(sm, wm, window, &effects);
+    free(effects.scratchpad);
+}
+
+#ifdef TESTS
+static void (*window_manager_test_effective_ffm_load_observer)(enum ffm_mode);
+#endif
+
+enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm)
+{
+    enum ffm_mode mode = (enum ffm_mode) __atomic_load_n(&wm->effective_ffm_mode, __ATOMIC_ACQUIRE);
+#ifdef TESTS
+    if (window_manager_test_effective_ffm_load_observer) window_manager_test_effective_ffm_load_observer(mode);
+#endif
+    return mode;
+}
+
+void window_manager_recompute_effective_ffm_mode(struct window_manager *wm)
+{
+    enum ffm_mode mode = wm->ffm_menu_suspend_count ? FFM_DISABLED : wm->configured_ffm_mode;
+    __atomic_store_n(&wm->effective_ffm_mode, (ffm_atomic_mode) mode, __ATOMIC_RELEASE);
 }
 
 bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode)
 {
-    uint32_t mask = mode == FFM_DISABLED ? MOUSE_EVENT_MASK : MOUSE_EVENT_MASK_FFM;
-    if (!mouse_handler_reconfigure(&g_mouse_state, mask)) return false;
-
-    wm->ffm_mode = mode;
+    wm->configured_ffm_mode = mode;
+    window_manager_recompute_effective_ffm_mode(wm);
     return true;
+}
+
+void window_manager_ffm_menu_opened(struct window_manager *wm)
+{
+    if (wm->ffm_menu_suspend_count != UINT32_MAX) ++wm->ffm_menu_suspend_count;
+    window_manager_recompute_effective_ffm_mode(wm);
+}
+
+void window_manager_ffm_menu_closed(struct window_manager *wm)
+{
+    if (wm->ffm_menu_suspend_count != 0) --wm->ffm_menu_suspend_count;
+    window_manager_recompute_effective_ffm_mode(wm);
 }
 
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled)
@@ -2126,16 +2159,7 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
         }
     }
 
-    int rule_len = buf_len(wm->rules);
-    for (int i = 0; i < rule_len; ++i) {
-        if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE)) {
-            rule_destroy(&wm->rules[i]);
-            if (buf_del(wm->rules, i)) {
-                --i;
-                --rule_len;
-            }
-        }
-    }
+    rule_cleanup_one_shots();
 
     CFRelease(window_list);
     return list;
@@ -3388,7 +3412,9 @@ void window_manager_init(struct window_manager *wm)
     wm->system_element = AXUIElementCreateSystemWide();
     AXUIElementSetMessagingTimeout(wm->system_element, 1.0);
 
-    wm->ffm_mode = FFM_DISABLED;
+    wm->configured_ffm_mode = FFM_DISABLED;
+    wm->ffm_menu_suspend_count = 0;
+    window_manager_recompute_effective_ffm_mode(wm);
     wm->purify_mode = PURIFY_DISABLED;
     wm->window_origin_mode = WINDOW_ORIGIN_DEFAULT;
     wm->enable_mff = false;

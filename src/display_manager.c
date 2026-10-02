@@ -510,6 +510,11 @@ enum space_op_error display_manager_focus_space(uint32_t did, uint64_t sid)
     return scripting_addition_focus_space(sid) ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
+bool display_manager_observe(void)
+{
+    return CGDisplayRegisterReconfigurationCallback(display_handler, NULL) == kCGErrorSuccess;
+}
+
 bool display_manager_begin(struct display_manager *dm)
 {
     dm->current_display_id = display_manager_active_display_id();
@@ -518,5 +523,5 @@ bool display_manager_begin(struct display_manager *dm)
     dm->mode = EXTERNAL_BAR_OFF;
     dm->top_padding = 0;
     dm->bottom_padding = 0;
-    return CGDisplayRegisterReconfigurationCallback(display_handler, NULL) == kCGErrorSuccess;
+    return display_manager_observe();
 }

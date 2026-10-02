@@ -13,6 +13,7 @@
 #define CLIENT_OPT_SHRT         "-m"
 #define CONFIG_OPT_LONG         "--config"
 #define CONFIG_OPT_SHRT         "-c"
+#define NATIVE_CONFIG_OPT_LONG  "--config-jsonc"
 #define DEBUG_VERBOSE_OPT_LONG  "--verbose"
 #define DEBUG_VERBOSE_OPT_SHRT  "-V"
 #define VERSION_OPT_LONG        "--version"
@@ -46,7 +47,10 @@ uint8_t *g_event_bytes;
 char g_sa_socket_file[MAXLEN];
 char g_socket_file[MAXLEN];
 char g_config_file[4096];
+char g_native_config_file[PATH_MAX];
 char g_lock_file[MAXLEN];
+struct declarative_startup_state g_declarative_startup;
+static bool g_native_config_explicit;
 
 mach_port_t g_bs_port;
 int g_connection;
@@ -200,8 +204,37 @@ static inline bool configure_settings_and_acquire_lock(void)
 }
 #pragma clang diagnostic pop
 
+static void print_declarative_diagnostic(const struct declarative_error *diagnostic)
+{
+    declarative_report_error(stderr, diagnostic);
+}
+
+static bool capture_invocation_path(const char *path, char output[PATH_MAX], struct declarative_error *diagnostic)
+{
+    char cwd[PATH_MAX];
+    if (path && path[0] == '/') return declarative_startup_capture_path(path, NULL, output, diagnostic);
+    if (!getcwd(cwd, sizeof(cwd))) {
+        memset(diagnostic, 0, sizeof(*diagnostic));
+        diagnostic->stage = DECLARATIVE_ERROR_PATH;
+        snprintf(diagnostic->json_path, sizeof(diagnostic->json_path), "%s", "$");
+        snprintf(diagnostic->message, sizeof(diagnostic->message), "could not capture current directory");
+        return false;
+    }
+    return declarative_startup_capture_path(path, cwd, output, diagnostic);
+}
+
 static void parse_arguments(int argc, char **argv)
 {
+    enum declarative_primary_action primary_action = declarative_primary_action_classify(argc, argv);
+
+    if (primary_action == DECLARATIVE_PRIMARY_INVALID_CHECK) {
+        struct declarative_error diagnostic = { .stage = DECLARATIVE_ERROR_PATH };
+        snprintf(diagnostic.json_path, sizeof(diagnostic.json_path), "%s", "$");
+        snprintf(diagnostic.message, sizeof(diagnostic.message), "--check-config requires exactly one path and cannot be combined with other arguments");
+        print_declarative_diagnostic(&diagnostic);
+        exit(EXIT_FAILURE);
+    }
+
     if ((string_equals(argv[1], HELP_OPT_LONG)) ||
         (string_equals(argv[1], HELP_OPT_SHRT))) {
         fprintf(stdout, "Usage: yabai [option]\n"
@@ -215,6 +248,8 @@ static void parse_arguments(int argc, char **argv)
                         "    --stop-service         Stops a running instance of the service.\n"
                         "    --message, -m <msg>    Send message to a running instance of yabai.\n"
                         "    --config, -c <config>  Use the specified configuration file.\n"
+                        "    --config-jsonc <config> Use the specified native JSONC configuration file.\n"
+                        "    --check-config <config> Validate JSONC schema only; exit 0 if valid, nonzero otherwise.\n"
                         "    --verbose, -V          Output debug information to stdout.\n"
                         "    --version, -v          Print version to stdout and exit.\n"
                         "    --help, -h             Print options to stdout and exit.\n"
@@ -262,6 +297,21 @@ static void parse_arguments(int argc, char **argv)
         exit(service_stop());
     }
 
+    if (primary_action == DECLARATIVE_PRIMARY_CHECK) {
+        char path[PATH_MAX];
+        struct declarative_error diagnostic = {0};
+        struct declarative_config_model *model = NULL;
+        if (!capture_invocation_path(argv[2], path, &diagnostic) ||
+            !declarative_config_parse_file(path, &model, &diagnostic)) {
+            print_declarative_diagnostic(&diagnostic);
+            declarative_config_destroy(model);
+            exit(EXIT_FAILURE);
+        }
+        declarative_config_destroy(model);
+        fputs("configuration is valid; runtime preparation was not checked\n", stdout);
+        exit(EXIT_SUCCESS);
+    }
+
     for (int i = 1; i < argc; ++i) {
         char *opt = argv[i];
 
@@ -273,10 +323,108 @@ static void parse_arguments(int argc, char **argv)
             char *val = i < argc - 1 ? argv[++i] : NULL;
             if (!val) error("yabai: option '%s|%s' requires an argument!\n", CONFIG_OPT_LONG, CONFIG_OPT_SHRT);
             snprintf(g_config_file, sizeof(g_config_file), "%s", val);
+        } else if (string_equals(opt, NATIVE_CONFIG_OPT_LONG)) {
+            char *val = i < argc - 1 ? argv[++i] : NULL;
+            if (!val) error("yabai: option '%s' requires an argument!\n", NATIVE_CONFIG_OPT_LONG);
+            if (g_native_config_explicit) error("yabai: option '%s' may only be specified once!\n", NATIVE_CONFIG_OPT_LONG);
+            struct declarative_error diagnostic = {0};
+            if (!capture_invocation_path(val, g_native_config_file, &diagnostic)) {
+                print_declarative_diagnostic(&diagnostic);
+                exit(EXIT_FAILURE);
+            }
+            g_native_config_explicit = true;
         } else {
             error("yabai: '%s' is not a valid option!\n", opt);
         }
     }
+}
+
+static bool declarative_startup_bootstrap(void *context)
+{
+    return declarative_startup_install(context, NULL);
+}
+
+#ifdef TESTS
+static struct declarative_startup_completion_ops declarative_startup_production_test_overrides;
+#endif
+
+static bool menu_bar_startup_staging_seal_on_event_loop(void *context)
+{
+    (void) context;
+    return menu_bar_manager_startup_staging_seal();
+}
+
+static void declarative_startup_inventory(void *context)
+{
+    (void) context;
+#ifdef TESTS
+    if (declarative_startup_production_test_overrides.inventory) {
+        declarative_startup_production_test_overrides.inventory(declarative_startup_production_test_overrides.context);
+        return;
+    }
+#endif
+    window_manager_begin(&g_space_manager, &g_window_manager);
+}
+
+static bool declarative_startup_rebuild_notifications(void *context)
+{
+    (void) context;
+#ifdef TESTS
+    if (declarative_startup_production_test_overrides.rebuild_notifications) {
+        return declarative_startup_production_test_overrides.rebuild_notifications(
+            declarative_startup_production_test_overrides.context);
+    }
+#endif
+    return update_window_notifications();
+}
+
+static bool declarative_startup_seal_menu(void *context)
+{
+    (void) context;
+#ifdef TESTS
+    if (declarative_startup_production_test_overrides.seal_menu_staging) {
+        return declarative_startup_production_test_overrides.seal_menu_staging(
+            declarative_startup_production_test_overrides.context);
+    }
+#endif
+    return event_loop_perform_sync(&g_event_loop, menu_bar_startup_staging_seal_on_event_loop, NULL);
+}
+
+static bool declarative_startup_start_socket(void *context)
+{
+    (void) context;
+#ifdef TESTS
+    if (declarative_startup_production_test_overrides.start_socket) {
+        return declarative_startup_production_test_overrides.start_socket(
+            declarative_startup_production_test_overrides.context);
+    }
+#endif
+    return message_loop_begin(g_socket_file);
+}
+
+static void declarative_startup_execute_legacy_config(void *context)
+{
+    (void) context;
+#ifdef TESTS
+    if (declarative_startup_production_test_overrides.execute_legacy_config) {
+        declarative_startup_production_test_overrides.execute_legacy_config(
+            declarative_startup_production_test_overrides.context);
+        return;
+    }
+#endif
+    exec_config_file(g_config_file, sizeof(g_config_file));
+}
+
+static struct declarative_startup_completion_ops declarative_startup_production_completion_ops(void)
+{
+    return (struct declarative_startup_completion_ops) {
+        .inventory = declarative_startup_inventory,
+        .rebuild_notifications = declarative_startup_rebuild_notifications,
+        .seal_menu_staging = declarative_startup_seal_menu,
+        .start_socket = declarative_startup_start_socket,
+        .execute_legacy_config = declarative_startup_execute_legacy_config,
+        .notifications_required = workspace_is_macos_sequoia() || workspace_is_macos_tahoe()
+    };
 }
 
 #ifndef TESTS
@@ -284,6 +432,16 @@ int main(int argc, char **argv)
 {
     if (argc > 1) {
         parse_arguments(argc, argv);
+    }
+
+    struct declarative_error native_diagnostic = {0};
+    if (!declarative_startup_select(&g_declarative_startup,
+                                    g_native_config_explicit ? g_native_config_file : NULL,
+                                    getenv("XDG_CONFIG_HOME"), getenv("HOME"),
+                                    &native_diagnostic)) {
+        print_declarative_diagnostic(&native_diagnostic);
+        declarative_startup_destroy(&g_declarative_startup);
+        return EXIT_FAILURE;
     }
 
     if (is_root()) {
@@ -313,9 +471,15 @@ int main(int argc, char **argv)
     if (!menu_bar_manager_init()) {
         error("yabai: could not initialize menu bar manager! abort..\n");
     }
+    menu_bar_manager_startup_staging_open();
 
-    if (!event_loop_begin(&g_event_loop)) {
-        error("yabai: could not start event loop! abort..\n");
+    if (!event_loop_begin_bootstrap(&g_event_loop, declarative_startup_bootstrap, &g_declarative_startup)) {
+        menu_bar_manager_startup_staging_abort();
+        menu_bar_manager_shutdown();
+        declarative_report_runtime(stderr, "runtime", g_declarative_startup.path, "$", 0, 0,
+                                   "startup runtime preparation failed");
+        declarative_startup_destroy(&g_declarative_startup);
+        return EXIT_FAILURE;
     }
 
     if (!workspace_event_handler_begin(&g_workspace_context)) {
@@ -326,11 +490,12 @@ int main(int argc, char **argv)
         error("yabai: could not start process manager! abort..\n");
     }
 
-    if (!display_manager_begin(&g_display_manager)) {
+    bool native_installed = declarative_installed_generation() != 0;
+    if (!(native_installed ? display_manager_observe() : display_manager_begin(&g_display_manager))) {
         error("yabai: could not start display manager! abort..\n");
     }
 
-    if (!mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK)) {
+    if (!mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK_FFM)) {
         error("yabai: could not start mouse handler! abort..\n");
     }
 
@@ -363,20 +528,23 @@ int main(int argc, char **argv)
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 816, NULL);
     }
 
-    window_manager_init(&g_window_manager);
-    space_manager_begin(&g_space_manager);
-    window_manager_begin(&g_space_manager, &g_window_manager);
-    event_loop_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0);
-
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
-        update_window_notifications();
+    if (!native_installed) {
+        window_manager_init(&g_window_manager);
+        space_manager_begin(&g_space_manager);
     }
 
-    if (!message_loop_begin(g_socket_file)) {
+    struct declarative_startup_completion_ops completion = declarative_startup_production_completion_ops();
+    switch (declarative_startup_complete(&completion)) {
+    case DECLARATIVE_STARTUP_COMPLETION_OK: break;
+    case DECLARATIVE_STARTUP_COMPLETION_NOTIFICATION_FAILED:
+        error("yabai: could not rebuild window notifications! abort..\n");
+    case DECLARATIVE_STARTUP_COMPLETION_MENU_FAILED:
+        error("yabai: could not seal startup menu bar staging! abort..\n");
+    case DECLARATIVE_STARTUP_COMPLETION_SOCKET_FAILED:
         error("yabai: could not start message loop! abort..\n");
+    case DECLARATIVE_STARTUP_COMPLETION_INVALID:
+        error("yabai: invalid startup completion contract! abort..\n");
     }
-
-    exec_config_file(g_config_file, sizeof(g_config_file));
 
     [NSApp run];
 

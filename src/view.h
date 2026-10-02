@@ -218,6 +218,7 @@ struct view
     int window_gap;
     uint32_t auto_balance;
     uint64_t flags;
+    struct declarative_runtime_cell runtime_ownership[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT];
 };
 
 #define view_check_flag(v, x) ((v)->flags  &  (x))
@@ -253,6 +254,18 @@ bool view_is_invalid(struct view *view);
 bool view_is_dirty(struct view *view);
 void view_flush(struct view *view);
 void view_update(struct view *view);
+#ifdef TESTS
+struct view_test_platform_ops
+{
+    bool (*space_is_visible)(uint64_t sid, void *context);
+    void (*update_windows)(struct view *view, void *context);
+    void (*flush_windows)(struct window_node *root, void *context);
+    void *context;
+    CFStringRef (*copy_space_uuid)(uint64_t sid, void *context);
+    bool (*space_is_user)(uint64_t sid, void *context);
+};
+void view_test_set_platform_ops(const struct view_test_platform_ops *ops);
+#endif
 struct view *view_create(uint64_t sid);
 void view_destroy(struct view *view);
 void view_clear(struct view *view);

@@ -33,6 +33,7 @@ static bool update_window_notifications_append(uint32_t **window_list, size_t *w
 
 #ifdef TESTS
 static int g_window_notification_rebuild_count;
+static bool g_window_notification_rebuild_result = true;
 
 static void event_loop_test_mouse_drag_move_window_direct(struct window *window, float x, float y)
 {
@@ -44,11 +45,11 @@ static void event_loop_test_mouse_drag_move_window_direct(struct window *window,
 static void (*event_loop_test_mouse_drag_move_window)(struct window *, float, float) = event_loop_test_mouse_drag_move_window_direct;
 #endif
 
-static void update_window_notifications(void)
+static bool update_window_notifications(void)
 {
 #ifdef TESTS
     ++g_window_notification_rebuild_count;
-    return;
+    return g_window_notification_rebuild_result;
 #endif
 
     size_t window_count = 0;
@@ -72,11 +73,14 @@ static void update_window_notifications(void)
         })
     }
 
-    if (success && window_count <= 2147483647u) {
-        SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count);
+    if (success && window_count <= INT_MAX) {
+        success = SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count) == kCGErrorSuccess;
+    } else {
+        success = false;
     }
 
     free(window_list);
+    return success;
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
@@ -154,7 +158,7 @@ static bool event_loop_post_application_front_switched(struct process *process, 
 {
     struct application_front_switched_event *event = event_loop_create_application_front_switched(process, generation, replay);
     if (!event) return false;
-    return event_loop_enqueue(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
+    return event_loop_try_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
 }
 
 static bool event_loop_post_tracked_application_front_switched(struct process *process)
@@ -167,7 +171,7 @@ static bool event_loop_post_tracked_application_front_switched(struct process *p
     uint64_t previous_psn = __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE);
 
     event->generation = process_manager_publish_tracked_front_switch_locked(&g_process_manager, process->psn);
-    bool accepted = event_loop_enqueue(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
+    bool accepted = event_loop_try_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
     if (!accepted) {
         __atomic_store_n(&g_process_manager.front_switch_generation, previous_generation, __ATOMIC_RELEASE);
         __atomic_store_n(&g_process_manager.front_switch_psn, previous_psn, __ATOMIC_RELEASE);
@@ -761,16 +765,7 @@ static EVENT_HANDLER(WINDOW_CREATED)
     CFRelease(context);
     if (!window) return;
 
-    int rule_len = buf_len(g_window_manager.rules);
-    for (int i = 0; i < rule_len; ++i) {
-        if (rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT_REMOVE)) {
-            rule_destroy(&g_window_manager.rules[i]);
-            if (buf_del(g_window_manager.rules, i)) {
-                --i;
-                --rule_len;
-            }
-        }
-    }
+    rule_cleanup_one_shots();
 
     if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
         uint64_t sid;
@@ -1241,6 +1236,7 @@ static EVENT_HANDLER(SLS_SPACE_CREATED)
         space_manager_find_view(&g_space_manager, sid);
         event_signal_push(SIGNAL_SPACE_CREATED, context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
+        declarative_configuration_request_reconcile();
     }
 }
 
@@ -1257,6 +1253,7 @@ static EVENT_HANDLER(SLS_SPACE_DESTROYED)
         event_signal_push(SIGNAL_SPACE_DESTROYED, context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
     }
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(SPACE_CHANGED)
@@ -1371,6 +1368,7 @@ static EVENT_HANDLER(DISPLAY_ADDED)
     window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, did);
     event_signal_push(SIGNAL_DISPLAY_ADDED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(DISPLAY_REMOVED)
@@ -1381,6 +1379,7 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
     window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, display_manager_main_display_id());
     event_signal_push(SIGNAL_DISPLAY_REMOVED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(DISPLAY_MOVED)
@@ -1390,6 +1389,7 @@ static EVENT_HANDLER(DISPLAY_MOVED)
     space_manager_mark_spaces_invalid(&g_space_manager);
     event_signal_push(SIGNAL_DISPLAY_MOVED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(DISPLAY_RESIZED)
@@ -1399,6 +1399,7 @@ static EVENT_HANDLER(DISPLAY_RESIZED)
     space_manager_mark_spaces_invalid_for_display(&g_space_manager, did);
     event_signal_push(SIGNAL_DISPLAY_RESIZED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
+    declarative_configuration_request_reconcile();
 }
 
 static bool mouse_drag_action_is_valid(enum mouse_mode action)
@@ -1690,8 +1691,9 @@ out:
 
 static EVENT_HANDLER(MOUSE_MOVED)
 {
-    if (g_window_manager.ffm_mode == FFM_DISABLED) goto out;
-    if (mission_control_is_active())               goto out;
+    enum ffm_mode ffm_mode = window_manager_effective_ffm_mode(&g_window_manager);
+    if (ffm_mode == FFM_DISABLED)    goto out;
+    if (mission_control_is_active()) goto out;
     if (g_mouse_state.ffm_window_id)               goto out;
 
     if (__atomic_load_n(&__pending_gesture, __ATOMIC_RELAXED)) goto out;
@@ -1706,7 +1708,7 @@ static EVENT_HANDLER(MOUSE_MOVED)
         if (window->id == g_window_manager.focused_window_id) goto out;
         if (!window_manager_is_window_eligible(window))       goto out;
 
-        if (g_window_manager.ffm_mode == FFM_AUTOFOCUS) {
+        if (ffm_mode == FFM_AUTOFOCUS) {
 
             //
             // NOTE(asmvik): Look for a window with role AXSheet or AXDrawer
@@ -1740,7 +1742,7 @@ static EVENT_HANDLER(MOUSE_MOVED)
 
             window_manager_focus_window_without_raise(&window->application->psn, window->id);
             g_mouse_state.ffm_window_id = window->id;
-        } else if (g_window_manager.ffm_mode == FFM_AUTORAISE) {
+        } else if (ffm_mode == FFM_AUTORAISE) {
 
             //
             // NOTE(asmvik): If any **floating** window would be fully occluded by
@@ -1886,6 +1888,7 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
     event_signal_push(SIGNAL_MISSION_CONTROL_EXIT, (void*)(uintptr_t)g_mission_control_mode);
     g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(DOCK_DID_RESTART)
@@ -1903,32 +1906,19 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
 
     event_signal_push(SIGNAL_DOCK_DID_RESTART, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
+    declarative_configuration_request_reconcile();
 }
-
-static enum ffm_mode ffm_value;
-static int is_menu_open = 0;
 
 static EVENT_HANDLER(MENU_OPENED)
 {
     debug("%s\n", __FUNCTION__);
-    ++is_menu_open;
-
-    if (is_menu_open == 1) {
-        ffm_value = g_window_manager.ffm_mode;
-        g_window_manager.ffm_mode = FFM_DISABLED;
-    }
+    window_manager_ffm_menu_opened(&g_window_manager);
 }
 
 static EVENT_HANDLER(MENU_CLOSED)
 {
     debug("%s\n", __FUNCTION__);
-    --is_menu_open;
-
-    if (is_menu_open == 0) {
-        g_window_manager.ffm_mode = ffm_value;
-    } else if (is_menu_open < 0) {
-        is_menu_open = 0;
-    }
+    window_manager_ffm_menu_closed(&g_window_manager);
 }
 
 static EVENT_HANDLER(MENU_BAR_HIDDEN_CHANGED)
@@ -1957,6 +1947,7 @@ static EVENT_HANDLER(SYSTEM_WOKE)
 
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);
+    declarative_configuration_request_reconcile();
 }
 
 static EVENT_HANDLER(MENU_BAR_REFRESH)
@@ -1969,7 +1960,46 @@ static EVENT_HANDLER(MENU_BAR_REFRESH)
 static EVENT_HANDLER(MENU_BAR_ACTION)
 {
     (void) param1;
-    menu_bar_manager_handle_action(context);
+    enum menu_bar_tracking_transition transition = menu_bar_manager_handle_action(context);
+    if (transition == MENU_BAR_TRACKING_TRANSITION_OPENED) {
+        window_manager_ffm_menu_opened(&g_window_manager);
+    } else if (transition == MENU_BAR_TRACKING_TRANSITION_CLOSED) {
+        window_manager_ffm_menu_closed(&g_window_manager);
+    }
+}
+
+static EVENT_HANDLER(CONFIGURATION_RECONCILE)
+{
+    (void) context;
+    (void) param1;
+    (void) declarative_configuration_reconcile();
+}
+
+struct event_loop_sync
+{
+    event_loop_sync_callback callback;
+    void *context;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool completed;
+    bool result;
+};
+
+static void event_loop_sync_complete(struct event_loop_sync *sync, bool result)
+{
+    pthread_mutex_lock(&sync->mutex);
+    sync->result = result;
+    sync->completed = true;
+    pthread_cond_signal(&sync->cond);
+    pthread_mutex_unlock(&sync->mutex);
+}
+
+static EVENT_HANDLER(EVENT_LOOP_SYNC)
+{
+    (void) param1;
+    struct event_loop_sync *sync = context;
+    bool result = sync->callback ? sync->callback(sync->context) : true;
+    event_loop_sync_complete(sync, result);
 }
 
 static EVENT_HANDLER(DAEMON_MESSAGE)
@@ -2017,14 +2047,40 @@ cleanup:
 }
 #pragma clang diagnostic pop
 
+struct event_loop_bootstrap
+{
+    struct event_loop *event_loop;
+    event_loop_bootstrap_callback callback;
+    void *context;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool completed;
+    bool result;
+};
+
+static __thread struct event_loop *event_loop_worker;
+
 static void *event_loop_run(void *context)
 {
     struct event event;
-    struct event_loop *event_loop = context;
+    struct event_loop_bootstrap *bootstrap = context;
+    struct event_loop *event_loop = bootstrap->event_loop;
+    event_loop_worker = event_loop;
 
-    while (event_loop->is_running) {
+    NSAutoreleasePool *bootstrap_pool = [[NSAutoreleasePool alloc] init];
+    bool bootstrap_result = !bootstrap->callback || bootstrap->callback(bootstrap->context);
+    [bootstrap_pool drain];
+
+    pthread_mutex_lock(&bootstrap->mutex);
+    bootstrap->result = bootstrap_result;
+    bootstrap->completed = true;
+    if (!bootstrap_result) __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
+    pthread_cond_signal(&bootstrap->cond);
+    pthread_mutex_unlock(&bootstrap->mutex);
+
+    while (__atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE)) {
         while (sem_wait(event_loop->semaphore) == -1 && errno == EINTR) {}
-        if (!event_loop->is_running) break;
+        if (!__atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE)) break;
 
         NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
         while (event_queue_pop(&event_loop->queue, &event)) {
@@ -2045,6 +2101,7 @@ static void *event_loop_run(void *context)
         [pool drain];
     }
 
+    event_loop_worker = NULL;
     return NULL;
 }
 
@@ -2066,6 +2123,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     case MENU_BAR_ACTION: {
         menu_bar_manager_release_action(context);
     } break;
+    case EVENT_LOOP_SYNC: {
+        event_loop_sync_complete(context, false);
+    } break;
     default: {
     } break;
     }
@@ -2084,9 +2144,9 @@ static bool event_loop_rejected_event_is_fatal(enum event_type type)
     }
 }
 
-static void event_loop_release_rejected_event(enum event_type type, void *context, int param1)
+static void event_loop_discard_event(enum event_type type, void *context, int param1, bool rejected)
 {
-    if (event_loop_rejected_event_is_fatal(type)) {
+    if (rejected && event_loop_rejected_event_is_fatal(type)) {
         error("fatal error: event queue rejected destructive event %d\n", type);
     }
 
@@ -2099,6 +2159,80 @@ static void event_loop_release_rejected_event(enum event_type type, void *contex
         event_loop_release_event_context(type, context);
     } break;
     }
+}
+
+#define EVENT_LOOP_ADMISSION_OPEN       (1u << 31)
+#define EVENT_LOOP_ADMISSION_COUNT_MASK (~EVENT_LOOP_ADMISSION_OPEN)
+
+#ifdef TESTS
+static void (*event_loop_admit_producer_test_hook)(void);
+static void (*event_loop_leave_producer_test_hook)(void);
+#endif
+
+static uint32_t event_loop_admission_count(uint32_t state)
+{
+    return state & EVENT_LOOP_ADMISSION_COUNT_MASK;
+}
+
+static bool event_loop_admission_is_open(uint32_t state)
+{
+    return (state & EVENT_LOOP_ADMISSION_OPEN) != 0;
+}
+
+static bool event_loop_admit_producer(struct event_loop *event_loop)
+{
+#ifdef TESTS
+    if (event_loop_admit_producer_test_hook) event_loop_admit_producer_test_hook();
+#endif
+
+    if (!event_loop) return false;
+
+    uint32_t state = __atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE);
+    while (event_loop_admission_is_open(state)) {
+        if (event_loop_admission_count(state) == EVENT_LOOP_ADMISSION_COUNT_MASK) return false;
+        if (__atomic_compare_exchange_n(&event_loop->producer_admission, &state, state + 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return true;
+    }
+
+    return false;
+}
+
+static void event_loop_leave_producer(struct event_loop *event_loop)
+{
+    pthread_mutex_lock(&event_loop->producer_lock);
+    uint32_t previous = __atomic_fetch_sub(&event_loop->producer_admission, 1, __ATOMIC_ACQ_REL);
+    uint32_t current = previous - 1;
+#ifdef TESTS
+    if (event_loop_leave_producer_test_hook) event_loop_leave_producer_test_hook();
+#endif
+    if (!event_loop_admission_is_open(current) && event_loop_admission_count(current) == 0) {
+        pthread_cond_broadcast(&event_loop->producer_cond);
+    }
+    pthread_mutex_unlock(&event_loop->producer_lock);
+}
+
+static void event_loop_wait_for_producers_closed(struct event_loop *event_loop)
+{
+    if (!event_loop->producer_sync_initialized) return;
+
+    pthread_mutex_lock(&event_loop->producer_lock);
+    while (event_loop_admission_count(__atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE)) != 0) {
+        pthread_cond_wait(&event_loop->producer_cond, &event_loop->producer_lock);
+    }
+    pthread_mutex_unlock(&event_loop->producer_lock);
+}
+
+static void event_loop_close_producer_admission(struct event_loop *event_loop)
+{
+    __atomic_fetch_and(&event_loop->producer_admission, EVENT_LOOP_ADMISSION_COUNT_MASK, __ATOMIC_ACQ_REL);
+    event_loop_wait_for_producers_closed(event_loop);
+}
+
+static void event_loop_close_producer_admission_after_admitted_self(struct event_loop *event_loop)
+{
+    __atomic_fetch_and(&event_loop->producer_admission, EVENT_LOOP_ADMISSION_COUNT_MASK, __ATOMIC_ACQ_REL);
+    event_loop_leave_producer(event_loop);
+    event_loop_wait_for_producers_closed(event_loop);
 }
 
 static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type type, void *context, int param1)
@@ -2116,17 +2250,24 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
         warn("%s: the event loop is falling behind, its queue now holds %u events\n", __FUNCTION__, capacity);
     } else if (result == EVENT_QUEUE_FULL) {
         warn("%s: could not grow the event queue, event %d dropped\n", __FUNCTION__, type);
-        event_loop_release_rejected_event(type, context, param1);
+        event_loop_discard_event(type, context, param1, true);
         return false;
     }
 
-    if (post_wake) sem_post(event_loop->semaphore);
+    if (post_wake && event_loop->semaphore) sem_post(event_loop->semaphore);
     return true;
 }
 
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
-    return event_loop_enqueue(event_loop, type, context, param1);
+    if (!event_loop_admit_producer(event_loop)) {
+        event_loop_discard_event(type, context, param1, true);
+        return false;
+    }
+
+    bool result = event_loop_enqueue(event_loop, type, context, param1);
+    event_loop_leave_producer(event_loop);
+    return result;
 }
 
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
@@ -2140,7 +2281,29 @@ static int (*event_loop_thread_create)(pthread_t *, const pthread_attr_t *, void
 #define event_loop_thread_create pthread_create
 #endif
 
-bool event_loop_begin(struct event_loop *event_loop)
+static void event_loop_cleanup(struct event_loop *event_loop)
+{
+    event_loop_close_producer_admission(event_loop);
+
+    if (event_loop->queue.events) {
+        struct event event;
+        while (event_queue_pop(&event_loop->queue, &event)) {
+            event_loop_discard_event(event.type, event.context, event.param1, false);
+        }
+        event_queue_destroy(&event_loop->queue);
+    }
+    if (event_loop->semaphore) sem_close(event_loop->semaphore);
+    event_loop->semaphore = NULL;
+    if (event_loop->producer_sync_initialized) {
+        pthread_cond_destroy(&event_loop->producer_cond);
+        pthread_mutex_destroy(&event_loop->producer_lock);
+    }
+    memset(&event_loop->thread, 0, sizeof(event_loop->thread));
+    event_loop->producer_sync_initialized = false;
+    __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+}
+
+bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootstrap_callback callback, void *context)
 {
     *event_loop = (struct event_loop) { 0 };
     if (!event_queue_init(&event_loop->queue, EVENT_QUEUE_CAPACITY)) return false;
@@ -2153,15 +2316,108 @@ bool event_loop_begin(struct event_loop *event_loop)
         return false;
     }
 
-    event_loop->is_running = true;
-    if (event_loop_thread_create(&event_loop->thread, NULL, &event_loop_run, event_loop) != 0) {
-        event_loop->is_running = false;
-        memset(&event_loop->thread, 0, sizeof(event_loop->thread));
-        sem_close(event_loop->semaphore);
-        event_loop->semaphore = NULL;
-        event_queue_destroy(&event_loop->queue);
+    if (pthread_mutex_init(&event_loop->producer_lock, NULL) != 0) {
+        event_loop_cleanup(event_loop);
+        return false;
+    }
+    if (pthread_cond_init(&event_loop->producer_cond, NULL) != 0) {
+        pthread_mutex_destroy(&event_loop->producer_lock);
+        event_loop_cleanup(event_loop);
+        return false;
+    }
+    event_loop->producer_sync_initialized = true;
+    __atomic_store_n(&event_loop->producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+
+    struct event_loop_bootstrap bootstrap = {
+        .event_loop = event_loop,
+        .callback = callback,
+        .context = context,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER
+    };
+
+    __atomic_store_n(&event_loop->is_running, true, __ATOMIC_RELEASE);
+    if (event_loop_thread_create(&event_loop->thread, NULL, &event_loop_run, &bootstrap) != 0) {
+        __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
+        event_loop_close_producer_admission(event_loop);
+        pthread_cond_destroy(&bootstrap.cond);
+        pthread_mutex_destroy(&bootstrap.mutex);
+        event_loop_cleanup(event_loop);
         return false;
     }
 
-    return true;
+    pthread_mutex_lock(&bootstrap.mutex);
+    while (!bootstrap.completed) pthread_cond_wait(&bootstrap.cond, &bootstrap.mutex);
+    bool result = bootstrap.result;
+    pthread_mutex_unlock(&bootstrap.mutex);
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+
+    if (!result) {
+        event_loop_close_producer_admission(event_loop);
+        pthread_join(event_loop->thread, NULL);
+        event_loop_cleanup(event_loop);
+    }
+    return result;
+}
+
+bool event_loop_begin(struct event_loop *event_loop)
+{
+    return event_loop_begin_bootstrap(event_loop, NULL, NULL);
+}
+
+bool event_loop_is_worker_thread(struct event_loop *event_loop)
+{
+    return event_loop && event_loop_worker == event_loop;
+}
+
+bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_callback callback, void *context)
+{
+    struct event_loop_sync sync = {
+        .callback = callback,
+        .context = context,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER
+    };
+
+    if (!event_loop_admit_producer(event_loop)) {
+        pthread_cond_destroy(&sync.cond);
+        pthread_mutex_destroy(&sync.mutex);
+        return false;
+    }
+
+    if (event_loop_is_worker_thread(event_loop)) {
+        event_loop_leave_producer(event_loop);
+        pthread_cond_destroy(&sync.cond);
+        pthread_mutex_destroy(&sync.mutex);
+        return false;
+    }
+
+    (void) event_loop_enqueue(event_loop, EVENT_LOOP_SYNC, &sync, 0);
+    event_loop_leave_producer(event_loop);
+
+    pthread_mutex_lock(&sync.mutex);
+    while (!sync.completed) pthread_cond_wait(&sync.cond, &sync.mutex);
+    bool result = sync.result;
+    pthread_mutex_unlock(&sync.mutex);
+
+    pthread_cond_destroy(&sync.cond);
+    pthread_mutex_destroy(&sync.mutex);
+    return result;
+}
+
+void event_loop_end(struct event_loop *event_loop)
+{
+    if (!event_loop_admit_producer(event_loop)) return;
+    if (event_loop_is_worker_thread(event_loop)) {
+        event_loop_leave_producer(event_loop);
+        warn("%s: ignoring event-loop shutdown requested from the event-loop thread\n", __FUNCTION__);
+        return;
+    }
+
+    event_loop_close_producer_admission_after_admitted_self(event_loop);
+    __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
+    sem_post(event_loop->semaphore);
+    pthread_join(event_loop->thread, NULL);
+    event_loop_cleanup(event_loop);
 }

@@ -111,6 +111,150 @@ TEST_FUNC(message_utf8_ingress_validation,
     }
 });
 
+struct message_reload_test_context
+{
+    FILE *response;
+};
+
+static size_t message_space_lifecycle_create_calls;
+static size_t message_space_lifecycle_destroy_calls;
+static uint64_t message_space_lifecycle_active(void) { return 11; }
+static enum space_op_error message_space_lifecycle_create(uint64_t sid)
+{
+    ++message_space_lifecycle_create_calls;
+    return sid == 11 ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_MISSING_SRC;
+}
+static enum space_op_error message_space_lifecycle_destroy(uint64_t sid)
+{
+    ++message_space_lifecycle_destroy_calls;
+    return sid == 11 ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_MISSING_SRC;
+}
+
+static bool message_test_reload_on_worker(void *context)
+{
+    struct message_reload_test_context *test = context;
+    char exact[] = "reload\0";
+    handle_domain_config(test->response, message_test_token("config"), exact);
+    return true;
+}
+
+TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation,
+{
+    bool saved_verbose = g_verbose;
+    int saved_window_gap = g_space_manager.window_gap;
+    enum ffm_mode saved_ffm = g_window_manager.configured_ffm_mode;
+    struct rule *saved_rules = g_window_manager.rules;
+    struct bucket **saved_views = g_space_manager.view.buckets;
+    struct bucket **saved_managed = g_window_manager.managed_window.buckets;
+    struct declarative_runtime_cell saved_runtime =
+        g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP];
+    struct menu_bar_settings saved_menu = menu_bar_manager_settings();
+    int saved_mouse_modifier = g_mouse_state.modifier;
+    uint64_t saved_generation = declarative_installed_generation();
+    g_verbose = false;
+    char scoped[] = "--space\0focused\0reload\0";
+    char trailing[] = "reload\0trailing\0";
+    char mixed_before[] = "debug_output\0on\0reload\0";
+    char mixed_after[] = "reload\0debug_output\0on\0";
+    char *invalid_messages[] = { scoped, trailing, mixed_before, mixed_after };
+
+    for (size_t i = 0; i < array_count(invalid_messages); ++i) {
+        FILE *response = tmpfile();
+        TEST_CHECK(response != NULL, true);
+        if (!response) continue;
+        handle_domain_config(response, message_test_token("config"), invalid_messages[i]);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        fclose(response);
+        TEST_CHECK(strstr(output, "must be unscoped") != NULL, true);
+        TEST_CHECK(g_verbose, false);
+        TEST_CHECK(g_space_manager.window_gap, saved_window_gap);
+        TEST_CHECK(g_window_manager.configured_ffm_mode, saved_ffm);
+        TEST_CHECK(g_window_manager.rules, saved_rules);
+        TEST_CHECK(g_space_manager.view.buckets, saved_views);
+        TEST_CHECK(g_window_manager.managed_window.buckets, saved_managed);
+        TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP].present,
+                   saved_runtime.present);
+        TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP].source,
+                   saved_runtime.source);
+        TEST_CHECK(menu_bar_manager_settings().enabled, saved_menu.enabled);
+        TEST_CHECK(menu_bar_manager_settings().style, saved_menu.style);
+        TEST_CHECK(g_mouse_state.modifier, saved_mouse_modifier);
+        TEST_CHECK(declarative_installed_generation(), saved_generation);
+    }
+
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    declarative_install_test_set_generation(UINT64_MAX);
+    FILE *exact_response = tmpfile();
+    TEST_CHECK(exact_response != NULL, true);
+    if (exact_response) {
+        struct message_reload_test_context exact = { .response = exact_response };
+        TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, message_test_reload_on_worker, &exact), true);
+        event_loop_end(&g_event_loop);
+        rewind(exact_response);
+        unsigned char marker = 0;
+        TEST_CHECK(fread(&marker, 1, 1, exact_response), 1UL);
+        TEST_CHECK(marker, (unsigned char) FAILURE_MESSAGE[0]);
+        fclose(exact_response);
+    }
+    TEST_CHECK(declarative_installed_generation(), UINT64_MAX);
+    declarative_install_test_set_generation(0);
+    g_event_loop = saved_event_loop;
+    g_verbose = saved_verbose;
+});
+
+TEST_FUNC(message_space_create_destroy_success_requests_one_reconcile,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct menu_bar_manager_state saved_menu_manager = g_menu_bar_manager;
+    __auto_type saved_active = message_space_active;
+    __auto_type saved_add = message_space_add;
+    __auto_type saved_destroy = message_space_destroy;
+    g_event_loop = (struct event_loop) {0};
+    g_menu_bar_manager = (struct menu_bar_manager_state) {0};
+    declarative_install_test_set_generation(1);
+    TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_message_lifecycle_%d", getpid());
+    g_event_loop.semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+    message_space_active = message_space_lifecycle_active;
+    message_space_add = message_space_lifecycle_create;
+    message_space_destroy = message_space_lifecycle_destroy;
+    message_space_lifecycle_create_calls = 0;
+    message_space_lifecycle_destroy_calls = 0;
+
+    char create[] = "--create\0";
+    char destroy[] = "--destroy\0";
+    handle_domain_space(NULL, message_test_token("space"), create);
+    handle_domain_space(NULL, message_test_token("space"), destroy);
+    TEST_CHECK(message_space_lifecycle_create_calls, 1U);
+    TEST_CHECK(message_space_lifecycle_destroy_calls, 1U);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+
+    struct event event = {0};
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    sem_close(g_event_loop.semaphore);
+    event_queue_destroy(&g_event_loop.queue);
+    message_space_active = saved_active;
+    message_space_add = saved_add;
+    message_space_destroy = saved_destroy;
+    declarative_install_test_set_generation(0);
+    g_menu_bar_manager = saved_menu_manager;
+    g_event_loop = saved_event_loop;
+});
+
 TEST_FUNC(message_numeric_token_boundaries,
 {
     struct token_value value = token_to_value(message_test_token("2147483647"));

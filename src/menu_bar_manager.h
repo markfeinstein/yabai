@@ -16,6 +16,13 @@
 #define MENU_BAR_SPACE_FILTER_OCCUPIED_STR "occupied"
 #define MENU_BAR_SPACE_FILTER_ALL_STR      "all"
 
+enum menu_bar_tracking_transition
+{
+    MENU_BAR_TRACKING_TRANSITION_NONE = 0,
+    MENU_BAR_TRACKING_TRANSITION_OPENED,
+    MENU_BAR_TRACKING_TRANSITION_CLOSED
+};
+
 enum menu_bar_dirty_reason
 {
     MENU_BAR_DIRTY_STARTUP        = 1u << 0,
@@ -50,9 +57,21 @@ bool menu_bar_manager_set_enabled(enum menu_bar_enabled enabled);
 bool menu_bar_manager_set_style(enum menu_bar_style style);
 bool menu_bar_manager_set_space_filter(enum menu_bar_space_filter filter);
 
+/* Startup-only staging changes settings without publishing or scheduling work. */
+void menu_bar_manager_startup_staging_open(void);
+bool menu_bar_manager_startup_staging_seal(void);
+void menu_bar_manager_startup_staging_abort(void);
+bool menu_bar_manager_startup_stage_enabled(enum menu_bar_enabled enabled);
+bool menu_bar_manager_startup_stage_style(enum menu_bar_style style);
+bool menu_bar_manager_startup_stage_space_filter(enum menu_bar_space_filter filter);
+bool menu_bar_manager_startup_settings_can_commit(const struct menu_bar_settings *settings);
+void menu_bar_manager_startup_settings_commit(const struct menu_bar_settings *settings);
+void menu_bar_manager_settings_commit_no_post(const struct menu_bar_settings *settings);
+void menu_bar_manager_settings_postcommit(const struct menu_bar_settings *previous);
+
 void menu_bar_manager_mark_dirty(uint32_t reason);
 void menu_bar_manager_refresh(void);
-void menu_bar_manager_handle_action(struct menu_bar_action *action);
+enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar_action *action);
 void menu_bar_manager_release_action(struct menu_bar_action *action);
 
 #endif

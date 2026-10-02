@@ -937,9 +937,30 @@ bool view_is_dirty(struct view *view)
     return view_check_flag(view, VIEW_IS_DIRTY);
 }
 
+#ifdef TESTS
+static struct view_test_platform_ops view_test_platform_ops;
+
+void view_test_set_platform_ops(const struct view_test_platform_ops *ops)
+{
+    view_test_platform_ops = ops ? *ops : (struct view_test_platform_ops) { 0 };
+}
+#endif
+
 void view_flush(struct view *view)
 {
-    if (space_is_visible(view->sid)) {
+#ifdef TESTS
+    bool visible = view_test_platform_ops.space_is_visible
+        ? view_test_platform_ops.space_is_visible(view->sid, view_test_platform_ops.context)
+        : space_is_visible(view->sid);
+#else
+    bool visible = space_is_visible(view->sid);
+#endif
+    if (visible) {
+#ifdef TESTS
+        if (view_test_platform_ops.flush_windows) {
+            view_test_platform_ops.flush_windows(view->root, view_test_platform_ops.context);
+        } else
+#endif
         window_node_flush(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
     } else {
@@ -1059,18 +1080,26 @@ void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
 
 void view_update(struct view *view)
 {
-    uint32_t did = space_display_id(view->sid);
-    CGRect frame = display_bounds_constrained(did, false);
-    view->root->area = area_from_cgrect(frame);
+#ifdef TESTS
+    if (view_test_platform_ops.update_windows) {
+        view_test_platform_ops.update_windows(view, view_test_platform_ops.context);
+    } else {
+#endif
+        uint32_t did = space_display_id(view->sid);
+        CGRect frame = display_bounds_constrained(did, false);
+        view->root->area = area_from_cgrect(frame);
 
-    if (view_check_flag(view, VIEW_ENABLE_PADDING)) {
-        view->root->area.x += view->left_padding;
-        view->root->area.w -= (view->left_padding + view->right_padding);
-        view->root->area.y += view->top_padding;
-        view->root->area.h -= (view->top_padding + view->bottom_padding);
+        if (view_check_flag(view, VIEW_ENABLE_PADDING)) {
+            view->root->area.x += view->left_padding;
+            view->root->area.w -= (view->left_padding + view->right_padding);
+            view->root->area.y += view->top_padding;
+            view->root->area.h -= (view->top_padding + view->bottom_padding);
+        }
+
+        window_node_update(view, view->root);
+#ifdef TESTS
     }
-
-    window_node_update(view, view->root);
+#endif
     view_set_flag(view, VIEW_IS_VALID);
     view_set_flag(view, VIEW_IS_DIRTY);
 }
@@ -1084,12 +1113,25 @@ struct view *view_create(uint64_t sid)
     memset(view->root, 0, sizeof(struct window_node));
 
     view->sid = sid;
+#ifdef TESTS
+    view->uuid = view_test_platform_ops.copy_space_uuid
+        ? view_test_platform_ops.copy_space_uuid(sid, view_test_platform_ops.context)
+        : SLSSpaceCopyName(g_connection, sid);
+#else
     view->uuid = SLSSpaceCopyName(g_connection, sid);
+#endif
 
     view_set_flag(view, VIEW_ENABLE_PADDING);
     view_set_flag(view, VIEW_ENABLE_GAP);
 
-    if (space_is_user(view->sid)) {
+#ifdef TESTS
+    bool is_user_space = view_test_platform_ops.space_is_user
+        ? view_test_platform_ops.space_is_user(sid, view_test_platform_ops.context)
+        : space_is_user(view->sid);
+#else
+    bool is_user_space = space_is_user(view->sid);
+#endif
+    if (is_user_space) {
         if (!view_check_flag(view, VIEW_LAYOUT))         view->layout         = g_space_manager.layout;
         if (!view_check_flag(view, VIEW_TOP_PADDING))    view->top_padding    = g_space_manager.top_padding;
         if (!view_check_flag(view, VIEW_BOTTOM_PADDING)) view->bottom_padding = g_space_manager.bottom_padding;

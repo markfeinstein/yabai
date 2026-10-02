@@ -38,6 +38,7 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags);
 CFStringRef display_uuid(uint32_t did);
 uint32_t display_id(CFStringRef uuid);
 CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar);
+CGRect display_bounds_constrained_with_external_bar(uint32_t did, int mode, int top_padding, int bottom_padding);
 CGPoint display_center(uint32_t did);
 uint64_t display_space_id(uint32_t did);
 int display_space_count(uint32_t did);

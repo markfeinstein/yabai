@@ -1,6 +1,58 @@
 extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 
+static struct {
+    uint64_t generation;
+    size_t native_prefix_length;
+    const char *const *labels;
+    size_t label_count;
+    const struct rule_fold_context *context;
+} rule_native_state;
+
+void rule_native_generation_install(uint64_t generation, size_t native_prefix_length,
+                                    const char *const *labels, size_t label_count,
+                                    const struct rule_fold_context *context)
+{
+    rule_native_state.generation = generation;
+    rule_native_state.native_prefix_length = native_prefix_length;
+    rule_native_state.labels = labels;
+    rule_native_state.label_count = label_count;
+    rule_native_state.context = context;
+}
+
+void rule_native_generation_clear(void) { memset(&rule_native_state, 0, sizeof(rule_native_state)); }
+uint64_t rule_native_generation(void) { return rule_native_state.generation; }
+size_t rule_native_prefix_length(void) { return rule_native_state.native_prefix_length; }
+
+bool rule_native_label_is_protected(const char *label)
+{
+    if (!label) return false;
+    for (size_t i = 0; i < rule_native_state.label_count; ++i) {
+        if (rule_native_state.labels[i] && string_equals(rule_native_state.labels[i], label)) return true;
+    }
+    return false;
+}
+
+static const struct rule_fold_context *rule_installed_fold_context(struct rule *rule,
+                                                                   const struct rule_fold_context *provided)
+{
+    if (rule && rule->owner == RULE_OWNER_NATIVE) {
+        if (rule_native_state.context && rule->generation == rule_native_state.generation) {
+            return rule_native_state.context;
+        }
+        if (rule_native_state.generation) return NULL;
+    }
+    return provided;
+}
+
+static void rule_free(void *value)
+{
+#ifdef TESTS
+    declarative_rules_test_note_free(value);
+#endif
+    free(value);
+}
+
 void rule_serialize(FILE *rsp, struct rule *rule, int index)
 {
     TIME_FUNCTION;
@@ -22,45 +74,45 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
     fprintf(rsp,
             "{\n"
             "\t\"index\":%d,\n"
-            "\t\"label\":\"%s\",\n"
-            "\t\"app\":\"%s\",\n"
-            "\t\"title\":\"%s\",\n"
-            "\t\"role\":\"%s\",\n"
-            "\t\"subrole\":\"%s\",\n"
-            "\t\"display\":%d,\n"
-            "\t\"space\":%d,\n"
-            "\t\"follow_space\":%s,\n"
-            "\t\"opacity\":%.4f,\n"
-            "\t\"manage\":%s,\n"
-            "\t\"sticky\":%s,\n"
-            "\t\"mouse_follows_focus\":%s,\n"
-            "\t\"sub-layer\":\"%s\",\n"
-            "\t\"native-fullscreen\":%s,\n"
-            "\t\"grid\":\"%d:%d:%d:%d:%d:%d\",\n"
-            "\t\"scratchpad\":\"%s\",\n"
-            "\t\"one-shot\":%s,\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":%d,\n"
+            "\t\"%s\":%d,\n"
+            "\t\"%s\":%s,\n"
+            "\t\"%s\":%.4f,\n"
+            "\t\"%s\":%s,\n"
+            "\t\"%s\":%s,\n"
+            "\t\"%s\":%s,\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":%s,\n"
+            "\t\"%s\":\"%d:%d:%d:%d:%d:%d\",\n"
+            "\t\"%s\":\"%s\",\n"
+            "\t\"%s\":%s,\n"
             "\t\"flags\":\"0x%08x\"\n"
             "}",
             index,
-            escaped_label ? escaped_label : label ? label : "",
-            escaped_app ? escaped_app : app ? app : "",
-            escaped_title ? escaped_title : title ? title : "",
-            escaped_role ? escaped_role : role ? role : "",
-            escaped_srole ? escaped_srole : srole ? srole : "",
-            rule->effects.did ? display_manager_display_id_arrangement(rule->effects.did) : 0,
-            rule->effects.sid ? space_manager_mission_control_index(rule->effects.sid) : 0,
-            json_bool(rule_effects_check_flag(&rule->effects, RULE_FOLLOW_SPACE)),
-            rule->effects.opacity,
-            json_optional_bool(rule->effects.manage),
-            json_optional_bool(rule->effects.sticky),
-            json_optional_bool(rule->effects.mff),
-            rule_effects_check_flag(&rule->effects, RULE_LAYER) ? layer_str[rule->effects.layer] : "",
-            json_optional_bool(rule->effects.fullscreen),
-            rule->effects.grid[0], rule->effects.grid[1],
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_LABEL].query_name, escaped_label ? escaped_label : label ? label : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_APP].query_name, escaped_app ? escaped_app : app ? app : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_TITLE].query_name, escaped_title ? escaped_title : title ? title : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_ROLE].query_name, escaped_role ? escaped_role : role ? role : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SUBROLE].query_name, escaped_srole ? escaped_srole : srole ? srole : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_DISPLAY].query_name, rule->effects.did ? display_manager_display_id_arrangement(rule->effects.did) : 0,
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SPACE].query_name, rule->effects.sid ? space_manager_mission_control_index(rule->effects.sid) : 0,
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_FOLLOW].query_name, json_bool(rule_effects_check_flag(&rule->effects, RULE_FOLLOW_SPACE)),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_OPACITY].query_name, rule->effects.opacity,
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_MANAGE].query_name, json_optional_bool(rule->effects.manage),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_STICKY].query_name, json_optional_bool(rule->effects.sticky),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_MFF].query_name, json_optional_bool(rule->effects.mff),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SUB_LAYER].query_name, rule_effects_check_flag(&rule->effects, RULE_LAYER) ? layer_str[rule->effects.layer] : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_FULLSCREEN].query_name, json_optional_bool(rule->effects.fullscreen),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_GRID].query_name, rule->effects.grid[0], rule->effects.grid[1],
             rule->effects.grid[2], rule->effects.grid[3],
             rule->effects.grid[4], rule->effects.grid[5],
-            escaped_scratchpad ? escaped_scratchpad : scratchpad ? scratchpad : "",
-            json_bool(rule_check_flag(rule, RULE_ONE_SHOT)),
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SCRATCHPAD].query_name, escaped_scratchpad ? escaped_scratchpad : scratchpad ? scratchpad : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_ONE_SHOT].query_name, json_bool(rule_check_flag(rule, RULE_ONE_SHOT)),
             (uint32_t)(rule->effects.flags << 16) | (uint32_t)rule->flags);
 }
 
@@ -68,6 +120,7 @@ void rule_combine_effects(struct rule_effects *effects, struct rule_effects *res
 {
     if (effects->did) {
         result->did = effects->did;
+        result->sid = 0;
         if (rule_effects_check_flag(effects, RULE_FOLLOW_SPACE)) {
             rule_effects_set_flag(result, RULE_FOLLOW_SPACE);
         } else {
@@ -77,6 +130,7 @@ void rule_combine_effects(struct rule_effects *effects, struct rule_effects *res
 
     if (effects->sid) {
         result->sid = effects->sid;
+        result->did = 0;
         if (rule_effects_check_flag(effects, RULE_FOLLOW_SPACE)) {
             rule_effects_set_flag(result, RULE_FOLLOW_SPACE);
         } else {
@@ -114,6 +168,64 @@ void rule_combine_effects(struct rule_effects *effects, struct rule_effects *res
     }
 }
 
+enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_effects *result, const struct rule_fold_context *context)
+{
+    context = rule_installed_fold_context(rule, context);
+    if (rule->owner != RULE_OWNER_NATIVE) {
+        rule_combine_effects(&rule->effects, result);
+        return RULE_FOLD_OK;
+    }
+
+    bool has_target = rule->effects.sid || rule->effects.did;
+    bool valid = !has_target;
+    if (has_target) {
+        if (rule->effects.sid) {
+            valid = rule_fold_context_target_is_valid(context, RULE_TARGET_SPACE,
+                                                       rule->effects.sid, rule->space_uuid,
+                                                       rule->expected_space_kind);
+        } else {
+            valid = rule_fold_context_target_is_valid(context, RULE_TARGET_DISPLAY,
+                                                       rule->effects.did, rule->display_uuid, 0);
+        }
+    }
+
+    struct rule_effects contribution = rule->effects;
+    if (!valid) {
+        contribution.did = 0;
+        contribution.sid = 0;
+        rule_effects_clear_flag(&contribution, RULE_FOLLOW_SPACE);
+    }
+    rule_combine_effects(&contribution, result);
+
+    if (!valid && rule->warning_state) {
+        uint64_t emitted = __atomic_load_n(&rule->warning_state->emitted_generation, __ATOMIC_ACQUIRE);
+        uint64_t pending = __atomic_load_n(&rule->warning_state->pending_generation, __ATOMIC_ACQUIRE);
+        if (emitted != rule->generation && pending != rule->generation) {
+            if (__atomic_compare_exchange_n(&rule->warning_state->pending_generation, &pending, rule->generation,
+                                            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                return RULE_FOLD_WARNING_NEWLY_REQUIRED;
+            }
+        }
+    }
+    return RULE_FOLD_OK;
+}
+
+bool rule_acknowledge_stale_warning(struct rule *rule)
+{
+    if (!rule || !rule->warning_state) return false;
+    uint64_t pending = __atomic_load_n(&rule->warning_state->pending_generation, __ATOMIC_ACQUIRE);
+    if (pending != rule->generation) return false;
+    __atomic_store_n(&rule->warning_state->emitted_generation, rule->generation, __ATOMIC_RELEASE);
+    return true;
+}
+
+void rule_report_fold_warning(struct rule *rule, enum rule_fold_result result)
+{
+    if (result != RULE_FOLD_WARNING_NEWLY_REQUIRED) return;
+    declarative_report_stale_rule();
+    (void) rule_acknowledge_stale_warning(rule);
+}
+
 void rule_reapply_all(void)
 {
     table_for (struct window *window, g_window_manager.window, {
@@ -132,12 +244,12 @@ void rule_reapply_all(void)
     })
 }
 
-bool rule_reapply_by_index(int index)
+bool rule_reapply_by_index(int index, const struct rule_fold_context *context)
 {
     for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
         if (i == index) {
             if (!rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT)) {
-                rule_apply(&g_window_manager.rules[i]);
+                rule_apply(&g_window_manager.rules[i], context);
             }
             return true;
         }
@@ -146,12 +258,12 @@ bool rule_reapply_by_index(int index)
     return false;
 }
 
-bool rule_reapply_by_label(char *label)
+bool rule_reapply_by_label(char *label, const struct rule_fold_context *context)
 {
     for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
         if (string_equals(g_window_manager.rules[i].label, label)) {
             if (!rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT)) {
-                rule_apply(&g_window_manager.rules[i]);
+                rule_apply(&g_window_manager.rules[i], context);
             }
             return true;
         }
@@ -160,52 +272,102 @@ bool rule_reapply_by_label(char *label)
     return false;
 }
 
-void rule_apply(struct rule *rule)
+void rule_apply(struct rule *rule, const struct rule_fold_context *context)
 {
+    struct rule_effects effects = {0};
+    enum rule_fold_result fold = rule_combine_rule_effects(rule, &effects, context);
+    rule_report_fold_warning(rule, fold);
     table_for (struct window *window, g_window_manager.window, {
         if (window->is_root) {
             if (window_manager_rule_matches_window(rule, window, window_title_ts(window), window_role_ts(window), window_subrole_ts(window))) {
-                window_manager_apply_manage_rule_effects_to_window(&g_space_manager, &g_window_manager, window, &rule->effects);
+                window_manager_apply_manage_rule_effects_to_window(&g_space_manager, &g_window_manager, window, &effects);
 
                 if (window_manager_is_window_eligible(window)) {
                     window->is_eligible = true;
-                    window_manager_apply_rule_effects_to_window(&g_space_manager, &g_window_manager, window, &rule->effects);
+                    window_manager_apply_rule_effects_to_window(&g_space_manager, &g_window_manager, window, &effects);
                 }
             }
         }
     })
+    rule_free(effects.scratchpad);
 }
 
-void rule_add(struct rule *rule)
+static void rule_buffer_delete_ordered(int index)
 {
-    if (rule->label) rule_remove_by_label(rule->label);
-    buf_push(g_window_manager.rules, *rule);
+    int count = buf_len(g_window_manager.rules);
+    if (index < 0 || index >= count) return;
+    if (index + 1 < count) {
+        memmove(&g_window_manager.rules[index], &g_window_manager.rules[index + 1],
+                (size_t) (count - index - 1) * sizeof(*g_window_manager.rules));
+    }
+    buf__hdr(g_window_manager.rules)->len = count - 1;
 }
 
-bool rule_remove_by_index(int index)
+enum rule_add_result rule_add(struct rule *rule)
+{
+    if (rule->label) {
+        if (rule_native_label_is_protected(rule->label)) return RULE_ADD_PROTECTED_COLLISION;
+        for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
+            if (string_equals(g_window_manager.rules[i].label, rule->label)) {
+                if (g_window_manager.rules[i].owner == RULE_OWNER_NATIVE) return RULE_ADD_PROTECTED_COLLISION;
+                rule_destroy(&g_window_manager.rules[i]);
+                rule_buffer_delete_ordered(i);
+                break;
+            }
+        }
+    }
+    rule->owner = RULE_OWNER_RUNTIME;
+    buf_push(g_window_manager.rules, *rule);
+    return RULE_ADD_OK;
+}
+
+enum rule_remove_result rule_remove_by_index(int index)
 {
     for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
         if (i == index) {
+            if (g_window_manager.rules[i].owner == RULE_OWNER_NATIVE) return RULE_REMOVE_PROTECTED_DENIED;
             rule_destroy(&g_window_manager.rules[i]);
-            buf_del(g_window_manager.rules, i);
-            return true;
+            rule_buffer_delete_ordered(i);
+            return RULE_REMOVE_OK;
         }
     }
 
-    return false;
+    return RULE_REMOVE_NOT_FOUND;
 }
 
-bool rule_remove_by_label(char *label)
+enum rule_remove_result rule_remove_by_label(char *label)
 {
+    if (rule_native_label_is_protected(label)) return RULE_REMOVE_PROTECTED_DENIED;
     for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
         if (string_equals(g_window_manager.rules[i].label, label)) {
+            if (g_window_manager.rules[i].owner == RULE_OWNER_NATIVE) return RULE_REMOVE_PROTECTED_DENIED;
             rule_destroy(&g_window_manager.rules[i]);
-            buf_del(g_window_manager.rules, i);
-            return true;
+            rule_buffer_delete_ordered(i);
+            return RULE_REMOVE_OK;
         }
     }
 
-    return false;
+    return RULE_REMOVE_NOT_FOUND;
+}
+
+void rule_cleanup_one_shots(void)
+{
+    int count = buf_len(g_window_manager.rules);
+    for (int i = 0; i < count;) {
+        if (!rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT_REMOVE)) {
+            ++i;
+            continue;
+        }
+        bool native = g_window_manager.rules[i].owner == RULE_OWNER_NATIVE;
+        rule_destroy(&g_window_manager.rules[i]);
+        if (i + 1 < count) {
+            memmove(&g_window_manager.rules[i], &g_window_manager.rules[i + 1],
+                    (size_t) (count - i - 1) * sizeof(*g_window_manager.rules));
+        }
+        --count;
+        buf__hdr(g_window_manager.rules)->len = count;
+        if (native && rule_native_state.native_prefix_length) --rule_native_state.native_prefix_length;
+    }
 }
 
 void rule_destroy(struct rule *rule)
@@ -215,11 +377,14 @@ void rule_destroy(struct rule *rule)
     if (rule_check_flag(rule, RULE_ROLE_VALID))    regfree(&rule->role_regex);
     if (rule_check_flag(rule, RULE_SUBROLE_VALID)) regfree(&rule->subrole_regex);
 
-    if (rule->label)   free(rule->label);
-    if (rule->app)     free(rule->app);
-    if (rule->title)   free(rule->title);
-    if (rule->role)    free(rule->role);
-    if (rule->subrole) free(rule->subrole);
+    rule_free(rule->label);
+    rule_free(rule->app);
+    rule_free(rule->title);
+    rule_free(rule->role);
+    rule_free(rule->subrole);
 
-    if (rule->effects.scratchpad) free(rule->effects.scratchpad);
+    rule_free(rule->effects.scratchpad);
+    rule_free(rule->display_uuid);
+    rule_free(rule->space_uuid);
+    memset(rule, 0, sizeof(*rule));
 }

@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Add native JSONC configuration for settings, per-Space policy and persistent
+  rules, with offline validation and transactional runtime reload.
 - Resolve the macOS 27 Dock Spaces singleton through Objective-C runtime
   metadata before falling back to build-specific byte patterns.
 - Return scripting-addition operation status to the client so unsupported

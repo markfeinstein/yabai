@@ -123,54 +123,161 @@ inline uint32_t display_id(CFStringRef uuid)
     return did;
 }
 
-CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar)
+static CGRect display_bounds_apply_constraints(CGRect frame, uint32_t did, uint32_t main_did,
+                                                int external_bar_mode,
+                                                int external_top_padding, int external_bottom_padding,
+                                                bool menu_bar_hidden, int notch_height, CGRect menu,
+                                                bool dock_hidden, bool dock_display, int dock_orientation,
+                                                CGRect dock)
 {
-    CGRect frame = CGDisplayBounds(did);
     int effective_ext_top_padding = 0;
-
-    if (!ignore_external_bar) {
-        if ((g_display_manager.mode == EXTERNAL_BAR_MAIN &&
-             did == display_manager_main_display_id()) ||
-            (g_display_manager.mode == EXTERNAL_BAR_ALL)) {
-            effective_ext_top_padding = g_display_manager.top_padding;
-
-            frame.origin.y    += effective_ext_top_padding;
-            frame.size.height -= effective_ext_top_padding;
-            frame.size.height -= g_display_manager.bottom_padding;
-        }
+    bool external_bar_applies = (external_bar_mode == EXTERNAL_BAR_MAIN && did == main_did) ||
+                                external_bar_mode == EXTERNAL_BAR_ALL;
+    if (external_bar_applies) {
+        effective_ext_top_padding = external_top_padding;
+        frame.origin.y += effective_ext_top_padding;
+        frame.size.height -= effective_ext_top_padding;
+        frame.size.height -= external_bottom_padding;
     }
 
-    if (display_manager_menu_bar_hidden()) {
-        int notch_height = workspace_display_notch_height(did);
+    if (menu_bar_hidden) {
         if (notch_height > effective_ext_top_padding) {
-             frame.origin.y    += (notch_height - effective_ext_top_padding);
-             frame.size.height -= (notch_height - effective_ext_top_padding);
+            frame.origin.y += notch_height - effective_ext_top_padding;
+            frame.size.height -= notch_height - effective_ext_top_padding;
         }
     } else {
-        CGRect menu = display_manager_menu_bar_rect(did);
-        frame.origin.y    += menu.size.height;
+        frame.origin.y += menu.size.height;
         frame.size.height -= menu.size.height;
     }
 
-    if (!display_manager_dock_hidden()) {
-        if (did == display_manager_dock_display_id()) {
-            CGRect dock = display_manager_dock_rect();
-            switch (display_manager_dock_orientation()) {
-            case DOCK_ORIENTATION_LEFT: {
-                frame.origin.x   += dock.size.width;
-                frame.size.width -= dock.size.width;
-            } break;
-            case DOCK_ORIENTATION_RIGHT: {
-                frame.size.width -= dock.size.width;
-            } break;
-            case DOCK_ORIENTATION_BOTTOM: {
-                frame.size.height -= dock.size.height;
-            } break;
-            }
+    if (!dock_hidden && dock_display) {
+        switch (dock_orientation) {
+        case DOCK_ORIENTATION_LEFT: {
+            frame.origin.x += dock.size.width;
+            frame.size.width -= dock.size.width;
+        } break;
+        case DOCK_ORIENTATION_RIGHT: {
+            frame.size.width -= dock.size.width;
+        } break;
+        case DOCK_ORIENTATION_BOTTOM: {
+            frame.size.height -= dock.size.height;
+        } break;
         }
     }
-
     return frame;
+}
+
+#ifdef TESTS
+struct display_bounds_platform_ops
+{
+    CGRect (*display_bounds)(uint32_t did, void *context);
+    uint32_t (*main_display_id)(void *context);
+    bool (*menu_bar_hidden)(void *context);
+    int (*notch_height)(uint32_t did, void *context);
+    CGRect (*menu_bar_rect)(uint32_t did, void *context);
+    bool (*dock_hidden)(void *context);
+    uint32_t (*dock_display_id)(void *context);
+    int (*dock_orientation)(void *context);
+    CGRect (*dock_rect)(void *context);
+    void *context;
+};
+static struct display_bounds_platform_ops display_bounds_test_ops;
+#endif
+
+static CGRect display_bounds_platform_display_bounds(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.display_bounds) return display_bounds_test_ops.display_bounds(did, display_bounds_test_ops.context);
+#endif
+    return CGDisplayBounds(did);
+}
+
+static uint32_t display_bounds_platform_main_display_id(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.main_display_id) return display_bounds_test_ops.main_display_id(display_bounds_test_ops.context);
+#endif
+    return display_manager_main_display_id();
+}
+
+static bool display_bounds_platform_menu_bar_hidden(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.menu_bar_hidden) return display_bounds_test_ops.menu_bar_hidden(display_bounds_test_ops.context);
+#endif
+    return display_manager_menu_bar_hidden();
+}
+
+static int display_bounds_platform_notch_height(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.notch_height) return display_bounds_test_ops.notch_height(did, display_bounds_test_ops.context);
+#endif
+    return workspace_display_notch_height(did);
+}
+
+static CGRect display_bounds_platform_menu_bar_rect(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.menu_bar_rect) return display_bounds_test_ops.menu_bar_rect(did, display_bounds_test_ops.context);
+#endif
+    return display_manager_menu_bar_rect(did);
+}
+
+static bool display_bounds_platform_dock_hidden(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_hidden) return display_bounds_test_ops.dock_hidden(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_hidden();
+}
+
+static uint32_t display_bounds_platform_dock_display_id(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_display_id) return display_bounds_test_ops.dock_display_id(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_display_id();
+}
+
+static int display_bounds_platform_dock_orientation(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_orientation) return display_bounds_test_ops.dock_orientation(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_orientation();
+}
+
+static CGRect display_bounds_platform_dock_rect(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_rect) return display_bounds_test_ops.dock_rect(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_rect();
+}
+
+CGRect display_bounds_constrained_with_external_bar(uint32_t did, int mode, int top_padding, int bottom_padding)
+{
+    uint32_t main_did = mode == EXTERNAL_BAR_MAIN ? display_bounds_platform_main_display_id() : 0;
+    bool menu_bar_hidden = display_bounds_platform_menu_bar_hidden();
+    bool dock_hidden = display_bounds_platform_dock_hidden();
+    bool dock_display = !dock_hidden && did == display_bounds_platform_dock_display_id();
+    return display_bounds_apply_constraints(display_bounds_platform_display_bounds(did), did, main_did, mode,
+                                            top_padding, bottom_padding,
+                                            menu_bar_hidden,
+                                            menu_bar_hidden ? display_bounds_platform_notch_height(did) : 0,
+                                            menu_bar_hidden ? CGRectZero : display_bounds_platform_menu_bar_rect(did),
+                                            dock_hidden, dock_display,
+                                            dock_display ? display_bounds_platform_dock_orientation() : 0,
+                                            dock_display ? display_bounds_platform_dock_rect() : CGRectZero);
+}
+
+CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar)
+{
+    return display_bounds_constrained_with_external_bar(did,
+                                                        ignore_external_bar ? EXTERNAL_BAR_OFF : g_display_manager.mode,
+                                                        g_display_manager.top_padding,
+                                                        g_display_manager.bottom_padding);
 }
 
 CGPoint display_center(uint32_t did)

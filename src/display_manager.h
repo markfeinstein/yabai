@@ -89,5 +89,6 @@ void display_manager_set_active_display_id(uint32_t did);
 void display_manager_focus_display(uint32_t did, uint64_t sid);
 enum space_op_error display_manager_focus_space(uint32_t did, uint64_t sid);
 bool display_manager_begin(struct display_manager *dm);
+bool display_manager_observe(void);
 
 #endif

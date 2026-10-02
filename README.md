@@ -36,7 +36,8 @@ Additional features of yabai include focus-follows-mouse, disabling animations f
 ## Installation and Configuration
 
 - The [&nearr;&nbsp;yabai&nbsp;wiki][yabai-wiki] has both brief and detailed installation instructions for multiple installation methods, and also explains how to uninstall yabai completely.
-- Sample configuration files can be found in the [&nearr;&nbsp;examples][yabai-examples] directory. Refer to the [&nearr;&nbsp;documentation][yabai-docs] or the wiki for further information.
+- Native settings, per-Space policy, and persistent rules can be written in `~/.config/yabai/yabai.jsonc`. Validate it without starting the daemon with `yabai --check-config ~/.config/yabai/yabai.jsonc`.
+- Native JSONC loads before `yabairc`. Keep `yabairc` for runtime overrides, signals, startup actions, and shell logic. Sample files are in the [&nearr;&nbsp;examples][yabai-examples] directory; the complete JSONC schema and reload behavior are in the [&nearr;&nbsp;documentation][yabai-docs].
 - Keyboard shortcuts can be defined with [&nearr;&nbsp;skhd][gh-skhd] or any other suitable software you may prefer.
 
 ## Requirements and Caveats

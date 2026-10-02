@@ -44,6 +44,9 @@ enum ffm_mode
     FFM_AUTORAISE
 };
 
+typedef uint32_t ffm_atomic_mode;
+_Static_assert(FFM_AUTORAISE <= UINT32_MAX, "ffm mode must fit its atomic storage");
+
 static const char *ffm_mode_str[] =
 {
     "disabled",
@@ -88,7 +91,9 @@ struct window_manager
     ProcessSerialNumber focused_window_psn;
     uint32_t last_window_id;
     bool enable_mff;
-    enum ffm_mode ffm_mode;
+    enum ffm_mode configured_ffm_mode;
+    ffm_atomic_mode effective_ffm_mode;
+    uint32_t ffm_menu_suspend_count;
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
     bool enable_window_opacity;
@@ -179,6 +184,10 @@ void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool e
 bool window_manager_set_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_window_opacity(struct window_manager *wm, struct window *window, float opacity);
 bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode);
+enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm);
+void window_manager_recompute_effective_ffm_mode(struct window_manager *wm);
+void window_manager_ffm_menu_opened(struct window_manager *wm);
+void window_manager_ffm_menu_closed(struct window_manager *wm);
 enum window_op_error window_manager_set_window_insertion(struct space_manager *sm, struct window *window, int direction);
 enum window_op_error window_manager_stack_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
 enum window_op_error window_manager_warp_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);

@@ -138,6 +138,9 @@ static MOUSE_HANDLER(mouse_handler)
         event_loop_post(&g_event_loop, MOUSE_DRAGGED, (void *) CFRetain(event), button);
     } break;
     case kCGEventMouseMoved: {
+        enum ffm_mode ffm_mode = window_manager_effective_ffm_mode(&g_window_manager);
+        if (ffm_mode == FFM_DISABLED) return event;
+
         uint8_t mod = mouse_mod_from_cgflags(CGEventGetFlags(event));
         uint8_t modifier = __atomic_load_n(&mouse_state->modifier, __ATOMIC_ACQUIRE);
         if (mod == modifier) return event;

@@ -732,6 +732,8 @@ static void menu_bar_manager_publish_disabled_snapshot(void)
     }
 }
 
+static bool menu_bar_manager_startup_staging_is_open;
+
 bool menu_bar_manager_init(void)
 {
     struct menu_bar_callbacks callbacks = {
@@ -750,12 +752,14 @@ bool menu_bar_manager_init(void)
     g_menu_bar_manager.menu_tracking_depth = 0;
     g_menu_bar_manager.pre_menu_focused_display_id = 0;
     menu_bar_manager_clear_action_failure();
+    menu_bar_manager_startup_staging_is_open = false;
 
     return true;
 }
 
 void menu_bar_manager_shutdown(void)
 {
+    menu_bar_manager_startup_staging_is_open = false;
     g_menu_bar_manager.initialized = false;
     g_menu_bar_manager.refresh_pending = false;
     g_menu_bar_manager.dirty_reasons = 0;
@@ -869,6 +873,106 @@ bool menu_bar_manager_parse_space_filter(const char *text, size_t length, enum m
     return false;
 }
 
+void menu_bar_manager_startup_staging_open(void)
+{
+    menu_bar_manager_startup_staging_is_open = true;
+}
+
+bool menu_bar_manager_startup_staging_seal(void)
+{
+    if (!menu_bar_manager_startup_staging_is_open) return false;
+    menu_bar_manager_startup_staging_is_open = false;
+
+    if (!g_menu_bar_manager.initialized || g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return true;
+    g_menu_bar_manager.dirty_reasons |= MENU_BAR_DIRTY_STARTUP;
+    if (g_menu_bar_manager.refresh_pending) return true;
+
+    g_menu_bar_manager.refresh_pending = true;
+    if (!event_loop_try_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0)) {
+        g_menu_bar_manager.refresh_pending = false;
+        return false;
+    }
+    return true;
+}
+
+void menu_bar_manager_startup_staging_abort(void)
+{
+    menu_bar_manager_startup_staging_is_open = false;
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+}
+
+bool menu_bar_manager_startup_stage_enabled(enum menu_bar_enabled enabled)
+{
+    if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_enabled(enabled)) return false;
+    g_menu_bar_manager.settings.enabled = enabled;
+    return true;
+}
+
+bool menu_bar_manager_startup_stage_style(enum menu_bar_style style)
+{
+    if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_style(style)) return false;
+    g_menu_bar_manager.settings.style = style;
+    return true;
+}
+
+bool menu_bar_manager_startup_stage_space_filter(enum menu_bar_space_filter filter)
+{
+    if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_space_filter(filter)) return false;
+    g_menu_bar_manager.settings.space_filter = filter;
+    return true;
+}
+
+bool menu_bar_manager_startup_settings_can_commit(const struct menu_bar_settings *settings)
+{
+    return settings && menu_bar_manager_startup_staging_is_open &&
+           menu_bar_manager_valid_enabled(settings->enabled) &&
+           menu_bar_manager_valid_style(settings->style) &&
+           menu_bar_manager_valid_space_filter(settings->space_filter);
+}
+
+void menu_bar_manager_startup_settings_commit(const struct menu_bar_settings *settings)
+{
+    assert(menu_bar_manager_startup_settings_can_commit(settings));
+    g_menu_bar_manager.settings = *settings;
+}
+
+void menu_bar_manager_settings_commit_no_post(const struct menu_bar_settings *settings)
+{
+    assert(settings && menu_bar_manager_valid_enabled(settings->enabled) &&
+           menu_bar_manager_valid_style(settings->style) &&
+           menu_bar_manager_valid_space_filter(settings->space_filter));
+    g_menu_bar_manager.settings = *settings;
+}
+
+void menu_bar_manager_settings_postcommit(const struct menu_bar_settings *previous)
+{
+    if (!previous) return;
+    if (previous->enabled != g_menu_bar_manager.settings.enabled) {
+        menu_bar_manager_clear_action_failure();
+        if (g_menu_bar_manager.settings.enabled == MENU_BAR_ENABLED) {
+            g_menu_bar_manager.enabled_generation_floor = g_menu_bar_manager.generation + 1;
+            if (g_menu_bar_manager.enabled_generation_floor == 0) g_menu_bar_manager.enabled_generation_floor = 1;
+        } else {
+            g_menu_bar_manager.refresh_pending = false;
+            g_menu_bar_manager.dirty_reasons = 0;
+            while (g_menu_bar_manager.menu_tracking_depth > 0) {
+                --g_menu_bar_manager.menu_tracking_depth;
+                event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+            }
+            g_menu_bar_manager.pre_menu_focused_display_id = 0;
+            menu_bar_manager_publish_disabled_snapshot();
+            return;
+        }
+    }
+    if (g_menu_bar_manager.settings.enabled == MENU_BAR_ENABLED &&
+        (previous->enabled != g_menu_bar_manager.settings.enabled ||
+         previous->style != g_menu_bar_manager.settings.style ||
+         previous->space_filter != g_menu_bar_manager.settings.space_filter)) {
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_STARTUP);
+    }
+}
+
 bool menu_bar_manager_set_enabled(enum menu_bar_enabled enabled)
 {
     if (!menu_bar_manager_valid_enabled(enabled)) return false;
@@ -920,6 +1024,11 @@ bool menu_bar_manager_set_space_filter(enum menu_bar_space_filter filter)
 void menu_bar_manager_mark_dirty(uint32_t reason)
 {
     if (!g_menu_bar_manager.initialized) return;
+
+    if (menu_bar_manager_startup_staging_is_open) {
+        g_menu_bar_manager.dirty_reasons |= reason;
+        return;
+    }
     if (g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return;
 
     g_menu_bar_manager.dirty_reasons |= reason;
@@ -934,17 +1043,19 @@ void menu_bar_manager_mark_dirty(uint32_t reason)
 void menu_bar_manager_refresh(void)
 {
     g_menu_bar_manager.refresh_pending = false;
-    g_menu_bar_manager.dirty_reasons = 0;
+    if (menu_bar_manager_startup_staging_is_open) return;
 
+    g_menu_bar_manager.dirty_reasons = 0;
     if (!g_menu_bar_manager.initialized || g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return;
 
     struct menu_bar_snapshot *snapshot = menu_bar_manager_create_snapshot();
     menu_bar_manager_publish_if_changed(snapshot);
 }
 
-void menu_bar_manager_handle_action(struct menu_bar_action *action)
+enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar_action *action)
 {
-    if (!action) return;
+    enum menu_bar_tracking_transition transition = MENU_BAR_TRACKING_TRANSITION_NONE;
+    if (!action) return transition;
 
     switch (action->type) {
     case MENU_BAR_ACTION_SET_STYLE: {
@@ -967,15 +1078,16 @@ void menu_bar_manager_handle_action(struct menu_bar_action *action)
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
 
         if (action->data.menu_tracking.is_tracking) {
-            if (g_menu_bar_manager.menu_tracking_depth++ == 0) {
+            if (g_menu_bar_manager.menu_tracking_depth == 0) {
                 g_menu_bar_manager.pre_menu_focused_display_id = action->data.menu_tracking.focused_display_id;
             }
-            event_loop_post(&g_event_loop, MENU_OPENED, NULL, 0);
+            if (g_menu_bar_manager.menu_tracking_depth != UINT32_MAX) ++g_menu_bar_manager.menu_tracking_depth;
+            transition = MENU_BAR_TRACKING_TRANSITION_OPENED;
             menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
         } else if (g_menu_bar_manager.menu_tracking_depth > 0) {
             --g_menu_bar_manager.menu_tracking_depth;
             if (g_menu_bar_manager.menu_tracking_depth == 0) g_menu_bar_manager.pre_menu_focused_display_id = 0;
-            event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+            transition = MENU_BAR_TRACKING_TRANSITION_CLOSED;
             menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
         }
     } break;
@@ -985,6 +1097,7 @@ void menu_bar_manager_handle_action(struct menu_bar_action *action)
     }
 
     menu_bar_manager_release_action(action);
+    return transition;
 }
 
 void menu_bar_manager_release_action(struct menu_bar_action *action)

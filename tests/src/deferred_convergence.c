@@ -287,6 +287,10 @@ TEST_FUNC(event_queue_binary_wake_converges_after_merges,
     sem_unlink(semaphore_name);
     TEST_CHECK(loop.semaphore != SEM_FAILED, true);
     if (loop.semaphore != SEM_FAILED) {
+        pthread_mutex_init(&loop.producer_lock, NULL);
+        pthread_cond_init(&loop.producer_cond, NULL);
+        loop.producer_sync_initialized = true;
+        __atomic_store_n(&loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
         TEST_CHECK(event_loop_try_post(&loop, MENU_BAR_REFRESH, NULL, 1), true);
         for (int i = 0; i < 1000; ++i) TEST_CHECK(event_loop_try_post(&loop, MENU_BAR_REFRESH, NULL, i), true);
         TEST_CHECK(sem_trywait(loop.semaphore), 0);
@@ -300,6 +304,9 @@ TEST_FUNC(event_queue_binary_wake_converges_after_merges,
         errno = 0;
         TEST_CHECK(sem_trywait(loop.semaphore), -1);
         TEST_CHECK(errno, EAGAIN);
+        event_loop_close_producer_admission(&loop);
+        pthread_cond_destroy(&loop.producer_cond);
+        pthread_mutex_destroy(&loop.producer_lock);
         sem_close(loop.semaphore);
     }
     event_queue_destroy(&loop.queue);
@@ -337,6 +344,10 @@ TEST_FUNC(producer_pending_state_rolls_back_and_retries_after_rejection,
     uint32_t saved_pending_focus = __pending_window_focus;
     g_event_loop = (struct event_loop) { 0 };
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
     struct event replaced = { 0 };
     uint32_t capacity = 0;
     bool post_wake = false;
@@ -384,6 +395,9 @@ TEST_FUNC(producer_pending_state_rolls_back_and_retries_after_rejection,
         sem_close(g_event_loop.semaphore);
     }
 
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
     g_event_loop = saved_event_loop;
     g_menu_bar_manager = saved_menu_bar_manager;

@@ -66,10 +66,32 @@ static uint64_t *menu_bar_manager_test_display_space_list(uint32_t did, int *cou
     return spaces;
 }
 
+static uint64_t menu_bar_manager_test_display_space_id(uint32_t did)
+{
+    return did == 1 ? 42 : 0;
+}
+
 static int menu_bar_manager_test_space_type(int cid, uint64_t sid)
 {
     (void) cid;
     return sid == 42 ? 0 : 1;
+}
+
+static int menu_bar_manager_test_mission_control_index(uint64_t sid)
+{
+    return sid == 42 ? 1 : 0;
+}
+
+static uint64_t *menu_bar_manager_test_window_space_list(uint32_t wid, int *count)
+{
+    static uint64_t spaces[] = { 42 };
+    if (wid != 1001) {
+        if (count) *count = 0;
+        return NULL;
+    }
+
+    if (count) *count = 1;
+    return spaces;
 }
 
 static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *count, bool include_minimized)
@@ -134,8 +156,11 @@ static void menu_bar_manager_test_install_native_seams(void)
     g_menu_bar_manager_native.active_display_count = menu_bar_manager_test_active_display_count;
     g_menu_bar_manager_native.arrangement_display_id = menu_bar_manager_test_arrangement_display_id;
     g_menu_bar_manager_native.display_space_list = menu_bar_manager_test_display_space_list;
+    g_menu_bar_manager_native.display_space_id = menu_bar_manager_test_display_space_id;
     g_menu_bar_manager_native.space_type = menu_bar_manager_test_space_type;
+    g_menu_bar_manager_native.mission_control_index = menu_bar_manager_test_mission_control_index;
     g_menu_bar_manager_native.space_window_list = menu_bar_manager_test_space_window_list;
+    g_menu_bar_manager_native.window_space_list = menu_bar_manager_test_window_space_list;
     g_menu_bar_manager_native.window_is_sticky = menu_bar_manager_test_window_is_sticky;
     g_menu_bar_manager_native.space_is_fullscreen = menu_bar_manager_test_space_is_fullscreen;
 }
@@ -145,10 +170,15 @@ static void menu_bar_manager_test_begin_queue(void)
     event_queue_init(&g_event_loop.queue, 16);
     sem_init(&g_menu_bar_manager_test_sem, 0, 0);
     g_event_loop.semaphore = &g_menu_bar_manager_test_sem;
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
 }
 
 static void menu_bar_manager_test_end_queue(void)
 {
+    event_loop_close_producer_admission(&g_event_loop);
     struct event event;
     while (event_queue_pop(&g_event_loop.queue, &event)) {
         event_loop_release_event_context(event.type, event.context);
@@ -158,6 +188,10 @@ static void menu_bar_manager_test_end_queue(void)
     g_event_loop.queue = (struct event_queue) { 0 };
     sem_destroy(&g_menu_bar_manager_test_sem);
     g_event_loop.semaphore = NULL;
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    g_event_loop.producer_sync_initialized = false;
+    __atomic_store_n(&g_event_loop.producer_admission, 0, __ATOMIC_RELEASE);
 }
 
 static int menu_bar_manager_test_count_events(enum event_type type)
@@ -191,6 +225,140 @@ static void menu_bar_manager_test_set_enabled_snapshot(uint64_t generation, uint
     g_menu_bar_manager.enabled_generation_floor = floor;
     g_menu_bar_manager.last_snapshot = menu_bar_manager_test_snapshot(generation, MENU_BAR_ENABLED, 42);
 }
+
+struct menu_bar_manager_live_staging_test_context
+{
+    pthread_t first_worker_thread;
+    pthread_t seal_worker_thread;
+};
+
+static bool menu_bar_manager_test_live_stage_dirty(void *context)
+{
+    struct menu_bar_manager_live_staging_test_context *test = context;
+    test->first_worker_thread = pthread_self();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_WINDOW);
+    return true;
+}
+
+static bool menu_bar_manager_test_live_stage_seal(void *context)
+{
+    struct menu_bar_manager_live_staging_test_context *test = context;
+    test->seal_worker_thread = pthread_self();
+    return menu_bar_manager_startup_staging_seal();
+}
+
+static bool menu_bar_manager_test_live_noop(void *context)
+{
+    (void) context;
+    return true;
+}
+
+TEST_FUNC(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct display_manager saved_display_manager = g_display_manager;
+    g_event_loop = (struct event_loop) {0};
+    g_display_manager.current_display_id = 0;
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_install_native_seams();
+    g_menu_bar_manager.initialized = true;
+    g_menu_bar_manager.settings.enabled = MENU_BAR_ENABLED;
+    g_menu_bar_manager.settings.style = MENU_BAR_STYLE_COMPACT;
+    g_menu_bar_manager.settings.space_filter = MENU_BAR_SPACE_FILTER_OCCUPIED;
+
+    struct menu_bar_manager_live_staging_test_context test = {0};
+    menu_bar_manager_startup_staging_open();
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, menu_bar_manager_test_live_stage_dirty, &test), true);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_DISPLAY);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, menu_bar_manager_test_live_stage_seal, &test), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, menu_bar_manager_test_live_noop, NULL), true);
+
+    TEST_CHECK(pthread_equal(test.first_worker_thread, g_event_loop.thread), true);
+    TEST_CHECK(pthread_equal(test.seal_worker_thread, g_event_loop.thread), true);
+    TEST_CHECK(menu_bar_manager_startup_staging_is_open, false);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
+    TEST_CHECK(g_menu_bar_manager.generation, 1ULL);
+    TEST_CHECK(g_menu_bar_manager.last_snapshot != NULL, true);
+
+    event_loop_end(&g_event_loop);
+    menu_bar_manager_test_reset();
+    g_event_loop = saved_event_loop;
+    g_display_manager = saved_display_manager;
+});
+
+TEST_FUNC(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers,
+{
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    g_menu_bar_manager.initialized = true;
+    g_menu_bar_manager.settings.enabled = MENU_BAR_ENABLED;
+
+    menu_bar_manager_startup_staging_open();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_WINDOW);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_DISPLAY);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+
+    menu_bar_manager_refresh();
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_DISPLAY);
+    TEST_CHECK(g_menu_bar_manager.generation, 0ULL);
+
+    TEST_CHECK(menu_bar_manager_startup_staging_seal(), true);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons,
+               MENU_BAR_DIRTY_STARTUP | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_DISPLAY);
+    TEST_CHECK(menu_bar_manager_startup_staging_seal(), false);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_SPACE);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    menu_bar_manager_startup_staging_open();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
+    menu_bar_manager_startup_staging_abort();
+    TEST_CHECK(menu_bar_manager_startup_staging_is_open, false);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+
+    menu_bar_manager_startup_staging_open();
+    g_menu_bar_manager.initialized = false;
+    menu_bar_manager_shutdown();
+    TEST_CHECK(menu_bar_manager_startup_staging_is_open, false);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
+TEST_FUNC(menu_bar_manager_startup_staging_seal_reports_refresh_rejection,
+{
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    g_menu_bar_manager.initialized = true;
+    g_menu_bar_manager.settings.enabled = MENU_BAR_ENABLED;
+
+    menu_bar_manager_startup_staging_open();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    event_loop_close_producer_admission(&g_event_loop);
+    TEST_CHECK(menu_bar_manager_startup_staging_seal(), false);
+    TEST_CHECK(menu_bar_manager_startup_staging_is_open, false);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_STARTUP);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
 
 TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
     bool saved_tahoe = _workspace_is_macos_version_tahoe;

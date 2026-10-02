@@ -227,12 +227,19 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     sem_unlink(replay_semaphore_name);
     TEST_CHECK(replay_semaphore != SEM_FAILED, true);
     g_event_loop.semaphore = replay_semaphore;
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
     event_loop_replay_lost_front_switched(&replay_process);
     TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &psn_b), 0U);
     TEST_CHECK(g_event_loop.queue.count, 1U);
     struct event accepted_replay_event;
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &accepted_replay_event), true);
     event_loop_release_event_context(accepted_replay_event.type, accepted_replay_event.context);
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
     if (replay_semaphore != SEM_FAILED) sem_close(replay_semaphore);
     TEST_CHECK(pthread_mutex_trylock(&g_process_manager_front_switch_lock), 0);
@@ -244,6 +251,10 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     uint32_t capacity = 0;
     bool post_wake = false;
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
     TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED }, false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
     g_event_queue_test_fail_allocation = true;
     uint64_t generation_before_rejection = g_process_manager.front_switch_generation;
@@ -259,6 +270,9 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     TEST_CHECK(pthread_mutex_trylock(&g_process_manager_front_switch_lock), 0);
     pthread_mutex_unlock(&g_process_manager_front_switch_lock);
 
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
     g_event_loop = saved_event_loop;
     table_free(&g_window_manager.application);
@@ -290,6 +304,839 @@ TEST_FUNC(window_removal_clears_focus_and_recycled_identity_state,
     TEST_CHECK(wm.last_window_id, 0U);
     TEST_CHECK(window_manager_find_lost_focused_event(&wm, 42), false);
     table_free(&wm.window_lost_focused_event);
+});
+
+struct event_loop_bootstrap_test_state
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool entered;
+    bool release;
+    bool callback_result;
+    pthread_t callback_thread;
+    uint32_t queued_while_blocked;
+};
+
+struct event_loop_begin_test_context
+{
+    struct event_loop *event_loop;
+    struct event_loop_bootstrap_test_state *bootstrap;
+    bool result;
+};
+
+struct event_loop_end_test_context
+{
+    struct event_loop *event_loop;
+};
+
+struct event_loop_paused_admission_test_context
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool entered;
+    bool release;
+    bool accepted;
+    CFMutableArrayRef context;
+};
+
+struct event_loop_worker_guard_test_context
+{
+    bool sync_result;
+    bool end_left_loop_live;
+    pthread_t worker_thread;
+};
+
+struct event_loop_paused_leave_test_context
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    uint32_t pause_after;
+    uint32_t observed;
+    bool entered;
+    bool release;
+};
+
+struct event_loop_sync_thread_test_context
+{
+    bool result;
+    uint32_t callback_count;
+};
+
+struct event_loop_thread_create_interval_test_context
+{
+    bool fail_create;
+    uint32_t create_calls;
+    pthread_t sync_thread;
+    struct event_loop_sync_thread_test_context sync;
+};
+
+struct event_loop_cross_loop_test_context
+{
+    struct event_loop *other_loop;
+    pthread_t source_worker;
+    pthread_t target_worker;
+    bool target_sync_result;
+    bool target_cleanup_complete;
+    uint32_t target_callback_count;
+};
+
+static uint32_t event_loop_test_queue_count(struct event_loop *event_loop)
+{
+    pthread_mutex_lock(&event_loop->queue.lock);
+    uint32_t count = event_loop->queue.count;
+    pthread_mutex_unlock(&event_loop->queue.lock);
+    return count;
+}
+
+static bool event_loop_test_bootstrap_callback(void *context)
+{
+    struct event_loop_bootstrap_test_state *state = context;
+    pthread_mutex_lock(&state->mutex);
+    state->callback_thread = pthread_self();
+    state->entered = true;
+    pthread_cond_signal(&state->cond);
+    while (!state->release) pthread_cond_wait(&state->cond, &state->mutex);
+    state->queued_while_blocked = event_loop_test_queue_count(&g_event_loop);
+    bool result = state->callback_result;
+    pthread_mutex_unlock(&state->mutex);
+    return result;
+}
+
+static void *event_loop_test_begin_bootstrap(void *context)
+{
+    struct event_loop_begin_test_context *begin = context;
+    begin->result = event_loop_begin_bootstrap(begin->event_loop, event_loop_test_bootstrap_callback, begin->bootstrap);
+    return NULL;
+}
+
+static void *event_loop_test_concurrent_producer(void *context)
+{
+    bool *accepted = context;
+    *accepted = event_loop_try_post(&g_event_loop, MENU_BAR_REFRESH, NULL, 0);
+    return NULL;
+}
+
+static void *event_loop_test_end_thread(void *context)
+{
+    struct event_loop_end_test_context *end = context;
+    event_loop_end(end->event_loop);
+    return NULL;
+}
+
+static bool event_loop_test_fd_is_open(int fd)
+{
+    return fcntl(fd, F_GETFD) != -1;
+}
+
+static void event_loop_test_close_fd_if_open(int fd)
+{
+    if (event_loop_test_fd_is_open(fd)) close(fd);
+}
+
+static uint32_t event_loop_test_admitted_count(struct event_loop *event_loop)
+{
+    return event_loop_admission_count(__atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE));
+}
+
+static bool event_loop_test_admission_is_closed(struct event_loop *event_loop)
+{
+    return !event_loop_admission_is_open(__atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE));
+}
+
+static bool event_loop_test_wait_for_active_posters(struct event_loop *event_loop, uint32_t active_posters)
+{
+    for (int i = 0; i < 1000; ++i) {
+        if (event_loop_test_admitted_count(event_loop) == active_posters) return true;
+        usleep(1000);
+    }
+    return false;
+}
+
+static bool event_loop_test_wait_for_closed_admission(struct event_loop *event_loop)
+{
+    for (int i = 0; i < 1000; ++i) {
+        if (event_loop_test_admission_is_closed(event_loop)) return true;
+        usleep(1000);
+    }
+    return false;
+}
+
+static struct event_loop_paused_admission_test_context *event_loop_paused_admission_test;
+static struct event_loop_paused_leave_test_context *event_loop_paused_leave_test;
+
+static void event_loop_test_pause_before_admission(void)
+{
+    struct event_loop_paused_admission_test_context *test = event_loop_paused_admission_test;
+    if (!test) return;
+
+    pthread_mutex_lock(&test->mutex);
+    test->entered = true;
+    pthread_cond_signal(&test->cond);
+    while (!test->release) pthread_cond_wait(&test->cond, &test->mutex);
+    pthread_mutex_unlock(&test->mutex);
+}
+
+static void event_loop_test_pause_during_leave(void)
+{
+    struct event_loop_paused_leave_test_context *test = event_loop_paused_leave_test;
+    if (!test) return;
+
+    pthread_mutex_lock(&test->mutex);
+    if (test->observed++ < test->pause_after) {
+        pthread_mutex_unlock(&test->mutex);
+        return;
+    }
+    test->entered = true;
+    pthread_cond_signal(&test->cond);
+    while (!test->release) pthread_cond_wait(&test->cond, &test->mutex);
+    pthread_mutex_unlock(&test->mutex);
+}
+
+static void *event_loop_test_paused_window_created_post(void *context)
+{
+    struct event_loop_paused_admission_test_context *test = context;
+    test->accepted = event_loop_try_post(&g_event_loop, WINDOW_CREATED, test->context, 0);
+    return NULL;
+}
+
+static bool event_loop_test_worker_guard_callback(void *context)
+{
+    struct event_loop_worker_guard_test_context *test = context;
+    test->worker_thread = pthread_self();
+    test->sync_result = event_loop_perform_sync(&g_event_loop, NULL, NULL);
+    event_loop_end(&g_event_loop);
+    test->end_left_loop_live = g_event_loop.semaphore != NULL && g_event_loop.queue.events != NULL;
+    return true;
+}
+
+static bool event_loop_test_sync_callback(void *context)
+{
+    struct event_loop_sync_thread_test_context *test = context;
+    ++test->callback_count;
+    return true;
+}
+
+static void *event_loop_test_sync_thread(void *context)
+{
+    struct event_loop_sync_thread_test_context *test = context;
+    test->result = event_loop_perform_sync(&g_event_loop, event_loop_test_sync_callback, test);
+    return NULL;
+}
+
+static bool event_loop_test_cross_loop_target(void *context)
+{
+    struct event_loop_cross_loop_test_context *test = context;
+    test->target_worker = pthread_self();
+    ++test->target_callback_count;
+    return true;
+}
+
+static bool event_loop_test_cross_loop_source(void *context)
+{
+    struct event_loop_cross_loop_test_context *test = context;
+    test->source_worker = pthread_self();
+    test->target_sync_result = event_loop_perform_sync(test->other_loop, event_loop_test_cross_loop_target, test);
+    event_loop_end(test->other_loop);
+    test->target_cleanup_complete = test->other_loop->semaphore == NULL && test->other_loop->queue.events == NULL;
+    return true;
+}
+
+static struct event_loop_thread_create_interval_test_context *event_loop_thread_create_interval_test;
+
+static int event_loop_test_interval_thread_create(pthread_t *thread, const pthread_attr_t *attr,
+                                                 void *(*start_routine)(void *), void *context)
+{
+    struct event_loop_thread_create_interval_test_context *test = event_loop_thread_create_interval_test;
+    if (!test) return pthread_create(thread, attr, start_routine, context);
+
+    ++test->create_calls;
+    if (pthread_create(&test->sync_thread, NULL, event_loop_test_sync_thread, &test->sync) != 0) return EAGAIN;
+    for (int i = 0; i < 1000; ++i) {
+        if (event_loop_test_queue_count(&g_event_loop) == 1) break;
+        usleep(1000);
+    }
+
+    return test->fail_create ? EAGAIN : pthread_create(thread, attr, start_routine, context);
+}
+
+TEST_FUNC(event_loop_zero_initialized_state_rejects_without_queue_access,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+
+    CFMutableArrayRef rejected_context = CFArrayCreateMutable(NULL, 0, NULL);
+    TEST_CHECK(rejected_context != NULL, true);
+    if (rejected_context) {
+        CFRetain(rejected_context);
+        TEST_CHECK((int) CFGetRetainCount(rejected_context), 2);
+        TEST_CHECK(event_loop_try_post(&g_event_loop, WINDOW_CREATED, rejected_context, 0), false);
+        TEST_CHECK((int) CFGetRetainCount(rejected_context), 1);
+        CFRelease(rejected_context);
+    }
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), false);
+    TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(declarative_space_create_destroy_and_absent_event_coalesce_reconcile,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct space_manager saved_space_manager = g_space_manager;
+    g_event_loop = (struct event_loop) {0};
+    g_space_manager = (struct space_manager) {0};
+    table_init(&g_space_manager.view, 4, hash_view, compare_view);
+    declarative_install_test_set_generation(1);
+
+    TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_decl_lifecycle_%d", getpid());
+    g_event_loop.semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    TEST_CHECK(g_event_loop.semaphore != SEM_FAILED, true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+
+    handle_space_lifecycle_success();
+    handle_space_lifecycle_success();
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+
+    /* Destruction of a SID with no local view must still request work, and coalesce. */
+    EVENT_HANDLER_SLS_SPACE_DESTROYED((void *)(intptr_t) 9999, 0);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+
+    struct event event = {0};
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
+    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.param1, 0);
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    sem_close(g_event_loop.semaphore);
+    event_queue_destroy(&g_event_loop.queue);
+    declarative_install_test_set_generation(0);
+    table_free(&g_space_manager.view);
+    g_space_manager = saved_space_manager;
+    g_event_loop = saved_event_loop;
+});
+
+static uint32_t declarative_reconcile_entry_test_reserved;
+static uint32_t declarative_reconcile_entry_test_queue_count;
+static void declarative_reconcile_entry_test_hook(void)
+{
+    declarative_reload_test_set_reconcile_entry_hook(NULL);
+    declarative_configuration_request_reconcile();
+    declarative_reconcile_entry_test_reserved = declarative_reload_test_reconcile_reservation();
+    declarative_reconcile_entry_test_queue_count = event_loop_test_queue_count(&g_event_loop);
+}
+
+TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct table saved_window_table = g_window_manager.window;
+    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    bool saved_menu_bar_initialized = g_menu_bar_manager.initialized;
+    bool saved_tahoe = _workspace_is_macos_version_tahoe;
+    bool saved_sequoia = _workspace_is_macos_version_sequoia;
+    bool saved_sonoma = _workspace_is_macos_version_sonoma;
+    bool saved_ventura = _workspace_is_macos_version_ventura;
+    bool saved_monterey = _workspace_is_macos_version_monterey;
+    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+
+    g_event_loop = (struct event_loop) {0};
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    g_window_manager.focused_window_id = 0;
+    g_menu_bar_manager.initialized = false;
+    workspace_set_macos_version(10);
+    declarative_install_test_set_generation(1);
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+
+    TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_decl_restart_wake_%d", getpid());
+    g_event_loop.semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    TEST_CHECK(g_event_loop.semaphore != SEM_FAILED, true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+
+    EVENT_HANDLER_DOCK_DID_RESTART(NULL, 0);
+    EVENT_HANDLER_DOCK_DID_RESTART(NULL, 0);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+
+    struct event event = {0};
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
+    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.param1, 0);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+
+    EVENT_HANDLER_SYSTEM_WOKE(NULL, 0);
+    EVENT_HANDLER_SYSTEM_WOKE(NULL, 0);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
+    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.param1, 0);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
+
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    sem_close(g_event_loop.semaphore);
+    event_queue_destroy(&g_event_loop.queue);
+    declarative_install_test_set_generation(0);
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_window_table;
+    g_window_manager.focused_window_id = saved_focused_window_id;
+    g_menu_bar_manager.initialized = saved_menu_bar_initialized;
+    _workspace_is_macos_version_tahoe = saved_tahoe;
+    _workspace_is_macos_version_sequoia = saved_sequoia;
+    _workspace_is_macos_version_sonoma = saved_sonoma;
+    _workspace_is_macos_version_ventura = saved_ventura;
+    _workspace_is_macos_version_monterey = saved_monterey;
+    _workspace_is_macos_version_bigsur = saved_bigsur;
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(declarative_reconcile_reserves_before_post_and_coalesces,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    declarative_install_test_set_generation(1);
+
+    /* Rejected admission must roll the reservation back for the later live loop. */
+    declarative_configuration_request_reconcile();
+
+    struct event_loop_bootstrap_test_state bootstrap = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .callback_result = true
+    };
+    struct event_loop_begin_test_context begin = { .event_loop = &g_event_loop, .bootstrap = &bootstrap };
+    pthread_t begin_thread;
+    TEST_CHECK(pthread_create(&begin_thread, NULL, event_loop_test_begin_bootstrap, &begin), 0);
+    pthread_mutex_lock(&bootstrap.mutex);
+    while (!bootstrap.entered) pthread_cond_wait(&bootstrap.cond, &bootstrap.mutex);
+    pthread_mutex_unlock(&bootstrap.mutex);
+
+    declarative_configuration_request_reconcile();
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+    declarative_reconcile_entry_test_reserved = 0;
+    declarative_reconcile_entry_test_queue_count = 0;
+    declarative_reload_test_set_reconcile_entry_hook(declarative_reconcile_entry_test_hook);
+    pthread_mutex_lock(&bootstrap.mutex);
+    bootstrap.release = true;
+    pthread_cond_signal(&bootstrap.cond);
+    pthread_mutex_unlock(&bootstrap.mutex);
+    pthread_join(begin_thread, NULL);
+    TEST_CHECK(begin.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
+    TEST_CHECK(declarative_reconcile_entry_test_reserved, 1U);
+    TEST_CHECK(declarative_reconcile_entry_test_queue_count >= 1U, true);
+    /* The first barrier may already have been queued ahead of the admitted follow-up. */
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 0U);
+    printf("                   phase5 reconcile queue accepted=2 skipped=1 rejected=1 followup=1 owned_contexts=0 owned_sockets=0\n");
+    declarative_install_test_set_generation(0);
+    event_loop_end(&g_event_loop);
+
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    struct event_loop_bootstrap_test_state bootstrap = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .callback_result = true
+    };
+    struct event_loop_begin_test_context begin = { .event_loop = &g_event_loop, .bootstrap = &bootstrap };
+    pthread_t begin_thread;
+    TEST_CHECK(pthread_create(&begin_thread, NULL, event_loop_test_begin_bootstrap, &begin), 0);
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    while (!bootstrap.entered) pthread_cond_wait(&bootstrap.cond, &bootstrap.mutex);
+    pthread_mutex_unlock(&bootstrap.mutex);
+
+    TEST_CHECK(pthread_equal(bootstrap.callback_thread, g_event_loop.thread), true);
+    pthread_t producers[4];
+    bool accepted[4] = {0};
+    for (int i = 0; i < 4; ++i) {
+        TEST_CHECK(pthread_create(&producers[i], NULL, event_loop_test_concurrent_producer, &accepted[i]), 0);
+    }
+    for (int i = 0; i < 4; ++i) {
+        pthread_join(producers[i], NULL);
+        TEST_CHECK(accepted[i], true);
+    }
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    bootstrap.release = true;
+    pthread_cond_signal(&bootstrap.cond);
+    pthread_mutex_unlock(&bootstrap.mutex);
+    pthread_join(begin_thread, NULL);
+
+    TEST_CHECK(begin.result, true);
+    TEST_CHECK(bootstrap.queued_while_blocked, 1U);
+    event_loop_end(&g_event_loop);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+
+    bootstrap = (struct event_loop_bootstrap_test_state) {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .callback_result = false,
+        .release = true
+    };
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, event_loop_test_bootstrap_callback, &bootstrap), false);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+
+    pthread_mutex_lock(&g_event_loop.queue.lock);
+    pthread_t producer;
+    bool accepted = false;
+    TEST_CHECK(pthread_create(&producer, NULL, event_loop_test_concurrent_producer, &accepted), 0);
+    TEST_CHECK(event_loop_test_wait_for_active_posters(&g_event_loop, 1), true);
+
+    struct event_loop_paused_leave_test_context leave = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .pause_after = 1
+    };
+    event_loop_paused_leave_test = &leave;
+    event_loop_leave_producer_test_hook = event_loop_test_pause_during_leave;
+
+    struct event_loop_end_test_context end = { .event_loop = &g_event_loop };
+    pthread_t end_thread;
+    TEST_CHECK(pthread_create(&end_thread, NULL, event_loop_test_end_thread, &end), 0);
+    TEST_CHECK(event_loop_test_wait_for_closed_admission(&g_event_loop), true);
+    TEST_CHECK(g_event_loop.queue.events != NULL, true);
+
+    CFMutableArrayRef rejected_context = CFArrayCreateMutable(NULL, 0, NULL);
+    TEST_CHECK(rejected_context != NULL, true);
+    if (rejected_context) {
+        CFRetain(rejected_context);
+        TEST_CHECK((int) CFGetRetainCount(rejected_context), 2);
+        TEST_CHECK(event_loop_try_post(&g_event_loop, WINDOW_CREATED, rejected_context, 0), false);
+        TEST_CHECK((int) CFGetRetainCount(rejected_context), 1);
+        CFRelease(rejected_context);
+    }
+
+    pthread_mutex_unlock(&g_event_loop.queue.lock);
+    pthread_mutex_lock(&leave.mutex);
+    while (!leave.entered) pthread_cond_wait(&leave.cond, &leave.mutex);
+    pthread_mutex_unlock(&leave.mutex);
+    TEST_CHECK(g_event_loop.queue.events != NULL, true);
+
+    pthread_mutex_lock(&leave.mutex);
+    leave.release = true;
+    pthread_cond_signal(&leave.cond);
+    pthread_mutex_unlock(&leave.mutex);
+    pthread_join(producer, NULL);
+    TEST_CHECK(accepted, true);
+    pthread_join(end_thread, NULL);
+    event_loop_leave_producer_test_hook = NULL;
+    event_loop_paused_leave_test = NULL;
+    pthread_cond_destroy(&leave.cond);
+    pthread_mutex_destroy(&leave.mutex);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_front_switch_helpers_use_admission_and_rollback,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    pid_t saved_front_pid = g_process_manager.front_pid;
+    uint64_t saved_generation = g_process_manager.front_switch_generation;
+    uint64_t saved_front_psn = g_process_manager.front_switch_psn;
+    g_event_loop = (struct event_loop) {0};
+
+    struct process process = {
+        .pid = 1234,
+        .psn = { .highLongOfPSN = 42, .lowLongOfPSN = 24 },
+        .name = "front-switch-test"
+    };
+
+    struct event_loop_bootstrap_test_state bootstrap = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .callback_result = false
+    };
+    struct event_loop_begin_test_context begin = { .event_loop = &g_event_loop, .bootstrap = &bootstrap };
+    pthread_t begin_thread;
+    TEST_CHECK(pthread_create(&begin_thread, NULL, event_loop_test_begin_bootstrap, &begin), 0);
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    while (!bootstrap.entered) pthread_cond_wait(&bootstrap.cond, &bootstrap.mutex);
+    pthread_mutex_unlock(&bootstrap.mutex);
+
+    TEST_CHECK(event_loop_post_application_front_switched(&process, 99, false), true);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    bootstrap.release = true;
+    pthread_cond_signal(&bootstrap.cond);
+    pthread_mutex_unlock(&bootstrap.mutex);
+    pthread_join(begin_thread, NULL);
+    TEST_CHECK(begin.result, false);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+
+    g_event_loop = (struct event_loop) {0};
+    __atomic_store_n(&g_process_manager.front_switch_generation, 70, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_process_manager.front_switch_psn, process_manager_pack_psn((ProcessSerialNumber) { .highLongOfPSN = 7, .lowLongOfPSN = 8 }), __ATOMIC_RELEASE);
+    TEST_CHECK(event_loop_post_tracked_application_front_switched(&process), false);
+    TEST_CHECK(__atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE), 70ULL);
+    TEST_CHECK(__atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE), process_manager_pack_psn((ProcessSerialNumber) { .highLongOfPSN = 7, .lowLongOfPSN = 8 }));
+
+    g_process_manager.front_pid = saved_front_pid;
+    __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_psn, __ATOMIC_RELEASE);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_late_pre_admission_post_after_cleanup_releases_context,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+
+    struct event_loop_paused_admission_test_context paused = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER
+    };
+    paused.context = CFArrayCreateMutable(NULL, 0, NULL);
+    TEST_CHECK(paused.context != NULL, true);
+    if (paused.context) CFRetain(paused.context);
+
+    event_loop_paused_admission_test = &paused;
+    event_loop_admit_producer_test_hook = event_loop_test_pause_before_admission;
+    pthread_t producer;
+    TEST_CHECK(pthread_create(&producer, NULL, event_loop_test_paused_window_created_post, &paused), 0);
+
+    pthread_mutex_lock(&paused.mutex);
+    while (!paused.entered) pthread_cond_wait(&paused.cond, &paused.mutex);
+    pthread_mutex_unlock(&paused.mutex);
+    event_loop_admit_producer_test_hook = NULL;
+
+    event_loop_end(&g_event_loop);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
+
+    pthread_mutex_lock(&paused.mutex);
+    paused.release = true;
+    pthread_cond_signal(&paused.cond);
+    pthread_mutex_unlock(&paused.mutex);
+    pthread_join(producer, NULL);
+
+    TEST_CHECK(paused.accepted, false);
+    if (paused.context) {
+        TEST_CHECK((int) CFGetRetainCount(paused.context), 1);
+        CFRelease(paused.context);
+    }
+
+    event_loop_paused_admission_test = NULL;
+    pthread_cond_destroy(&paused.cond);
+    pthread_mutex_destroy(&paused.mutex);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_worker_guards_reject_sync_and_self_shutdown,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+
+    struct event_loop_worker_guard_test_context guard = {0};
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, event_loop_test_worker_guard_callback, &guard), true);
+    TEST_CHECK(pthread_equal(guard.worker_thread, g_event_loop.thread), true);
+    TEST_CHECK(guard.sync_result, false);
+    TEST_CHECK(guard.end_left_loop_live, true);
+    TEST_CHECK(g_event_loop.semaphore != NULL, true);
+    TEST_CHECK(g_event_loop.queue.events != NULL, true);
+
+    event_loop_end(&g_event_loop);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_worker_identity_is_scoped_to_the_supplied_loop,
+{
+    struct event_loop source_loop = {0};
+    struct event_loop target_loop = {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&source_loop, NULL, NULL), true);
+    TEST_CHECK(event_loop_begin_bootstrap(&target_loop, NULL, NULL), true);
+    pthread_t target_thread = target_loop.thread;
+
+    struct event_loop_cross_loop_test_context test = { .other_loop = &target_loop };
+    TEST_CHECK(event_loop_perform_sync(&source_loop, event_loop_test_cross_loop_source, &test), true);
+    TEST_CHECK(pthread_equal(test.source_worker, source_loop.thread), true);
+    TEST_CHECK(pthread_equal(test.target_worker, target_thread), true);
+    TEST_CHECK(pthread_equal(test.source_worker, test.target_worker), false);
+    TEST_CHECK(test.target_sync_result, true);
+    TEST_CHECK(test.target_callback_count, 1U);
+    TEST_CHECK(test.target_cleanup_complete, true);
+    TEST_CHECK(target_loop.semaphore == NULL, true);
+    TEST_CHECK(target_loop.queue.events == NULL, true);
+    TEST_CHECK(source_loop.semaphore != NULL, true);
+    TEST_CHECK(source_loop.queue.events != NULL, true);
+
+    event_loop_end(&source_loop);
+    TEST_CHECK(source_loop.semaphore == NULL, true);
+    TEST_CHECK(source_loop.queue.events == NULL, true);
+});
+
+TEST_FUNC(event_loop_sync_during_thread_create_interval_completes_on_success_and_failure,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    __auto_type saved_thread_create = event_loop_thread_create;
+
+    for (int fail_create = 0; fail_create <= 1; ++fail_create) {
+        g_event_loop = (struct event_loop) {0};
+        struct event_loop_thread_create_interval_test_context test = { .fail_create = fail_create != 0 };
+        event_loop_thread_create_interval_test = &test;
+        event_loop_thread_create = event_loop_test_interval_thread_create;
+
+        bool began = event_loop_begin_bootstrap(&g_event_loop, NULL, NULL);
+        pthread_join(test.sync_thread, NULL);
+
+        TEST_CHECK(test.create_calls, 1U);
+        TEST_CHECK(began, !test.fail_create);
+        TEST_CHECK(test.sync.result, !test.fail_create);
+        TEST_CHECK(test.sync.callback_count, test.fail_create ? 0U : 1U);
+
+        if (began) event_loop_end(&g_event_loop);
+        TEST_CHECK(g_event_loop.semaphore == NULL, true);
+        TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    }
+
+    event_loop_thread_create = saved_thread_create;
+    event_loop_thread_create_interval_test = NULL;
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_sync_submission_concurrent_with_shutdown_completes,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+
+    pthread_mutex_lock(&g_event_loop.queue.lock);
+    struct event_loop_sync_thread_test_context sync = {0};
+    pthread_t sync_thread;
+    TEST_CHECK(pthread_create(&sync_thread, NULL, event_loop_test_sync_thread, &sync), 0);
+    TEST_CHECK(event_loop_test_wait_for_active_posters(&g_event_loop, 1), true);
+
+    struct event_loop_end_test_context end = { .event_loop = &g_event_loop };
+    pthread_t end_thread;
+    TEST_CHECK(pthread_create(&end_thread, NULL, event_loop_test_end_thread, &end), 0);
+    TEST_CHECK(event_loop_test_wait_for_closed_admission(&g_event_loop), true);
+
+    pthread_mutex_unlock(&g_event_loop.queue.lock);
+    pthread_join(sync_thread, NULL);
+    pthread_join(end_thread, NULL);
+    TEST_CHECK(sync.callback_count <= 1U, true);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_bootstrap_failure_drains_queued_daemon_messages,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    g_event_loop = (struct event_loop) {0};
+    g_daemon_message_admission = (struct daemon_message_admission) {0};
+
+    struct event_loop_bootstrap_test_state bootstrap = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER,
+        .callback_result = false
+    };
+    struct event_loop_begin_test_context begin = { .event_loop = &g_event_loop, .bootstrap = &bootstrap };
+    pthread_t begin_thread;
+    TEST_CHECK(pthread_create(&begin_thread, NULL, event_loop_test_begin_bootstrap, &begin), 0);
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    while (!bootstrap.entered) pthread_cond_wait(&bootstrap.cond, &bootstrap.mutex);
+    pthread_mutex_unlock(&bootstrap.mutex);
+
+    int pair[2] = { -1, -1 };
+    TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair), 0);
+    if (pair[1] != -1) {
+        int flags = fcntl(pair[1], F_GETFL, 0);
+        if (flags != -1) fcntl(pair[1], F_SETFL, flags | O_NONBLOCK);
+    }
+    if (pair[0] != -1) {
+        TEST_CHECK(daemon_message_admission_acquire(&g_daemon_message_admission), true);
+        TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 1U);
+        TEST_CHECK(event_loop_try_post(&g_event_loop, DAEMON_MESSAGE, NULL, pair[0]), true);
+    }
+
+    pthread_mutex_lock(&bootstrap.mutex);
+    bootstrap.release = true;
+    pthread_cond_signal(&bootstrap.cond);
+    pthread_mutex_unlock(&bootstrap.mutex);
+    pthread_join(begin_thread, NULL);
+    TEST_CHECK(begin.result, false);
+    TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 0U);
+    TEST_CHECK(event_loop_test_fd_is_open(pair[0]), false);
+    if (pair[1] != -1) {
+        char byte = 0;
+        TEST_CHECK(read(pair[1], &byte, 1), 0);
+    }
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+
+    event_loop_test_close_fd_if_open(pair[0]);
+    event_loop_test_close_fd_if_open(pair[1]);
+    pthread_cond_destroy(&bootstrap.cond);
+    pthread_mutex_destroy(&bootstrap.mutex);
+    g_daemon_message_admission = saved_admission;
+    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(window_minimize_events_resolve_stable_ids,

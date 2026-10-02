@@ -23,7 +23,7 @@ yabai - window manager
 Synopsis
 --------
 
-*yabai* [*--load-sa*|*--uninstall-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
+*yabai* [*--load-sa*|*--uninstall-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--config-jsonc* 'config_file'|*--check-config* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
 
 Description
 -----------
@@ -65,9 +65,17 @@ Options
     Send message to a running instance of yabai.
 
 *--config*, *-c* '<config_file>'::
-    Use the specified configuration file. +
+    Use the specified legacy *yabairc* file. +
     Executes the file directly if it is a regular file executable by the current user. +
     If direct execution rejects the file format, or the file is not executable, interprets it using `/usr/bin/env sh <config_file>`.
+
+*--config-jsonc* '<config_file>'::
+    Use the specified native JSONC configuration file. A relative path is captured as an absolute lexical path before startup. +
+    This option does not disable *yabairc* discovery or an explicit *--config* path.
+
+*--check-config* '<config_file>'::
+    Validate one native JSONC file and exit. This exact three-argument invocation cannot be combined with any other option or trailing argument. +
+    Success prints `configuration is valid; runtime preparation was not checked`. It checks file input, JSONC syntax, schema, limits and regular expressions, but not display or Space targets, permissions, event resources, runtime labels or other runtime preparation.
 
 *--verbose*, *-V*::
     Output debug information to stdout.
@@ -77,6 +85,181 @@ Options
 
 *--help*, *-h*::
     Print options to stdout and exit.
+
+Native JSONC configuration
+--------------------------
+
+Startup and validation
+~~~~~~~~~~~~~~~~~~~~~~
+
+The native configuration file is named `yabai.jsonc`. Without *--config-jsonc*, yabai checks an absolute `$XDG_CONFIG_HOME/yabai/yabai.jsonc` first, then `$HOME/.config/yabai/yabai.jsonc`. A relative `XDG_CONFIG_HOME` is ignored. A missing discovered file is allowed; a missing explicit file is an error. Ordinary symlinks are followed. An explicit relative path is captured as an absolute lexical path without resolving its final symlink, and reload reopens that same path. If no native file was installed, reload repeats default discovery.
+
+Native JSONC and *yabairc* are independent. At daemon startup yabai parses and prepares JSONC, installs native settings and rules, inventories existing windows, publishes the initial menu state, starts the message socket, and then executes *yabairc*. Native rules therefore apply to the initial window inventory. Settings in *yabairc* override native settings, and rules added there follow the native rule prefix and normally affect later windows only.
+
+Use the exact offline check before starting the daemon:
+
+----
+yabai --check-config ~/.config/yabai/yabai.jsonc
+----
+
+This command validates the authored file and schema only. It does not resolve display or Space indices, check current topology, check runtime label collisions, test SIP or Screen Recording requirements, or acquire daemon resources. Startup and reload can still reject a file that passes this check.
+
+File and JSONC rules
+~~~~~~~~~~~~~~~~~~~~
+
+The file must be a regular UTF-8 file no larger than 1 MiB. One UTF-8 BOM is accepted only at byte zero. `//` line comments and `/* ... */` block comments are accepted outside strings. Block comments do not nest. Trailing commas, single-quoted strings, unquoted keys, JSON5 numbers and other JSON5 syntax are rejected.
+
+The reader opens the selected path once with `O_RDONLY | O_CLOEXEC`, follows ordinary symlinks, and compares descriptor metadata before and after reading. A changed device, inode, file type, size, high-resolution modification time or change time rejects the candidate. Premature EOF and detected growth also reject it. Unlocked POSIX reads cannot detect a same-metadata overwrite, so this check promises detection of observable metadata changes rather than every concurrent write.
+
+Raw NUL bytes, malformed UTF-8, a BOM away from byte zero, UTF-16 or UTF-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and `null` are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
+
+The top-level object accepts exactly `version`, `config`, `spaces` and `rules`. `version` is required and must have the mathematical integer value 1. The other three keys are optional:
+
+[source,json]
+----
+{
+  "version": 1,
+  "config": {},
+  "spaces": [],
+  "rules": []
+}
+----
+
+Numbers and limits
+~~~~~~~~~~~~~~~~~~
+
+Integer fields use mathematical value semantics: `1`, `1.0` and `1e0` are equivalent when the value is integral and in range. JSON booleans are not numbers. Signed setting integers use `INT_MIN...INT_MAX`; unsigned fields use the ranges stated below.
+
+A float starts as a finite `double`. Except for an allowed zero, its absolute value must be between `FLT_MIN` and `FLT_MAX`. Yabai casts it once to `float`, requires the result to remain finite and nonzero when the input was nonzero, then applies the field range. Rounding inside that destination range is accepted.
+
+Parser and copied-model limits are:
+
+* authored file: 1 MiB, including comments and a BOM;
+* nesting depth: 64 containers;
+* members in one object: 256;
+* Space policies: 1,024;
+* native rules: 1,024;
+* decoded key: 128 UTF-8 bytes;
+* Space UUID, rule label or scratchpad: 1,024 UTF-8 bytes;
+* regular expression: 4,096 UTF-8 bytes;
+* path: `PATH_MAX - 1` UTF-8 bytes;
+* copied native model: 8 MiB. This budget does not include Foundation parser overhead;
+* display and Space target index: `1...INT_MAX`.
+
+Global settings
+~~~~~~~~~~~~~~~
+
+`config` accepts every current `config` setting. Omitting a field leaves the built-in value at startup; a successful reload restores the built-in value before applying the new native fields.
+
+Boolean fields are `debug_output`, `mouse_follows_focus`, `window_zoom_persist`, `skip_window_focus_animation` and `window_opacity`.
+
+Enum fields are:
+
+* `focus_follows_mouse`: `off`, `autofocus`, `autoraise`;
+* `display_arrangement_order`: `default`, `horizontal`, `vertical`;
+* `window_origin_display`: `default`, `focused`, `cursor`;
+* `window_placement`: `first_child`, `second_child`;
+* `window_insertion_point`: `focused`, `first`, `last`;
+* `window_shadow`: `off`, `float`, `on`;
+* `menubar`: `off`, `on`;
+* `menubar_style`: `compact`, `expanded`;
+* `menubar_space_filter`: `occupied`, `all`;
+* `layout`: `bsp`, `stack`, `float`;
+* `split_type`: `vertical`, `horizontal`, `auto`;
+* `auto_balance`: `off`, `on`, `x-axis`, `y-axis`;
+* `mouse_modifier`: `alt`, `shift`, `cmd`, `ctrl`, `fn`;
+* `mouse_action1`, `mouse_action2`: `move`, `resize`;
+* `mouse_drop_action`: `swap`, `stack`;
+* `window_animation_easing`: `ease_in_sine`, `ease_out_sine`, `ease_in_out_sine`, `ease_in_quad`, `ease_out_quad`, `ease_in_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_out_cubic`, `ease_in_quart`, `ease_out_quart`, `ease_in_out_quart`, `ease_in_quint`, `ease_out_quint`, `ease_in_out_quint`, `ease_in_expo`, `ease_out_expo`, `ease_in_out_expo`, `ease_in_circ`, `ease_out_circ`, `ease_in_out_circ`.
+
+Numeric fields are:
+
+* `window_opacity_duration`: finite seconds in `0...INT_MAX/1000`, also subject to the scripting-addition duration conversion;
+* `window_animation_duration`: finite seconds greater than or equal to zero. A nonzero value requires nonprompting SIP and Screen Recording preflight during runtime preparation;
+* `menubar_opacity`: `0...1`;
+* `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
+* `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`: mathematical integer `INT_MIN...INT_MAX`;
+* `split_ratio`: `0.1...0.9`.
+
+`external_bar` is an exact object. All three fields are required: `mode` is `off`, `main` or `all`, while `top_padding` and `bottom_padding` are mathematical integers in `INT_MIN...INT_MAX`.
+
+The native `window_shadow`, `window_opacity`, `window_opacity_duration`, `active_window_opacity` and `normal_window_opacity` settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; `window_animation_duration` has the separate Screen Recording and SIP preflight described above.
+
+Space policy
+~~~~~~~~~~~~
+
+Each `spaces` entry is an exact object with required `match` and `settings` fields. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `split_type` and `auto_balance`, using the types and ranges above.
+
+Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native-fullscreen Spaces remain floating.
+
+Effective precedence is:
+
+----
+built-in < native global < native Space < runtime global < runtime Space
+----
+
+A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. `space --layout` uses runtime Space ownership. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+
+Native rules
+~~~~~~~~~~~~
+
+Each `rules` entry accepts exactly `label`, `one_shot`, `match` and `effects`. `match` is required and nonempty. `label` is optional, nonempty, unique within the file and at most 1,024 UTF-8 bytes. `one_shot` is an optional boolean, defaulting to `false`. `effects` is optional and may be empty, so an effectless persistent rule is valid.
+
+`match` accepts `app`, `title`, `role` and `subrole`. Each matcher is an exact object with required nonempty `pattern` and optional boolean `exclude`, which defaults to `false`. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role or subrole without app or title.
+
+`effects` accepts:
+
+* `display`: exact object `{ "index": n }`, where `n` is `1...INT_MAX`;
+* `space`: exact object `{ "index": n }`, where `n` is `1...INT_MAX`;
+* `follow`: boolean shared by the selected display or Space target. It is invalid without either target;
+* `grid`: exactly `[rows, columns, x, y, width, height]`. Each value is a mathematical integer in `0...UINT_MAX`; rows and columns must be greater than zero;
+* `opacity`: finite float in `0...1`;
+* `manage`, `sticky`, `mouse_follows_focus`, `native_fullscreen`: boolean;
+* `sub_layer`: `below`, `normal`, `above`, `auto`;
+* `scratchpad`: nonempty string of at most 1,024 UTF-8 bytes. The reserved identifiers `float`, `sticky`, `shadow`, `split`, `zoom-parent`, `zoom-fullscreen`, `windowed-fullscreen`, `native-fullscreen`, `expose`, `pip` and `recover` are rejected.
+
+A rule cannot specify both `scratchpad` and `manage`. If both display and Space are present, Space wins and the shared `follow` applies to it.
+
+The native `sticky`, `sub_layer` and `opacity` effects call the scripting addition and require partial SIP disablement. Assigning a `scratchpad` label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
+
+Native display and Space targets use one-based indices only. Display indices resolve using the candidate `display_arrangement_order`; equal coordinates use the captured managed-display ordinal as the final tie-break. Space indices use the captured global Mission Control order. Runtime preparation strictly rejects malformed, incomplete, duplicate, zero-ID or ambiguous display/Space topology instead of filtering it.
+
+Targets resolve once per configuration generation to an internal ID and an identity fingerprint. A later topology change does not retarget a native rule. When the ID disappears, changes kind or maps to another UUID, that rule contributes no move or follow effect, still contributes its independent effects, and emits at most one warning for that rule and generation. A stale Space target does not fall back to a display target in the same rule. A later valid runtime target may still win during rule folding.
+
+Native rules remain before runtime rules. Runtime `rule --add` cannot claim a native label, even after a native one-shot has been consumed, and `rule --remove` cannot remove a native rule. A successful reload recreates native one-shots and retains runtime rules in their existing order. Direct reapply and delayed window-created retries fold against the currently installed generation context. Reload changes registrations for future windows; it does not undo or reapply effects on existing windows. Use `rule --apply` for an explicit reapplication where supported.
+
+Reload, topology and atomicity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The reload grammar is exactly:
+
+----
+yabai -m config reload
+----
+
+A scoped form, trailing token or mixed lifecycle/setting message is rejected before mutation. Reload uses the installed absolute lexical path. When generation is 0 because startup found no native file, it repeats default discovery. A successful first installation uses generation 1; each later successful reload increments once, including a byte-identical reload. Reload at `UINT64_MAX` is rejected.
+
+Reload parses and prepares the entire candidate before changing installed state. Preparation includes regular expressions, strict topology, target fingerprints, runtime-label collision checks, permission preflight, detached Space trees, and a complete managed-window table. Any preparation failure preserves the installed model, path, generation, settings, runtime ownership, native rules, views, forest and managed-window table.
+
+The event-loop worker publishes prepared settings, views, forest, managed-window table, native rule prefix, native label index, model, path, fold context and generation through a no-allocation, no-post boundary. Allocation-capable refreshes, tree flushes, animations, notifications and logging run afterward as best-effort reconciliation. A failure after publication does not roll back the committed generation.
+
+Topology lifecycle work uses a binary reservation before queue admission. Duplicate triggers coalesce. The event handler clears the reservation on entry so a trigger during processing can queue one follow-up. Queue admission owns event context and daemon response/socket cleanup on both acceptance and rejection.
+
+Focus follows mouse uses one daemon-lifetime event tap with the superset event mask. `configured_ffm_mode` holds the configured value. Nested menu tracking forces the atomic effective mode to `off`; closing the final menu derives the effective mode from the latest configured value rather than restoring a saved stale value.
+
+Diagnostics
+~~~~~~~~~~~
+
+Startup and offline-check errors go to stderr; reload errors go to the daemon client. Configuration errors and stale native targets also request a best-effort Notification Center notification and write an error to the macOS unified log with subsystem `com.asmvik.yabai` and category `configuration`.
+
+A complete stderr or notification diagnostic is capped at 2,048 UTF-8 bytes. A failing daemon response has the same 2,048-byte wire cap, including its one-byte failure marker, so its diagnostic text is at most 2,047 bytes. The dynamic unified-log payload is capped at 1,024 UTF-8 bytes. Truncation preserves valid UTF-8. Paths escape control characters, JSON paths are sanitized, and diagnostics omit source text, candidate values, regular-expression text, shell commands and unknown key text. Notification and log sink failures do not replace the primary error. Notification presentation and unified-log persistence remain subject to macOS settings and policy.
+
+Inspect recent configuration log records with:
+
+----
+log show --predicate 'subsystem == "com.asmvik.yabai" && category == "configuration"' --last 5m
+----
 
 Definitions
 -----------
@@ -130,6 +313,9 @@ yabai -m config <global setting>::
 
 yabai -m config [--space '<SPACE_SEL>'] <space setting>::
     Get or set the value of <space setting>.
+
+yabai -m config reload::
+    Reload the native JSONC configuration. The command must be unscoped and contain no trailing token or additional config mutation.
 
 Global Settings
 ^^^^^^^^^^^^^^^

@@ -67,6 +67,8 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(SYSTEM_WOKE) \
     EVENT_TYPE_ENTRY(MENU_BAR_REFRESH) \
     EVENT_TYPE_ENTRY(MENU_BAR_ACTION) \
+    EVENT_TYPE_ENTRY(CONFIGURATION_RECONCILE) \
+    EVENT_TYPE_ENTRY(EVENT_LOOP_SYNC) \
     EVENT_TYPE_ENTRY(DAEMON_MESSAGE)
 
 enum event_type
@@ -110,12 +112,23 @@ static bool event_queue_pop(struct event_queue *queue, struct event *event);
 struct event_loop
 {
     bool is_running;
+    bool producer_sync_initialized;
+    volatile uint32_t producer_admission;
+    pthread_mutex_t producer_lock;
+    pthread_cond_t producer_cond;
     pthread_t thread;
     sem_t *semaphore;
     struct event_queue queue;
 };
 
+typedef bool (*event_loop_bootstrap_callback)(void *context);
+typedef bool (*event_loop_sync_callback)(void *context);
+
 bool event_loop_begin(struct event_loop *event_loop);
+bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootstrap_callback callback, void *context);
+void event_loop_end(struct event_loop *event_loop);
+bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_callback callback, void *context);
+bool event_loop_is_worker_thread(struct event_loop *event_loop);
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_window_inventory_did_change(void);

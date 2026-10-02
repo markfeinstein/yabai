@@ -26,6 +26,23 @@ static void event_queue_test_release(struct event_queue_test_context *context)
     ++context->releases;
 }
 
+static void event_queue_test_open_loop(struct event_loop *event_loop)
+{
+    pthread_mutex_init(&event_loop->producer_lock, NULL);
+    pthread_cond_init(&event_loop->producer_cond, NULL);
+    event_loop->producer_sync_initialized = true;
+    __atomic_store_n(&event_loop->producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+}
+
+static void event_queue_test_close_loop(struct event_loop *event_loop)
+{
+    event_loop_close_producer_admission(event_loop);
+    pthread_cond_destroy(&event_loop->producer_cond);
+    pthread_mutex_destroy(&event_loop->producer_lock);
+    event_loop->producer_sync_initialized = false;
+    __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+}
+
 static bool event_queue_check_grows_past_512k_fifo_and_release_once(char *test_name)
 {
     bool result = true;
@@ -211,6 +228,7 @@ static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced
         return false;
     }
     event_loop.semaphore = semaphore;
+    event_queue_test_open_loop(&event_loop);
 
     event_loop_post(&event_loop, MOUSE_DRAGGED, first, 1);
     TEST_CHECK((int) CFGetRetainCount(first), 2);
@@ -230,6 +248,7 @@ static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced
     TEST_CHECK(popped_extra, false);
     if (popped_extra) event_loop_release_event_context(event.type, event.context);
 
+    event_queue_test_close_loop(&event_loop);
     sem_close(semaphore);
     event_queue_destroy(&event_loop.queue);
     CFRelease(first);
@@ -312,6 +331,7 @@ static bool event_queue_check_mouse_up_boundary_preserves_drag_fifo(char *test_n
         return false;
     }
     event_loop.semaphore = semaphore;
+    event_queue_test_open_loop(&event_loop);
 
     for (int i = 0; i < array_count(contexts); ++i) {
         event_loop_post(&event_loop, types[i], contexts[i], i + 1);
@@ -331,6 +351,7 @@ static bool event_queue_check_mouse_up_boundary_preserves_drag_fifo(char *test_n
     struct event event = { 0 };
     TEST_CHECK(event_queue_pop(&event_loop.queue, &event), false);
 
+    event_queue_test_close_loop(&event_loop);
     sem_close(semaphore);
     event_queue_destroy(&event_loop.queue);
     for (int i = 0; i < array_count(contexts); ++i) {
