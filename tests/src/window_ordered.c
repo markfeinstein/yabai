@@ -8,6 +8,22 @@
 #define TEST_ORDERED_WID_B 0x7ffffff2
 #define TEST_ORDERED_EXTRA_WID_BASE UINT32_C(0x70000000)
 
+static CGError test_ordered_query_failure(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    (void) ordered_in;
+    return kCGErrorFailure;
+}
+
+static CGError test_ordered_query_out(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    *ordered_in = 0;
+    return kCGErrorSuccess;
+}
+
 struct test_ordered
 {
     struct application application;
@@ -30,6 +46,7 @@ static void test_ordered_window_init(struct window *window, struct application *
 // Two tiled windows on a bsp view of a space that is not visible, as the event loop leaves them.
 static bool test_ordered_init(struct test_ordered *t)
 {
+    event_loop_window_is_ordered_in = test_ordered_query_out;
     static bool tables_initialized;
     if (!tables_initialized) {
         g_connection = SLSMainConnectionID();
@@ -181,6 +198,34 @@ TEST_FUNC(stack_layout_capacity_preflight_preserves_then_accepts_bounded_invento
         window_manager_remove_window(&g_window_manager, windows[i]->id);
         free(windows[i]);
     }
+    test_ordered_free(&t);
+});
+
+TEST_FUNC(window_ordered_query_failure_preserves_state,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    __auto_type saved_query = event_loop_window_is_ordered_in;
+    event_loop_window_is_ordered_in = test_ordered_query_failure;
+    EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
+    TEST_CHECK(window_check_flag(&t.a, WINDOW_ORDERED_OUT), false);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
+
+    event_loop_window_is_ordered_in = test_ordered_query_out;
+    EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
+    TEST_CHECK(window_check_flag(&t.a, WINDOW_ORDERED_OUT), true);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
+
+    event_loop_window_is_ordered_in = test_ordered_query_failure;
+    EVENT_HANDLER_SLS_WINDOW_IS_VISIBLE((void *)(intptr_t) t.a.id, 0);
+    TEST_CHECK(window_check_flag(&t.a, WINDOW_ORDERED_OUT), true);
+    TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
+
+    event_loop_window_is_ordered_in = saved_query;
     test_ordered_free(&t);
 });
 

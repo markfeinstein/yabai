@@ -1,6 +1,11 @@
 #!/bin/sh
 
 set -eu
+if [ "$(/usr/bin/id -u)" -eq 0 ]; then
+    echo "installer fixtures must not run as root" >&2
+    exit 1
+fi
+export YABAI_INSTALL_TEST_PATH=1
 
 TEST_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd "$TEST_DIR/.." && pwd)
@@ -92,6 +97,11 @@ MKTEMP_LOG="$TEST_ROOT/mktemp.log"
 MKTEMP_ESCAPE="$TEST_ROOT/mktemp-escape"
 mkdir "$MOCK_BIN" "$TMPDIR_MOCK_BIN" "$BIN_DIR" "$MAN_DIR" "$WORK_DIR" "$TEMP_DIR"
 
+grep -F 'PATH=/usr/bin:/bin:/usr/sbin:/sbin' "$REPO_ROOT/scripts/install.sh" >/dev/null || \
+    fail 'installer does not pin a trusted production PATH'
+grep -F '"$(/usr/bin/id -u)" -eq 0' "$REPO_ROOT/scripts/install.sh" >/dev/null || \
+    fail 'installer does not disable fixture PATH injection for root'
+
 cat > "$MOCK_BIN/curl" <<'EOF'
 #!/bin/sh
 set -eu
@@ -117,7 +127,11 @@ archive="yabai-v${version}.tar.gz"
 case "$3" in
     "$archive")
         [ "$(cat "$3")" = 'mock archive' ] || exit 64
-        hash=76f383841570bfe1e3fd24cedd9b1a4b804b43b0f39c86a951c97d187fc6b1b4
+        if [ "${MOCK_HASH_MISMATCH:-0}" -eq 1 ]; then
+            hash=invalid-release-hash
+        else
+            hash=76f383841570bfe1e3fd24cedd9b1a4b804b43b0f39c86a951c97d187fc6b1b4
+        fi
         ;;
     */yabai)
         [ "$(cat "$3")" = 'new binary' ] || exit 64
@@ -138,6 +152,7 @@ archive="yabai-v${version}.tar.gz"
 [ "$2" = "$archive" ] || exit 64
 [ -f "$2" ] || exit 64
 [ "$(cat "$2")" = 'mock archive' ] || exit 64
+[ -z "${MOCK_TAR_MARKER:-}" ] || : > "$MOCK_TAR_MARKER"
 mkdir -p archive/bin archive/doc
 printf 'new binary\n' > archive/bin/yabai
 chmod 0700 archive/bin/yabai
@@ -277,8 +292,23 @@ published_leftovers=$(find "$TEMP_DIR" -name 'asmvik-yabai-v9.9.9-installer.*' -
 [ -z "$published_leftovers" ] || fail "published-version temporary directory remains: $published_leftovers"
 assert_no_owned_paths
 
-printf 'old binary after success\n' > "$BIN_DIR/yabai"
-printf 'old manual after success\n' > "$MAN_DIR/yabai.1"
+printf 'old binary before hash mismatch\n' > "$BIN_DIR/yabai"
+printf 'old manual before hash mismatch\n' > "$MAN_DIR/yabai.1"
+TAR_MARKER="$TEST_ROOT/tar-invoked"
+if (
+    cd "$WORK_DIR"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_HASH_MISMATCH=1 MOCK_TAR_MARKER="$TAR_MARKER" \
+        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+); then
+    fail 'checksum mismatch unexpectedly succeeded'
+fi
+[ "$(cat "$BIN_DIR/yabai")" = 'old binary before hash mismatch' ] || fail 'checksum rejection replaced the binary'
+[ "$(cat "$MAN_DIR/yabai.1")" = 'old manual before hash mismatch' ] || fail 'checksum rejection replaced the man page'
+[ ! -e "$TAR_MARKER" ] || fail 'checksum rejection extracted the archive'
+assert_no_owned_paths
+
+printf 'old binary after checksum rejection\n' > "$BIN_DIR/yabai"
+printf 'old manual after checksum rejection\n' > "$MAN_DIR/yabai.1"
 if (
     cd "$WORK_DIR"
     PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_TAR_MODE=missing-man \
@@ -286,8 +316,8 @@ if (
 ); then
     fail 'malformed release preparation unexpectedly succeeded'
 fi
-[ "$(cat "$BIN_DIR/yabai")" = 'old binary after success' ] || fail 'failed preparation replaced the binary'
-[ "$(cat "$MAN_DIR/yabai.1")" = 'old manual after success' ] || fail 'failed preparation replaced the man page'
+[ "$(cat "$BIN_DIR/yabai")" = 'old binary after checksum rejection' ] || fail 'failed preparation replaced the binary'
+[ "$(cat "$MAN_DIR/yabai.1")" = 'old manual after checksum rejection' ] || fail 'failed preparation replaced the man page'
 assert_no_owned_paths
 
 printf 'old linked binary\n' > "$TEST_ROOT/old-linked-binary"
@@ -438,4 +468,4 @@ if grep -F "ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
 fi
 assert_no_owned_paths
 
-printf 'installer regression tests passed (22 cases)\n'
+printf 'installer regression tests passed (23 cases)\n'

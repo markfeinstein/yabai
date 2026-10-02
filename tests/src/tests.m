@@ -531,9 +531,54 @@ TEST_FUNC(scripting_addition_socket_identity_requires_strict_nonroot_uid,
     snprintf(g_sa_socket_file, sizeof(g_sa_socket_file), "%s", saved_socket_path);
 });
 
+static int scripting_addition_test_close_count;
+
+static size_t scripting_addition_test_write_failure(const void *buffer, size_t size, size_t count, FILE *handle)
+{
+    (void) buffer;
+    (void) size;
+    (void) count;
+    (void) handle;
+    return 0;
+}
+
+static int scripting_addition_test_close_success(FILE *handle)
+{
+    ++scripting_addition_test_close_count;
+    return fclose(handle);
+}
+
+static int scripting_addition_test_close_failure(FILE *handle)
+{
+    (void) fclose(handle);
+    return EOF;
+}
+
 TEST_FUNC(scripting_addition_helpers_propagate_failures_and_use_literal_paths,
 {
     TEST_CHECK(scripting_addition_prepare_binary("/path/that/does/not/exist"), false);
+
+    char file_template[] = "/tmp/yabai-sa-write-test.XXXXXX";
+    int file_descriptor = mkstemp(file_template);
+    TEST_CHECK(file_descriptor != -1, true);
+    if (file_descriptor != -1) {
+        close(file_descriptor);
+        TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), true);
+
+        __auto_type saved_write_stream = scripting_addition_write_stream;
+        __auto_type saved_close_file = scripting_addition_close_file;
+        scripting_addition_test_close_count = 0;
+        scripting_addition_write_stream = scripting_addition_test_write_failure;
+        scripting_addition_close_file = scripting_addition_test_close_success;
+        TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), false);
+        TEST_CHECK(scripting_addition_test_close_count, 1);
+
+        scripting_addition_write_stream = saved_write_stream;
+        scripting_addition_close_file = scripting_addition_test_close_failure;
+        TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), false);
+        scripting_addition_close_file = saved_close_file;
+        unlink(file_template);
+    }
 
     char directory_template[] = "/tmp/yabai-sa-remove-test.XXXXXX";
     char *directory = mkdtemp(directory_template);
@@ -1600,12 +1645,19 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 #define TEST_LIST                                              \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
+    TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
+    TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
+    TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
+    TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
+    TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
+    TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
+    TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
     TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
     TEST_ENTRY(config_file_execution_preserves_literal_path)     \
@@ -1646,6 +1698,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
     TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
     TEST_ENTRY(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory) \
+    TEST_ENTRY(window_ordered_query_failure_preserves_state)    \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
     TEST_ENTRY(window_ordered_out_stays_unmanaged)              \
     TEST_ENTRY(window_ordered_in_is_tiled_again)                \
@@ -1663,6 +1716,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
     TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
     TEST_ENTRY(event_queue_adjacent_mouse_drags_coalesce_and_release_replaced_context) \
+    TEST_ENTRY(event_queue_different_mouse_button_drags_preserve_fifo) \
     TEST_ENTRY(event_queue_mouse_up_boundary_preserves_drag_fifo) \
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \

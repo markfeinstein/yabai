@@ -214,7 +214,7 @@ static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced
 
     event_loop_post(&event_loop, MOUSE_DRAGGED, first, 1);
     TEST_CHECK((int) CFGetRetainCount(first), 2);
-    event_loop_post(&event_loop, MOUSE_DRAGGED, second, 2);
+    event_loop_post(&event_loop, MOUSE_DRAGGED, second, 1);
     TEST_CHECK(event_loop.queue.count, 1U);
     TEST_CHECK((int) CFGetRetainCount(first), 1);
     TEST_CHECK((int) CFGetRetainCount(second), 2);
@@ -222,7 +222,7 @@ static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced
     struct event event = { 0 };
     TEST_CHECK(event_queue_pop(&event_loop.queue, &event), true);
     TEST_CHECK(event.type, MOUSE_DRAGGED);
-    TEST_CHECK(event.param1, 2);
+    TEST_CHECK(event.param1, 1);
     TEST_CHECK(event.context == second, true);
     event_loop_release_event_context(event.type, event.context);
     TEST_CHECK((int) CFGetRetainCount(second), 1);
@@ -234,6 +234,38 @@ static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced
     event_queue_destroy(&event_loop.queue);
     CFRelease(first);
     CFRelease(second);
+    return result;
+}
+
+static bool event_queue_check_different_mouse_button_drags_preserve_fifo(char *test_name)
+{
+    bool result = true;
+    struct event_queue_test_context contexts[2] = { 0 };
+    struct event replaced = { 0 };
+    uint32_t capacity = 0;
+    bool post_wake = false;
+
+    if (!event_queue_test_reset(4)) return false;
+
+    for (int i = 0; i < 2; ++i) {
+        contexts[i].index = i;
+        struct event event = { .type = MOUSE_DRAGGED, .param1 = i, .context = &contexts[i] };
+        TEST_CHECK(event_queue_push(&event_queue_test_queue, event, true, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
+    }
+    TEST_CHECK(event_queue_test_queue.count, 2U);
+
+    for (int i = 0; i < 2; ++i) {
+        struct event event = { 0 };
+        TEST_CHECK(event_queue_pop(&event_queue_test_queue, &event), true);
+        TEST_CHECK(event.type, MOUSE_DRAGGED);
+        TEST_CHECK(event.param1, i);
+        TEST_CHECK(event.context == &contexts[i], true);
+        event_queue_test_release(event.context);
+    }
+    TEST_CHECK(contexts[0].releases, 1);
+    TEST_CHECK(contexts[1].releases, 1);
+
+    event_queue_test_destroy();
     return result;
 }
 
@@ -466,6 +498,10 @@ TEST_FUNC(event_queue_merge_releases_replaced_mouse_move_once, {
 
 TEST_FUNC(event_queue_adjacent_mouse_drags_coalesce_and_release_replaced_context, {
     result = event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced_context(test_name);
+});
+
+TEST_FUNC(event_queue_different_mouse_button_drags_preserve_fifo, {
+    result = event_queue_check_different_mouse_button_drags_preserve_fifo(test_name);
 });
 
 TEST_FUNC(event_queue_mouse_up_boundary_preserves_drag_fifo, {

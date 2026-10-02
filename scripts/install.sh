@@ -16,6 +16,12 @@
 
 set -e
 
+# Installer tests may inject fixture tools only when the real process is unprivileged.
+if [ "${YABAI_INSTALL_TEST_PATH:-}" != 1 ] || [ "$(/usr/bin/id -u)" -eq 0 ]; then
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    export PATH
+fi
+
 BIN_DIR="$1"
 MAN_DIR="$2"
 

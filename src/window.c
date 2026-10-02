@@ -4,17 +4,32 @@ extern int g_layer_below_window_level;
 extern int g_layer_above_window_level;
 extern int g_connection;
 
-bool window_observe(struct window *window)
+#ifdef TESTS
+static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+#else
+#define window_observe_add_notification AXObserverAddNotification
+#endif
+
+bool window_observe(struct window *window, bool *retry)
 {
+    bool retryable_failure = false;
+    bool permanent_failure = false;
+    if (retry) *retry = false;
     for (int i = 0; i < array_count(ax_window_notification); ++i) {
-        AXError result = AXObserverAddNotification(window->application->observer_ref, window->ref, ax_window_notification[i], window);
+        AXError result = window_observe_add_notification(window->application->observer_ref, window->ref, ax_window_notification[i], window);
         if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
             window->notification |= 1 << i;
         } else {
+            if (result == kAXErrorCannotComplete) {
+                retryable_failure = true;
+            } else {
+                permanent_failure = true;
+            }
             debug("%s: %s failed with error %s\n", __FUNCTION__, ax_window_notification_str[i], ax_error_str[-result]);
         }
     }
 
+    if (retry) *retry = retryable_failure && !permanent_failure;
     return (window->notification & AX_WINDOW_ALL) == AX_WINDOW_ALL;
 }
 

@@ -372,6 +372,16 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     }
 }
 
+static void event_loop_clear_window_identity(struct window_manager *wm, uint32_t window_id)
+{
+    window_manager_remove_lost_focused_event(wm, window_id);
+    if (wm->focused_window_id == window_id) {
+        wm->focused_window_id = 0;
+        wm->focused_window_psn = (ProcessSerialNumber) {0};
+    }
+    if (wm->last_window_id == window_id) wm->last_window_id = 0;
+}
+
 static void event_loop_clear_terminated_front_identity(struct process *process)
 {
     if (psn_equals(&g_process_manager.front_psn, &process->psn)) {
@@ -449,6 +459,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
         if (window->is_eligible) {
             event_signal_push(SIGNAL_WINDOW_DESTROYED, window);
         }
+        event_loop_clear_window_identity(&g_window_manager, window->id);
 
         window_manager_remove_scratchpad_for_window(&g_window_manager, window, false);
         window_manager_remove_window(&g_window_manager, window->id);
@@ -743,7 +754,11 @@ static EVENT_HANDLER(WINDOW_CREATED)
     struct application *application = window_manager_find_application(&g_window_manager, window_pid);
     if (!application) { CFRelease(context); return; }
 
-    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, context, window_id, true);
+    CFRetain(context);
+    bool retry = false;
+    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, context, window_id, true, &retry);
+    if (!window && retry) window_manager_schedule_window_created_retry(context);
+    CFRelease(context);
     if (!window) return;
 
     int rule_len = buf_len(g_window_manager.rules);
@@ -801,6 +816,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     if (window->is_eligible) {
         event_signal_push(SIGNAL_WINDOW_DESTROYED, window);
     }
+    event_loop_clear_window_identity(&g_window_manager, window->id);
 
     window_manager_remove_scratchpad_for_window(&g_window_manager, window, false);
     window_manager_remove_window(&g_window_manager, window->id);
@@ -1013,7 +1029,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
 static EVENT_HANDLER(WINDOW_MINIMIZED)
 {
-    struct window *window = context;
+    uint32_t window_id = (uint32_t)(intptr_t) context;
+    struct window *window = window_manager_find_window(&g_window_manager, window_id);
+    if (!window) return;
 
     if (!__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, window->id);
@@ -1058,7 +1076,12 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
 
 static EVENT_HANDLER(WINDOW_DEMINIMIZED)
 {
-    struct window *window = context;
+    uint32_t window_id = (uint32_t)(intptr_t) context;
+    struct window *window = window_manager_find_window(&g_window_manager, window_id);
+    if (!window) {
+        window_manager_remove_lost_focused_event(&g_window_manager, window_id);
+        return;
+    }
 
     if (!__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, window->id);
@@ -1137,6 +1160,12 @@ static EVENT_HANDLER(SLS_WINDOW_ORDERED)
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
+#ifdef TESTS
+static CGError (*event_loop_window_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
+#else
+#define event_loop_window_is_ordered_in SLSWindowIsOrderedIn
+#endif
+
 // NOTE: Apps that hide a window on close (e.g. Electron) order it out without minimizing it or
 // hiding the app, so none of those events arrives to untile it; the window server's own visibility
 // notifications do. The ordered-in state must be checked: switching spaces sends 816 for every window
@@ -1156,7 +1185,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
     }
 
     uint8_t ordered_in = 0;
-    SLSWindowIsOrderedIn(g_connection, wid, &ordered_in);
+    if (event_loop_window_is_ordered_in(g_connection, wid, &ordered_in) != kCGErrorSuccess) return;
     if (ordered_in) return;
 
     window_manager_window_did_order_out(&g_window_manager, window);
@@ -1177,7 +1206,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
     }
 
     uint8_t ordered_in = 0;
-    SLSWindowIsOrderedIn(g_connection, wid, &ordered_in);
+    if (event_loop_window_is_ordered_in(g_connection, wid, &ordered_in) != kCGErrorSuccess) return;
     if (!ordered_in) return;
 
     uint64_t sid = space_manager_active_space();
@@ -1270,6 +1299,19 @@ static EVENT_HANDLER(SPACE_CHANGED)
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_FOCUS);
 }
 
+static bool event_loop_commit_display_change(struct display_manager *dm, struct space_manager *sm,
+                                             uint32_t new_display_id, uint64_t new_space_id,
+                                             uint32_t space_display_id)
+{
+    if (!new_display_id || !new_space_id || new_display_id != space_display_id) return false;
+
+    dm->last_display_id = dm->current_display_id;
+    dm->current_display_id = new_display_id;
+    sm->last_space_id = sm->current_space_id;
+    sm->current_space_id = new_space_id;
+    return true;
+}
+
 static EVENT_HANDLER(DISPLAY_CHANGED)
 {
     uint32_t new_did = display_manager_active_display_id();
@@ -1278,15 +1320,11 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
         return;
     }
 
-    g_display_manager.last_display_id = g_display_manager.current_display_id;
-    g_display_manager.current_display_id = new_did;
-
-    g_space_manager.last_space_id = g_space_manager.current_space_id;
-    g_space_manager.current_space_id = display_space_id(g_display_manager.current_display_id);
-
-    uint32_t expected_display_id = space_display_id(g_space_manager.current_space_id);
-    if (g_display_manager.current_display_id != expected_display_id) {
-        debug("%s: %d %lld did not match %d! ignoring event..\n", __FUNCTION__, g_display_manager.current_display_id, g_space_manager.current_space_id, expected_display_id);
+    uint64_t new_sid = display_space_id(new_did);
+    uint32_t expected_display_id = space_display_id(new_sid);
+    if (!event_loop_commit_display_change(&g_display_manager, &g_space_manager,
+                                          new_did, new_sid, expected_display_id)) {
+        debug("%s: %d %lld did not match %d! ignoring event..\n", __FUNCTION__, new_did, new_sid, expected_display_id);
         return;
     }
 

@@ -134,7 +134,8 @@ static MOUSE_HANDLER(mouse_handler)
     case kCGEventRightMouseDragged: {
         struct mouse_click_state *click_state = mouse_click_state_for_event(mouse_state, type);
         mouse_click_state_mouse_dragged(click_state);
-        event_loop_post(&g_event_loop, MOUSE_DRAGGED, (void *) CFRetain(event), 0);
+        int button = (int) CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
+        event_loop_post(&g_event_loop, MOUSE_DRAGGED, (void *) CFRetain(event), button);
     } break;
     case kCGEventMouseMoved: {
         uint8_t mod = mouse_mod_from_cgflags(CGEventGetFlags(event));

@@ -1,3 +1,86 @@
+static AXError application_test_create_result;
+static AXError application_test_notification_results[7];
+static int application_test_notification_index;
+static int application_test_source_count;
+
+static AXError application_test_observer_create(pid_t pid, AXObserverCallback callback, AXObserverRef *observer)
+{
+    (void) pid;
+    (void) callback;
+    if (application_test_create_result == kAXErrorSuccess) *observer = (AXObserverRef)(intptr_t) 1;
+    return application_test_create_result;
+}
+
+static AXError application_test_observer_add_notification(AXObserverRef observer, AXUIElementRef element,
+                                                          CFStringRef notification, void *context)
+{
+    (void) observer;
+    (void) element;
+    (void) notification;
+    (void) context;
+    return application_test_notification_results[application_test_notification_index++];
+}
+
+static void application_test_add_run_loop_source(AXObserverRef observer)
+{
+    (void) observer;
+    ++application_test_source_count;
+}
+
+static void application_test_reset(AXError default_result)
+{
+    application_test_create_result = kAXErrorSuccess;
+    application_test_notification_index = 0;
+    application_test_source_count = 0;
+    for (int i = 0; i < array_count(application_test_notification_results); ++i) {
+        application_test_notification_results[i] = default_result;
+    }
+}
+
+TEST_FUNC(application_observation_retries_only_transient_required_failures,
+{
+    __auto_type saved_create = application_observer_create;
+    __auto_type saved_add_notification = application_observer_add_notification;
+    __auto_type saved_add_source = application_observer_add_run_loop_source;
+    application_observer_create = application_test_observer_create;
+    application_observer_add_notification = application_test_observer_add_notification;
+    application_observer_add_run_loop_source = application_test_add_run_loop_source;
+
+    struct application application = { .name = "test" };
+    application_test_reset(kAXErrorSuccess);
+    application_test_notification_results[AX_APPLICATION_WINDOW_MENU_OPENED_INDEX] = kAXErrorNotImplemented;
+    application_test_notification_results[AX_APPLICATION_WINDOW_MENU_CLOSED_INDEX] = kAXErrorNotImplemented;
+    TEST_CHECK(application_observe(&application), true);
+    TEST_CHECK(application.ax_retry, false);
+    TEST_CHECK(application_test_source_count, 1);
+
+    application = (struct application) { .name = "test" };
+    application_test_reset(kAXErrorSuccess);
+    application_test_notification_results[AX_APPLICATION_WINDOW_CREATED_INDEX] = kAXErrorCannotComplete;
+    TEST_CHECK(application_observe(&application), false);
+    TEST_CHECK(application.ax_retry, true);
+    TEST_CHECK(application_test_source_count, 1);
+
+    application = (struct application) { .name = "test" };
+    application_test_reset(kAXErrorSuccess);
+    application_test_notification_results[AX_APPLICATION_WINDOW_CREATED_INDEX] = kAXErrorCannotComplete;
+    application_test_notification_results[AX_APPLICATION_WINDOW_FOCUSED_INDEX] = kAXErrorNotImplemented;
+    TEST_CHECK(application_observe(&application), false);
+    TEST_CHECK(application.ax_retry, false);
+
+    application = (struct application) { .name = "test" };
+    application_test_reset(kAXErrorSuccess);
+    application_test_create_result = kAXErrorCannotComplete;
+    TEST_CHECK(application_observe(&application), false);
+    TEST_CHECK(application.ax_retry, true);
+    TEST_CHECK(application_test_notification_index, 0);
+    TEST_CHECK(application_test_source_count, 0);
+
+    application_observer_create = saved_create;
+    application_observer_add_notification = saved_add_notification;
+    application_observer_add_run_loop_source = saved_add_source;
+});
+
 static uint64_t test_publish_tracked_front_switch(ProcessSerialNumber psn)
 {
     pthread_mutex_lock(&g_process_manager_front_switch_lock);
@@ -188,6 +271,66 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     g_process_manager.last_front_psn = saved_processed_last_front_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_psn, __ATOMIC_RELEASE);
+});
+
+TEST_FUNC(window_removal_clears_focus_and_recycled_identity_state,
+{
+    struct window_manager wm = { 0 };
+    table_init(&wm.window_lost_focused_event, 4, hash_wm, compare_wm);
+    wm.focused_window_id = 42;
+    wm.focused_window_psn = (ProcessSerialNumber) { .highLongOfPSN = 1, .lowLongOfPSN = 2 };
+    wm.last_window_id = 42;
+    window_manager_add_lost_focused_event(&wm, 42);
+
+    event_loop_clear_window_identity(&wm, 42);
+
+    TEST_CHECK(wm.focused_window_id, 0U);
+    TEST_CHECK(wm.focused_window_psn.highLongOfPSN, 0U);
+    TEST_CHECK(wm.focused_window_psn.lowLongOfPSN, 0U);
+    TEST_CHECK(wm.last_window_id, 0U);
+    TEST_CHECK(window_manager_find_lost_focused_event(&wm, 42), false);
+    table_free(&wm.window_lost_focused_event);
+});
+
+TEST_FUNC(window_minimize_events_resolve_stable_ids,
+{
+    struct table saved_window_table = g_window_manager.window;
+    struct table saved_lost_event_table = g_window_manager.window_lost_focused_event;
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.window_lost_focused_event = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    table_init(&g_window_manager.window_lost_focused_event, 4, hash_wm, compare_wm);
+
+    window_manager_add_lost_focused_event(&g_window_manager, 77);
+    EVENT_HANDLER_WINDOW_MINIMIZED((void *)(intptr_t) 77, 0);
+    TEST_CHECK(window_manager_find_lost_focused_event(&g_window_manager, 77), true);
+    EVENT_HANDLER_WINDOW_DEMINIMIZED((void *)(intptr_t) 77, 0);
+    TEST_CHECK(window_manager_find_lost_focused_event(&g_window_manager, 77), false);
+
+    table_free(&g_window_manager.window);
+    table_free(&g_window_manager.window_lost_focused_event);
+    g_window_manager.window = saved_window_table;
+    g_window_manager.window_lost_focused_event = saved_lost_event_table;
+});
+
+TEST_FUNC(display_change_rejects_invalid_pairs_before_commit,
+{
+    struct display_manager dm = { .last_display_id = 1, .current_display_id = 2 };
+    struct space_manager sm = { .last_space_id = 10, .current_space_id = 20 };
+
+    TEST_CHECK(event_loop_commit_display_change(&dm, &sm, 0, 30, 0), false);
+    TEST_CHECK(event_loop_commit_display_change(&dm, &sm, 3, 0, 3), false);
+    TEST_CHECK(event_loop_commit_display_change(&dm, &sm, 3, 30, 4), false);
+    TEST_CHECK(dm.last_display_id, 1U);
+    TEST_CHECK(dm.current_display_id, 2U);
+    TEST_CHECK(sm.last_space_id, 10ULL);
+    TEST_CHECK(sm.current_space_id, 20ULL);
+
+    TEST_CHECK(event_loop_commit_display_change(&dm, &sm, 3, 30, 3), true);
+    TEST_CHECK(dm.last_display_id, 2U);
+    TEST_CHECK(dm.current_display_id, 3U);
+    TEST_CHECK(sm.last_space_id, 20ULL);
+    TEST_CHECK(sm.current_space_id, 30ULL);
 });
 
 TEST_FUNC(update_window_notifications_append_grows_past_fixed_boundary,

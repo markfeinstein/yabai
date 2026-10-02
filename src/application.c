@@ -28,9 +28,9 @@ static OBSERVER_CALLBACK(application_notification_handler)
     } else if (CFEqual(notification, kAXMenuClosedNotification)) {
         event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
     } else if (CFEqual(notification, kAXWindowMiniaturizedNotification)) {
-        event_loop_post(&g_event_loop, WINDOW_MINIMIZED, context, 0);
+        event_loop_post(&g_event_loop, WINDOW_MINIMIZED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXWindowDeminiaturizedNotification)) {
-        event_loop_post(&g_event_loop, WINDOW_DEMINIMIZED, context, 0);
+        event_loop_post(&g_event_loop, WINDOW_DEMINIMIZED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXUIElementDestroyedNotification)) {
         struct window *window = context;
 
@@ -47,23 +47,63 @@ static OBSERVER_CALLBACK(application_notification_handler)
 }
 #pragma clang diagnostic pop
 
+static bool application_observation_should_retry(bool retryable_failure, bool permanent_failure)
+{
+    return retryable_failure && !permanent_failure;
+}
+
+static void application_observation_record_failure(AXError result, bool required,
+                                                   bool *retryable_failure, bool *permanent_failure)
+{
+    if (!required) return;
+    if (result == kAXErrorCannotComplete) {
+        *retryable_failure = true;
+    } else {
+        *permanent_failure = true;
+    }
+}
+
+static void application_observer_add_run_loop_source_direct(AXObserverRef observer)
+{
+    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
+}
+
+#ifdef TESTS
+static AXError (*application_observer_create)(pid_t, AXObserverCallback, AXObserverRef *) = AXObserverCreate;
+static AXError (*application_observer_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+static void (*application_observer_add_run_loop_source)(AXObserverRef) = application_observer_add_run_loop_source_direct;
+#else
+#define application_observer_create AXObserverCreate
+#define application_observer_add_notification AXObserverAddNotification
+#define application_observer_add_run_loop_source application_observer_add_run_loop_source_direct
+#endif
+
 bool application_observe(struct application *application)
 {
-    if (AXObserverCreate(application->pid, application_notification_handler, &application->observer_ref) == kAXErrorSuccess) {
+    bool retryable_failure = false;
+    bool permanent_failure = false;
+    application->ax_retry = false;
+
+    AXError create_result = application_observer_create(application->pid, application_notification_handler, &application->observer_ref);
+    if (create_result == kAXErrorSuccess) {
         for (int i = 0; i < array_count(ax_application_notification); ++i) {
-            AXError result = AXObserverAddNotification(application->observer_ref, application->ref, ax_application_notification[i], application);
+            AXError result = application_observer_add_notification(application->observer_ref, application->ref, ax_application_notification[i], application);
             if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
                 application->notification |= 1 << i;
             } else {
-                if (result == kAXErrorCannotComplete) application->ax_retry = true;
+                bool required = (AX_APPLICATION_ALL & (1 << i)) != 0;
+                application_observation_record_failure(result, required, &retryable_failure, &permanent_failure);
                 debug("%s: error '%s' for application '%s' and notification '%s'\n", __FUNCTION__, ax_error_str[-result], application->name, ax_application_notification_str[i]);
             }
         }
 
         application->is_observing = true;
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(application->observer_ref), kCFRunLoopDefaultMode);
+        application_observer_add_run_loop_source(application->observer_ref);
+    } else {
+        application_observation_record_failure(create_result, true, &retryable_failure, &permanent_failure);
     }
 
+    application->ax_retry = application_observation_should_retry(retryable_failure, permanent_failure);
     return (application->notification & AX_APPLICATION_ALL) == AX_APPLICATION_ALL;
 }
 

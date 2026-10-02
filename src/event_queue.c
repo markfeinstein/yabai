@@ -69,7 +69,9 @@ static enum event_queue_result event_queue_push(struct event_queue *queue, struc
 
     if (merge && queue->count) {
         struct event *last = &queue->events[event_queue_slot(queue, queue->count - 1)];
-        if (last->type == event.type) {
+        bool same_stream = last->type == event.type &&
+                           (event.type != MOUSE_DRAGGED || last->param1 == event.param1);
+        if (same_stream) {
             *replaced = *last;
             *last = event;
             result = EVENT_QUEUE_MERGED;

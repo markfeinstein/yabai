@@ -17,3 +17,4 @@ run: build
 	./bin/menu_bar_ui
 	./bin/loader_protocol
 	/bin/sh ./install.sh
+	python3 ./seticon.py

@@ -108,14 +108,22 @@ err:
     return false;
 }
 
+#ifdef TESTS
+static size_t (*scripting_addition_write_stream)(const void *, size_t, size_t, FILE *) = fwrite;
+static int (*scripting_addition_close_file)(FILE *) = fclose;
+#else
+#define scripting_addition_write_stream fwrite
+#define scripting_addition_close_file fclose
+#endif
+
 static bool scripting_addition_write_file(char *buffer, unsigned int size, char *file, char *file_mode)
 {
     FILE *handle = fopen(file, file_mode);
     if (!handle) return false;
 
-    size_t bytes = fwrite(buffer, size, 1, handle);
+    size_t bytes = scripting_addition_write_stream(buffer, size, 1, handle);
     bool result = bytes == 1;
-    fclose(handle);
+    if (scripting_addition_close_file(handle) != 0) result = false;
 
     return result;
 }

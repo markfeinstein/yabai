@@ -1,3 +1,59 @@
+static CGError window_manager_test_ordered_result;
+static uint8_t window_manager_test_ordered_value;
+static int window_manager_test_ordered_calls;
+
+static CGError window_manager_test_window_is_ordered_in(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    ++window_manager_test_ordered_calls;
+    *ordered_in = window_manager_test_ordered_value;
+    return window_manager_test_ordered_result;
+}
+
+TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
+{
+    __auto_type saved_query = window_manager_window_is_ordered_in;
+    window_manager_window_is_ordered_in = window_manager_test_window_is_ordered_in;
+    struct window window = { .id = 42 };
+    uint8_t ordered_in = 0;
+
+    window_manager_test_ordered_result = kCGErrorFailure;
+    window_manager_test_ordered_value = 1;
+    window_manager_test_ordered_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_ordered_state(&window, 0, &ordered_in), false);
+    TEST_CHECK(window_manager_test_ordered_calls, 1);
+
+    window_manager_test_ordered_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_ordered_state(&window, 1, &ordered_in), true);
+    TEST_CHECK(window_manager_test_ordered_calls, 0);
+
+    window_manager_test_ordered_result = kCGErrorSuccess;
+    window_manager_test_ordered_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_ordered_state(&window, 0, &ordered_in), true);
+    TEST_CHECK(ordered_in, 1);
+    TEST_CHECK(window_manager_test_ordered_calls, 1);
+
+    window_manager_window_is_ordered_in = saved_query;
+});
+
+TEST_FUNC(window_inventory_compares_membership_not_cardinality,
+{
+    struct window_manager window_manager = {0};
+    table_init(&window_manager.window, 4, hash_wm, compare_wm);
+    struct window windows[2] = { { .id = 11 }, { .id = 22 } };
+    table_add(&window_manager.window, &windows[0].id, &windows[0]);
+    table_add(&window_manager.window, &windows[1].id, &windows[1]);
+
+    uint32_t same_membership[] = { 22, 11 };
+    uint32_t equal_count_different_membership[] = { 11, 33 };
+    TEST_CHECK(window_manager_window_list_is_resolved(&window_manager, same_membership, 2), true);
+    TEST_CHECK(window_manager_window_list_is_resolved(&window_manager, equal_count_different_membership, 2), false);
+    TEST_CHECK(window_manager_window_list_is_resolved(&window_manager, NULL, 0), true);
+
+    table_free(&window_manager.window);
+});
+
 TEST_FUNC(window_manager_remaps_both_stacked_nodes_after_cross_space_swap,
 {
     struct window_manager window_manager = {0};

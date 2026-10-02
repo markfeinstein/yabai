@@ -1985,8 +1985,17 @@ struct window **window_manager_find_application_windows(struct window_manager *w
     return window_list;
 }
 
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules)
+void window_manager_schedule_window_created_retry(AXUIElementRef window_ref)
 {
+    CFRetain(window_ref);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        event_loop_post(&g_event_loop, WINDOW_CREATED, (void *) window_ref, 0);
+    });
+}
+
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, bool *retry)
+{
+    if (retry) *retry = false;
     struct window *window = window_create(application, window_ref, window_id);
 
     char *window_title = window_title_ts(window);
@@ -2005,7 +2014,7 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     // NOTE(asmvik): Attempt to track **all** windows.
     //
 
-    if (!window_observe(window)) {
+    if (!window_observe(window, retry)) {
         debug("%s: could not observe %s %d\n", __FUNCTION__, window->application->name, window->id);
         window_manager_remove_lost_focused_event(wm, window->id);
         window_unobserve(window);
@@ -2108,8 +2117,13 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
         uint32_t window_id = ax_window_id(window_ref);
         if (!window_id || window_manager_find_window(wm, window_id)) continue;
 
-        struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true);
-        if (window) list[(*count)++] = window;
+        bool retry = false;
+        struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true, &retry);
+        if (window) {
+            list[(*count)++] = window;
+        } else if (retry) {
+            window_manager_schedule_window_created_retry(window_ref);
+        }
     }
 
     int rule_len = buf_len(wm->rules);
@@ -2154,6 +2168,14 @@ static uint32_t *window_manager_existing_application_window_list(struct applicat
     return space_list ? space_window_list_for_connection(space_list, space_count, application ? application->connection : 0, window_count, true) : NULL;
 }
 
+static bool window_manager_window_list_is_resolved(struct window_manager *wm, uint32_t *window_list, int window_count)
+{
+    for (int i = 0; i < window_count; ++i) {
+        if (!window_manager_find_window(wm, window_list[i])) return false;
+    }
+    return true;
+}
+
 bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index)
 {
     bool result = false;
@@ -2165,7 +2187,6 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
     CFArrayRef window_list_ref = application_window_list(application);
     int window_count = window_list_ref ? CFArrayGetCount(window_list_ref) : 0;
 
-    int empty_count = 0;
     for (int i = 0; i < window_count; ++i) {
         AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list_ref, i);
         uint32_t window_id = ax_window_id(window_ref);
@@ -2176,21 +2197,17 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
         // :Workaround
         //
         // NOTE(asmvik): The AX API appears to always include a single element for Finder that returns an empty window id.
-        // This is likely the desktop window. Other similar cases should be handled the same way; simply ignore the window when
-        // we attempt to do an equality check to see if we have correctly discovered the number of windows to track.
+        // This is likely the desktop window. Other similar cases should be ignored.
         //
 
-        if (!window_id) {
-            ++empty_count;
-            continue;
-        }
+        if (!window_id) continue;
 
         if (!window_manager_find_window(wm, window_id)) {
-            window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, false);
+            window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, false, NULL);
         }
     }
 
-    if (global_window_count != window_count-empty_count) {
+    if (!window_manager_window_list_is_resolved(wm, global_window_list, global_window_count)) {
         if (refresh_index == -1) {
             bool missing_window = false;
             uint32_t *app_window_list = NULL;
@@ -2220,6 +2237,7 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                 //
 
                 CFMutableDataRef data_ref = CFDataCreateMutable(NULL, 0x14);
+                if (!data_ref) goto probe_complete;
                 CFDataIncreaseLength(data_ref, 0x14);
 
                 uint8_t *data = CFDataGetMutableBytePtr(data_ref);
@@ -2232,6 +2250,8 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 
                     memcpy(data+0xc, &element_id, sizeof(uint64_t));
                     AXUIElementRef element_ref = _AXUIElementCreateWithRemoteToken(data_ref);
+                    if (!element_ref) continue;
+                    bool element_consumed = false;
 
                     const void *role = NULL;
                     AXUIElementCopyAttributeValue(element_ref, kAXRoleAttribute, &role);
@@ -2246,30 +2266,34 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                             probe_last_window_element_id = element_id;
                             debug("%s: probe %s element_id=%llu wid=%d\n", __FUNCTION__, application->name, element_id, element_wid);
 
+                            int match_index = -1;
                             if (element_wid != 0) {
                                 for (int i = 0; i < app_window_list_len; ++i) {
                                     if (app_window_list[i] == element_wid) {
                                         matched = true;
-                                        ts_buf_del(app_window_list, i);
+                                        match_index = i;
                                         break;
                                     }
                                 }
                             }
 
                             if (matched) {
-                                window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, false);
-                            } else {
-                                CFRelease(element_ref);
+                                element_consumed = true;
+                                if (window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, false, NULL)) {
+                                    ts_buf_del(app_window_list, match_index);
+                                }
                             }
                         }
 
                         CFRelease(role);
                     }
+                    if (!element_consumed) CFRelease(element_ref);
                 }
 
                 CFRelease(data_ref);
             }
 
+probe_complete:
             if (ts_buf_len(app_window_list) > 0) {
                 debug("%s: workaround failed to resolve all windows for %s (probed roles=%d windows=%d last_window_element_id=%llu unresolved=%d)\n",
                       __FUNCTION__, application->name, probe_role_count, probe_window_count, probe_last_window_element_id, ts_buf_len(app_window_list));
@@ -2279,22 +2303,6 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                 buf_push(wm->applications_to_refresh, application);
             } else {
                 debug("%s: workaround resolved all windows for %s\n", __FUNCTION__, application->name);
-            }
-        } else {
-            bool missing_window = false;
-
-            for (int i = 0; i < global_window_count; ++i) {
-                struct window *window = window_manager_find_window(wm, global_window_list[i]);
-                if (!window) {
-                    missing_window = true;
-                    break;
-                }
-            }
-
-            if (!missing_window) {
-                debug("%s: all windows for %s are now resolved\n", __FUNCTION__, application->name);
-                buf_del(wm->applications_to_refresh, refresh_index);
-                result = true;
             }
         }
     } else if (refresh_index != -1) {
@@ -3047,6 +3055,18 @@ bool window_manager_toggle_scratchpad_window_by_label(struct window_manager *wm,
     return window ? window_manager_toggle_scratchpad_window(wm, window, 0) : false;
 }
 
+#ifdef TESTS
+static CGError (*window_manager_window_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
+#else
+#define window_manager_window_is_ordered_in SLSWindowIsOrderedIn
+#endif
+
+static bool window_manager_scratchpad_ordered_state(struct window *window, int forced_mode, uint8_t *ordered_in)
+{
+    return forced_mode != 0 ||
+           window_manager_window_is_ordered_in(g_connection, window->id, ordered_in) == kCGErrorSuccess;
+}
+
 bool window_manager_toggle_scratchpad_window(struct window_manager *wm, struct window *window, int forced_mode)
 {
     TIME_FUNCTION;
@@ -3058,7 +3078,7 @@ bool window_manager_toggle_scratchpad_window(struct window_manager *wm, struct w
     bool visible_space = window_space(window->id) == sid || window_is_sticky(window->id);
 
     uint8_t ordered_in = 0;
-    SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in);
+    if (!window_manager_scratchpad_ordered_state(window, forced_mode, &ordered_in)) return false;
 
     switch (forced_mode) {
     case 0: goto mode_0;

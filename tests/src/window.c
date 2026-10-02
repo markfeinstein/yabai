@@ -1,3 +1,60 @@
+static AXError window_test_observe_result;
+static int window_test_observe_call_count;
+
+static AXError window_test_add_notification(AXObserverRef observer, AXUIElementRef element,
+                                            CFStringRef notification, void *context)
+{
+    (void) observer;
+    (void) element;
+    (void) notification;
+    (void) context;
+    return window_test_observe_result;
+}
+
+static AXError window_test_add_mixed_notification(AXObserverRef observer, AXUIElementRef element,
+                                                  CFStringRef notification, void *context)
+{
+    (void) observer;
+    (void) element;
+    (void) notification;
+    (void) context;
+    return window_test_observe_call_count++ == 0 ? kAXErrorCannotComplete : kAXErrorNotImplemented;
+}
+
+TEST_FUNC(window_observe_retries_only_transient_failures,
+{
+    struct application application = {0};
+    struct window window = { .application = &application };
+    bool retry = false;
+    __auto_type saved_add_notification = window_observe_add_notification;
+    window_observe_add_notification = window_test_add_notification;
+
+    window_test_observe_result = kAXErrorCannotComplete;
+    TEST_CHECK(window_observe(&window, &retry), false);
+    TEST_CHECK(retry, true);
+    TEST_CHECK(window.notification, 0U);
+
+    retry = true;
+    window_test_observe_result = kAXErrorNotImplemented;
+    TEST_CHECK(window_observe(&window, &retry), false);
+    TEST_CHECK(retry, false);
+    TEST_CHECK(window.notification, 0U);
+
+    window_observe_add_notification = window_test_add_mixed_notification;
+    window_test_observe_call_count = 0;
+    TEST_CHECK(window_observe(&window, &retry), false);
+    TEST_CHECK(retry, false);
+    TEST_CHECK(window.notification, 0U);
+
+    window_observe_add_notification = window_test_add_notification;
+    window_test_observe_result = kAXErrorSuccess;
+    TEST_CHECK(window_observe(&window, &retry), true);
+    TEST_CHECK(retry, false);
+    TEST_CHECK(window.notification, AX_WINDOW_ALL);
+
+    window_observe_add_notification = saved_add_notification;
+});
+
 TEST_FUNC(window_subrole_is_unknown,
 {
     TEST_CHECK(window_subrole_is_unknown(kAXUnknownSubrole), true);

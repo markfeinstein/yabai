@@ -1025,20 +1025,22 @@ static void do_window_sticky(char *message)
 }
 
 typedef void (*focus_window_call)(ProcessSerialNumber psn, uint32_t wid);
-static void do_window_focus(char *message)
+static bool do_window_focus(char *message)
 {
-    if (set_front_window_fp == 0) return;
+    if (set_front_window_fp == 0) return false;
 
     int window_connection;
     ProcessSerialNumber window_psn;
 
     uint32_t wid;
     unpack(wid);
+    if (!wid) return false;
 
-    SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection);
-    SLSGetConnectionPSN(SLSMainConnectionID(), &window_psn);
+    if (SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection) != kCGErrorSuccess) return false;
+    if (SLSGetConnectionPSN(window_connection, &window_psn) != kCGErrorSuccess) return false;
 
     ((focus_window_call) set_front_window_fp)(window_psn, wid);
+    return true;
 }
 
 static void do_window_shadow(char *message)
@@ -1280,7 +1282,7 @@ static void handle_message(int sockfd, char *message, size_t length)
         do_window_shadow(message);
     } break;
     case SA_OPCODE_WINDOW_FOCUS: {
-        do_window_focus(message);
+        status = do_window_focus(message);
     } break;
     case SA_OPCODE_WINDOW_SCALE: {
         do_window_scale(message);
