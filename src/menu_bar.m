@@ -12,8 +12,8 @@
 #define YB_MENU_BAR_MAX_EXPANDED_WIDTH 520.0
 #define YB_MENU_BAR_STATUS_HEIGHT       22.0
 #define YB_MENU_BAR_BUTTON_PAD_X         7.0
-#define YB_MENU_BAR_GAP                  5.0
-#define YB_MENU_BAR_DISPLAY_GAP          9.0
+#define YB_MENU_BAR_GAP                  0.0
+#define YB_MENU_BAR_DISPLAY_GAP          4.0
 #define YB_MENU_BAR_OUTER_INSET          2.0
 #define YB_MENU_BAR_CELL_WIDTH          25.0
 #define YB_MENU_BAR_SCREEN_WIDTH        22.0
@@ -79,9 +79,9 @@ enum yb_menu_bar_control_kind
 
 @interface YBMenuBarController : NSObject <NSMenuDelegate> {
     struct menu_bar_callbacks _callbacks;
-    NSMutableArray *_status_items;
-    NSMutableArray *_status_views;
+    NSStatusItem *_status_item;
     NSMenu *_menu;
+    NSView *_strip_view;
     struct menu_bar_snapshot *_snapshot;
     struct menu_bar_snapshot *_deferred_snapshot;
     bool _is_tracking_menu;
@@ -103,8 +103,8 @@ enum yb_menu_bar_control_kind
 - (bool)testHasDeferredSnapshot;
 - (bool)testHasStatusItem;
 - (NSUInteger)testStatusItemCount;
-- (NSUInteger)testStatusViewCount;
-- (bool)testStatusItemsOwnIndependentViews;
+- (NSUInteger)testStatusButtonCount;
+- (bool)testStatusItemOwnsStripView;
 - (bool)testIsTrackingMenu;
 - (uint64_t)testTrackingGeneration;
 - (NSView *)testBuildCompactStrip;
@@ -621,7 +621,16 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         [self endMenuTrackingApplyDeferred:false];
     }
 
-    [self clearRenderedStatusItems];
+    if (_status_item) {
+        [_status_item setMenu:nil];
+        [_status_item setView:nil];
+        [[NSStatusBar systemStatusBar] removeStatusItem:_status_item];
+        [_status_item release];
+        _status_item = nil;
+    }
+
+    [_strip_view release];
+    _strip_view = nil;
 
     [_menu release];
     _menu = nil;
@@ -641,42 +650,11 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     _is_tearing_down_status_item = false;
 }
 
-- (void)clearRenderedStatusItems
+- (void)ensureStatusItem
 {
-    for (NSStatusItem *item in _status_items) {
-        [item setMenu:nil];
-        [item setView:nil];
-        [[NSStatusBar systemStatusBar] removeStatusItem:item];
-    }
+    if (_status_item) return;
 
-    [_status_items release];
-    _status_items = nil;
-    [_status_views release];
-    _status_views = nil;
-}
-
-- (void)installStatusViews:(NSArray *)views
-{
-    [self clearRenderedStatusItems];
-    if (![views count]) return;
-
-    _status_items = [[NSMutableArray alloc] initWithCapacity:[views count]];
-    _status_views = [views mutableCopy];
-
-    for (NSView *view in _status_views) {
-        [view removeFromSuperview];
-        NSRect frame = [view frame];
-        frame.origin = NSZeroPoint;
-        [view setFrame:frame];
-    }
-
-    for (NSInteger i = (NSInteger) [_status_views count] - 1; i >= 0; --i) {
-        NSView *view = [_status_views objectAtIndex:(NSUInteger) i];
-        NSStatusItem *item = [[NSStatusBar systemStatusBar] statusItemWithLength:NSWidth([view frame])];
-        [item setMenu:nil];
-        [item setView:view];
-        [_status_items addObject:item];
-    }
+    _status_item = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
 }
 
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear
@@ -705,6 +683,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         return;
     }
 
+    [self ensureStatusItem];
     [self rebuildMenu];
 
     if (_snapshot->settings.style == MENU_BAR_STYLE_EXPANDED) {
@@ -857,8 +836,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)renderCompactStatusItem
 {
-    NSView *strip = [self buildCompactStrip];
-    [self installStatusViews:[NSArray arrayWithObject:strip]];
+    [_status_item setMenu:nil];
+    [_status_item setView:nil];
+    [_strip_view release];
+    _strip_view = [[self buildCompactStrip] retain];
+    [_status_item setLength:NSWidth([_strip_view frame])];
+    [_status_item setView:_strip_view];
 }
 
 - (YBMenuBarButton *)buttonWithTitle:(NSString *)title frame:(NSRect)frame kind:(enum yb_menu_bar_control_kind)kind
@@ -958,10 +941,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)renderExpandedStatusItem
 {
-    NSView *strip = [self buildExpandedStrip];
-    NSArray *views = [[strip subviews] copy];
-    [self installStatusViews:views];
-    [views release];
+    [_status_item setMenu:nil];
+    [_status_item setView:nil];
+    [_strip_view release];
+    _strip_view = [[self buildExpandedStrip] retain];
+    [_status_item setLength:NSWidth([_strip_view frame])];
+    [_status_item setView:_strip_view];
 }
 
 - (void)sendAction:(struct menu_bar_action)action
@@ -1020,9 +1005,10 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)openMenu:(id)sender
 {
-    if (![_status_items count] || !_menu) return;
+    if (!_status_item || !_menu) return;
 
-    NSView *view = [sender isKindOfClass:[NSView class]] ? (NSView *) sender : [_status_views firstObject];
+    NSView *view = [sender isKindOfClass:[NSView class]] ? (NSView *) sender : _strip_view;
+    if (!view) view = [_status_item button];
     if (!view) return;
 
     NSPoint point = NSMakePoint(NSMidX([view bounds]), NSMinY([view bounds]));
@@ -1080,30 +1066,22 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (bool)testHasStatusItem
 {
-    return [_status_items count] != 0;
+    return _status_item != nil;
 }
 
 - (NSUInteger)testStatusItemCount
 {
-    return [_status_items count];
+    return _status_item ? 1 : 0;
 }
 
-- (NSUInteger)testStatusViewCount
+- (NSUInteger)testStatusButtonCount
 {
-    return [_status_views count];
+    return [[_strip_view subviews] count];
 }
 
-- (bool)testStatusItemsOwnIndependentViews
+- (bool)testStatusItemOwnsStripView
 {
-    NSUInteger count = [_status_items count];
-    if (count != [_status_views count]) return false;
-
-    for (NSUInteger i = 0; i < count; ++i) {
-        NSStatusItem *item = [_status_items objectAtIndex:i];
-        NSView *view = [_status_views objectAtIndex:count - i - 1];
-        if ([item view] != view) return false;
-    }
-    return true;
+    return _status_item && [_status_item view] == _strip_view;
 }
 
 - (bool)testIsTrackingMenu

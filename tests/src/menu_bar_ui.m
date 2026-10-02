@@ -587,8 +587,8 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(YB_MENU_BAR_SCREEN_RADIUS == 3.0);
     TEST_CHECK(YB_MENU_BAR_INDEX_FONT_SIZE == 12.0);
     TEST_CHECK(YB_MENU_BAR_INDEX_PAD_X == 8.0);
-    TEST_CHECK(YB_MENU_BAR_GAP == 5.0);
-    TEST_CHECK(YB_MENU_BAR_DISPLAY_GAP == 9.0);
+    TEST_CHECK(YB_MENU_BAR_GAP == 0.0);
+    TEST_CHECK(YB_MENU_BAR_DISPLAY_GAP == 4.0);
     TEST_CHECK([active image] == nil);
     TEST_CHECK([[active title] length] == 0);
     TEST_CHECK(occupied_one->yb_index == 3);
@@ -602,9 +602,8 @@ test_expanded_screen_cells_and_compact_option(void)
     for (NSView *view in [expanded subviews]) {
         TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == view);
     }
-    CGFloat same_display_gap = (NSMaxX([visible_other frame]) + NSMinX([occupied_one frame])) * 0.5;
+    TEST_CHECK(NSMaxX([visible_other frame]) == NSMinX([occupied_one frame]));
     CGFloat display_gap = (NSMaxX([occupied_one frame]) + NSMinX([occupied_two frame])) * 0.5;
-    TEST_CHECK([expanded hitTest:NSMakePoint(same_display_gap, NSMidY([expanded bounds]))] == nil);
     TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == nil);
     TEST_CHECK([expanded hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
                                              NSMidY([expanded bounds]))] == nil);
@@ -650,7 +649,7 @@ test_expanded_screen_cells_and_compact_option(void)
 }
 
 static bool
-test_expanded_render_uses_independent_status_items(void)
+test_expanded_render_uses_one_status_item_with_sub_buttons(void)
 {
     struct menu_bar_ui_action_log log = {0};
     struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
@@ -658,15 +657,16 @@ test_expanded_render_uses_independent_status_items(void)
 
     [controller testSetSnapshot:menu_bar_ui_default_layout_snapshot(72)];
     [controller testRebuildMenu];
+    [controller ensureStatusItem];
     [controller renderExpandedStatusItem];
 
-    TEST_CHECK([controller testStatusItemCount] == 4);
-    TEST_CHECK([controller testStatusViewCount] == 4);
-    TEST_CHECK([controller testStatusItemsOwnIndependentViews]);
+    TEST_CHECK([controller testStatusItemCount] == 1);
+    TEST_CHECK([controller testStatusButtonCount] == 4);
+    TEST_CHECK([controller testStatusItemOwnsStripView]);
 
     [controller clearStatusItem];
     TEST_CHECK([controller testStatusItemCount] == 0);
-    TEST_CHECK([controller testStatusViewCount] == 0);
+    TEST_CHECK([controller testStatusButtonCount] == 0);
     TEST_CHECK(log.count == 0);
 
     [controller release];
@@ -868,8 +868,8 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     }
     struct yb_screen_selection expected = yb_select_screen_interval(entries, total, active);
     TEST_CHECK(YB_MENU_BAR_MAX_EXPANDED_WIDTH == 520.0);
-    TEST_CHECK(expected.start == 15);
-    TEST_CHECK(expected.count == 11);
+    TEST_CHECK(expected.start == 14);
+    TEST_CHECK(expected.count == 13);
     [controller testSetSnapshot:snapshot];
 
     NSView *expanded = [controller testBuildExpandedStrip];
@@ -878,9 +878,9 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     size_t count = menu_bar_ui_screen_selection(expanded, indexes, 40, &omitted);
     TEST_CHECK(count > 1 && count < total);
     TEST_CHECK(count == expected.count);
-    TEST_CHECK(indexes[0] == 116);
-    TEST_CHECK(indexes[count - 1] == 126);
-    TEST_CHECK(omitted == 29);
+    TEST_CHECK(indexes[0] == 115);
+    TEST_CHECK(indexes[count - 1] == 127);
+    TEST_CHECK(omitted == 27);
     TEST_CHECK(omitted == total - count);
     TEST_CHECK(NSWidth([expanded frame]) == yb_screen_interval_width(entries, expected.start,
                                                                      expected.count, omitted));
@@ -986,7 +986,7 @@ int main(void)
             { "lifecycle_reinit_ignores_stale_delivery", test_lifecycle_reinit_ignores_stale_delivery },
             { "read_only_rendered_paths_emit_only_setting_actions", test_read_only_rendered_paths_emit_only_setting_actions },
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
-            { "expanded_render_uses_independent_status_items", test_expanded_render_uses_independent_status_items },
+            { "expanded_render_uses_one_status_item_with_sub_buttons", test_expanded_render_uses_one_status_item_with_sub_buttons },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
             { "multi_digit_number_geometry_stays_compact_and_within_bounds", test_multi_digit_number_geometry_stays_compact_and_within_bounds },
