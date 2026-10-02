@@ -207,6 +207,8 @@ struct menu_bar_ui_bitmap_metrics
     CGFloat outline_alpha_sum;
     CGFloat outline_max_alpha;
     CGFloat maximum_channel_spread;
+    NSUInteger colorized_pixel_count;
+    NSUInteger interior_colorized_pixel_count;
     NSInteger interior_min_x;
     NSInteger interior_max_x;
     NSInteger interior_min_y;
@@ -269,11 +271,12 @@ menu_bar_ui_render_screen(YBMenuBarScreenCell *cell,
             CGFloat alpha = 0.0;
             [pixel getRed:&red green:&green blue:&blue alpha:&alpha];
             NSPoint sample = NSMakePoint(x + 0.5, y + 0.5);
+            CGFloat channel_spread = MAX(red, MAX(green, blue)) - MIN(red, MIN(green, blue));
             if (alpha >= 0.05) {
                 ++metrics.painted_pixel_count;
                 metrics.alpha_sum += alpha;
-                metrics.maximum_channel_spread = MAX(metrics.maximum_channel_spread,
-                                                      MAX(red, MAX(green, blue)) - MIN(red, MIN(green, blue)));
+                metrics.maximum_channel_spread = MAX(metrics.maximum_channel_spread, channel_spread);
+                if (channel_spread >= 0.08) ++metrics.colorized_pixel_count;
                 if (!NSPointInRect(sample, interior)) {
                     ++metrics.outline_painted_pixel_count;
                     metrics.outline_alpha_sum += alpha;
@@ -288,6 +291,7 @@ menu_bar_ui_render_screen(YBMenuBarScreenCell *cell,
                     ++metrics.interior_painted_pixel_count;
                     metrics.interior_alpha_sum += alpha;
                     metrics.interior_max_alpha = MAX(metrics.interior_max_alpha, alpha);
+                    if (channel_spread >= 0.08) ++metrics.interior_colorized_pixel_count;
                     metrics.interior_min_x = MIN(metrics.interior_min_x, x);
                     metrics.interior_max_x = MAX(metrics.interior_max_x, x);
                     metrics.interior_min_y = MIN(metrics.interior_min_y, y);
@@ -799,6 +803,78 @@ test_screen_number_visual_states_are_centered_monochrome_and_unfilled(void)
 }
 
 static bool
+test_pressed_active_screen_cell_is_colorized_only_while_highlighted(void)
+{
+    YBMenuBarScreenCell *cell = [[YBMenuBarScreenCell alloc] initWithFrame:NSMakeRect(0.0, 0.0,
+                                                                                     YB_MENU_BAR_CELL_WIDTH,
+                                                                                     YB_MENU_BAR_STATUS_HEIGHT)];
+    [cell setTitle:@""];
+    [cell setImage:nil];
+    [cell setBordered:NO];
+    [cell setButtonType:NSButtonTypeMomentaryPushIn];
+    NSObject *target = [[NSObject alloc] init];
+    [cell setTarget:target];
+    [cell setAction:@selector(performStripAction:)];
+    [cell setToolTip:@"unchanged tooltip"];
+    [cell setAccessibilityLabel:@"unchanged accessibility label"];
+    cell->yb_kind = YB_MENU_BAR_CONTROL_OPEN_MENU;
+    cell->yb_index = 8;
+    cell->yb_state = YB_MENU_BAR_SCREEN_ACTIVE;
+
+    TEST_CHECK(yb_screen_pressed_color() != nil);
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.22);
+    TEST_CHECK(![cell isHighlighted]);
+    struct menu_bar_ui_bitmap_metrics normal_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    struct menu_bar_ui_bitmap_metrics normal_dark = menu_bar_ui_render_screen(cell, NSAppearanceNameDarkAqua, false);
+    TEST_CHECK(normal_aqua.maximum_channel_spread <= 0.03);
+    TEST_CHECK(normal_dark.maximum_channel_spread <= 0.03);
+    TEST_CHECK(normal_aqua.colorized_pixel_count == 0);
+    TEST_CHECK(normal_dark.colorized_pixel_count == 0);
+    TEST_CHECK(normal_aqua.unexpected_interior_painted_pixel_count == 0);
+    TEST_CHECK(normal_dark.unexpected_interior_painted_pixel_count == 0);
+
+    [cell highlight:YES];
+    TEST_CHECK([cell isHighlighted]);
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.22);
+    struct menu_bar_ui_bitmap_metrics pressed_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    struct menu_bar_ui_bitmap_metrics pressed_dark = menu_bar_ui_render_screen(cell, NSAppearanceNameDarkAqua, false);
+    g_yb_menu_bar_contrast_override = 1;
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.34);
+    g_yb_menu_bar_contrast_override = -1;
+    struct menu_bar_ui_bitmap_metrics pressed_contrast = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, true);
+    TEST_CHECK(pressed_aqua.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_dark.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_contrast.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_aqua.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_dark.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_contrast.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_aqua.interior_colorized_pixel_count > normal_aqua.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_dark.interior_colorized_pixel_count > normal_dark.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_contrast.interior_colorized_pixel_count >= pressed_aqua.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_aqua.unexpected_interior_painted_pixel_count > 0);
+    TEST_CHECK(pressed_dark.unexpected_interior_painted_pixel_count > 0);
+    TEST_CHECK(pressed_contrast.interior_alpha_sum > pressed_aqua.interior_alpha_sum);
+    TEST_CHECK(pressed_aqua.alpha_sum > normal_aqua.alpha_sum);
+    TEST_CHECK(pressed_dark.alpha_sum > normal_dark.alpha_sum);
+
+    [cell highlight:NO];
+    TEST_CHECK(![cell isHighlighted]);
+    struct menu_bar_ui_bitmap_metrics released_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(released_aqua.maximum_channel_spread <= 0.03);
+    TEST_CHECK(released_aqua.colorized_pixel_count == 0);
+    TEST_CHECK(released_aqua.unexpected_interior_painted_pixel_count == 0);
+    TEST_CHECK([cell action] == @selector(performStripAction:));
+    TEST_CHECK([cell target] == target);
+    TEST_CHECK(cell->yb_kind == YB_MENU_BAR_CONTROL_OPEN_MENU);
+    TEST_CHECK([[cell toolTip] isEqualToString:@"unchanged tooltip"]);
+    TEST_CHECK([[cell accessibilityLabel] isEqualToString:@"unchanged accessibility label"]);
+
+    [target release];
+    [cell release];
+    return true;
+}
+
+static bool
 test_multi_digit_number_geometry_stays_compact_and_within_bounds(void)
 {
     NSFont *font = yb_screen_index_font();
@@ -989,6 +1065,7 @@ int main(void)
             { "expanded_render_uses_one_status_item_with_sub_buttons", test_expanded_render_uses_one_status_item_with_sub_buttons },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
+            { "pressed_active_screen_cell_is_colorized_only_while_highlighted", test_pressed_active_screen_cell_is_colorized_only_while_highlighted },
             { "multi_digit_number_geometry_stays_compact_and_within_bounds", test_multi_digit_number_geometry_stays_compact_and_within_bounds },
             { "overflow_keeps_active_and_nearest_source_neighbors", test_overflow_keeps_active_and_nearest_source_neighbors },
             { "generation_ordering_without_status_item_delivery", test_generation_ordering_without_status_item_delivery },

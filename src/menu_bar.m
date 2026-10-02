@@ -164,6 +164,18 @@ yb_screen_is_dashed(enum yb_menu_bar_screen_state state)
     return state == YB_MENU_BAR_SCREEN_UNKNOWN || state == YB_MENU_BAR_SCREEN_PLACEHOLDER;
 }
 
+static NSColor *
+yb_screen_pressed_color(void)
+{
+    return [NSColor systemOrangeColor];
+}
+
+static CGFloat
+yb_screen_pressed_fill_alpha(void)
+{
+    return yb_increased_contrast() ? 0.34 : 0.22;
+}
+
 static NSFont *
 yb_screen_index_font(void)
 {
@@ -226,6 +238,12 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
     [self setNeedsDisplay:YES];
 }
 
+- (void)highlight:(BOOL)flag
+{
+    [super highlight:flag];
+    [self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirty_rect
 {
     (void) dirty_rect;
@@ -241,7 +259,16 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
             [outline setLineDash:pattern count:2 phase:0.0];
         }
 
-        NSColor *outline_ink = [[NSColor labelColor] colorWithAlphaComponent:yb_screen_alpha(yb_state)];
+        bool pressed = [self isHighlighted];
+        NSColor *pressed_ink = yb_screen_pressed_color();
+        if (pressed) {
+            [[pressed_ink colorWithAlphaComponent:yb_screen_pressed_fill_alpha()] setFill];
+            [outline fill];
+        }
+
+        NSColor *outline_ink = pressed
+                             ? pressed_ink
+                             : [[NSColor labelColor] colorWithAlphaComponent:yb_screen_alpha(yb_state)];
         [outline_ink setStroke];
         [outline stroke];
 
@@ -249,7 +276,7 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
         if (index) {
             NSDictionary *attributes = @{
                 NSFontAttributeName: yb_screen_index_font(),
-                NSForegroundColorAttributeName: [NSColor labelColor]
+                NSForegroundColorAttributeName: pressed ? pressed_ink : [NSColor labelColor]
             };
             NSSize text_size = [index sizeWithAttributes:attributes];
             NSPoint text_origin = NSMakePoint(NSMidX(screen) - text_size.width * 0.5,
