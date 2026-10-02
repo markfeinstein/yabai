@@ -1662,6 +1662,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
     TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
     TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
+    TEST_ENTRY(event_queue_adjacent_mouse_drags_coalesce_and_release_replaced_context) \
+    TEST_ENTRY(event_queue_mouse_up_boundary_preserves_drag_fifo) \
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
     TEST_ENTRY(event_queue_full_failstops_destructive_events)    \

@@ -2069,7 +2069,7 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
     uint32_t capacity = 0;
     bool post_wake = false;
     struct event event = { .type = type, .param1 = param1, .context = context };
-    bool merge = type == MOUSE_MOVED || type == MENU_BAR_REFRESH;
+    bool merge = type == MOUSE_DRAGGED || type == MOUSE_MOVED || type == MENU_BAR_REFRESH;
     enum event_queue_result result = event_queue_push(&event_loop->queue, event, merge, &replaced, &capacity, &post_wake);
 
     if (result == EVENT_QUEUE_MERGED) {

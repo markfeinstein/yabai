@@ -176,6 +176,137 @@ static bool event_queue_check_merge_releases_replaced_mouse_move_once(char *test
     return result;
 }
 
+static bool event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced_context(char *test_name)
+{
+    bool result = true;
+    struct event_loop event_loop = { 0 };
+    CFMutableArrayRef first = CFArrayCreateMutable(NULL, 0, NULL);
+    CFMutableArrayRef second = CFArrayCreateMutable(NULL, 0, NULL);
+
+    if (!first || !second) {
+        if (first) CFRelease(first);
+        if (second) CFRelease(second);
+        return false;
+    }
+
+    CFRetain(first);
+    CFRetain(second);
+    if (!event_queue_init(&event_loop.queue, 4)) {
+        CFRelease(first);
+        CFRelease(first);
+        CFRelease(second);
+        CFRelease(second);
+        return false;
+    }
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_drag_merge_%d", getpid());
+    sem_t *semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    if (semaphore == SEM_FAILED) {
+        event_queue_destroy(&event_loop.queue);
+        CFRelease(first);
+        CFRelease(first);
+        CFRelease(second);
+        CFRelease(second);
+        return false;
+    }
+    event_loop.semaphore = semaphore;
+
+    event_loop_post(&event_loop, MOUSE_DRAGGED, first, 1);
+    TEST_CHECK((int) CFGetRetainCount(first), 2);
+    event_loop_post(&event_loop, MOUSE_DRAGGED, second, 2);
+    TEST_CHECK(event_loop.queue.count, 1U);
+    TEST_CHECK((int) CFGetRetainCount(first), 1);
+    TEST_CHECK((int) CFGetRetainCount(second), 2);
+
+    struct event event = { 0 };
+    TEST_CHECK(event_queue_pop(&event_loop.queue, &event), true);
+    TEST_CHECK(event.type, MOUSE_DRAGGED);
+    TEST_CHECK(event.param1, 2);
+    TEST_CHECK(event.context == second, true);
+    event_loop_release_event_context(event.type, event.context);
+    TEST_CHECK((int) CFGetRetainCount(second), 1);
+    bool popped_extra = event_queue_pop(&event_loop.queue, &event);
+    TEST_CHECK(popped_extra, false);
+    if (popped_extra) event_loop_release_event_context(event.type, event.context);
+
+    sem_close(semaphore);
+    event_queue_destroy(&event_loop.queue);
+    CFRelease(first);
+    CFRelease(second);
+    return result;
+}
+
+static bool event_queue_check_mouse_up_boundary_preserves_drag_fifo(char *test_name)
+{
+    bool result = true;
+    struct event_loop event_loop = { 0 };
+    CFMutableArrayRef contexts[] = {
+        CFArrayCreateMutable(NULL, 0, NULL),
+        CFArrayCreateMutable(NULL, 0, NULL),
+        CFArrayCreateMutable(NULL, 0, NULL),
+    };
+    enum event_type types[] = { MOUSE_DRAGGED, MOUSE_UP, MOUSE_DRAGGED };
+
+    for (int i = 0; i < array_count(contexts); ++i) {
+        if (!contexts[i]) {
+            for (int j = 0; j < array_count(contexts); ++j) {
+                if (contexts[j]) CFRelease(contexts[j]);
+            }
+            return false;
+        }
+    }
+    for (int i = 0; i < array_count(contexts); ++i) {
+        CFRetain(contexts[i]);
+    }
+
+    if (!event_queue_init(&event_loop.queue, 4)) {
+        for (int i = 0; i < array_count(contexts); ++i) {
+            CFRelease(contexts[i]);
+            CFRelease(contexts[i]);
+        }
+        return false;
+    }
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_drag_bound_%d", getpid());
+    sem_t *semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    if (semaphore == SEM_FAILED) {
+        event_queue_destroy(&event_loop.queue);
+        for (int i = 0; i < array_count(contexts); ++i) {
+            CFRelease(contexts[i]);
+            CFRelease(contexts[i]);
+        }
+        return false;
+    }
+    event_loop.semaphore = semaphore;
+
+    for (int i = 0; i < array_count(contexts); ++i) {
+        event_loop_post(&event_loop, types[i], contexts[i], i + 1);
+    }
+    TEST_CHECK(event_loop.queue.count, 3U);
+
+    for (int i = 0; i < array_count(contexts); ++i) {
+        struct event event = { 0 };
+        TEST_CHECK(event_queue_pop(&event_loop.queue, &event), true);
+        TEST_CHECK(event.type, types[i]);
+        TEST_CHECK(event.param1, i + 1);
+        TEST_CHECK(event.context == contexts[i], true);
+        event_loop_release_event_context(event.type, event.context);
+        TEST_CHECK((int) CFGetRetainCount(contexts[i]), 1);
+    }
+
+    struct event event = { 0 };
+    TEST_CHECK(event_queue_pop(&event_loop.queue, &event), false);
+
+    sem_close(semaphore);
+    event_queue_destroy(&event_loop.queue);
+    for (int i = 0; i < array_count(contexts); ++i) {
+        CFRelease(contexts[i]);
+    }
+    return result;
+}
+
 static bool event_queue_check_full_releases_owned_context_once(char *test_name)
 {
     bool result = true;
@@ -331,6 +462,14 @@ TEST_FUNC(event_queue_wrapped_growth_preserves_fifo_and_release_once, {
 
 TEST_FUNC(event_queue_merge_releases_replaced_mouse_move_once, {
     result = event_queue_check_merge_releases_replaced_mouse_move_once(test_name);
+});
+
+TEST_FUNC(event_queue_adjacent_mouse_drags_coalesce_and_release_replaced_context, {
+    result = event_queue_check_adjacent_mouse_drags_coalesce_and_release_replaced_context(test_name);
+});
+
+TEST_FUNC(event_queue_mouse_up_boundary_preserves_drag_fifo, {
+    result = event_queue_check_mouse_up_boundary_preserves_drag_fifo(test_name);
 });
 
 TEST_FUNC(event_queue_full_releases_owned_context_once, {
