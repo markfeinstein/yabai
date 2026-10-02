@@ -84,6 +84,42 @@ bool space_gesture_requires_payload(void)
     return [[NSProcessInfo processInfo] operatingSystemVersion].majorVersion >= 27;
 }
 
+#ifdef TESTS
+static int space_gesture_test_requires_payload = -1;
+static void (*space_gesture_test_post_event)(CGEventTapLocation tap, CGEventRef event);
+static void (*space_gesture_test_wait)(useconds_t usec);
+#endif
+
+static bool space_gesture_should_pace_payload(void)
+{
+#ifdef TESTS
+    if (space_gesture_test_requires_payload >= 0) return space_gesture_test_requires_payload;
+#endif
+    return space_gesture_requires_payload();
+}
+
+static void space_gesture_post_event(CGEventTapLocation tap, CGEventRef event)
+{
+#ifdef TESTS
+    if (space_gesture_test_post_event) {
+        space_gesture_test_post_event(tap, event);
+        return;
+    }
+#endif
+    CGEventPost(tap, event);
+}
+
+static void space_gesture_wait(useconds_t usec)
+{
+#ifdef TESTS
+    if (space_gesture_test_wait) {
+        space_gesture_test_wait(usec);
+        return;
+    }
+#endif
+    usleep(usec);
+}
+
 static bool space_gesture_natural_scrolling(void)
 {
     // Read once per request, so changes in System Settings need no daemon restart.
@@ -176,8 +212,10 @@ bool space_gesture_perform(int direction, int count)
             }
         }
 
+        bool pace_payload = space_gesture_should_pace_payload();
         for (int i = 0; i < 3; ++i) {
-            CGEventPost(kCGSessionEventTap, events[i]);
+            space_gesture_post_event(kCGSessionEventTap, events[i]);
+            if (pace_payload && i < 2) space_gesture_wait(10000);
             CFRelease(events[i]);
         }
     }
