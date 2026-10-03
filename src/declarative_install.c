@@ -321,9 +321,9 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         if (!target.is_user_space) continue;
         struct area area = view->root->area;
         area.x -= (float) view->left_padding;
-        area.w += (float) (view->left_padding + view->right_padding);
+        area.w += view_padding_sum(view->left_padding, view->right_padding);
         area.y -= (float) view->top_padding;
-        area.h += (float) (view->top_padding + view->bottom_padding);
+        area.h += view_padding_sum(view->top_padding, view->bottom_padding);
         struct area bounds = area;
 #define APPLY_SPACE(field, id, member) do { \
     view->member = effective.fields[field].value.integer; \
@@ -339,9 +339,9 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         view->auto_balance = effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
 #undef APPLY_SPACE
         area.x += (float) view->left_padding;
-        area.w -= (float) (view->left_padding + view->right_padding);
+        area.w -= view_padding_sum(view->left_padding, view->right_padding);
         area.y += (float) view->top_padding;
-        area.h -= (float) (view->top_padding + view->bottom_padding);
+        area.h -= view_padding_sum(view->top_padding, view->bottom_padding);
         if (view_layout_is_accordion(view->layout)) {
             float min_x = bounds.x, max_x = bounds.x + bounds.w;
             float min_y = bounds.y, max_y = bounds.y + bounds.h;

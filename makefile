@@ -44,8 +44,30 @@ icon:
 	python3 $(SCRIPT_PATH)/seticon.py $(ASSET_PATH)/icon/2x/icon-512px@2x.png $(BUILD_PATH)/yabai
 
 publish:
-	sed -i '' "s/^VERSION=.*/VERSION=\"$(shell $(BUILD_PATH)/yabai --version | cut -d "v" -f 2)\"/" $(SCRIPT_PATH)/install.sh
-	sed -i '' "s/^EXPECTED_HASH=.*/EXPECTED_HASH=\"$(shell shasum -a 256 $(BUILD_PATH)/$(shell $(BUILD_PATH)/yabai --version).tar.gz | cut -d " " -f 1)\"/" $(SCRIPT_PATH)/install.sh
+	@set -eu; \
+	installer='$(SCRIPT_PATH)/install.sh'; \
+	binary='$(BUILD_PATH)/yabai'; \
+	[ -f "$$binary" ] && [ -x "$$binary" ]; \
+	release=$$("$$binary" --version); \
+	case "$$release" in yabai-v*) ;; *) exit 1 ;; esac; \
+	version=$${release#yabai-v}; \
+	[ -n "$$version" ]; \
+	case "$$version" in *[!0-9A-Za-z._-]*) exit 1 ;; esac; \
+	archive='$(BUILD_PATH)/'"$$release"'.tar.gz'; \
+	[ -f "$$archive" ]; \
+	hash=$$(shasum -a 256 "$$archive" | cut -d ' ' -f 1); \
+	[ "$${#hash}" -eq 64 ]; \
+	case "$$hash" in *[!0-9a-f]*) exit 1 ;; esac; \
+	[ "$$(grep -c '^VERSION=' "$$installer")" -eq 1 ]; \
+	[ "$$(grep -c '^EXPECTED_HASH=' "$$installer")" -eq 1 ]; \
+	tmp=$$(mktemp '$(SCRIPT_PATH)/.install.sh.XXXXXX'); \
+	trap 'rm -f "$$tmp"' 0 HUP INT TERM; \
+	sed -e "s/^VERSION=.*/VERSION=\"$$version\"/" \
+	    -e "s/^EXPECTED_HASH=.*/EXPECTED_HASH=\"$$hash\"/" \
+	    "$$installer" > "$$tmp"; \
+	chmod 0755 "$$tmp"; \
+	mv -f "$$tmp" "$$installer"; \
+	trap - 0 HUP INT TERM
 
 archive: man install sign icon
 	rm -rf $(ARCH_PATH)

@@ -1688,6 +1688,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \
     TEST_ENTRY(window_focus_fallback_selector_matches_public_recent_helper) \
     TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
+    TEST_ENTRY(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
     TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
@@ -1736,6 +1737,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mouse_drop_action_rollback_failstop_exits) \
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \
+    TEST_ENTRY(view_padding_sum_widens_before_addition)         \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
     TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
     TEST_ENTRY(scaffold_identity_is_invalidated_across_rapid_layout_conversions) \
@@ -1822,6 +1824,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_generated_limit_boundaries)                     \
     TEST_ENTRY(declarative_schema_paths_are_exact_and_redacted)            \
     TEST_ENTRY(declarative_exact_integral_lexemes_are_enforced)            \
+    TEST_ENTRY(declarative_numeric_offsets_scale_with_bounded_traversals)  \
     TEST_ENTRY(declarative_signed_integer_boundaries_are_overflow_safe)     \
     TEST_ENTRY(declarative_positive_integer_boundaries_are_overflow_safe)   \
     TEST_ENTRY(declarative_source_positions_handle_cr_and_crlf)            \

@@ -1,11 +1,6 @@
 #!/bin/sh
 
 set -eu
-if [ "$(/usr/bin/id -u)" -eq 0 ]; then
-    echo "installer fixtures must not run as root" >&2
-    exit 1
-fi
-export YABAI_INSTALL_TEST_PATH=1
 
 TEST_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd "$TEST_DIR/.." && pwd)
@@ -48,11 +43,13 @@ file_mode()
 
 run_installer()
 {
-    installer=${1:-$REPO_ROOT/scripts/install.sh}
-    mock_version=${2:-7.1.25}
+    installer=${1:-$INSTALLER_FIXTURE}
+    mock_version=${2:-$INSTALLER_VERSION}
+    mock_expected_hash=${3:-$INSTALLER_EXPECTED_HASH}
     (
         cd "$WORK_DIR"
         PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_VERSION="$mock_version" \
+            MOCK_EXPECTED_HASH="$mock_expected_hash" \
             /bin/sh "$installer" "$BIN_DIR" "$MAN_DIR" >/dev/null
     )
 }
@@ -69,8 +66,9 @@ assert_tmpdir_template()
     if (
         cd "$WORK_DIR"
         PATH="$TMPDIR_MOCK_BIN:$MOCK_BIN:$PATH" TMPDIR="$tmpdir" \
+            MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
             MOCK_MKTEMP_LOG="$MKTEMP_LOG" MOCK_MKTEMP_RESULT="$MKTEMP_ESCAPE" \
-            /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+            /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
     ); then
         fail "TMPDIR '$tmpdir' template probe unexpectedly succeeded"
     fi
@@ -95,17 +93,50 @@ WORK_DIR="$TEST_ROOT/work"
 TEMP_DIR="$TEST_ROOT/tmp"
 MKTEMP_LOG="$TEST_ROOT/mktemp.log"
 MKTEMP_ESCAPE="$TEST_ROOT/mktemp-escape"
+INSTALLER_FIXTURE="$TEST_ROOT/install-fixture.sh"
 mkdir "$MOCK_BIN" "$TMPDIR_MOCK_BIN" "$BIN_DIR" "$MAN_DIR" "$WORK_DIR" "$TEMP_DIR"
 
-grep -F 'PATH=/usr/bin:/bin:/usr/sbin:/sbin' "$REPO_ROOT/scripts/install.sh" >/dev/null || \
-    fail 'installer does not pin a trusted production PATH'
-grep -F '"$(/usr/bin/id -u)" -eq 0' "$REPO_ROOT/scripts/install.sh" >/dev/null || \
-    fail 'installer does not disable fixture PATH injection for root'
+[ "$(sed -n '1p' "$REPO_ROOT/scripts/install.sh")" = '#!/bin/sh' ] || \
+    fail 'installer does not use /bin/sh directly'
+[ "$(grep -c '^PATH=/usr/bin:/bin:/usr/sbin:/sbin$' "$REPO_ROOT/scripts/install.sh")" -eq 1 ] || \
+    fail 'installer does not pin one unconditional trusted production PATH'
+if grep -F 'YABAI_INSTALL_TEST_PATH' "$REPO_ROOT/scripts/install.sh" >/dev/null; then
+    fail 'installer retains a production test PATH bypass'
+fi
+grep -F 'URL="https://github.com/${AUTHOR}/${NAME}/releases/download/v${VERSION}/${ARCHIVE}"' \
+    "$REPO_ROOT/scripts/install.sh" >/dev/null || fail 'installer release URL template is incorrect'
+sed "s|^PATH=/usr/bin:/bin:/usr/sbin:/sbin$|PATH=$MOCK_BIN:/usr/bin:/bin:/usr/sbin:/sbin|" \
+    "$REPO_ROOT/scripts/install.sh" > "$INSTALLER_FIXTURE"
+chmod 0755 "$INSTALLER_FIXTURE"
+
+INSTALLER_VERSION=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' "$INSTALLER_FIXTURE")
+INSTALLER_EXPECTED_HASH=$(sed -n 's/^EXPECTED_HASH="\([^"]*\)"$/\1/p' "$INSTALLER_FIXTURE")
+case "$INSTALLER_VERSION" in
+    ''|*[!A-Za-z0-9._-]*) fail 'installer fixture has a missing or unsafe VERSION' ;;
+esac
+case "$INSTALLER_EXPECTED_HASH" in
+    *[!0-9A-Fa-f]*) fail 'installer fixture has an unsafe EXPECTED_HASH' ;;
+esac
+[ "${#INSTALLER_EXPECTED_HASH}" -eq 64 ] || fail 'installer fixture has a missing or invalid EXPECTED_HASH'
+
+FAKE_SH_BIN="$TEST_ROOT/fake-sh-bin"
+FAKE_SH_MARKER="$TEST_ROOT/fake-sh-used"
+mkdir "$FAKE_SH_BIN"
+cat > "$FAKE_SH_BIN/sh" <<EOF
+#!/bin/sh
+: > "$FAKE_SH_MARKER"
+exit 68
+EOF
+chmod 0755 "$FAKE_SH_BIN/sh"
+if PATH="$FAKE_SH_BIN:$PATH" "$REPO_ROOT/scripts/install.sh" relative relative >/dev/null 2>&1; then
+    fail 'production installer accepted invalid local destinations'
+fi
+[ ! -e "$FAKE_SH_MARKER" ] || fail 'production installer shebang used sh from PATH'
 
 cat > "$MOCK_BIN/curl" <<'EOF'
 #!/bin/sh
 set -eu
-version=${MOCK_VERSION:-7.1.25}
+version=${MOCK_VERSION:?}
 archive="yabai-v${version}.tar.gz"
 expected="https://github.com/asmvik/yabai/releases/download/v${version}/${archive}"
 [ "$#" -eq 4 ] || exit 64
@@ -119,7 +150,8 @@ EOF
 cat > "$MOCK_BIN/shasum" <<'EOF'
 #!/bin/sh
 set -eu
-version=${MOCK_VERSION:-7.1.25}
+version=${MOCK_VERSION:?}
+expected_hash=${MOCK_EXPECTED_HASH:?}
 archive="yabai-v${version}.tar.gz"
 [ "$#" -eq 3 ] || exit 64
 [ "$1" = -a ] || exit 64
@@ -130,7 +162,7 @@ case "$3" in
         if [ "${MOCK_HASH_MISMATCH:-0}" -eq 1 ]; then
             hash=invalid-release-hash
         else
-            hash=76f383841570bfe1e3fd24cedd9b1a4b804b43b0f39c86a951c97d187fc6b1b4
+            hash=$expected_hash
         fi
         ;;
     */yabai)
@@ -145,7 +177,7 @@ EOF
 cat > "$MOCK_BIN/tar" <<'EOF'
 #!/bin/sh
 set -eu
-version=${MOCK_VERSION:-7.1.25}
+version=${MOCK_VERSION:?}
 archive="yabai-v${version}.tar.gz"
 [ "$#" -eq 2 ] || exit 64
 [ "$1" = -xzf ] || exit 64
@@ -205,7 +237,7 @@ case "$2:$3" in
     */bin/.yabai-install.*/yabai:*/bin/yabai) operation=bin-final ;;
     */man/.yabai-install.*/yabai.1:*/man/yabai.1) operation=man-final ;;
 esac
-if [ "$mode" = "$operation" ]; then
+if [ "$mode" != none ] && [ "$mode" = "$operation" ]; then
     /bin/mv "$@"
     exit 65
 fi
@@ -231,9 +263,13 @@ fi
 exec /bin/rm "$@"
 EOF
 
-cat > "$TMPDIR_MOCK_BIN/mktemp" <<'EOF'
+cat > "$MOCK_BIN/mktemp" <<'EOF'
 #!/bin/sh
 set -eu
+if [ -z "${MOCK_MKTEMP_LOG:-}" ]; then
+    exec /usr/bin/mktemp "$@"
+fi
+[ ! -e "$MOCK_MKTEMP_LOG" ] || exit 69
 printf '%s\n' "$#" "$1" "$2" > "$MOCK_MKTEMP_LOG"
 [ "$#" -eq 2 ]
 [ "$1" = -d ]
@@ -245,9 +281,9 @@ cat > "$TMPDIR_MOCK_BIN/curl" <<'EOF'
 exit 67
 EOF
 chmod +x "$MOCK_BIN/curl" "$MOCK_BIN/shasum" "$MOCK_BIN/tar" "$MOCK_BIN/id" "$MOCK_BIN/mv" "$MOCK_BIN/rm" \
-    "$TMPDIR_MOCK_BIN/mktemp" "$TMPDIR_MOCK_BIN/curl"
+    "$MOCK_BIN/mktemp" "$TMPDIR_MOCK_BIN/curl"
 
-installer_template='asmvik-yabai-v7.1.25-installer.XXXXXX'
+installer_template="asmvik-yabai-v${INSTALLER_VERSION}-installer.XXXXXX"
 assert_tmpdir_template / "/$installer_template"
 assert_tmpdir_template /tmp/ "/tmp/$installer_template"
 assert_tmpdir_template /tmp/// "/tmp/$installer_template"
@@ -258,8 +294,9 @@ relative_output="$TEST_ROOT/relative-output"
 if (
     cd "$WORK_DIR"
     PATH="$TMPDIR_MOCK_BIN:$MOCK_BIN:$PATH" TMPDIR=relative/tmp \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
         MOCK_MKTEMP_LOG="$MKTEMP_LOG" MOCK_MKTEMP_RESULT="$MKTEMP_ESCAPE" \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$relative_output" 2>&1
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$relative_output" 2>&1
 ); then
     fail 'relative TMPDIR unexpectedly succeeded'
 fi
@@ -270,22 +307,26 @@ grep -F "Temporary directory base 'relative/tmp' is not an absolutepath." "$rela
     fail 'relative TMPDIR cleanup escaped before rejection'
 rm -R "$MKTEMP_ESCAPE"
 
-mkdir "$WORK_DIR/asmvik-yabai-v7.1.25-installer"
-printf 'legacy directory sentinel\n' > "$WORK_DIR/asmvik-yabai-v7.1.25-installer/sentinel"
+legacy_installer_dir="$WORK_DIR/asmvik-yabai-v${INSTALLER_VERSION}-installer"
+mkdir "$legacy_installer_dir"
+printf 'legacy directory sentinel\n' > "$legacy_installer_dir/sentinel"
 printf 'old binary\n' > "$BIN_DIR/yabai"
 printf 'old manual\n' > "$MAN_DIR/yabai.1"
 
 run_installer
 [ "$(cat "$BIN_DIR/yabai")" = 'new binary' ] || fail 'successful installation did not replace the binary'
 [ "$(cat "$MAN_DIR/yabai.1")" = 'new manual' ] || fail 'successful installation did not replace the man page'
-[ "$(cat "$WORK_DIR/asmvik-yabai-v7.1.25-installer/sentinel")" = 'legacy directory sentinel' ] || fail 'legacy predictable directory was modified'
+[ "$(cat "$legacy_installer_dir/sentinel")" = 'legacy directory sentinel' ] || fail 'legacy predictable directory was modified'
 assert_no_owned_paths
 
 PUBLISHED_INSTALLER="$TEST_ROOT/install-published.sh"
-sed 's/^VERSION=.*/VERSION="9.9.9"/' "$REPO_ROOT/scripts/install.sh" > "$PUBLISHED_INSTALLER"
+PUBLISHED_EXPECTED_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+sed -e 's/^VERSION=.*/VERSION="9.9.9"/' \
+    -e "s/^EXPECTED_HASH=.*/EXPECTED_HASH=\"$PUBLISHED_EXPECTED_HASH\"/" \
+    "$INSTALLER_FIXTURE" > "$PUBLISHED_INSTALLER"
 printf 'old binary before published-version install\n' > "$BIN_DIR/yabai"
 printf 'old manual before published-version install\n' > "$MAN_DIR/yabai.1"
-run_installer "$PUBLISHED_INSTALLER" 9.9.9
+run_installer "$PUBLISHED_INSTALLER" 9.9.9 "$PUBLISHED_EXPECTED_HASH"
 [ "$(cat "$BIN_DIR/yabai")" = 'new binary' ] || fail 'published-version installation did not replace the binary'
 [ "$(cat "$MAN_DIR/yabai.1")" = 'new manual' ] || fail 'published-version installation did not replace the man page'
 published_leftovers=$(find "$TEMP_DIR" -name 'asmvik-yabai-v9.9.9-installer.*' -print)
@@ -297,8 +338,10 @@ printf 'old manual before hash mismatch\n' > "$MAN_DIR/yabai.1"
 TAR_MARKER="$TEST_ROOT/tar-invoked"
 if (
     cd "$WORK_DIR"
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_HASH_MISMATCH=1 MOCK_TAR_MARKER="$TAR_MARKER" \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_HASH_MISMATCH=1 MOCK_TAR_MARKER="$TAR_MARKER" \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
 ); then
     fail 'checksum mismatch unexpectedly succeeded'
 fi
@@ -311,8 +354,10 @@ printf 'old binary after checksum rejection\n' > "$BIN_DIR/yabai"
 printf 'old manual after checksum rejection\n' > "$MAN_DIR/yabai.1"
 if (
     cd "$WORK_DIR"
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_TAR_MODE=missing-man \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_TAR_MODE=missing-man \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
 ); then
     fail 'malformed release preparation unexpectedly succeeded'
 fi
@@ -328,8 +373,9 @@ MV_COUNT="$TEST_ROOT/mv-count"
 if (
     cd "$WORK_DIR"
     PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
         MOCK_MV_FAIL_SECOND_FINAL=1 MOCK_MV_COUNT="$MV_COUNT" \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
 ); then
     fail 'second commit-time mv failure unexpectedly succeeded'
 fi
@@ -380,8 +426,10 @@ for mode in bin-backup man-backup; do
     printf 'old manual for %s\n' "$mode" > "$MAN_DIR/yabai.1"
     if (
         cd "$WORK_DIR"
-        PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_MV_FAIL_AFTER="$mode" \
-            /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+        PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+            MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+            MOCK_MV_FAIL_AFTER="$mode" \
+            /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
     ); then
         fail "$mode post-effect failure unexpectedly succeeded"
     fi
@@ -394,8 +442,10 @@ for mode in bin-final man-final; do
     rm -f "$BIN_DIR/yabai" "$MAN_DIR/yabai.1"
     if (
         cd "$WORK_DIR"
-        PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_MV_FAIL_AFTER="$mode" \
-            /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+        PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+            MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+            MOCK_MV_FAIL_AFTER="$mode" \
+            /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
     ); then
         fail "$mode post-effect failure unexpectedly succeeded"
     fi
@@ -413,8 +463,9 @@ for mode in fail-before fail-after; do
     if (
         cd "$WORK_DIR"
         PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+            MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
             MOCK_RM_MODE="$mode" MOCK_RM_MARKER="$marker" \
-            /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
+            /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >/dev/null 2>&1
     ); then
         fail "$mode backup-removal failure unexpectedly succeeded"
     fi
@@ -427,16 +478,42 @@ done
 identity_output="$TEST_ROOT/identity-output"
 (
     cd "$WORK_DIR"
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=501 MOCK_CURRENT_USER=developer SUDO_USER=root \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_EUID=501 MOCK_CURRENT_USER=developer SUDO_USER=root \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
 )
 grep -F "  developer ALL=(root) NOPASSWD:" "$identity_output" >/dev/null || \
     fail 'normal invocation did not use the current user in the sudoers row'
 
+SAFE_BIN_DIR=$BIN_DIR
+UNSAFE_BIN_DIR="$TEST_ROOT/bin unsafe,#"
+mkdir "$UNSAFE_BIN_DIR"
+BIN_DIR=$UNSAFE_BIN_DIR
 (
     cd "$WORK_DIR"
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 MOCK_SUDO_USER=alice MOCK_SUDO_UID=502 SUDO_USER=alice \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_EUID=501 MOCK_CURRENT_USER=developer \
+        MOCK_MV_FAIL_SECOND_FINAL=0 MOCK_MV_FAIL_AFTER=none MOCK_RM_MODE=none \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+)
+[ "$(cat "$BIN_DIR/yabai")" = 'new binary' ] || fail 'unsafe sudoers path installation did not install the binary'
+[ "$(cat "$MAN_DIR/yabai.1")" = 'new manual' ] || fail 'unsafe sudoers path installation did not install the man page'
+grep -F 'Unable to determine a non-root invoking user; no sudoers row was generated.' "$identity_output" >/dev/null || \
+    fail 'unsafe sudoers path did not report that no row was generated'
+if grep -F "ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
+    fail 'unsafe binary path emitted a sudoers row'
+fi
+assert_no_owned_paths
+BIN_DIR=$SAFE_BIN_DIR
+
+(
+    cd "$WORK_DIR"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_EUID=0 MOCK_SUDO_USER=alice MOCK_SUDO_UID=502 SUDO_USER=alice \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
 )
 grep -F "  alice ALL=(root) NOPASSWD:" "$identity_output" >/dev/null || \
     fail 'sudo invocation did not use the validated invoking user'
@@ -447,8 +524,9 @@ fi
 (
     cd "$WORK_DIR"
     unset SUDO_USER
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" MOCK_EUID=0 \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
 )
 grep -F 'Unable to determine a non-root invoking user; no sudoers row was generated.' "$identity_output" >/dev/null || \
     fail 'root invocation without SUDO_USER did not omit the sudoers row'
@@ -458,8 +536,10 @@ fi
 
 (
     cd "$WORK_DIR"
-    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" MOCK_EUID=0 SUDO_USER='invalid;name' \
-        /bin/sh "$REPO_ROOT/scripts/install.sh" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
+    PATH="$MOCK_BIN:$PATH" TMPDIR="$TEMP_DIR" \
+        MOCK_VERSION="$INSTALLER_VERSION" MOCK_EXPECTED_HASH="$INSTALLER_EXPECTED_HASH" \
+        MOCK_EUID=0 SUDO_USER='invalid;name' \
+        /bin/sh "$INSTALLER_FIXTURE" "$BIN_DIR" "$MAN_DIR" >"$identity_output"
 )
 grep -F 'Unable to determine a non-root invoking user; no sudoers row was generated.' "$identity_output" >/dev/null || \
     fail 'invalid SUDO_USER did not omit the sudoers row'
@@ -468,4 +548,36 @@ if grep -F "ALL=(root) NOPASSWD:" "$identity_output" >/dev/null; then
 fi
 assert_no_owned_paths
 
-printf 'installer regression tests passed (23 cases)\n'
+PUBLISH_ROOT="$TEST_ROOT/publish"
+PUBLISH_BUILD="$PUBLISH_ROOT/build"
+PUBLISH_SCRIPT="$PUBLISH_ROOT/scripts"
+PUBLISH_BASELINE="$PUBLISH_ROOT/install.baseline.sh"
+mkdir -p "$PUBLISH_BUILD" "$PUBLISH_SCRIPT"
+cp "$REPO_ROOT/scripts/install.sh" "$PUBLISH_SCRIPT/install.sh"
+cp "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE"
+
+if make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
+    fail 'publish without a binary unexpectedly succeeded'
+fi
+cmp -s "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE" || fail 'missing-binary publish changed installer'
+
+cat > "$PUBLISH_BUILD/yabai" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'yabai-v9.8.7'
+EOF
+chmod 0755 "$PUBLISH_BUILD/yabai"
+if make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
+    fail 'publish without an archive unexpectedly succeeded'
+fi
+cmp -s "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE" || fail 'missing-archive publish changed installer'
+
+printf 'local fake archive\n' > "$PUBLISH_BUILD/yabai-v9.8.7.tar.gz"
+PUBLISH_HASH=$(shasum -a 256 "$PUBLISH_BUILD/yabai-v9.8.7.tar.gz" | cut -d ' ' -f 1)
+make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null
+grep -F 'VERSION="9.8.7"' "$PUBLISH_SCRIPT/install.sh" >/dev/null || \
+    fail 'successful publish wrote the wrong version'
+grep -F "EXPECTED_HASH=\"$PUBLISH_HASH\"" "$PUBLISH_SCRIPT/install.sh" >/dev/null || \
+    fail 'successful publish wrote the wrong archive hash'
+[ "$(file_mode "$PUBLISH_SCRIPT/install.sh")" = 755 ] || fail 'publish did not retain executable mode 0755'
+
+printf 'installer regression tests passed (28 cases)\n'

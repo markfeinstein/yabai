@@ -641,11 +641,9 @@ static struct view *declarative_detached_view_create(const struct declarative_to
             .h = (float) bounds.size.height
         };
         root->area.x += (float) view->left_padding;
-        root->area.w -= (float) view->left_padding;
-        root->area.w -= (float) view->right_padding;
+        root->area.w -= view_padding_sum(view->left_padding, view->right_padding);
         root->area.y += (float) view->top_padding;
-        root->area.h -= (float) view->top_padding;
-        root->area.h -= (float) view->bottom_padding;
+        root->area.h -= view_padding_sum(view->top_padding, view->bottom_padding);
         if (view_layout_is_accordion(view->layout)) {
             float min_x = (float) bounds.origin.x, max_x = (float) CGRectGetMaxX(bounds);
             float min_y = (float) bounds.origin.y, max_y = (float) CGRectGetMaxY(bounds);

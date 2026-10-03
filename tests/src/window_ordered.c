@@ -8,6 +8,12 @@
 #define TEST_ORDERED_WID_B 0x7ffffff2
 #define TEST_ORDERED_EXTRA_WID_BASE UINT32_C(0x70000000)
 
+TEST_FUNC(view_padding_sum_widens_before_addition,
+{
+    TEST_CHECK(view_padding_sum(INT_MAX, INT_MAX), 4294967294.0);
+    TEST_CHECK(view_padding_sum(INT_MIN, INT_MIN), -4294967296.0);
+});
+
 static CGError test_ordered_query_failure(int connection, uint32_t wid, uint8_t *ordered_in)
 {
     (void) connection;

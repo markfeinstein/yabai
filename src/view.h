@@ -1,6 +1,8 @@
 #ifndef VIEW_H
 #define VIEW_H
 
+#include <math.h>
+
 #include "declarative_space_identity.h"
 
 #define AX_ABS(a, b) (((a) - (b) < 0) ? (((a) - (b)) * -1) : ((a) - (b)))
@@ -142,6 +144,30 @@ static const char *window_node_split_str[] =
     "auto"
 };
 
+static inline void area_split_pair(enum window_node_split split, int gap, float ratio,
+                                   const struct area *parent_area,
+                                   struct area *left_area, struct area *right_area)
+{
+    *left_area = *parent_area;
+    *right_area = *parent_area;
+
+    float parent_extent = split == SPLIT_Y ? parent_area->w : parent_area->h;
+    float available_extent = parent_extent - (float) gap;
+    float left_extent = available_extent * ratio;
+    float right_extent = available_extent * (1.0f - ratio);
+    float right_offset = truncf(left_extent + 0.5f) + (float) gap;
+
+    if (split == SPLIT_Y) {
+        left_area->w = truncf(left_extent);
+        right_area->w = truncf(right_extent);
+        right_area->x += right_offset;
+    } else {
+        left_area->h = truncf(left_extent);
+        right_area->h = truncf(right_extent);
+        right_area->y += right_offset;
+    }
+}
+
 static const char *auto_balance_str[] = {
     "off",
     "vertical",
@@ -194,6 +220,11 @@ static const char *view_type_str[] =
     "accordion_horizontal",
     "accordion_vertical"
 };
+
+static inline double view_padding_sum(int first, int second)
+{
+    return (double) first + (double) second;
+}
 
 static inline bool view_layout_is_accordion(enum view_type layout)
 {

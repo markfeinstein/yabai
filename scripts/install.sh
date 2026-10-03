@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 
 #
 # This script will install the latest pre-built yabai release from GitHub.
@@ -16,11 +16,8 @@
 
 set -e
 
-# Installer tests may inject fixture tools only when the real process is unprivileged.
-if [ "${YABAI_INSTALL_TEST_PATH:-}" != 1 ] || [ "$(/usr/bin/id -u)" -eq 0 ]; then
-    PATH=/usr/bin:/bin:/usr/sbin:/sbin
-    export PATH
-fi
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
 
 BIN_DIR="$1"
 MAN_DIR="$2"
@@ -260,8 +257,18 @@ else
     SUDOERS_USER=$(id -un 2>/dev/null) || SUDOERS_USER=
 fi
 
-if [ -n "$SUDOERS_USER" ]; then
-    echo "  $SUDOERS_USER ALL=(root) NOPASSWD: sha256:$(shasum -a 256 "$BIN_DIR/yabai" | cut -d " " -f 1) $BIN_DIR/yabai --load-sa"
+SUDOERS_BINARY=
+case "$BIN_DIR/yabai" in
+    /*)
+        case "$BIN_DIR/yabai" in
+            *[!A-Za-z0-9_./-]*) ;;
+            *) SUDOERS_BINARY="$BIN_DIR/yabai" ;;
+        esac
+        ;;
+esac
+
+if [ -n "$SUDOERS_USER" ] && [ -n "$SUDOERS_BINARY" ]; then
+    echo "  $SUDOERS_USER ALL=(root) NOPASSWD: sha256:$(shasum -a 256 "$SUDOERS_BINARY" | cut -d " " -f 1) $SUDOERS_BINARY --load-sa"
 else
     echo "  Unable to determine a non-root invoking user; no sudoers row was generated."
 fi

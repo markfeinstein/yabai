@@ -82,7 +82,22 @@ static void source_position_bytes(const uint8_t *bytes, size_t length, size_t at
     }
 }
 
-struct structural_parser { uint8_t *b; size_t n, p, depth; struct declarative_error *e; const char *target_path; bool target_found; size_t target_at; };
+struct numeric_offsets {
+    size_t space_count, rule_count;
+    size_t version;
+    size_t config[DECLARATIVE_CONFIG_COUNT];
+    size_t external_bar[2];
+    size_t slots[];
+};
+static size_t *numeric_space_offsets(struct numeric_offsets *offsets, size_t index) { return offsets->slots + index * (DECLARATIVE_CONFIG_COUNT + 1); }
+static size_t *numeric_rule_offsets(struct numeric_offsets *offsets, size_t index) { return offsets->slots + offsets->space_count * (DECLARATIVE_CONFIG_COUNT + 1) + index * 8; }
+
+struct structural_parser { uint8_t *b; size_t n, p, depth; struct declarative_error *e; const char *target_path; bool target_found; size_t target_at; struct numeric_offsets *numeric_offsets; };
+#ifdef TESTS
+static _Thread_local size_t structural_full_traversals;
+size_t declarative_config_get_structural_traversal_count(void) { return structural_full_traversals; }
+#endif
+static bool structural_parse_document(struct structural_parser *p, const char *path);
 static void source_position(struct structural_parser *p, size_t at, size_t *line, size_t *column)
 {
     source_position_bytes(p->b, p->n, at, line, column);
@@ -153,9 +168,32 @@ static bool parse_array(struct structural_parser*p,const char*path)
 {
     if(p->target_path&&!strcmp(path,p->target_path)&&!p->target_found){p->target_found=true;p->target_at=p->p;}if(++p->depth>DECLARATIVE_CONFIG_MAX_DEPTH)return structural_fail(p,p->p,path,"nesting depth exceeds limit");++p->p;skip_ws(p);if(p->p<p->n&&p->b[p->p]==']'){++p->p;--p->depth;return true;}size_t index=0;for(;;){char child[256];snprintf(child,sizeof(child),"%s[%zu]",path,index++);if(p->target_path&&!strcmp(child,p->target_path)&&!p->target_found){p->target_found=true;p->target_at=p->p;}if(!parse_structural_value(p,child)){--p->depth;return false;}skip_ws(p);if(p->p<p->n&&p->b[p->p]==','){++p->p;skip_ws(p);continue;}if(p->p<p->n&&p->b[p->p]==']'){++p->p;--p->depth;return true;}--p->depth;return structural_fail(p,p->p,path,"expected comma or array end");}
 }
+static size_t *numeric_offset_for_path(struct numeric_offsets *offsets, const char *path)
+{
+    if (!offsets || !path) return NULL;
+    if (!strcmp(path, "$.version")) return &offsets->version;
+    static const char config_prefix[] = "$.config.";
+    if (!strncmp(path, config_prefix, sizeof(config_prefix)-1)) {
+        const char *name=path+sizeof(config_prefix)-1;size_t length=strlen(name);int id=declarative_config_id_for_name(name,length);
+        if(id>=0&&(declarative_config_descriptors[id].kind==DECLARATIVE_VALUE_INT||id==DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR))return &offsets->config[id];
+        if(!strcmp(name,"external_bar.top_padding"))return &offsets->external_bar[0];if(!strcmp(name,"external_bar.bottom_padding"))return &offsets->external_bar[1];return NULL;
+    }
+    size_t index=0;int consumed=0;
+    if(sscanf(path,"$.spaces[%zu].%n",&index,&consumed)==1&&consumed>0&&index<offsets->space_count){const char *tail=path+consumed;size_t *space=numeric_space_offsets(offsets,index);if(!strcmp(tail,"match.index"))return &space[0];static const char settings_prefix[]="settings.";if(!strncmp(tail,settings_prefix,sizeof(settings_prefix)-1)){const char*name=tail+sizeof(settings_prefix)-1;int id=declarative_config_id_for_name(name,strlen(name));if(id>=0&&declarative_config_descriptors[id].kind==DECLARATIVE_VALUE_INT)return &space[1+id];}return NULL;}
+    consumed=0;
+    if(sscanf(path,"$.rules[%zu].effects.%n",&index,&consumed)==1&&consumed>0&&index<offsets->rule_count){const char *tail=path+consumed;size_t *rule=numeric_rule_offsets(offsets,index);if(!strcmp(tail,"display.index"))return &rule[0];if(!strcmp(tail,"space.index"))return &rule[1];size_t grid=0;int end=0;if(sscanf(tail,"grid[%zu]%n",&grid,&end)==1&&tail[end]=='\0'&&grid<6)return &rule[2+grid];}
+    return NULL;
+}
 static bool parse_structural_value(struct structural_parser*p,const char*path)
 {
-    skip_ws(p);if(p->target_path&&!strcmp(path,p->target_path)&&!p->target_found){p->target_found=true;p->target_at=p->p;}if(p->p>=p->n)return structural_fail(p,p->p,path,"expected value");uint8_t c=p->b[p->p];if(c=='{')return parse_object(p,path);if(c=='[')return parse_array(p,path);if(c=='"'){uint8_t*d=NULL;size_t l=0;bool r=parse_string(p,&d,&l,false,path);free(d);return r;}size_t s=p->p;while(p->p<p->n&&!strchr(" \t\r\n,]}",p->b[p->p]))++p->p;if(s==p->p)return structural_fail(p,s,path,"invalid value");return true;
+    skip_ws(p);if(p->target_path&&!strcmp(path,p->target_path)&&!p->target_found){p->target_found=true;p->target_at=p->p;}size_t *numeric=numeric_offset_for_path(p->numeric_offsets,path);if(numeric&&*numeric==SIZE_MAX)*numeric=p->p;if(p->p>=p->n)return structural_fail(p,p->p,path,"expected value");uint8_t c=p->b[p->p];if(c=='{')return parse_object(p,path);if(c=='[')return parse_array(p,path);if(c=='"'){uint8_t*d=NULL;size_t l=0;bool r=parse_string(p,&d,&l,false,path);free(d);return r;}size_t s=p->p;while(p->p<p->n&&!strchr(" \t\r\n,]}",p->b[p->p]))++p->p;if(s==p->p)return structural_fail(p,s,path,"invalid value");return true;
+}
+static bool structural_parse_document(struct structural_parser *p, const char *path)
+{
+#ifdef TESTS
+    ++structural_full_traversals;
+#endif
+    return parse_structural_value(p,path);
 }
 
 bool declarative_jsonc_normalize(uint8_t *bytes, size_t length, struct declarative_error *error)
@@ -168,7 +206,7 @@ bool declarative_jsonc_normalize(uint8_t *bytes, size_t length, struct declarati
     for(size_t i=leading_bom?3:0;i+2<length;++i)if(bytes[i]==0xef&&bytes[i+1]==0xbb&&bytes[i+2]==0xbf){set_error(error,DECLARATIVE_ERROR_ENCODING,0,0,"$","byte order mark is only allowed at byte zero");return false;}
     bool string=false,escape=false;
     for(size_t i=0;i<length;++i){if(string){if(escape)escape=false;else if(bytes[i]=='\\')escape=true;else if(bytes[i]=='"')string=false;continue;}if(bytes[i]=='"'){string=true;continue;}if(bytes[i]=='/'&&i+1<length&&bytes[i+1]=='/'){bytes[i]=' '; bytes[i+1]=' '; ++i;while(i+1<length&&bytes[i+1]!='\n'&&bytes[i+1]!='\r')bytes[++i]=' ';}else if(bytes[i]=='/'&&i+1<length&&bytes[i+1]=='*'){size_t start=i;bytes[i]=' '; bytes[i+1]=' '; ++i;bool closed=false;while(i+1<length){if(bytes[i+1]=='*'&&i+2<length&&bytes[i+2]=='/'){bytes[++i]=' ';bytes[++i]=' ';closed=true;break;}++i;if(bytes[i]!='\n'&&bytes[i]!='\r')bytes[i]=' ';}if(!closed){size_t line,column;source_position_bytes(bytes,length,start,&line,&column);set_error(error,DECLARATIVE_ERROR_JSONC,line,column,"$","unterminated block comment");return false;}}}
-    struct structural_parser p={.b=bytes,.n=length,.e=error};if(!parse_structural_value(&p,"$"))return false;skip_ws(&p);if(p.p!=length)return structural_fail(&p,p.p,"$","extra input after JSON value");return true;
+    struct structural_parser p={.b=bytes,.n=length,.e=error};if(!structural_parse_document(&p,"$"))return false;skip_ws(&p);if(p.p!=length)return structural_fail(&p,p.p,"$","extra input after JSON value");return true;
 }
 
 static bool is_number(id object) { return [object isKindOfClass:[NSNumber class]] && CFGetTypeID((CFTypeRef)object) != CFBooleanGetTypeID(); }
@@ -183,14 +221,19 @@ bool declarative_model_budget_charge(size_t*used,size_t amount){if(!used||*used>
 #else
 static bool declarative_model_budget_charge(size_t*used,size_t amount){if(!used||*used>DECLARATIVE_CONFIG_MAX_MODEL_BYTES||amount>DECLARATIVE_CONFIG_MAX_MODEL_BYTES-*used)return false;*used+=amount;return true;}
 #endif
-struct model_builder { struct declarative_config_model *model; size_t bytes; struct declarative_error *error; const uint8_t *source; size_t source_length; };
+struct model_builder { struct declarative_config_model *model; size_t bytes; struct declarative_error *error; const uint8_t *source; size_t source_length; struct numeric_offsets *numeric_offsets; };
 
 static bool builder_value_offset(struct model_builder *b, const char *path, size_t *offset)
 {
-    struct structural_parser finder={(uint8_t *)b->source,b->source_length,0,0,NULL,path,false,0};
-    if (!parse_structural_value(&finder,"$") || !finder.target_found) return false;
-    *offset=finder.target_at;
-    return true;
+    size_t *indexed=numeric_offset_for_path(b->numeric_offsets,path);if(!indexed||*indexed==SIZE_MAX)return false;*offset=*indexed;return true;
+}
+
+static struct numeric_offsets *numeric_offsets_create(id root, const uint8_t *source, size_t length, struct declarative_error *error)
+{
+    size_t spaces=0,rules=0;if([root isKindOfClass:[NSDictionary class]]){id value=root[@"spaces"];if([value isKindOfClass:[NSArray class]]&&[value count]<=DECLARATIVE_CONFIG_MAX_SPACES)spaces=[value count];value=root[@"rules"];if([value isKindOfClass:[NSArray class]]&&[value count]<=DECLARATIVE_CONFIG_MAX_RULES)rules=[value count];}
+    size_t slot_count=spaces*(DECLARATIVE_CONFIG_COUNT+1)+rules*8;size_t bytes=sizeof(struct numeric_offsets)+slot_count*sizeof(size_t);
+    struct numeric_offsets *offsets=allocator_ops->calloc_fn(1,bytes);if(!offsets){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return NULL;}offsets->space_count=spaces;offsets->rule_count=rules;offsets->version=SIZE_MAX;for(size_t i=0;i<DECLARATIVE_CONFIG_COUNT;++i)offsets->config[i]=SIZE_MAX;offsets->external_bar[0]=offsets->external_bar[1]=SIZE_MAX;for(size_t i=0;i<slot_count;++i)offsets->slots[i]=SIZE_MAX;
+    struct structural_parser parser={.b=(uint8_t*)source,.n=length,.e=error,.numeric_offsets=offsets};if(!structural_parse_document(&parser,"$")){allocator_ops->free_fn(offsets);if(!error||error->stage==DECLARATIVE_ERROR_NONE)set_error(error,DECLARATIVE_ERROR_JSONC,0,0,"$","invalid structural index");return NULL;}return offsets;
 }
 
 /* Parse a strict-JSON decimal lexeme exactly. Foundation's NSNumber remains the
@@ -230,7 +273,7 @@ static bool builder_number_to_uint(struct model_builder*b,id object,const char*p
     if(!is_number(object))return false;size_t at;uint64_t mag;bool neg;if(!builder_value_offset(b,path,&at)||!exact_integer_at(b,at,false,0,maximum,&mag,&neg)||mag<minimum)return false;*out=(uint32_t)mag;return true;
 }
 
-static bool builder_error(struct model_builder*b,enum declarative_error_stage stage,const char*path,const char*message){size_t line=0,column=0;if(b->source){const uint8_t*at=NULL;struct structural_parser finder={(uint8_t*)b->source,b->source_length,0,0,NULL,path,false,0};if(parse_structural_value(&finder,"$")&&finder.target_found)at=b->source+finder.target_at;if(!at){const char*p=path;while(*p){if(*p=='.')++p;else if(*p=='['){while(*p&&*p!=']')++p;if(*p)++p;}else{const char*start=p;while(*p&&*p!='.'&&*p!='[')++p;size_t n=(size_t)(p-start);if(n&&*start!='$'&&*start!='<'&&n<140){char needle[144];snprintf(needle,sizeof(needle),"\"%.*s\"",(int)n,start);const uint8_t*found=(const uint8_t*)strstr((const char*)b->source,needle);if(found)at=found;}}}}if(!at)at=b->source;line=1;column=1;for(const uint8_t*q=b->source;q<at;++q){if(*q=='\r'){++line;column=1;if(q+1<at&&q[1]=='\n')++q;}else if(*q=='\n'){++line;column=1;}else ++column;}}set_error(b->error,stage,line,column,path,message);return false;}
+static bool builder_error(struct model_builder*b,enum declarative_error_stage stage,const char*path,const char*message){size_t line=0,column=0;if(b->source){const uint8_t*at=NULL;size_t indexed;if(builder_value_offset(b,path,&indexed))at=b->source+indexed;struct structural_parser finder={.b=(uint8_t*)b->source,.n=b->source_length,.target_path=path};if(!at&&structural_parse_document(&finder,"$")&&finder.target_found)at=b->source+finder.target_at;if(!at){const char*p=path;while(*p){if(*p=='.')++p;else if(*p=='['){while(*p&&*p!=']')++p;if(*p)++p;}else{const char*start=p;while(*p&&*p!='.'&&*p!='[')++p;size_t n=(size_t)(p-start);if(n&&*start!='$'&&*start!='<'&&n<140){char needle[144];snprintf(needle,sizeof(needle),"\"%.*s\"",(int)n,start);const uint8_t*found=(const uint8_t*)strstr((const char*)b->source,needle);if(found)at=found;}}}}if(!at)at=b->source;line=1;column=1;for(const uint8_t*q=b->source;q<at;++q){if(*q=='\r'){++line;column=1;if(q+1<at&&q[1]=='\n')++q;}else if(*q=='\n'){++line;column=1;}else ++column;}}set_error(b->error,stage,line,column,path,message);return false;}
 static void *model_alloc(struct model_builder*b,size_t n){if(n==0)n=1;size_t charged=b->bytes;if(!declarative_model_budget_charge(&charged,n)){set_error(b->error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","copied model exceeds limit");return NULL;}void*p=allocator_ops->calloc_fn(1,n);if(!p){set_error(b->error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return NULL;}b->bytes=charged;return p;}
 static char *model_string(struct model_builder*b,NSString*s,size_t max,bool nonempty){if(![s isKindOfClass:[NSString class]])return NULL;NSUInteger n=[s lengthOfBytesUsingEncoding:NSUTF8StringEncoding];if((nonempty&&n==0)||n>max)return NULL;char*p=model_alloc(b,n+1);if(!p)return NULL;if(![s getCString:p maxLength:n+1 encoding:NSUTF8StringEncoding]){allocator_ops->free_fn(p);return NULL;}return p;}
 struct enum_mapping { const char *name; int value; };
@@ -299,8 +342,11 @@ void declarative_config_destroy(struct declarative_config_model*m){if(!m)return;
 
 bool declarative_config_parse_bytes(const uint8_t*source,size_t length,const char*path,struct declarative_config_model**out,struct declarative_error*error)
 {
+#ifdef TESTS
+    structural_full_traversals=0;
+#endif
     if(out)*out=NULL;if(error)memset(error,0,sizeof(*error));if(!set_public_path(error,path))return false;if(!source||length>DECLARATIVE_CONFIG_MAX_FILE_SIZE){set_error(error,DECLARATIVE_ERROR_FILE,0,0,"$","file exceeds size limit");return false;}uint8_t*b=malloc(length+1);if(!b){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return false;}memcpy(b,source,length);b[length]=0;if(!declarative_jsonc_normalize(b,length,error)){free(b);return false;}
-    @autoreleasepool { NSError*ns_error=nil;id root=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytesNoCopy:b length:length freeWhenDone:NO] options:0 error:&ns_error];if(!root){size_t line=0,column=0;NSNumber*index=ns_error.userInfo[@"NSJSONSerializationErrorIndex"];if(index)source_position_bytes(b,length,MIN((size_t)[index unsignedLongLongValue],length),&line,&column);set_error(error,DECLARATIVE_ERROR_JSON,line,column,"$","invalid JSON syntax");free(b);return false;}struct model_builder builder={0};builder.error=error;builder.source=b;builder.source_length=length;builder.model=allocator_ops->calloc_fn(1,sizeof(*builder.model));if(!builder.model){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");free(b);return false;}builder.model->allocator_free=allocator_ops->free_fn;builder.bytes=sizeof(*builder.model);if(builder.bytes>DECLARATIVE_CONFIG_MAX_MODEL_BYTES||!convert_root(root,&builder)){ if(error&&error->stage==DECLARATIVE_ERROR_NONE)set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,"$","configuration does not match schema");declarative_config_destroy(builder.model);free(b);return false;}builder.model->allocated_bytes=builder.bytes;if(out)*out=builder.model;else declarative_config_destroy(builder.model); }
+    @autoreleasepool { NSError*ns_error=nil;id root=[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytesNoCopy:b length:length freeWhenDone:NO] options:0 error:&ns_error];if(!root){size_t line=0,column=0;NSNumber*index=ns_error.userInfo[@"NSJSONSerializationErrorIndex"];if(index)source_position_bytes(b,length,MIN((size_t)[index unsignedLongLongValue],length),&line,&column);set_error(error,DECLARATIVE_ERROR_JSON,line,column,"$","invalid JSON syntax");free(b);return false;}struct model_builder builder={0};builder.error=error;builder.source=b;builder.source_length=length;builder.model=allocator_ops->calloc_fn(1,sizeof(*builder.model));if(!builder.model){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");free(b);return false;}builder.model->allocator_free=allocator_ops->free_fn;builder.bytes=sizeof(*builder.model);builder.numeric_offsets=numeric_offsets_create(root,b,length,error);if(!builder.numeric_offsets){declarative_config_destroy(builder.model);free(b);return false;}if(builder.bytes>DECLARATIVE_CONFIG_MAX_MODEL_BYTES||!convert_root(root,&builder)){ if(error&&error->stage==DECLARATIVE_ERROR_NONE)set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,"$","configuration does not match schema");allocator_ops->free_fn(builder.numeric_offsets);declarative_config_destroy(builder.model);free(b);return false;}allocator_ops->free_fn(builder.numeric_offsets);builder.model->allocated_bytes=builder.bytes;if(out)*out=builder.model;else declarative_config_destroy(builder.model); }
     free(b);return true;
 }
 
