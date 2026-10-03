@@ -165,7 +165,7 @@ Enum fields are:
 * `menubar`: `off`, `on`;
 * `menubar_style`: `compact`, `expanded`;
 * `menubar_space_filter`: `occupied`, `all`;
-* `layout`: `bsp`, `stack`, `float`;
+* `layout`: `bsp`, `stack`, `float`, `accordion_horizontal`, `accordion_vertical`;
 * `split_type`: `vertical`, `horizontal`, `auto`;
 * `auto_balance`: `off`, `on`, `x-axis`, `y-axis`;
 * `mouse_modifier`: `alt`, `shift`, `cmd`, `ctrl`, `fn`;
@@ -181,6 +181,7 @@ Numeric fields are:
 * `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
 * `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
 * `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`: mathematical integer `INT_MIN...INT_MAX`;
+* `accordion_padding`: mathematical integer `0...INT_MAX`, default 30 display points;
 * `split_ratio`: `0.1...0.9`.
 
 `external_bar` is an exact object. All three fields are required: `mode` is `off`, `main` or `all`, while `top_padding` and `bottom_padding` are mathematical integers in `INT_MIN...INT_MAX`.
@@ -190,7 +191,7 @@ The native `window_shadow`, `window_opacity`, `window_opacity_duration`, `active
 Space policy
 ~~~~~~~~~~~~
 
-Each `spaces` entry is an exact object with required `match` and `settings` fields. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `split_type` and `auto_balance`, using the types and ranges above.
+Each `spaces` entry is an exact object with required `match` and `settings` fields. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `split_type` and `auto_balance`, using the types and ranges above.
 
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native-fullscreen Spaces remain floating.
 
@@ -201,6 +202,35 @@ built-in < native global < native Space < runtime global < runtime Space
 ----
 
 A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. `space --layout` uses runtime Space ownership. For `window_focus_fallback`, this means `yabai -m config window_focus_fallback recent` overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built-in `off` value. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+
+Accordion geometry
+~~~~~~~~~~~~~~~~~~
+
+`accordion_horizontal` and `accordion_vertical` are managed layouts. Every managed window remains in the Space forest and managed-window table; rules with `manage=false`, native-fullscreen Spaces and system Spaces remain outside that forest. Accordion does not require the scripting addition.
+
+The layout keeps one stable membership order. Changing focus expands another slot without moving that window to the front. Insertion, removal, minimization, restoration, a cross-Space move or an explicit swap may change membership order. When no managed member has focus, the first member is the deterministic expanded fallback.
+
+After display, menu bar, Dock, external-bar and Space padding constraints, let `L` be the finite nonnegative length on the accordion axis, `n` the managed-window count and `p` the nonnegative `accordion_padding` request. With no windows, yabai emits no frames. One window receives the complete usable area. For two or more windows, the effective strip is `s = min(p, L / n)`. Each nonfocused window receives `s`; the focused window receives `L - (n - 1) * s`. Frames partition the usable axis in stable order and fill the cross axis. The final frame absorbs floating-point remainder so the last edge equals the constrained boundary. Over-capacity requests therefore give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid.
+
+Focus, inventory, delayed create, destroy, minimize, restore, Space move, display change, topology reconciliation and Mission Control exit paths recompute the same geometry. A successful JSONC reload may add, change or remove the layout and `accordion_padding` under the normal transaction and precedence rules. Preparation failure preserves the installed generation, roots, managed-window table, ownership and effective layout.
+
+To assign Mission Control Space 9 to the horizontal accordion layout with the default strip request:
+
+[source,jsonc]
+----
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 9 },
+      "settings": {
+        "layout": "accordion_horizontal",
+        "accordion_padding": 30
+      }
+    }
+  ]
+}
+----
 
 Native rules
 ~~~~~~~~~~~~
@@ -443,8 +473,8 @@ Global Settings
 Space Settings
 ^^^^^^^^^^^^^^
 
-*layout* ['bsp|stack|float']::
-    Set the layout of the selected space.
+*layout* ['bsp|stack|float|accordion_horizontal|accordion_vertical']::
+    Set the layout of the selected space. `accordion_horizontal` arranges the strips along the x-axis; `accordion_vertical` arranges them along the y-axis.
 
 *split_type* ['vertical|horizontal|auto']::
     Specify how a window should be split. +
@@ -466,6 +496,9 @@ Space Settings
 
 *window_gap* ['<integer number>']::
     Size of the gap that separates windows for the selected space.
+
+*accordion_padding* ['<nonnegative integer number>']::
+    Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on `bsp`, `stack` or `float` geometry.
 
 *auto_balance* ['<BOOL_SEL>|x-axis|y-axis']::
     Balance the window tree upon change, so that all windows occupy an equally sized area.
@@ -562,7 +595,7 @@ COMMAND
 *--toggle* 'padding|gap|mission-control|show-desktop'::
     Toggle space setting on or off for the selected space.
 
-*--layout* 'bsp|stack|float'::
+*--layout* 'bsp|stack|float|accordion_horizontal|accordion_vertical'::
     Set the layout of the selected space.
 
 *--label* ['<LABEL>']::

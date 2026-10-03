@@ -46,6 +46,7 @@
     X(RIGHT_PADDING,         COMMAND_CONFIG_RIGHT_PADDING,         "right_padding",                 INT,        SPACE,  INT,              RIGHT_PADDING) \
     X(LAYOUT,                COMMAND_CONFIG_LAYOUT,                "layout",                        ENUM,       SPACE,  LAYOUT,           LAYOUT) \
     X(WINDOW_GAP,            COMMAND_CONFIG_WINDOW_GAP,            "window_gap",                    INT,        SPACE,  INT,              WINDOW_GAP) \
+    X(ACCORDION_PADDING,      COMMAND_CONFIG_ACCORDION_PADDING,      "accordion_padding",              INT,        SPACE,  NONNEGATIVE_INT,  ACCORDION_PADDING) \
     X(SPLIT_RATIO,           COMMAND_CONFIG_SPLIT_RATIO,           "split_ratio",                   FLOAT,      GLOBAL, SPLIT_RATIO,      SPLIT_RATIO) \
     X(SPLIT_TYPE,            COMMAND_CONFIG_SPLIT_TYPE,            "split_type",                    ENUM,       SPACE,  SPLIT_TYPE,       SPLIT_TYPE) \
     X(AUTO_BALANCE,          COMMAND_CONFIG_AUTO_BALANCE,          "auto_balance",                  ENUM,       SPACE,  AUTO_BALANCE,     AUTO_BALANCE) \

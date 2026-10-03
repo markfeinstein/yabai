@@ -974,6 +974,21 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     TEST_CHECK(table.views[0]->root->area.w, -100.0f);
     TEST_CHECK(table.views[0]->root->area.h, 950.0f);
     declarative_detached_view_table_destroy(&table);
+
+    defaults.layout = VIEW_ACCORDION_HORIZONTAL;
+    defaults.left_padding = 700;
+    defaults.right_padding = 400;
+    defaults.top_padding = -100;
+    defaults.bottom_padding = -50;
+    defaults.accordion_padding = INT_MAX;
+    TEST_CHECK(declarative_detached_view_table_prepare(&topology, &defaults, &table), true);
+    TEST_CHECK(table.views[0]->layout, VIEW_ACCORDION_HORIZONTAL);
+    TEST_CHECK(table.views[0]->accordion_padding, INT_MAX);
+    TEST_CHECK(table.views[0]->root->area.x, 700.0f);
+    TEST_CHECK(table.views[0]->root->area.y, 0.0f);
+    TEST_CHECK(table.views[0]->root->area.w, 0.0f);
+    TEST_CHECK(table.views[0]->root->area.h, 800.0f);
+    declarative_detached_view_table_destroy(&table);
     declarative_topology_destroy(&topology);
     declarative_topology_test_fixture_destroy(&fixture);
     TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);

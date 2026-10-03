@@ -2,12 +2,12 @@
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
 .\" Generator: Asciidoctor 2.0.26
-.\"      Date: 2026-10-03
+.\"      Date: 1980-01-01
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
 .\"  Language: English
 .\"
-.TH "YABAI" "1" "2026-10-03" "Yabai" "Yabai Manual"
+.TH "YABAI" "1" "1980-01-01" "Yabai" "Yabai Manual"
 .ie \n(.g .ds Aq \(aq
 .el       .ds Aq '
 .ss \n[.ss] 0
@@ -424,7 +424,7 @@ Enum fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
-\f(CRlayout\fP: \f(CRbsp\fP, \f(CRstack\fP, \f(CRfloat\fP;
+\f(CRlayout\fP: \f(CRbsp\fP, \f(CRstack\fP, \f(CRfloat\fP, \f(CRaccordion_horizontal\fP, \f(CRaccordion_vertical\fP;
 .RE
 .sp
 .RS 4
@@ -569,6 +569,17 @@ Numeric fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
+\f(CRaccordion_padding\fP: mathematical integer \f(CR0...INT_MAX\fP, default 30 display points;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
 \f(CRsplit_ratio\fP: \f(CR0.1...0.9\fP.
 .RE
 .sp
@@ -577,7 +588,7 @@ Numeric fields are:
 The native \f(CRwindow_shadow\fP, \f(CRwindow_opacity\fP, \f(CRwindow_opacity_duration\fP, \f(CRactive_window_opacity\fP and \f(CRnormal_window_opacity\fP settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; \f(CRwindow_animation_duration\fP has the separate Screen Recording and SIP preflight described above.
 .SS "Space policy"
 .sp
-Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and \f(CRsettings\fP fields. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above.
+Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and \f(CRsettings\fP fields. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above.
 .sp
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native\-fullscreen Spaces remain floating.
 .sp
@@ -592,6 +603,36 @@ built\-in < native global < native Space < runtime global < runtime Space
 .if n .RE
 .sp
 A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+.SS "Accordion geometry"
+.sp
+\f(CRaccordion_horizontal\fP and \f(CRaccordion_vertical\fP are managed layouts. Every managed window remains in the Space forest and managed\-window table; rules with \f(CRmanage=false\fP, native\-fullscreen Spaces and system Spaces remain outside that forest. Accordion does not require the scripting addition.
+.sp
+The layout keeps one stable membership order. Changing focus expands another slot without moving that window to the front. Insertion, removal, minimization, restoration, a cross\-Space move or an explicit swap may change membership order. When no managed member has focus, the first member is the deterministic expanded fallback.
+.sp
+After display, menu bar, Dock, external\-bar and Space padding constraints, let \f(CRL\fP be the finite nonnegative length on the accordion axis, \f(CRn\fP the managed\-window count and \f(CRp\fP the nonnegative \f(CRaccordion_padding\fP request. With no windows, yabai emits no frames. One window receives the complete usable area. For two or more windows, the effective strip is \f(CRs = min(p, L / n)\fP. Each nonfocused window receives \f(CRs\fP; the focused window receives \f(CRL \- (n \- 1) * s\fP. Frames partition the usable axis in stable order and fill the cross axis. The final frame absorbs floating\-point remainder so the last edge equals the constrained boundary. Over\-capacity requests therefore give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid.
+.sp
+Focus, inventory, delayed create, destroy, minimize, restore, Space move, display change, topology reconciliation and Mission Control exit paths recompute the same geometry. A successful JSONC reload may add, change or remove the layout and \f(CRaccordion_padding\fP under the normal transaction and precedence rules. Preparation failure preserves the installed generation, roots, managed\-window table, ownership and effective layout.
+.sp
+To assign Mission Control Space 9 to the horizontal accordion layout with the default strip request:
+.sp
+.if n .RS 4
+.nf
+.fam C
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 9 },
+      "settings": {
+        "layout": "accordion_horizontal",
+        "accordion_padding": 30
+      }
+    }
+  ]
+}
+.fam
+.fi
+.if n .RE
 .SS "Native rules"
 .sp
 Each \f(CRrules\fP entry accepts exactly \f(CRlabel\fP, \f(CRone_shot\fP, \f(CRmatch\fP and \f(CReffects\fP. \f(CRmatch\fP is required and nonempty. \f(CRlabel\fP is optional, nonempty, unique within the file and at most 1,024 UTF\-8 bytes. \f(CRone_shot\fP is an optional boolean, defaulting to \f(CRfalse\fP. \f(CReffects\fP is optional and may be empty, so an effectless persistent rule is valid.
@@ -1002,9 +1043,9 @@ Action performed when a bsp\-managed window is dropped in the center of some oth
 .RE
 .SS "Space Settings"
 .sp
-\fBlayout\fP [\fIbsp|stack|float\fP]
+\fBlayout\fP [\fIbsp|stack|float|accordion_horizontal|accordion_vertical\fP]
 .RS 4
-Set the layout of the selected space.
+Set the layout of the selected space. \f(CRaccordion_horizontal\fP arranges the strips along the x\-axis; \f(CRaccordion_vertical\fP arranges them along the y\-axis.
 .RE
 .sp
 \fBsplit_type\fP [\fIvertical|horizontal|auto\fP]
@@ -1041,6 +1082,11 @@ Padding added at the right side of the selected space.
 \fBwindow_gap\fP [\fI<integer number>\fP]
 .RS 4
 Size of the gap that separates windows for the selected space.
+.RE
+.sp
+\fBaccordion_padding\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on \f(CRbsp\fP, \f(CRstack\fP or \f(CRfloat\fP geometry.
 .RE
 .sp
 \fBauto_balance\fP [\fI<BOOL_SEL>|x\-axis|y\-axis\fP]
@@ -1181,7 +1227,7 @@ Size of the gap that separates windows on the selected space.
 Toggle space setting on or off for the selected space.
 .RE
 .sp
-\fB\-\-layout\fP \fIbsp|stack|float\fP
+\fB\-\-layout\fP \fIbsp|stack|float|accordion_horizontal|accordion_vertical\fP
 .RS 4
 Set the layout of the selected space.
 .RE

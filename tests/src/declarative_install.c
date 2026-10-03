@@ -161,6 +161,7 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_LEFT_PADDING: return bundle->space_manager.left_padding == value->integer;
     case DECLARATIVE_CONFIG_RIGHT_PADDING: return bundle->space_manager.right_padding == value->integer;
     case DECLARATIVE_CONFIG_WINDOW_GAP: return bundle->space_manager.window_gap == value->integer;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: return bundle->space_manager.accordion_padding == value->integer;
     case DECLARATIVE_CONFIG_LAYOUT: return bundle->space_manager.layout == value->enumeration;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return bundle->space_manager.split_ratio == value->real;
     case DECLARATIVE_CONFIG_SPLIT_TYPE: return bundle->space_manager.split_type == value->enumeration;
@@ -206,9 +207,9 @@ static struct declarative_config_model *declarative_install_test_model(void)
     static const char json[] =
         "{\"version\":1,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"focus_follows_mouse\":\"autofocus\","
         "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
-        "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"stack\","
+        "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"accordion_vertical\","
         "\"top_padding\":1,\"bottom_padding\":2,\"left_padding\":3,\"right_padding\":4,"
-        "\"window_gap\":5,\"split_type\":\"horizontal\",\"auto_balance\":\"x-axis\"}}],"
+        "\"window_gap\":5,\"accordion_padding\":27,\"split_type\":\"horizontal\",\"auto_balance\":\"x-axis\"}}],"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,\"match\":{\"app\":{\"pattern\":\"^App$\"}},"
         "\"effects\":{\"display\":{\"index\":1},\"manage\":true}}]}";
     struct declarative_config_model *model = NULL;
@@ -269,10 +270,12 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(g_space_manager.did_begin, true);
     TEST_CHECK(g_space_manager.layout, VIEW_BSP);
     TEST_CHECK(g_space_manager.window_gap, 9);
+    TEST_CHECK(g_space_manager.accordion_padding, 30);
     uint64_t policy_sid = 12;
     struct view *policy_view = table_find(&g_space_manager.view, &policy_sid);
     TEST_CHECK(policy_view != NULL, true);
-    TEST_CHECK(policy_view->layout, VIEW_STACK);
+    TEST_CHECK(policy_view->layout, VIEW_ACCORDION_VERTICAL);
+    TEST_CHECK(policy_view->accordion_padding, 27);
     TEST_CHECK(policy_view->top_padding, 1);
     TEST_CHECK(policy_view->bottom_padding, 2);
     TEST_CHECK(policy_view->left_padding, 3);

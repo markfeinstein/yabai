@@ -72,6 +72,7 @@ static void declarative_operation_set_global_space_geometry(void *manager, enum 
     case DECLARATIVE_CONFIG_LEFT_PADDING: space_manager_set_left_padding_for_all_spaces(sm, value); break;
     case DECLARATIVE_CONFIG_RIGHT_PADDING: space_manager_set_right_padding_for_all_spaces(sm, value); break;
     case DECLARATIVE_CONFIG_WINDOW_GAP: space_manager_set_window_gap_for_all_spaces(sm, value); break;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: space_manager_set_accordion_padding_for_all_spaces(sm, value); break;
     default: break;
     }
 }
@@ -162,6 +163,7 @@ int declarative_space_field_for_id(enum declarative_config_id id)
     case DECLARATIVE_CONFIG_LEFT_PADDING:   return DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING;
     case DECLARATIVE_CONFIG_RIGHT_PADDING:  return DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING;
     case DECLARATIVE_CONFIG_WINDOW_GAP:     return DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: return DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING;
     case DECLARATIVE_CONFIG_SPLIT_TYPE:     return DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE;
     case DECLARATIVE_CONFIG_AUTO_BALANCE:   return DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE;
     default: return -1;
@@ -209,7 +211,8 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return value->real > 0.0f && value->real <= 1.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return value->u32 != 0;
-    case DECLARATIVE_CONFIG_LAYOUT: return value->enumeration == VIEW_BSP || value->enumeration == VIEW_STACK || value->enumeration == VIEW_FLOAT;
+    case DECLARATIVE_CONFIG_LAYOUT: return value->enumeration >= VIEW_BSP && value->enumeration <= VIEW_ACCORDION_VERTICAL;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: return value->integer >= 0;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return value->real >= 0.1f && value->real <= 0.9f && isfinite(value->real);
     case DECLARATIVE_CONFIG_SPLIT_TYPE: return value->enumeration == SPLIT_Y || value->enumeration == SPLIT_X || value->enumeration == SPLIT_AUTO;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: return value->u32 <= (SPLIT_X | SPLIT_Y);
@@ -299,6 +302,15 @@ enum declarative_apply_result declarative_apply_runtime_setting(enum declarative
     case DECLARATIVE_CONFIG_WINDOW_GAP:
         if (view) { view_set_flag(view, VIEW_WINDOW_GAP); view->window_gap = value->integer; declarative_runtime_operation_ops.update_and_flush_space(view); }
         else declarative_runtime_operation_ops.set_global_space_geometry(&g_space_manager, id, value->integer);
+        break;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING:
+        if (view) {
+            view_set_flag(view, VIEW_ACCORDION_PADDING);
+            view->accordion_padding = value->integer;
+            if (view_layout_is_accordion(view->layout)) declarative_runtime_operation_ops.update_and_flush_space(view);
+        } else {
+            declarative_runtime_operation_ops.set_global_space_geometry(&g_space_manager, id, value->integer);
+        }
         break;
     case DECLARATIVE_CONFIG_LAYOUT:
         if (!declarative_runtime_operation_ops.set_layout_for_all_spaces(&g_space_manager, value->enumeration)) return DECLARATIVE_APPLY_LAYOUT_FAILED;

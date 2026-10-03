@@ -326,7 +326,7 @@ static void declarative_reload_set_ownership(void)
 TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 {
     static const char candidate_json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"stack\",\"window_gap\":17},"
+        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17},"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,"
         "\"match\":{\"app\":{\"pattern\":\"^App$\"}},\"effects\":{\"manage\":true}}]}";
     struct declarative_reload_fixture fixture = {
@@ -481,7 +481,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
 {
     static const char candidate_json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"stack\",\"window_gap\":17},"
+        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17},"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,"
         "\"match\":{\"app\":{\"pattern\":\"^App$\"}},\"effects\":{\"manage\":true}}]}";
     struct declarative_reload_fixture fixture = {
@@ -561,7 +561,8 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(fixture.postcommit_failures, fixture.postcommit_calls);
     struct view *new_view = table_find(&g_space_manager.view, &sid);
     TEST_CHECK(new_view != NULL, true);
-    TEST_CHECK(new_view ? new_view->layout : VIEW_FLOAT, VIEW_STACK);
+    TEST_CHECK(new_view ? new_view->layout : VIEW_FLOAT, VIEW_ACCORDION_HORIZONTAL);
+    TEST_CHECK(new_view ? new_view->accordion_padding : 0, 31);
     TEST_CHECK(new_view ? new_view->root != old_root : false, true);
 
     struct rule_effects effects = {0};
@@ -585,6 +586,16 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(rule_native_generation(), fixed_generation);
     TEST_CHECK(strcmp(g_window_manager.rules[1].label, "runtime-a"), 0);
     TEST_CHECK(strcmp(g_window_manager.rules[2].label, "runtime-b"), 0);
+
+    static const char exit_accordion_json[] =
+        "{\"version\":1,\"config\":{\"layout\":\"bsp\"},\"rules\":[]}";
+    fixture.json = exit_accordion_json;
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    new_view = table_find(&g_space_manager.view, &sid);
+    TEST_CHECK(new_view ? new_view->layout : VIEW_FLOAT, VIEW_BSP);
+    TEST_CHECK(new_view ? new_view->accordion_padding : 0, 30);
 
     static const char native_focus_json[] =
         "{\"version\":1,\"config\":{\"window_focus_fallback\":\"recent\"}}";

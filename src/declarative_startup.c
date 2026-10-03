@@ -135,6 +135,7 @@ struct declarative_space_defaults declarative_startup_view_defaults(const struct
 {
     struct declarative_space_defaults defaults = {
         .layout = VIEW_FLOAT,
+        .accordion_padding = 30,
         .split_type = SPLIT_AUTO,
         .split_ratio = 0.5f,
         .window_placement = CHILD_SECOND,
@@ -148,6 +149,7 @@ struct declarative_space_defaults declarative_startup_view_defaults(const struct
     NATIVE_INT(LEFT_PADDING, left_padding);
     NATIVE_INT(RIGHT_PADDING, right_padding);
     NATIVE_INT(WINDOW_GAP, window_gap);
+    NATIVE_INT(ACCORDION_PADDING, accordion_padding);
 #undef NATIVE_INT
     if (model->config[DECLARATIVE_CONFIG_LAYOUT].present) defaults.layout = model->config[DECLARATIVE_CONFIG_LAYOUT].enumeration;
     if (model->config[DECLARATIVE_CONFIG_SPLIT_TYPE].present) defaults.split_type = model->config[DECLARATIVE_CONFIG_SPLIT_TYPE].enumeration;

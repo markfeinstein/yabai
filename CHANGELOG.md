@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Add native managed `accordion_horizontal` and `accordion_vertical` layouts
+  with stable focus order, configurable `accordion_padding`, bounded strip
+  geometry and transactional JSONC startup, reload and topology integration.
 - Add native JSONC configuration for settings, per-Space policy and persistent
   rules, with offline validation and transactional runtime reload.
 - Add the typed `window_focus_fallback` policy for event-loop-native recent-window

@@ -630,6 +630,7 @@ static struct view *declarative_detached_view_create(const struct declarative_to
         view->left_padding = defaults->left_padding;
         view->right_padding = defaults->right_padding;
         view->window_gap = defaults->window_gap;
+        view->accordion_padding = defaults->accordion_padding;
         view->auto_balance = defaults->auto_balance;
         view->split_type = defaults->split_type;
         CGRect bounds = display->bounds;
@@ -645,6 +646,15 @@ static struct view *declarative_detached_view_create(const struct declarative_to
         root->area.y += (float) view->top_padding;
         root->area.h -= (float) view->top_padding;
         root->area.h -= (float) view->bottom_padding;
+        if (view_layout_is_accordion(view->layout)) {
+            float min_x = (float) bounds.origin.x, max_x = (float) CGRectGetMaxX(bounds);
+            float min_y = (float) bounds.origin.y, max_y = (float) CGRectGetMaxY(bounds);
+            float x = fminf(max_x, fmaxf(min_x, root->area.x));
+            float y = fminf(max_y, fmaxf(min_y, root->area.y));
+            float right = fminf(max_x, fmaxf(min_x, root->area.x + root->area.w));
+            float bottom = fminf(max_y, fmaxf(min_y, root->area.y + root->area.h));
+            root->area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
+        }
         if (!isfinite(root->area.x) || !isfinite(root->area.y) ||
             !isfinite(root->area.w) || !isfinite(root->area.h)) {
             CFRelease(view->uuid);
@@ -704,8 +714,8 @@ bool declarative_detached_view_table_prepare(const struct declarative_topology *
     if (!out) return false;
     memset(out, 0, sizeof(*out));
     if (!declarative_topology_validate_owned(topology) || !defaults ||
-        defaults->layout < VIEW_BSP || defaults->layout > VIEW_FLOAT ||
-        defaults->split_type < SPLIT_Y || defaults->split_type > SPLIT_AUTO) return false;
+        defaults->layout < VIEW_BSP || defaults->layout > VIEW_ACCORDION_VERTICAL ||
+        defaults->accordion_padding < 0 || defaults->split_type < SPLIT_Y || defaults->split_type > SPLIT_AUTO) return false;
     if (topology->space_count > (size_t) (INT_MAX - 1) / 2) return false;
     out->view_table = (struct table) {
         .capacity = (int) (topology->space_count * 2 + 1),

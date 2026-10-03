@@ -405,7 +405,8 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
         for (int i = 0; i < node->window_count; ++i) {
             struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
             if (window) {
-                struct area area = node->zoom ? node->zoom->area : node->area;
+                struct area area = node->has_window_areas ? node->window_area[i]
+                                 : node->zoom ? node->zoom->area : node->area;
                 ts_buf_push(*window_list, ((struct window_capture) { .window = window, .x = area.x, .y = area.y, .w = area.w, .h = area.h }));
             }
         }
@@ -894,7 +895,7 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
         }
 
         return leaf;
-    } else if (view->layout == VIEW_STACK) {
+    } else if (view_layout_is_single_root(view->layout)) {
         return view_stack_window_node(view->root, window) ? view->root : NULL;
     }
 
@@ -1078,6 +1079,56 @@ void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
     fprintf(rsp, "\n}");
 }
 
+static void window_node_clear_window_areas(struct window_node *node)
+{
+    node->has_window_areas = false;
+    if (node->left) window_node_clear_window_areas(node->left);
+    if (node->right) window_node_clear_window_areas(node->right);
+}
+
+static void view_update_accordion(struct view *view)
+{
+    struct window_node *root = view->root;
+    int count = root->window_count;
+    root->has_window_areas = count > 0;
+    if (count <= 0) return;
+
+    int focus_index = 0;
+    for (int i = 0; i < count; ++i) {
+        if (root->window_list[i] == g_window_manager.focused_window_id) {
+            focus_index = i;
+            break;
+        }
+    }
+
+    bool horizontal = view->layout == VIEW_ACCORDION_HORIZONTAL;
+    float axis = horizontal ? root->area.w : root->area.h;
+    if (!isfinite(axis) || axis < 0.0f) axis = 0.0f;
+    float request = view->accordion_padding;
+    if (!isfinite(request) || request < 0.0f) request = 0.0f;
+    float strip = count > 1 ? fminf(request, axis / (float) count) : 0.0f;
+    float focused = axis - strip * (float) (count - 1);
+    if (!isfinite(focused) || focused < 0.0f) focused = 0.0f;
+
+    float cursor = horizontal ? root->area.x : root->area.y;
+    float limit = cursor + axis;
+    for (int i = 0; i < count; ++i) {
+        float length = count == 1 || i == focus_index ? focused : strip;
+        if (count == 1) length = axis;
+        if (i == count - 1) length = fmaxf(0.0f, limit - cursor);
+        struct area area = root->area;
+        if (horizontal) {
+            area.x = cursor;
+            area.w = length;
+        } else {
+            area.y = cursor;
+            area.h = length;
+        }
+        root->window_area[i] = area;
+        cursor += length;
+    }
+}
+
 void view_update(struct view *view)
 {
 #ifdef TESTS
@@ -1096,7 +1147,22 @@ void view_update(struct view *view)
             view->root->area.h -= (view->top_padding + view->bottom_padding);
         }
 
-        window_node_update(view, view->root);
+        if (view_layout_is_accordion(view->layout)) {
+            float min_x = frame.origin.x, max_x = CGRectGetMaxX(frame);
+            float min_y = frame.origin.y, max_y = CGRectGetMaxY(frame);
+            float x = fminf(max_x, fmaxf(min_x, view->root->area.x));
+            float y = fminf(max_y, fmaxf(min_y, view->root->area.y));
+            float right = fminf(max_x, fmaxf(min_x, view->root->area.x + view->root->area.w));
+            float bottom = fminf(max_y, fmaxf(min_y, view->root->area.y + view->root->area.h));
+            view->root->area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
+        }
+
+        window_node_clear_window_areas(view->root);
+        if (view_layout_is_accordion(view->layout)) {
+            view_update_accordion(view);
+        } else {
+            window_node_update(view, view->root);
+        }
 #ifdef TESTS
     }
 #endif
@@ -1138,6 +1204,7 @@ struct view *view_create(uint64_t sid)
         if (!view_check_flag(view, VIEW_LEFT_PADDING))   view->left_padding   = g_space_manager.left_padding;
         if (!view_check_flag(view, VIEW_RIGHT_PADDING))  view->right_padding  = g_space_manager.right_padding;
         if (!view_check_flag(view, VIEW_WINDOW_GAP))     view->window_gap     = g_space_manager.window_gap;
+        if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) view->accordion_padding = g_space_manager.accordion_padding;
         if (!view_check_flag(view, VIEW_AUTO_BALANCE))   view->auto_balance   = g_space_manager.auto_balance;
         if (!view_check_flag(view, VIEW_SPLIT_TYPE))     view->split_type     = g_space_manager.split_type;
         view_update(view);

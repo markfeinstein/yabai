@@ -171,6 +171,8 @@ struct window_node
     enum window_node_child child;
     int insert_dir;
     struct feedback_window feedback_window;
+    struct area window_area[NODE_MAX_WINDOW_COUNT];
+    bool has_window_areas;
 };
 
 enum view_type
@@ -178,7 +180,9 @@ enum view_type
     VIEW_DEFAULT,
     VIEW_BSP,
     VIEW_STACK,
-    VIEW_FLOAT
+    VIEW_FLOAT,
+    VIEW_ACCORDION_HORIZONTAL,
+    VIEW_ACCORDION_VERTICAL
 };
 
 static const char *view_type_str[] =
@@ -186,8 +190,20 @@ static const char *view_type_str[] =
     "default",
     "bsp",
     "stack",
-    "float"
+    "float",
+    "accordion_horizontal",
+    "accordion_vertical"
 };
+
+static inline bool view_layout_is_accordion(enum view_type layout)
+{
+    return layout == VIEW_ACCORDION_HORIZONTAL || layout == VIEW_ACCORDION_VERTICAL;
+}
+
+static inline bool view_layout_is_single_root(enum view_type layout)
+{
+    return layout == VIEW_STACK || view_layout_is_accordion(layout);
+}
 
 enum view_flag
 {
@@ -201,8 +217,9 @@ enum view_flag
     VIEW_ENABLE_PADDING = 0x080,
     VIEW_ENABLE_GAP     = 0x100,
     VIEW_IS_VALID       = 0x200,
-    VIEW_IS_DIRTY       = 0x400,
-    VIEW_SPLIT_TYPE     = 0x800,
+    VIEW_IS_DIRTY         = 0x400,
+    VIEW_SPLIT_TYPE       = 0x800,
+    VIEW_ACCORDION_PADDING = 0x1000,
 };
 
 struct view
@@ -219,6 +236,7 @@ struct view
     int left_padding;
     int right_padding;
     int window_gap;
+    int accordion_padding;
     uint32_t auto_balance;
     uint64_t flags;
     struct declarative_runtime_cell runtime_ownership[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT];

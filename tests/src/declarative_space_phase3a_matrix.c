@@ -2,12 +2,12 @@
 static const enum declarative_config_id declarative_space_test_field_ids[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
     DECLARATIVE_CONFIG_LAYOUT, DECLARATIVE_CONFIG_TOP_PADDING, DECLARATIVE_CONFIG_BOTTOM_PADDING,
     DECLARATIVE_CONFIG_LEFT_PADDING, DECLARATIVE_CONFIG_RIGHT_PADDING, DECLARATIVE_CONFIG_WINDOW_GAP,
-    DECLARATIVE_CONFIG_SPLIT_TYPE, DECLARATIVE_CONFIG_AUTO_BALANCE
+    DECLARATIVE_CONFIG_ACCORDION_PADDING, DECLARATIVE_CONFIG_SPLIT_TYPE, DECLARATIVE_CONFIG_AUTO_BALANCE
 };
 
 static const uint64_t declarative_space_test_legacy_flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
     VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-    VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
+    VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
 };
 
 static void declarative_space_test_set_native_value(struct declarative_value *value, int scalar)
@@ -66,6 +66,7 @@ TEST_FUNC(declarative_space_generated_precedence_matrix_covers_all_fields_and_la
                 case DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING: defaults.left_padding = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING: defaults.right_padding = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP: defaults.window_gap = values[0]; break;
+                case DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING: defaults.accordion_padding = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE: defaults.split_type = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE: defaults.auto_balance = (uint32_t) values[0]; break;
                 }
@@ -110,6 +111,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
         case DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING: defaults.left_padding = base; break;
         case DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING: defaults.right_padding = base; break;
         case DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP: defaults.window_gap = base; break;
+        case DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING: defaults.accordion_padding = base; break;
         case DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE: defaults.split_type = base; break;
         case DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE: defaults.auto_balance = (uint32_t) base; break;
         }
@@ -140,7 +142,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
         else if (winner == 1) memset(native.config, 0, sizeof(native.config));
     }
     view.layout = VIEW_STACK; view.top_padding = 31; view.bottom_padding = 32; view.left_padding = 33;
-    view.right_padding = 34; view.window_gap = 35; view.split_type = SPLIT_Y; view.auto_balance = SPLIT_X;
+    view.right_padding = 34; view.window_gap = 35; view.accordion_padding = 36; view.split_type = SPLIT_Y; view.auto_balance = SPLIT_X;
     target.is_user_space = false;
     struct declarative_space_effective effective;
     TEST_CHECK(declarative_space_resolve_policy(&native, &runtime, &defaults, &target,
@@ -151,6 +153,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING].value.integer, 33);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer, 34);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer, 35);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer, 36);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer, SPLIT_Y);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32, SPLIT_X);
 })

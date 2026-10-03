@@ -183,6 +183,7 @@ static void declarative_install_space_defaults(struct space_manager *sm)
 {
     *sm = (struct space_manager) {
         .layout = VIEW_FLOAT,
+        .accordion_padding = 30,
         .split_ratio = 0.5f,
         .split_type = SPLIT_AUTO,
         .window_placement = CHILD_SECOND,
@@ -270,6 +271,7 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_LEFT_PADDING: sm->left_padding = value->integer; break;
     case DECLARATIVE_CONFIG_RIGHT_PADDING: sm->right_padding = value->integer; break;
     case DECLARATIVE_CONFIG_WINDOW_GAP: sm->window_gap = value->integer; break;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: sm->accordion_padding = value->integer; break;
     case DECLARATIVE_CONFIG_LAYOUT: sm->layout = value->enumeration; break;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: sm->split_ratio = value->real; break;
     case DECLARATIVE_CONFIG_SPLIT_TYPE: sm->split_type = value->enumeration; break;
@@ -314,6 +316,7 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         area.w += (float) (view->left_padding + view->right_padding);
         area.y -= (float) view->top_padding;
         area.h += (float) (view->top_padding + view->bottom_padding);
+        struct area bounds = area;
 #define APPLY_SPACE(field, id, member) do { \
     view->member = effective.fields[field].value.integer; \
 } while (0)
@@ -323,6 +326,7 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING, DECLARATIVE_CONFIG_LEFT_PADDING, left_padding);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, DECLARATIVE_CONFIG_RIGHT_PADDING, right_padding);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, DECLARATIVE_CONFIG_WINDOW_GAP, window_gap);
+        APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, DECLARATIVE_CONFIG_ACCORDION_PADDING, accordion_padding);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, DECLARATIVE_CONFIG_SPLIT_TYPE, split_type);
         view->auto_balance = effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
 #undef APPLY_SPACE
@@ -330,6 +334,15 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         area.w -= (float) (view->left_padding + view->right_padding);
         area.y += (float) view->top_padding;
         area.h -= (float) (view->top_padding + view->bottom_padding);
+        if (view_layout_is_accordion(view->layout)) {
+            float min_x = bounds.x, max_x = bounds.x + bounds.w;
+            float min_y = bounds.y, max_y = bounds.y + bounds.h;
+            float x = fminf(max_x, fmaxf(min_x, area.x));
+            float y = fminf(max_y, fmaxf(min_y, area.y));
+            float right = fminf(max_x, fmaxf(min_x, area.x + area.w));
+            float bottom = fminf(max_y, fmaxf(min_y, area.y + area.h));
+            area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
+        }
         if (!isfinite(area.x) || !isfinite(area.y) || !isfinite(area.w) || !isfinite(area.h) || area.w < 0 || area.h < 0) {
             declarative_topology_space_snapshot_destroy(entries);
             return false;
@@ -598,6 +611,7 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     g_space_manager.left_padding = bundle->space_manager.left_padding;
     g_space_manager.right_padding = bundle->space_manager.right_padding;
     g_space_manager.window_gap = bundle->space_manager.window_gap;
+    g_space_manager.accordion_padding = bundle->space_manager.accordion_padding;
     g_space_manager.split_ratio = bundle->space_manager.split_ratio;
     g_space_manager.split_type = bundle->space_manager.split_type;
     g_space_manager.auto_balance = bundle->space_manager.auto_balance;

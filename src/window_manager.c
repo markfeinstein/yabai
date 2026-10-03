@@ -2429,6 +2429,11 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
     window_manager_adjust_layer(b, LAYER_BELOW);
     scripting_addition_order_window(b->id, 1, a_node->window_order[1]);
 
+    if (view_layout_is_accordion(a_view->layout)) {
+        view_update(a_view);
+        view_flush(a_view);
+        return WINDOW_OP_ERROR_SUCCESS;
+    }
     struct area area = a_node->zoom ? a_node->zoom->area : a_node->area;
     window_manager_animate_window((struct window_capture) { b, area.x, area.y, area.w, area.h });
     return WINDOW_OP_ERROR_SUCCESS;
@@ -2585,6 +2590,13 @@ static void window_manager_swap_node_window_lists_and_remap(struct window_manage
     }
 }
 
+static bool window_manager_defer_accordion_swap_flush(struct view *view, uint32_t focused_window_id,
+                                                        uint32_t a_window_id, uint32_t b_window_id)
+{
+    return view_layout_is_accordion(view->layout) &&
+           (focused_window_id == a_window_id || focused_window_id == b_window_id);
+}
+
 enum window_op_error window_manager_swap_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b)
 {
     TIME_FUNCTION;
@@ -2630,12 +2642,18 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
         a_node->window_list[b_list_index] = a->id;
         a_node->window_order[b_order_index] = a->id;
 
+        bool defer_accordion_flush = window_manager_defer_accordion_swap_flush(a_view,
+            wm->focused_window_id, a->id, b->id);
         if (a->id == wm->focused_window_id) {
             window_manager_focus_window_with_raise(&b->application->psn, b->id, b->ref);
         } else if (b->id == wm->focused_window_id) {
             window_manager_focus_window_with_raise(&a->application->psn, a->id, a->ref);
         }
 
+        if (view_layout_is_accordion(a_view->layout) && !defer_accordion_flush) {
+            view_update(a_view);
+            view_flush(a_view);
+        }
         return WINDOW_OP_ERROR_SUCCESS;
     }
 
@@ -3301,6 +3319,7 @@ static void window_manager_finalize_mutated_views(struct view **mutated_views, i
 {
     for (int i = 0; i < mutated_count; ++i) {
         struct view *mutated_view = mutated_views[i];
+        if (view_layout_is_accordion(mutated_view->layout)) view_update(mutated_view);
         if (space_is_visible(mutated_view->sid) && view_is_dirty(mutated_view)) {
             window_node_flush(mutated_view->root);
             view_clear_flag(mutated_view, VIEW_IS_DIRTY);

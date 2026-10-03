@@ -94,6 +94,7 @@ static void declarative_test_global_geometry(void *manager, enum declarative_con
     case DECLARATIVE_CONFIG_LEFT_PADDING: sm->left_padding = value; break;
     case DECLARATIVE_CONFIG_RIGHT_PADDING: sm->right_padding = value; break;
     case DECLARATIVE_CONFIG_WINDOW_GAP: sm->window_gap = value; break;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: sm->accordion_padding = value; break;
     default: break;
     }
 }
@@ -188,6 +189,7 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_RIGHT_PADDING, "14", "14\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_LAYOUT, "bsp", "bsp\n", DECLARATIVE_TEST_EFFECT_LAYOUT },
     { DECLARATIVE_CONFIG_WINDOW_GAP, "15", "15\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_ACCORDION_PADDING, "30", "30\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", -1 },
     { DECLARATIVE_CONFIG_SPLIT_TYPE, "auto", "auto\n", DECLARATIVE_TEST_EFFECT_SPLIT_TYPE },
     { DECLARATIVE_CONFIG_AUTO_BALANCE, "on", "on\n", DECLARATIVE_TEST_EFFECT_AUTO_BALANCE },
@@ -313,8 +315,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_36_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 36);
+TEST_FUNC(declarative_command_matrix_covers_all_37_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 37);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -378,8 +380,8 @@ TEST_FUNC(declarative_window_focus_fallback_scoped_command_rejects_before_mutati
     g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK] = saved_ownership;
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_36_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 36);
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_37_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 37);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
@@ -586,6 +588,63 @@ TEST_FUNC(declarative_space_layout_message_surfaces_use_single_authority_and_pre
 
     declarative_test_user_space = true;
     declarative_test_operation_success = true;
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = last_space_id_before;
+    table_remove(&g_space_manager.view, &sid);
+    free(view);
+    if (initialized_application_table) {
+        table_free(&g_window_manager.application);
+        memset(&g_window_manager.application, 0, sizeof(g_window_manager.application));
+    }
+)
+
+TEST_FUNC(declarative_accordion_layouts_round_trip_through_imperative_surfaces,
+    bool initialized_application_table = false;
+    if (!g_window_manager.application.buckets) {
+        table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
+        initialized_application_table = true;
+    }
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 42;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid; view->layout = VIEW_FLOAT;
+    table_add(&g_space_manager.view, &sid, view);
+    uint64_t last_space_id_before = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_test_user_space = true;
+    declarative_test_operation_success = true;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+    char *output = declarative_test_run_config("layout", "accordion_horizontal");
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(g_space_manager.layout, VIEW_ACCORDION_HORIZONTAL);
+    output = declarative_test_run_config("layout", NULL);
+    TEST_CHECK(strcmp(output, "accordion_horizontal\n"), 0); free(output);
+
+    char scoped[] = "--space\0recent\0layout\0accordion_vertical\0";
+    size_t output_length = 0; output = NULL;
+    FILE *rsp = open_memstream(&output, &output_length);
+    handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, scoped);
+    fclose(rsp);
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(view->layout, VIEW_ACCORDION_VERTICAL);
+
+    char imperative[] = "recent\0--layout\0accordion_horizontal\0";
+    output = NULL; output_length = 0; rsp = open_memstream(&output, &output_length);
+    handle_domain_space(rsp, (struct token) { .text = "space", .length = 5 }, imperative);
+    fclose(rsp);
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(view->layout, VIEW_ACCORDION_HORIZONTAL);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_ACCORDION_HORIZONTAL);
+
+    output = declarative_test_run_config("accordion_padding", "37");
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(g_space_manager.accordion_padding, 37);
+    output = declarative_test_run_config("accordion_padding", NULL);
+    TEST_CHECK(strcmp(output, "37\n"), 0); free(output);
+    output = declarative_test_run_config("accordion_padding", "-1");
+    TEST_CHECK(strncmp(output, FAILURE_MESSAGE, strlen(FAILURE_MESSAGE)), 0); free(output);
+
     declarative_runtime_reset_operation_ops();
     g_space_manager.last_space_id = last_space_id_before;
     table_remove(&g_space_manager.view, &sid);

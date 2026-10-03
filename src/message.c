@@ -44,6 +44,8 @@ extern bool g_verbose;
 #define ARGUMENT_CONFIG_LAYOUT_BSP            "bsp"
 #define ARGUMENT_CONFIG_LAYOUT_STACK          "stack"
 #define ARGUMENT_CONFIG_LAYOUT_FLOAT          "float"
+#define ARGUMENT_CONFIG_LAYOUT_ACCORDION_HORIZONTAL "accordion_horizontal"
+#define ARGUMENT_CONFIG_LAYOUT_ACCORDION_VERTICAL   "accordion_vertical"
 #define ARGUMENT_CONFIG_SPLIT_TYPE_Y          "vertical"
 #define ARGUMENT_CONFIG_SPLIT_TYPE_X          "horizontal"
 #define ARGUMENT_CONFIG_SPLIT_TYPE_AUTO       "auto"
@@ -94,6 +96,8 @@ extern bool g_verbose;
 #define ARGUMENT_SPACE_LAYOUT_BSP   "bsp"
 #define ARGUMENT_SPACE_LAYOUT_STACK "stack"
 #define ARGUMENT_SPACE_LAYOUT_FLT   "float"
+#define ARGUMENT_SPACE_LAYOUT_ACCORDION_HORIZONTAL "accordion_horizontal"
+#define ARGUMENT_SPACE_LAYOUT_ACCORDION_VERTICAL   "accordion_vertical"
 /* ----------------------------------------------------------------------------- */
 
 /* --------------------------------DOMAIN WINDOW-------------------------------- */
@@ -1737,6 +1741,26 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_ACCORDION_PADDING)) {
+            struct token_value value = token_to_value(get_token(&message));
+            if (sel_sid) {
+                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                if (value.type == TOKEN_TYPE_INVALID) {
+                    fprintf(rsp, "%d\n", view->accordion_padding);
+                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+                }
+            } else {
+                if (value.type == TOKEN_TYPE_INVALID) {
+                    fprintf(rsp, "%d\n", g_space_manager.accordion_padding);
+                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
         } else if (token_equals(command, COMMAND_CONFIG_LAYOUT)) {
             struct token value = get_token(&message);
             if (sel_sid) {
@@ -1749,6 +1773,10 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_STACK));
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_FLOAT)) {
                     handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_FLOAT));
+                } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_HORIZONTAL)) {
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_ACCORDION_HORIZONTAL));
+                } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_VERTICAL)) {
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_ACCORDION_VERTICAL));
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1761,6 +1789,10 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &(struct declarative_value) { .present = true, .enumeration = VIEW_STACK }, 0) != DECLARATIVE_APPLY_OK) daemon_fail(rsp, "could not set layout.\n");
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_FLOAT)) {
                     if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &(struct declarative_value) { .present = true, .enumeration = VIEW_FLOAT }, 0) != DECLARATIVE_APPLY_OK) daemon_fail(rsp, "could not set layout.\n");
+                } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_HORIZONTAL)) {
+                    if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &(struct declarative_value) { .present = true, .enumeration = VIEW_ACCORDION_HORIZONTAL }, 0) != DECLARATIVE_APPLY_OK) daemon_fail(rsp, "could not set layout.\n");
+                } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_VERTICAL)) {
+                    if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &(struct declarative_value) { .present = true, .enumeration = VIEW_ACCORDION_VERTICAL }, 0) != DECLARATIVE_APPLY_OK) daemon_fail(rsp, "could not set layout.\n");
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -2257,6 +2289,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(acting_sid, VIEW_STACK));
             } else if (token_equals(value, ARGUMENT_SPACE_LAYOUT_FLT)) {
                 handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(acting_sid, VIEW_FLOAT));
+            } else if (token_equals(value, ARGUMENT_SPACE_LAYOUT_ACCORDION_HORIZONTAL)) {
+                handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(acting_sid, VIEW_ACCORDION_HORIZONTAL));
+            } else if (token_equals(value, ARGUMENT_SPACE_LAYOUT_ACCORDION_VERTICAL)) {
+                handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(acting_sid, VIEW_ACCORDION_VERTICAL));
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }

@@ -33,6 +33,7 @@ struct declarative_space_defaults
     int left_padding;
     int right_padding;
     int window_gap;
+    int accordion_padding;
     /* Captured global gap-enable state used by detached geometry calculations. */
     bool window_gap_enabled;
     enum window_node_split split_type;
@@ -136,6 +137,7 @@ struct declarative_space_view_before_image
     int left_padding;
     int right_padding;
     int window_gap;
+    int accordion_padding;
     enum window_node_split split_type;
     uint32_t auto_balance;
     uint32_t insertion_point;

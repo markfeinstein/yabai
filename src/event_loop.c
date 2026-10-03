@@ -86,7 +86,9 @@ static bool update_window_notifications(void)
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
 {
+    bool focus_changed = wm->focused_window_id != window->id;
     struct window *focused_window = window_manager_find_window(wm, wm->focused_window_id);
+    struct view *previous_view = focused_window ? window_manager_find_managed_window(wm, focused_window) : NULL;
     if (focused_window && focused_window != window && window_space(focused_window->id) == window_space(window->id)) {
         window_manager_set_window_opacity(wm, focused_window, g_window_manager.normal_window_opacity);
     }
@@ -106,7 +108,17 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     ms->ffm_window_id = 0;
 
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+    if (focus_changed && previous_view && previous_view != view && view_layout_is_accordion(previous_view->layout)) {
+        view_update(previous_view);
+        view_flush(previous_view);
+    }
     if (!view) return;
+
+    if (focus_changed && view_layout_is_accordion(view->layout)) {
+        view_update(view);
+        view_flush(view);
+        return;
+    }
 
     struct window_node *node = view_find_window_node(view, window->id);
     if (node->window_count <= 1) return;
@@ -174,6 +186,18 @@ static void application_window_collection_update_inventory(int previous_window_c
 {
     if (previous_window_count != window_count) {
         event_loop_window_inventory_did_change();
+    }
+}
+
+static void event_loop_flush_batched_views(struct view **views, int count)
+{
+    for (int i = 0; i < count; ++i) {
+        struct view *view = views[i];
+        bool duplicate = false;
+        for (int j = 0; j < i; ++j) duplicate |= views[j] == view;
+        if (duplicate || !view_is_dirty(view)) continue;
+        if (view_layout_is_accordion(view->layout)) view_update(view);
+        view_flush(view);
     }
 }
 
@@ -414,14 +438,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
-    for (int i = 0; i < view_count; ++i) {
-        struct view *view = view_list[i];
-        if (!space_is_visible(view->sid)) continue;
-        if (!view_is_dirty(view))         continue;
-
-        window_node_flush(view->root);
-        view_clear_flag(view, VIEW_IS_DIRTY);
-    }
+    event_loop_flush_batched_views(view_list, view_count);
 }
 
 static void event_loop_clear_window_identity(struct window_manager *wm, uint32_t window_id)
@@ -534,14 +551,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
-    for (int i = 0; i < view_count; ++i) {
-        struct view *view = view_list[i];
-        if (!space_is_visible(view->sid)) continue;
-        if (!view_is_dirty(view))         continue;
-
-        window_node_flush(view->root);
-        view_clear_flag(view, VIEW_IS_DIRTY);
-    }
+    event_loop_flush_batched_views(view_list, view_count);
 
 out:
     if (destroyed_windows) event_loop_request_window_focus_fallback_for_event(WINDOW_DESTROYED);
@@ -720,14 +730,7 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
-    for (int i = 0; i < view_count; ++i) {
-        struct view *view = view_list[i];
-        if (!space_is_visible(view->sid)) continue;
-        if (!view_is_dirty(view))         continue;
-
-        window_node_flush(view->root);
-        view_clear_flag(view, VIEW_IS_DIRTY);
-    }
+    event_loop_flush_batched_views(view_list, view_count);
 
     event_signal_push(SIGNAL_APPLICATION_VISIBLE, application);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
@@ -785,14 +788,7 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
-    for (int i = 0; i < view_count; ++i) {
-        struct view *view = view_list[i];
-        if (!space_is_visible(view->sid)) continue;
-        if (!view_is_dirty(view))         continue;
-
-        window_node_flush(view->root);
-        view_clear_flag(view, VIEW_IS_DIRTY);
-    }
+    event_loop_flush_batched_views(view_list, view_count);
 
     event_signal_push(SIGNAL_APPLICATION_HIDDEN, application);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);

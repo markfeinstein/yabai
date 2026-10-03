@@ -866,7 +866,15 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         { "same-bsp", VIEW_BSP, VIEW_BSP }, { "same-stack", VIEW_STACK, VIEW_STACK },
         { "bsp-to-stack", VIEW_BSP, VIEW_STACK }, { "stack-to-bsp", VIEW_STACK, VIEW_BSP },
         { "bsp-to-float", VIEW_BSP, VIEW_FLOAT }, { "stack-to-float", VIEW_STACK, VIEW_FLOAT },
-        { "float-to-bsp", VIEW_FLOAT, VIEW_BSP }, { "float-to-stack", VIEW_FLOAT, VIEW_STACK }
+        { "float-to-bsp", VIEW_FLOAT, VIEW_BSP }, { "float-to-stack", VIEW_FLOAT, VIEW_STACK },
+        { "same-accordion-horizontal", VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_HORIZONTAL },
+        { "same-accordion-vertical", VIEW_ACCORDION_VERTICAL, VIEW_ACCORDION_VERTICAL },
+        { "bsp-to-accordion-horizontal", VIEW_BSP, VIEW_ACCORDION_HORIZONTAL },
+        { "stack-to-accordion-vertical", VIEW_STACK, VIEW_ACCORDION_VERTICAL },
+        { "float-to-accordion-horizontal", VIEW_FLOAT, VIEW_ACCORDION_HORIZONTAL },
+        { "accordion-horizontal-to-bsp", VIEW_ACCORDION_HORIZONTAL, VIEW_BSP },
+        { "accordion-vertical-to-stack", VIEW_ACCORDION_VERTICAL, VIEW_STACK },
+        { "accordion-horizontal-to-vertical", VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_VERTICAL }
     };
     static const size_t cardinalities[] = { 0, 1, NODE_MAX_WINDOW_COUNT };
     static const char *row_names[] = {
@@ -878,6 +886,14 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         "stack-to-float-zero", "stack-to-float-one", "stack-to-float-max",
         "float-to-bsp-zero", "float-to-bsp-one", "float-to-bsp-max",
         "float-to-stack-zero", "float-to-stack-one", "float-to-stack-max",
+        "same-accordion-horizontal-zero", "same-accordion-horizontal-one", "same-accordion-horizontal-max",
+        "same-accordion-vertical-zero", "same-accordion-vertical-one", "same-accordion-vertical-max",
+        "bsp-to-accordion-horizontal-zero", "bsp-to-accordion-horizontal-one", "bsp-to-accordion-horizontal-max",
+        "stack-to-accordion-vertical-zero", "stack-to-accordion-vertical-one", "stack-to-accordion-vertical-max",
+        "float-to-accordion-horizontal-zero", "float-to-accordion-horizontal-one", "float-to-accordion-horizontal-max",
+        "accordion-horizontal-to-bsp-zero", "accordion-horizontal-to-bsp-one", "accordion-horizontal-to-bsp-max",
+        "accordion-vertical-to-stack-zero", "accordion-vertical-to-stack-one", "accordion-vertical-to-stack-max",
+        "accordion-horizontal-to-vertical-zero", "accordion-horizontal-to-vertical-one", "accordion-horizontal-to-vertical-max",
         "root-replace-landscape", "stack-to-bsp-landscape", "float-to-bsp-landscape",
         "root-replace-portrait", "stack-to-bsp-portrait", "float-to-bsp-portrait",
         "auto-descendant-gap-disabled", "auto-descendant-gap-enabled",
@@ -886,7 +902,7 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         "cross-sid-duplicate", "missing-eligible-object", "ineligible-removal",
         "mismatched-wid-object", "malformed-unchanged-root", "duplicate-final-owner"
     };
-    TEST_CHECK(sizeof(row_names) / sizeof(row_names[0]), 43UL);
+    TEST_CHECK(sizeof(row_names) / sizeof(row_names[0]), 67UL);
     size_t rows_run = 0;
     struct declarative_space_table_contract vc = { hash_wm, compare_wm, sizeof(uint64_t) };
     struct declarative_space_table_contract mc = { hash_wm, compare_wm, sizeof(uint32_t) };
@@ -987,7 +1003,7 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
                                                                                      source_wids[0]);
                     TEST_CHECK(zoomed->zoom == zoomed->parent || zoomed->zoom == prepared->final_root, true);
                 }
-                if (layouts[layout_index].from == VIEW_STACK) TEST_CHECK(final_order[0], 500U);
+                if (view_layout_is_single_root(layouts[layout_index].from)) TEST_CHECK(final_order[0], 500U);
             } else if (final_layout != VIEW_FLOAT && source_count) {
                 TEST_CHECK(prepared->final_insertion_point, source_wids[source_count - 1]);
             } else {
@@ -1032,7 +1048,7 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         defaults.layout = VIEW_BSP; defaults.split_type = SPLIT_AUTO; defaults.auto_balance = SPLIT_NONE;
         defaults.window_gap_enabled = true; defaults.window_gap = 10;
         struct declarative_space_preparation preparation;
-        TEST_CHECK(strcmp(row_names[rows_run], row_names[24 + geometry_case]), 0);
+        TEST_CHECK(strcmp(row_names[rows_run], row_names[48 + geometry_case]), 0);
         TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
                                              NULL, NULL, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME,
                                              &ops, &preparation), true);
@@ -1079,7 +1095,7 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         defaults.layout = VIEW_BSP; defaults.split_type = SPLIT_AUTO; defaults.auto_balance = SPLIT_NONE;
         defaults.window_gap_enabled = true; defaults.window_gap = 10;
         struct declarative_space_preparation preparation;
-        TEST_CHECK(strcmp(row_names[rows_run], row_names[30 + gap_case]), 0);
+        TEST_CHECK(strcmp(row_names[rows_run], row_names[54 + gap_case]), 0);
         TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
                                              NULL, NULL, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME,
                                              &ops, &preparation), true);
@@ -1410,6 +1426,14 @@ TEST_FUNC(declarative_space_phase3b_allocation_ordinal_matrix_e,
         { "stack-to-float", { VIEW_STACK }, { VIEW_FLOAT }, 1, { 3 } },
         { "float-to-bsp", { VIEW_FLOAT }, { VIEW_BSP }, 1, { 3 } },
         { "float-to-stack", { VIEW_FLOAT }, { VIEW_STACK }, 1, { 3 } },
+        { "same-accordion-horizontal", { VIEW_ACCORDION_HORIZONTAL }, { VIEW_ACCORDION_HORIZONTAL }, 1, { 3 } },
+        { "same-accordion-vertical", { VIEW_ACCORDION_VERTICAL }, { VIEW_ACCORDION_VERTICAL }, 1, { 3 } },
+        { "bsp-to-accordion-horizontal", { VIEW_BSP }, { VIEW_ACCORDION_HORIZONTAL }, 1, { 3 } },
+        { "stack-to-accordion-vertical", { VIEW_STACK }, { VIEW_ACCORDION_VERTICAL }, 1, { 3 } },
+        { "float-to-accordion-horizontal", { VIEW_FLOAT }, { VIEW_ACCORDION_HORIZONTAL }, 1, { 3 } },
+        { "accordion-horizontal-to-bsp", { VIEW_ACCORDION_HORIZONTAL }, { VIEW_BSP }, 1, { 3 } },
+        { "accordion-vertical-to-stack", { VIEW_ACCORDION_VERTICAL }, { VIEW_STACK }, 1, { 3 } },
+        { "accordion-horizontal-to-vertical", { VIEW_ACCORDION_HORIZONTAL }, { VIEW_ACCORDION_VERTICAL }, 1, { 3 } },
         { "root-replace-landscape", { VIEW_BSP }, { VIEW_BSP }, 1, { 2 }, false, false, false, true, false },
         { "stack-to-bsp-landscape", { VIEW_STACK }, { VIEW_BSP }, 1, { 2 }, false, false, false, true, false },
         { "float-to-bsp-landscape", { VIEW_FLOAT }, { VIEW_BSP }, 1, { 2 }, false, false, false, true, false },
@@ -1426,13 +1450,13 @@ TEST_FUNC(declarative_space_phase3b_allocation_ordinal_matrix_e,
     };
     struct declarative_space_table_contract vc = { hash_wm, compare_wm, sizeof(uint64_t) };
     struct declarative_space_table_contract mc = { hash_wm, compare_wm, sizeof(uint32_t) };
-    /* Matrix E allocation ledger (scenario order above):
-     * historical 753 + 15 checked index/geometry/alias ordinals = approved 768;
-     * the full table-entry equality index and preparation-owned old/final node
-     * indexes add 106 measured ordinals, yielding the new exact baseline 874. */
+    /* Matrix E allocation ledger (scenario order above): the pre-accordion
+     * baseline is 874 exact failure ordinals. Eight accordion transition rows
+     * add 274 measured ordinals for an exact total of 1148. */
     static const size_t expected_ordinals[] = {
-        30, 39, 30, 36, 41, 25, 25, 34, 29, 37, 37,
-        30, 37, 37, 30, 34, 34, 12, 109, 104, 36, 48
+        30, 39, 30, 36, 41, 25, 25, 34, 29,
+        30, 30, 36, 36, 29, 41, 36, 36,
+        37, 37, 30, 37, 37, 30, 34, 34, 12, 109, 104, 36, 48
     };
     size_t aggregate_failures = 0, aggregate_successes = 0;
     TEST_CHECK(sizeof(expected_ordinals) / sizeof(expected_ordinals[0]),
@@ -1528,8 +1552,8 @@ TEST_FUNC(declarative_space_phase3b_allocation_ordinal_matrix_e,
                scenario->name, baseline.allocation_count, baseline.allocation_count + 1);
     }
     declarative_space_test_fail_allocation_at(0);
-    TEST_CHECK(aggregate_successes, 44UL);
-    TEST_CHECK(aggregate_failures, 874UL);
+    TEST_CHECK(aggregate_successes, 60UL);
+    TEST_CHECK(aggregate_failures, 1148UL);
     printf("                   matrix-e aggregate failures=%zu successes=%zu\n",
            aggregate_failures, aggregate_successes);
 })

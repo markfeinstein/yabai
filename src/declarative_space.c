@@ -73,7 +73,7 @@ static uint64_t declarative_space_legacy_flag(enum declarative_runtime_space_fie
 {
     static const uint64_t flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
+        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
     return flags[field];
 }
@@ -132,6 +132,7 @@ static void declarative_space_set_current_non_user(const struct view *view,
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING, left_padding, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, right_padding, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
+    SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE, auto_balance, u32);
 #undef SET_CURRENT
@@ -159,6 +160,7 @@ bool declarative_space_resolve_policy(const struct declarative_config_model *nat
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING, left_padding, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, right_padding, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
+    SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE, auto_balance, u32);
 #undef SET_DEFAULT
@@ -504,6 +506,7 @@ static bool declarative_space_visit_node(struct declarative_space_root_context *
     context->hash = declarative_space_hash_u64(context->hash, (uint32_t) node->insert_dir);
     context->hash = declarative_space_hash_u64(context->hash, node->feedback_window.id);
     context->hash = declarative_space_hash_u64(context->hash, (uintptr_t) node->feedback_window.context);
+    context->hash = declarative_space_hash_u64(context->hash, node->has_window_areas);
     uint32_t bits;
     memcpy(&bits, &node->ratio, sizeof(bits));
     context->hash = declarative_space_hash_u64(context->hash, bits);
@@ -537,6 +540,12 @@ static bool declarative_space_visit_node(struct declarative_space_root_context *
         if (!declarative_space_grow((void **) &context->wids, &context->wid_capacity, context->wid_count + 1, sizeof(*context->wids))) return false;
         context->wids[context->wid_count++] = wid;
         context->hash = declarative_space_hash_u64(context->hash, wid);
+        if (node->has_window_areas) {
+            memcpy(&bits, &node->window_area[i].x, sizeof(bits)); context->hash = declarative_space_hash_u64(context->hash, bits);
+            memcpy(&bits, &node->window_area[i].y, sizeof(bits)); context->hash = declarative_space_hash_u64(context->hash, bits);
+            memcpy(&bits, &node->window_area[i].w, sizeof(bits)); context->hash = declarative_space_hash_u64(context->hash, bits);
+            memcpy(&bits, &node->window_area[i].h, sizeof(bits)); context->hash = declarative_space_hash_u64(context->hash, bits);
+        }
         for (int j = 0; j < node->window_count; ++j) {
             if (node->window_order[j] == wid) {
                 if (order_seen[j]) return false;
@@ -572,9 +581,9 @@ bool declarative_space_validate_root(const struct view *view,
         }
     }
     if (valid) {
-        if (view->layout == VIEW_STACK && (context.node_count != 1 || (view->root->left || view->root->right))) valid = false;
+        if (view_layout_is_single_root(view->layout) && (context.node_count != 1 || (view->root->left || view->root->right))) valid = false;
         if (view->layout == VIEW_FLOAT && (context.node_count != 1 || context.wid_count != 0)) valid = false;
-        if (view->layout != VIEW_BSP && view->layout != VIEW_STACK && view->layout != VIEW_FLOAT) valid = false;
+        if (view->layout < VIEW_BSP || view->layout > VIEW_ACCORDION_VERTICAL) valid = false;
         bool insertion_found = view->insertion_point == 0;
         for (size_t i = 0; valid && i < context.node_count; ++i) {
             struct window_node *node = context.nodes[i];
@@ -608,6 +617,7 @@ void declarative_space_capture_view_before(const struct view *view,
         .left_padding = view->left_padding,
         .right_padding = view->right_padding,
         .window_gap = view->window_gap,
+        .accordion_padding = view->accordion_padding,
         .split_type = view->split_type,
         .auto_balance = view->auto_balance,
         .insertion_point = view->insertion_point,
@@ -628,6 +638,7 @@ bool declarative_space_view_before_matches(const struct view *view,
            view->left_padding == image->left_padding &&
            view->right_padding == image->right_padding &&
            view->window_gap == image->window_gap &&
+           view->accordion_padding == image->accordion_padding &&
            view->split_type == image->split_type &&
            view->auto_balance == image->auto_balance &&
            view->insertion_point == image->insertion_point &&
@@ -885,7 +896,7 @@ static enum view_type declarative_space_final_layout(const struct declarative_sp
 {
     int layout = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer;
     /* Runtime cells are validated at ingress; retaining the live layout keeps synthetic before-image fixtures safe. */
-    return layout >= VIEW_BSP && layout <= VIEW_FLOAT ? (enum view_type) layout : target->target.view->layout;
+    return layout >= VIEW_BSP && layout <= VIEW_ACCORDION_VERTICAL ? (enum view_type) layout : target->target.view->layout;
 }
 
 static bool declarative_space_target_accepts(const struct declarative_space_prepared_target *target, uint64_t sid)
@@ -1505,7 +1516,7 @@ static bool declarative_space_make_converted_root(struct declarative_space_prepa
     for (size_t i = 0; i < target->tree_index_count; ++i) target->tree_index[i].node = NULL;
     if (layout == VIEW_FLOAT) return true;
     if (layout == VIEW_BSP) root->area = target->target.view->root->area;
-    if (layout == VIEW_STACK) {
+    if (view_layout_is_single_root(layout)) {
         for (size_t i = 0; i < target->flatten_count; ++i) {
             uint32_t wid = target->flatten_membership[i];
             struct declarative_space_tree_index_entry *entry = declarative_space_tree_find(target, wid);
@@ -1595,13 +1606,13 @@ static bool declarative_space_reconcile_same_layout(struct declarative_space_pre
         uint32_t wid = target->final_wids[i];
         struct declarative_space_tree_index_entry *entry = declarative_space_tree_find(target, wid);
         if (!entry || entry->node) continue;
-        bool added = layout == VIEW_STACK ? declarative_space_stack_add(root, wid) :
+        bool added = view_layout_is_single_root(layout) ? declarative_space_stack_add(root, wid) :
                      declarative_space_bsp_add_indexed(root, target, &context, wid, target->final_insertion_point,
                          target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer,
                          target->effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32,
                          declarative_space_target_gap(target), defaults);
         if (!added) { declarative_space_free(context.heap); return false; }
-        if (layout == VIEW_STACK) entry->node = root;
+        if (view_layout_is_single_root(layout)) entry->node = root;
     }
     declarative_space_free(context.heap);
     return true;
@@ -1884,8 +1895,8 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
     if (!out) return false;
     memset(out, 0, sizeof(*out));
     if ((mode != DECLARATIVE_SPACE_PRESERVE_RUNTIME && mode != DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD) ||
-        !defaults || defaults->layout < VIEW_BSP || defaults->layout > VIEW_FLOAT ||
-        defaults->split_type < SPLIT_NONE || defaults->split_type > SPLIT_AUTO ||
+        !defaults || defaults->layout < VIEW_BSP || defaults->layout > VIEW_ACCORDION_VERTICAL ||
+        defaults->accordion_padding < 0 || defaults->split_type < SPLIT_NONE || defaults->split_type > SPLIT_AUTO ||
         !(defaults->split_ratio >= 0.1f && defaults->split_ratio <= 0.9f) ||
         (defaults->window_placement != CHILD_FIRST && defaults->window_placement != CHILD_SECOND) ||
         defaults->window_insertion_point < INSERT_FOCUSED || defaults->window_insertion_point > INSERT_LAST ||
@@ -2071,6 +2082,7 @@ static bool declarative_space_root_fingerprint_node(struct window_node *node, si
     *hash = declarative_space_hash_u64(*hash, (uint32_t) node->insert_dir);
     *hash = declarative_space_hash_u64(*hash, node->feedback_window.id);
     *hash = declarative_space_hash_u64(*hash, (uintptr_t) node->feedback_window.context);
+    *hash = declarative_space_hash_u64(*hash, node->has_window_areas);
     uint32_t bits;
     memcpy(&bits, &node->ratio, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
     memcpy(&bits, &node->area.x, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
@@ -2078,7 +2090,15 @@ static bool declarative_space_root_fingerprint_node(struct window_node *node, si
     memcpy(&bits, &node->area.w, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
     memcpy(&bits, &node->area.h, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
     if (node->window_count < 0 || node->window_count > NODE_MAX_WINDOW_COUNT) return false;
-    for (int i = 0; i < node->window_count; ++i) *hash = declarative_space_hash_u64(*hash, node->window_list[i]);
+    for (int i = 0; i < node->window_count; ++i) {
+        *hash = declarative_space_hash_u64(*hash, node->window_list[i]);
+        if (node->has_window_areas) {
+            memcpy(&bits, &node->window_area[i].x, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
+            memcpy(&bits, &node->window_area[i].y, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
+            memcpy(&bits, &node->window_area[i].w, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
+            memcpy(&bits, &node->window_area[i].h, sizeof(bits)); *hash = declarative_space_hash_u64(*hash, bits);
+        }
+    }
     for (int i = 0; i < node->window_count; ++i) *hash = declarative_space_hash_u64(*hash, node->window_order[i]);
     return declarative_space_root_fingerprint_node(node->left, remaining, hash) &&
            declarative_space_root_fingerprint_node(node->right, remaining, hash);
@@ -2184,7 +2204,8 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             view->bottom_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_BOTTOM_PADDING].value.integer ||
             view->left_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING].value.integer ||
             view->right_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer ||
-            view->window_gap != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer;
+            view->window_gap != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer ||
+            view->accordion_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer;
         if (target->changed) view->root = target->final_root;
         view->declarative_identity = target->target.identity;
         view->layout = declarative_space_final_layout(target);
@@ -2193,6 +2214,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
         view->left_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING].value.integer;
         view->right_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer;
         view->window_gap = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer;
+        view->accordion_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer;
         view->split_type = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer;
         view->auto_balance = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
         view->insertion_point = target->final_insertion_point;

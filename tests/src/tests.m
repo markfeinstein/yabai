@@ -36,6 +36,7 @@ typedef TEST_SIG(function);
 #include "area.c"
 #include "window.c"
 #include "view.c"
+#include "accordion.c"
 #include "window_manager.c"
 #include "event_loop.c"
 #include "space_gesture.c"
@@ -1706,6 +1707,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_and_space_serializers_round_trip_safe_escaped_and_absent_strings) \
     TEST_ENTRY(view_stack_window_node_rejects_full_node_without_mutation) \
     TEST_ENTRY(view_find_window_list_expands_for_full_stack_node) \
+    TEST_ENTRY(accordion_geometry_matrix_is_bounded_stable_and_focus_expanding) \
+    TEST_ENTRY(accordion_focus_change_updates_and_flushes_once_without_reordering) \
+    TEST_ENTRY(accordion_batched_lifecycle_recomputes_before_visibility_and_deduplicates) \
+    TEST_ENTRY(accordion_swap_flush_defers_only_when_focus_notification_will_recompute) \
+    TEST_ENTRY(accordion_membership_insertion_removal_and_focus_preserve_order) \
     TEST_ENTRY(mouse_click_state_ordinary_drag_does_not_poison_consumed_click) \
     TEST_ENTRY(mouse_click_state_tracks_chorded_buttons_independently) \
     TEST_ENTRY(mouse_action_classifies_buttons_and_modifiers) \
@@ -1815,13 +1821,14 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_numeric_field_matrix)                           \
     TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
     TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
-    TEST_ENTRY(declarative_command_matrix_covers_all_36_query_invalid_and_mutation_paths) \
+    TEST_ENTRY(declarative_command_matrix_covers_all_37_query_invalid_and_mutation_paths) \
     TEST_ENTRY(declarative_window_focus_fallback_scoped_command_rejects_before_mutation) \
-    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_36_typed_setters)   \
+    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_37_typed_setters)   \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
     TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
     TEST_ENTRY(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership) \
     TEST_ENTRY(declarative_space_layout_message_surfaces_use_single_authority_and_preserve_failures) \
+    TEST_ENTRY(declarative_accordion_layouts_round_trip_through_imperative_surfaces) \
     TEST_ENTRY(declarative_non_user_space_layout_boundary_preserves_target_and_ownership) \
     TEST_ENTRY(declarative_imperative_failures_preserve_target_and_ownership_with_exact_errors) \
     TEST_ENTRY(declarative_imperative_animation_denial_requests_permission_with_exact_error) \

@@ -244,7 +244,7 @@ static bool mouse_drop_action_warp_capacity_available(struct view *dst_view, str
     struct window_node *dst_node = view_find_window_node(dst_view, dst_window->id);
     if (!dst_node) return false;
 
-    if (dst_view->layout == VIEW_STACK && dst_view->root->window_count >= NODE_MAX_WINDOW_COUNT) {
+    if (view_layout_is_single_root(dst_view->layout) && dst_view->root->window_count >= NODE_MAX_WINDOW_COUNT) {
         return false;
     }
 
@@ -302,6 +302,11 @@ void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, s
     window_manager_adjust_layer(src_window, LAYER_BELOW);
     scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
 
+    if (view_layout_is_accordion(dst_view->layout)) {
+        view_update(dst_view);
+        view_flush(dst_view);
+        return;
+    }
     if (dst_node->zoom) {
         window_manager_animate_window((struct window_capture) { src_window, dst_node->zoom->area.x, dst_node->zoom->area.y, dst_node->zoom->area.w, dst_node->zoom->area.h });
     } else {
@@ -331,6 +336,8 @@ void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, st
         }
     }
 
+    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+    if (dst_view != src_view && view_layout_is_accordion(dst_view->layout)) view_update(dst_view);
     struct window_capture *window_list = NULL;
     window_node_capture_windows(src_node, &window_list);
     window_node_capture_windows(dst_node, &window_list);
@@ -390,6 +397,8 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
     }
 
     window_manager_add_managed_window(wm, src_window, dst_view);
+    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+    if (dst_view != src_view && view_layout_is_accordion(dst_view->layout)) view_update(dst_view);
 
     struct window_capture *window_list = NULL;
 
@@ -407,6 +416,7 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
 void mouse_drop_no_target(struct space_manager *sm, struct window_manager *wm, struct view *src_view, struct view *dst_view, struct window *window, struct window_node *node)
 {
     if (src_view->sid == dst_view->sid) {
+        if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
         window_node_flush(node);
     } else {
         space_manager_untile_window(src_view, window);

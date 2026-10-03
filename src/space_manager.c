@@ -137,6 +137,11 @@ void space_manager_untile_window(struct view *view, struct window *window)
 
     window_manager_adjust_layer(window, LAYER_NORMAL);
     struct window_node *node = view_remove_window_node(view, window);
+    if (view_layout_is_accordion(view->layout)) {
+        view_update(view);
+        view_flush(view);
+        return;
+    }
     if (!node) return;
 
     if (space_is_visible(view->sid)) {
@@ -207,7 +212,7 @@ static bool space_manager_layout_inventory_is_valid(struct window_manager *wm, e
 {
     if (layout == VIEW_FLOAT) return true;
     if (!inventory_succeeded || window_count < 0 || window_count == INT_MAX || (window_count && !window_list)) return false;
-    if (layout == VIEW_STACK) {
+    if (view_layout_is_single_root(layout)) {
         int manageable_count = 0;
         for (int i = 0; i < window_count; ++i) {
             struct window *window = window_manager_find_window(wm, window_list[i]);
@@ -368,6 +373,20 @@ void space_manager_set_window_gap_for_all_spaces(struct space_manager *sm, int w
             view->window_gap = window_gap;
             view_update(view);
             view_flush(view);
+        }
+    })
+}
+
+void space_manager_set_accordion_padding_for_all_spaces(struct space_manager *sm, int accordion_padding)
+{
+    sm->accordion_padding = accordion_padding;
+    table_for (struct view *view, sm->view, {
+        if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) {
+            view->accordion_padding = accordion_padding;
+            if (view_layout_is_accordion(view->layout)) {
+                view_update(view);
+                view_flush(view);
+            }
         }
     })
 }
@@ -540,7 +559,10 @@ struct view *space_manager_tile_window_on_space_with_insertion_point(struct spac
         return NULL;
     }
 
-    if (space_is_visible(view->sid)) {
+    if (view_layout_is_accordion(view->layout)) {
+        view_update(view);
+        view_flush(view);
+    } else if (space_is_visible(view->sid)) {
         window_node_flush(node);
     } else {
         view_set_flag(view, VIEW_IS_DIRTY);
@@ -1215,6 +1237,7 @@ void space_manager_handle_display_add(struct space_manager *sm, uint32_t did)
 void space_manager_begin(struct space_manager *sm)
 {
     sm->layout = VIEW_FLOAT;
+    sm->accordion_padding = 30;
     sm->split_ratio = 0.5f;
     sm->auto_balance = SPLIT_NONE;
     sm->split_type = SPLIT_AUTO;
