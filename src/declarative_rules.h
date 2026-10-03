@@ -4,6 +4,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include "rule.h"
 #include "declarative_config.h"
+#include "declarative_space_identity.h"
 
 struct declarative_rule_display_entry
 {
@@ -22,6 +23,7 @@ struct declarative_rule_space_entry
     uint32_t parent_did;
     const char *parent_display_uuid;
     int parent_display_ordinal;
+    struct declarative_space_identity identity;
 };
 
 struct declarative_rule_topology_snapshot

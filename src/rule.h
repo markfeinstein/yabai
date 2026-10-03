@@ -1,6 +1,8 @@
 #ifndef RULE_H
 #define RULE_H
 
+#include "declarative_space_identity.h"
+
 #define RULE_PROP_UD  0
 #define RULE_PROP_ON  1
 #define RULE_PROP_OFF 2
@@ -59,7 +61,8 @@ struct rule_fold_context;
 
 bool rule_fold_context_target_is_valid(const struct rule_fold_context *context,
                                        enum rule_target_kind target, uint64_t id,
-                                       const char *uuid, int kind);
+                                       const char *uuid, int kind,
+                                       const struct declarative_space_identity *identity);
 
 struct rule_warning_state
 {
@@ -107,6 +110,7 @@ struct rule
     char *display_uuid;
     char *space_uuid;
     int expected_space_kind;
+    struct declarative_space_identity space_identity;
     struct rule_warning_state *warning_state;
 };
 

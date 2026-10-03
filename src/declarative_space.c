@@ -191,9 +191,22 @@ bool declarative_space_resolve_policy(const struct declarative_config_model *nat
     return true;
 }
 
+static bool declarative_space_public_identity(const char *uuid, uint64_t sid, int index, bool is_user_space,
+                                              struct declarative_space_identity *identity)
+{
+    if (!uuid || !uuid[0] || !sid || index <= 0 || !identity || strlen(uuid) >= sizeof(identity->uuid)) return false;
+    *identity = (struct declarative_space_identity) {
+        .has_uuid = true, .sid = sid, .kind = is_user_space ? 0 : 2,
+        .mission_control_ordinal = index - 1
+    };
+    memcpy(identity->uuid, uuid, strlen(uuid) + 1);
+    identity->fingerprint = declarative_space_identity_fingerprint(identity);
+    return declarative_space_identity_valid(identity);
+}
+
 static bool declarative_space_uuid_matches(const struct view *view, const char *uuid)
 {
-    if (!view || !view->uuid || !uuid || !uuid[0]) return false;
+    if (!view || !view->uuid || !uuid) return false;
     CFStringRef candidate = CFStringCreateWithCString(NULL, uuid, kCFStringEncodingUTF8);
     if (!candidate) return false;
     bool matches = CFEqual(view->uuid, candidate);
@@ -229,11 +242,12 @@ struct declarative_space_identity_index
     const char *uuid;
     const void *view;
     bool is_user_space;
+    struct declarative_space_identity identity;
 };
 
 static int declarative_space_compare_identity_sid(const void *left, const void *right);
 static int declarative_space_compare_identity_index(const void *left, const void *right);
-static int declarative_space_compare_identity_uuid(const void *left, const void *right);
+static int declarative_space_compare_identity_fingerprint(const void *left, const void *right);
 static int declarative_space_compare_identity_view(const void *left, const void *right);
 static bool declarative_space_identity_unique(struct declarative_space_identity_index *items, size_t count,
                                                int (*compare)(const void *, const void *));
@@ -260,22 +274,46 @@ bool declarative_space_validate_targets(const struct declarative_space_target *t
     for (size_t i = 0; i < target_count; ++i) {
         const struct declarative_space_target *target = &targets[i];
         const struct declarative_space_topology_entry *entry = &topology[i];
-        if (!target->view || !target->sid || target->index <= 0 || !target->uuid || !target->uuid[0] ||
+        struct declarative_space_identity target_identity = target->identity;
+        struct declarative_space_identity entry_identity = entry->identity;
+        if (!declarative_space_identity_valid(&target_identity)) {
+            (void) declarative_space_public_identity(target->uuid, target->sid, target->index,
+                                                     target->is_user_space, &target_identity);
+        }
+        if (!declarative_space_identity_valid(&entry_identity)) {
+            (void) declarative_space_public_identity(entry->uuid, entry->sid, entry->index,
+                                                     entry->is_user_space, &entry_identity);
+        }
+        if (!target->view || !target->sid || target->index <= 0 || !target->uuid ||
             !declarative_space_uuid_matches(target->view, target->uuid) || target->view->sid != target->sid ||
-            !entry->sid || entry->index <= 0 || !entry->uuid || !entry->uuid[0]) goto fail;
+            !entry->sid || entry->index <= 0 || !entry->uuid ||
+            !declarative_space_identity_valid(&target_identity) ||
+            !declarative_space_identity_valid(&entry_identity) ||
+            target_identity.has_uuid != (target->uuid[0] != '\0') ||
+            entry_identity.has_uuid != (entry->uuid[0] != '\0') ||
+            strcmp(target_identity.uuid, target->uuid) != 0 ||
+            strcmp(entry_identity.uuid, entry->uuid) != 0 ||
+            !declarative_space_identity_equal(&target_identity, &entry_identity) ||
+            (declarative_space_identity_valid(&target->view->declarative_identity) &&
+             !target->view->declarative_identity.has_uuid &&
+             !declarative_space_identity_equal(&target->view->declarative_identity, &target_identity))) goto fail;
         target_index[i] = (struct declarative_space_identity_index) {
-            target->sid, target->index, target->uuid, target->view, target->is_user_space
+            .sid = target->sid, .index = target->index, .uuid = target->uuid,
+            .view = target->view, .is_user_space = target->is_user_space,
+            .identity = target_identity
         };
         topology_index[i] = (struct declarative_space_identity_index) {
-            entry->sid, entry->index, entry->uuid, NULL, entry->is_user_space
+            .sid = entry->sid, .index = entry->index, .uuid = entry->uuid,
+            .view = NULL, .is_user_space = entry->is_user_space,
+            .identity = entry_identity
         };
     }
     if (!declarative_space_identity_unique(target_index, target_count, declarative_space_compare_identity_view) ||
         !declarative_space_identity_unique(target_index, target_count, declarative_space_compare_identity_index) ||
-        !declarative_space_identity_unique(target_index, target_count, declarative_space_compare_identity_uuid) ||
+        !declarative_space_identity_unique(target_index, target_count, declarative_space_compare_identity_fingerprint) ||
         !declarative_space_identity_unique(target_index, target_count, declarative_space_compare_identity_sid) ||
         !declarative_space_identity_unique(topology_index, topology_count, declarative_space_compare_identity_index) ||
-        !declarative_space_identity_unique(topology_index, topology_count, declarative_space_compare_identity_uuid) ||
+        !declarative_space_identity_unique(topology_index, topology_count, declarative_space_compare_identity_fingerprint) ||
         !declarative_space_identity_unique(topology_index, topology_count, declarative_space_compare_identity_sid)) goto fail;
     /* Both arrays are now SID-sorted and can be checked and joined in one pass. */
     for (size_t i = 0; i < target_count; ++i) {
@@ -283,6 +321,7 @@ bool declarative_space_validate_targets(const struct declarative_space_target *t
         const struct declarative_space_identity_index *entry = declarative_space_identity_find_sid(topology_index, topology_count, target->sid);
         if (!entry || entry->index != target->index || entry->is_user_space != target->is_user_space ||
             strcmp(entry->uuid, target->uuid) != 0 ||
+            !declarative_space_identity_equal(&entry->identity, &target->identity) ||
             table_find((struct table *) current_views, (void *) &target->sid) != target->view) goto fail;
     }
     declarative_space_free(target_index);
@@ -312,11 +351,12 @@ static int declarative_space_compare_identity_index(const void *left, const void
     return (a > b) - (a < b);
 }
 
-static int declarative_space_compare_identity_uuid(const void *left, const void *right)
+static int declarative_space_compare_identity_fingerprint(const void *left, const void *right)
 {
     DECLARATIVE_SPACE_INDEX_OPERATION();
-    return strcmp(((const struct declarative_space_identity_index *) left)->uuid,
-                  ((const struct declarative_space_identity_index *) right)->uuid);
+    uint64_t a = ((const struct declarative_space_identity_index *) left)->identity.fingerprint;
+    uint64_t b = ((const struct declarative_space_identity_index *) right)->identity.fingerprint;
+    return (a > b) - (a < b);
 }
 
 static int declarative_space_compare_identity_view(const void *left, const void *right)
@@ -561,6 +601,7 @@ void declarative_space_capture_view_before(const struct view *view,
 {
     if (!view || !out) return;
     *out = (struct declarative_space_view_before_image) {
+        .identity = view->declarative_identity,
         .layout = view->layout,
         .top_padding = view->top_padding,
         .bottom_padding = view->bottom_padding,
@@ -578,7 +619,10 @@ bool declarative_space_view_before_matches(const struct view *view,
                                             const struct declarative_space_view_before_image *image)
 {
     if (!view || !image) return false;
-    return view->layout == image->layout &&
+    bool identity_matches = (!declarative_space_identity_valid(&view->declarative_identity) &&
+                             !declarative_space_identity_valid(&image->identity)) ||
+                            declarative_space_identity_equal(&view->declarative_identity, &image->identity);
+    return identity_matches && view->layout == image->layout &&
            view->top_padding == image->top_padding &&
            view->bottom_padding == image->bottom_padding &&
            view->left_padding == image->left_padding &&
@@ -1875,6 +1919,12 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
         memcpy(out->targets[i].owned_uuid, targets[i].uuid, uuid_length + 1);
         out->targets[i].target = targets[i];
         out->targets[i].target.uuid = out->targets[i].owned_uuid;
+        if (!declarative_space_identity_valid(&out->targets[i].target.identity)) {
+            (void) declarative_space_public_identity(out->targets[i].target.uuid, out->targets[i].target.sid,
+                                                     out->targets[i].target.index,
+                                                     out->targets[i].target.is_user_space,
+                                                     &out->targets[i].target.identity);
+        }
         if (!declarative_space_resolve_policy(native, runtime, defaults, &targets[i], mode, &out->targets[i].effective)) goto fail;
         memcpy(out->targets[i].ownership_before.view, targets[i].view->runtime_ownership, sizeof(out->targets[i].ownership_before.view));
         out->targets[i].ownership_before.legacy_flags = targets[i].view->flags;
@@ -2136,6 +2186,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             view->right_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer ||
             view->window_gap != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer;
         if (target->changed) view->root = target->final_root;
+        view->declarative_identity = target->target.identity;
         view->layout = declarative_space_final_layout(target);
         view->top_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_TOP_PADDING].value.integer;
         view->bottom_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_BOTTOM_PADDING].value.integer;

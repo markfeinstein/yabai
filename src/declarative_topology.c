@@ -59,16 +59,40 @@ static void declarative_topology_disown(void *value)
 #endif
 }
 
-static char *declarative_topology_copy_cfstring(CFStringRef value)
+static char *declarative_topology_copy_cfstring_allow_empty(CFStringRef value, bool allow_empty)
 {
-    if (!cf_is_type(value, CFStringGetTypeID()) || CFStringGetLength(value) == 0) return NULL;
+    if (!cf_is_type(value, CFStringGetTypeID()) || (!allow_empty && CFStringGetLength(value) == 0)) return NULL;
     char bounded[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
-    if (!CFStringGetCString(value, bounded, sizeof(bounded), kCFStringEncodingUTF8) || bounded[0] == '\0') return NULL;
+    if (!CFStringGetCString(value, bounded, sizeof(bounded), kCFStringEncodingUTF8) ||
+        (!allow_empty && bounded[0] == '\0')) return NULL;
     size_t length = strlen(bounded);
     char *copy = declarative_topology_calloc(length + 1, 1);
     if (!copy) return NULL;
     memcpy(copy, bounded, length + 1);
     return copy;
+}
+
+static char *declarative_topology_copy_cfstring(CFStringRef value)
+{
+    return declarative_topology_copy_cfstring_allow_empty(value, false);
+}
+
+static bool declarative_topology_identity_init(struct declarative_space_identity *identity,
+                                               const char *uuid,
+                                               const struct declarative_topology_display *display,
+                                               uint64_t sid, int kind, int ordinal)
+{
+    if (!identity || !uuid || !display || !display->uuid || strlen(uuid) >= sizeof(identity->uuid) ||
+        strlen(display->uuid) >= sizeof(identity->parent_display_uuid)) return false;
+    *identity = (struct declarative_space_identity) {
+        .has_uuid = uuid[0] != '\0', .parent_did = display->did,
+        .parent_display_ordinal = display->managed_ordinal, .sid = sid,
+        .kind = kind, .mission_control_ordinal = ordinal
+    };
+    memcpy(identity->uuid, uuid, strlen(uuid) + 1);
+    memcpy(identity->parent_display_uuid, display->uuid, strlen(display->uuid) + 1);
+    identity->fingerprint = declarative_space_identity_fingerprint(identity);
+    return declarative_space_identity_valid(identity);
 }
 
 static uint64_t declarative_topology_hash_bytes(uint64_t hash, const void *bytes, size_t length)
@@ -99,6 +123,8 @@ static uint64_t declarative_topology_fingerprint(const struct declarative_topolo
         const struct declarative_topology_space *space = &topology->spaces[i];
         hash = declarative_topology_hash_bytes(hash, &space->sid, sizeof(space->sid));
         hash = declarative_topology_hash_bytes(hash, space->uuid, strlen(space->uuid) + 1);
+        hash = declarative_topology_hash_bytes(hash, &space->identity.fingerprint,
+                                               sizeof(space->identity.fingerprint));
         hash = declarative_topology_hash_bytes(hash, &space->kind, sizeof(space->kind));
         hash = declarative_topology_hash_bytes(hash, &space->mission_control_ordinal, sizeof(space->mission_control_ordinal));
         hash = declarative_topology_hash_bytes(hash, &space->parent_display_index, sizeof(space->parent_display_index));
@@ -222,14 +248,20 @@ static bool declarative_topology_parse_observation(const struct declarative_topo
             bool kind_ok = ops->space_kind(sid, &kind, ops->context);
             struct declarative_topology_space *space = &out->spaces[ordinal];
             space->sid = sid;
-            space->uuid = declarative_topology_copy_cfstring(uuid);
+            space->uuid = declarative_topology_copy_cfstring_allow_empty(uuid, true);
             if (uuid) CFRelease(uuid);
             space->kind = kind;
             space->mission_control_ordinal = (int) ordinal;
             space->parent_display_index = (size_t) i;
-            if (!kind_ok || kind < 0 || !space->uuid) goto out;
+            if (!kind_ok || kind < 0 || !space->uuid ||
+                !declarative_topology_identity_init(&space->identity, space->uuid, &out->displays[i],
+                                                    sid, kind, (int) ordinal)) goto out;
             for (size_t k = 0; k < ordinal; ++k) {
-                if (out->spaces[k].sid == sid || strcmp(out->spaces[k].uuid, space->uuid) == 0) goto out;
+                bool duplicate_uuid = space->uuid[0] && out->spaces[k].uuid[0] &&
+                                      strcmp(out->spaces[k].uuid, space->uuid) == 0;
+                bool same_identity = declarative_space_identity_equal(&out->spaces[k].identity, &space->identity);
+                bool collision = out->spaces[k].identity.fingerprint == space->identity.fingerprint && !same_identity;
+                if (out->spaces[k].sid == sid || duplicate_uuid || same_identity || collision) goto out;
             }
             ++ordinal;
         }
@@ -278,11 +310,23 @@ static bool declarative_topology_validate_owned(const struct declarative_topolog
     }
     for (size_t i = 0; i < topology->space_count; ++i) {
         const struct declarative_topology_space *space = &topology->spaces[i];
-        if (!space->sid || !space->uuid || !space->uuid[0] || space->kind < 0 ||
-            space->mission_control_ordinal != (int) i || space->parent_display_index >= topology->display_count) return false;
+        if (!space->sid || !space->uuid || space->kind < 0 ||
+            space->mission_control_ordinal != (int) i || space->parent_display_index >= topology->display_count ||
+            !declarative_space_identity_valid(&space->identity)) return false;
+        const struct declarative_topology_display *parent = &topology->displays[space->parent_display_index];
+        if (space->identity.has_uuid != (space->uuid[0] != '\0') ||
+            strcmp(space->identity.uuid, space->uuid) != 0 || space->identity.sid != space->sid ||
+            space->identity.kind != space->kind || space->identity.mission_control_ordinal != space->mission_control_ordinal ||
+            space->identity.parent_did != parent->did ||
+            space->identity.parent_display_ordinal != parent->managed_ordinal ||
+            strcmp(space->identity.parent_display_uuid, parent->uuid) != 0) return false;
         has_space[space->parent_display_index] = true;
         for (size_t j = 0; j < i; ++j) {
-            if (topology->spaces[j].sid == space->sid || strcmp(topology->spaces[j].uuid, space->uuid) == 0) return false;
+            bool duplicate_uuid = space->uuid[0] && topology->spaces[j].uuid[0] &&
+                                  strcmp(topology->spaces[j].uuid, space->uuid) == 0;
+            bool same_identity = declarative_space_identity_equal(&topology->spaces[j].identity, &space->identity);
+            bool collision = topology->spaces[j].identity.fingerprint == space->identity.fingerprint && !same_identity;
+            if (topology->spaces[j].sid == space->sid || duplicate_uuid || same_identity || collision) return false;
         }
     }
     for (size_t i = 0; i < topology->display_count; ++i) if (!has_space[i]) return false;
@@ -314,7 +358,8 @@ bool declarative_topology_equal(const struct declarative_topology *a,
     for (size_t i = 0; i < a->space_count; ++i) {
         const struct declarative_topology_space *x = &a->spaces[i], *y = &b->spaces[i];
         if (x->sid != y->sid || x->kind != y->kind || x->mission_control_ordinal != y->mission_control_ordinal ||
-            x->parent_display_index != y->parent_display_index || strcmp(x->uuid, y->uuid) != 0) return false;
+            x->parent_display_index != y->parent_display_index || strcmp(x->uuid, y->uuid) != 0 ||
+            !declarative_space_identity_equal(&x->identity, &y->identity)) return false;
     }
     return true;
 }
@@ -454,7 +499,7 @@ bool declarative_topology_rule_snapshot(const struct declarative_topology *topol
             .sid = source->sid, .uuid = source->uuid, .kind = source->kind,
             .mission_control_ordinal = source->mission_control_ordinal,
             .parent_did = parent->did, .parent_display_uuid = parent->uuid,
-            .parent_display_ordinal = parent->managed_ordinal
+            .parent_display_ordinal = parent->managed_ordinal, .identity = source->identity
         };
     }
     *snapshot = (struct declarative_rule_topology_snapshot) {
@@ -497,7 +542,8 @@ bool declarative_topology_space_snapshot(const struct declarative_topology *topo
     for (size_t i = 0; i < topology->space_count; ++i) {
         (*entries)[i] = (struct declarative_space_topology_entry) {
             .sid = topology->spaces[i].sid, .index = topology->spaces[i].mission_control_ordinal + 1,
-            .uuid = topology->spaces[i].uuid, .is_user_space = topology->spaces[i].kind == 0
+            .uuid = topology->spaces[i].uuid, .is_user_space = topology->spaces[i].kind == 0,
+            .identity = topology->spaces[i].identity
         };
     }
     *count = topology->space_count;
@@ -573,6 +619,7 @@ static struct view *declarative_detached_view_create(const struct declarative_to
         return NULL;
     }
     view->sid = space->sid;
+    view->declarative_identity = space->identity;
     view->root = root;
     view_set_flag(view, VIEW_ENABLE_PADDING);
     view_set_flag(view, VIEW_ENABLE_GAP);

@@ -297,7 +297,8 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         struct view *view = startup->detached_views.views[i];
         struct declarative_space_target target = {
             .view = view, .sid = entries[i].sid, .index = entries[i].index,
-            .uuid = entries[i].uuid, .is_user_space = entries[i].is_user_space
+            .uuid = entries[i].uuid, .is_user_space = entries[i].is_user_space,
+            .identity = entries[i].identity
         };
         struct declarative_space_effective effective = {0};
         if (!declarative_space_resolve_policy(startup->model, &empty_runtime, &defaults, &target,
@@ -802,11 +803,12 @@ static bool declarative_reload_prepare(struct declarative_reload_transaction *tr
     if (!transaction->targets && transaction->target_count) return declarative_reload_fail(transaction, "Space target allocation failed");
     for (size_t i = 0; i < transaction->target_count; ++i) {
         struct declarative_space_topology_entry *entry = &transaction->space_topology[i];
-        struct view *view = space_manager_find_view(&g_space_manager, entry->sid);
+        struct view *view = table_find(&g_space_manager.view, &entry->sid);
         if (!view) return declarative_reload_fail(transaction, "captured Space has no installed view");
         transaction->targets[i] = (struct declarative_space_target) {
             .view = view, .sid = entry->sid, .index = entry->index,
-            .uuid = entry->uuid, .is_user_space = entry->is_user_space
+            .uuid = entry->uuid, .is_user_space = entry->is_user_space,
+            .identity = entry->identity
         };
     }
     return true;
@@ -824,7 +826,7 @@ static struct declarative_space_defaults declarative_reconcile_view_defaults(voi
     defaults.focused_window_id = g_window_manager.focused_window_id;
 
     /* Gap enablement remains per-view; preparation snapshots each view's live flag. */
-    struct view *current = space_manager_find_view(&g_space_manager, g_space_manager.current_space_id);
+    struct view *current = table_find(&g_space_manager.view, &g_space_manager.current_space_id);
     defaults.window_gap_enabled = !current || view_check_flag(current, VIEW_ENABLE_GAP);
     return defaults;
 }
@@ -894,11 +896,12 @@ static bool declarative_configuration_reconcile_with_ops(const struct declarativ
     targets = declarative_install_calloc(count, sizeof(*targets));
     if (!targets && count) goto out;
     for (size_t i = 0; i < count; ++i) {
-        struct view *view = space_manager_find_view(&g_space_manager, entries[i].sid);
+        struct view *view = table_find(&g_space_manager.view, &entries[i].sid);
         if (!view) goto out;
         targets[i] = (struct declarative_space_target) {
             .view = view, .sid = entries[i].sid, .index = entries[i].index,
-            .uuid = entries[i].uuid, .is_user_space = entries[i].is_user_space
+            .uuid = entries[i].uuid, .is_user_space = entries[i].is_user_space,
+            .identity = entries[i].identity
         };
     }
     struct declarative_space_defaults defaults = declarative_reconcile_view_defaults();
@@ -924,6 +927,11 @@ out:
     declarative_topology_rule_snapshot_destroy(owned_displays, owned_spaces);
     declarative_install_free(targets);
     declarative_topology_space_snapshot_destroy(entries);
+    /* Rule target validation must follow the observed topology even when Space
+     * policy cannot safely reuse an installed UUID-less view. The prepared
+     * topology/context pair is complete here; publishing it does not alter the
+     * Space forest, managed-window table, or runtime ownership. */
+    if (!publication.published && fold_context) declarative_reconcile_publish(&publication);
     declarative_rule_fold_context_destroy(fold_context);
     declarative_topology_destroy(&topology);
     if (publication.published) {

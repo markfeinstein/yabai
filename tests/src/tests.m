@@ -1865,6 +1865,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_space_phase3c_foreign_thread_precommit_is_rejected) \
     TEST_ENTRY(ffm_configured_and_effective_state_handles_nested_suspension_and_latest_updates) \
     TEST_ENTRY(declarative_topology_capture_is_owned_strict_and_coherent) \
+    TEST_ENTRY(declarative_topology_uuidless_remap_is_never_admitted) \
+    TEST_ENTRY(declarative_topology_uuidless_live_shape_has_private_stable_identity) \
+    TEST_ENTRY(declarative_topology_uuidless_swap_keeps_identity_with_logical_space) \
     TEST_ENTRY(declarative_topology_rejects_malformed_incomplete_zero_and_ambiguous_observations) \
     TEST_ENTRY(declarative_topology_active_pair_is_strict_parented_and_stable) \
     TEST_ENTRY(declarative_topology_query_failures_leave_no_partial_capture) \
@@ -1883,6 +1886,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
     TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
+    TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
     TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
     TEST_ENTRY(declarative_reload_generation_zero_rediscovers_then_pins_installed_path) \
     TEST_ENTRY(declarative_reporter_bounds_redacts_and_escapes_structural_fields) \

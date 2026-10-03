@@ -730,6 +730,17 @@ static inline bool space_manager_is_space_last_user_space(uint64_t sid)
     return result;
 }
 
+static void space_manager_swap_view_identity(struct view *a_view, struct view *b_view)
+{
+    CFStringRef uuid = a_view->uuid;
+    a_view->uuid = b_view->uuid;
+    b_view->uuid = uuid;
+
+    struct declarative_space_identity identity = a_view->declarative_identity;
+    a_view->declarative_identity = b_view->declarative_identity;
+    b_view->declarative_identity = identity;
+}
+
 static enum space_op_error space_manager_swap_space_with_space_on_display(uint32_t a_did, uint64_t a_sid, uint32_t b_did, uint64_t b_sid)
 {
     if (display_manager_display_is_animating(a_did)) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
@@ -754,9 +765,7 @@ static enum space_op_error space_manager_swap_space_with_space_on_display(uint32
     a_view->sid = b_sid;
     b_view->sid = a_sid;
 
-    CFStringRef tmp = a_view->uuid;
-    a_view->uuid    = b_view->uuid;
-    b_view->uuid    = tmp;
+    space_manager_swap_view_identity(a_view, b_view);
 
     table_add(&g_space_manager.view, &a_sid, b_view);
     table_add(&g_space_manager.view, &b_sid, a_view);
@@ -1142,6 +1151,11 @@ bool space_manager_refresh_application_windows(struct space_manager *sm)
     return window_count != g_window_manager.window.count;
 }
 
+static bool space_manager_uuid_can_remap(CFStringRef uuid)
+{
+    return cf_is_type(uuid, CFStringGetTypeID()) && CFStringGetLength(uuid) > 0;
+}
+
 void space_manager_handle_display_add(struct space_manager *sm, uint32_t did)
 {
     int space_count;
@@ -1162,6 +1176,10 @@ void space_manager_handle_display_add(struct space_manager *sm, uint32_t did)
         uint64_t sid = space_list[i];
         CFStringRef uuid = SLSSpaceCopyName(g_connection, sid);
         if (!uuid) continue;
+        if (!space_manager_uuid_can_remap(uuid)) {
+            CFRelease(uuid);
+            continue;
+        }
 
         for (int j = 0; j < list_count; ++j) {
             CFStringRef view_uuid = uuid_list[j];

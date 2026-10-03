@@ -10,6 +10,7 @@
 
 #include "declarative_rules.h"
 #include "declarative_space.h"
+#include "declarative_space_identity.h"
 #include "view.h"
 
 struct declarative_topology_display
@@ -27,6 +28,7 @@ struct declarative_topology_space
     int kind;
     int mission_control_ordinal;
     size_t parent_display_index;
+    struct declarative_space_identity identity;
 };
 
 struct declarative_topology

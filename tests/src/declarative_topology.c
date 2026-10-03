@@ -11,6 +11,7 @@ struct declarative_topology_fixture
     bool zero_did;
     bool invalid_bounds;
     uint64_t missing_uuid_sid;
+    uint64_t empty_uuid_sid;
     uint64_t missing_kind_sid;
     uint64_t replacement_uuid_sid;
     const char *replacement_uuid;
@@ -69,6 +70,16 @@ static CFArrayRef declarative_topology_test_topology(CFStringRef a, const uint64
     CFArrayRef result = CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
     CFRelease(first);
     CFRelease(second);
+    return result;
+}
+
+static CFArrayRef declarative_topology_test_single_topology(CFStringRef display_uuid,
+                                                            const uint64_t *sids, size_t count)
+{
+    CFDictionaryRef display = declarative_topology_test_display(display_uuid, sids, count);
+    const void *values[] = { display };
+    CFArrayRef result = CFArrayCreate(NULL, values, 1, &kCFTypeArrayCallBacks);
+    CFRelease(display);
     return result;
 }
 
@@ -169,6 +180,7 @@ static CFStringRef declarative_topology_test_space_uuid(uint64_t sid, void *cont
 {
     struct declarative_topology_fixture *fixture = context;
     if (fixture->missing_uuid_sid == sid) return NULL;
+    if (fixture->empty_uuid_sid == sid) return CFStringCreateCopy(NULL, CFSTR(""));
     if (fixture->replacement_uuid_sid == sid && fixture->replacement_uuid) {
         return CFStringCreateWithCString(NULL, fixture->replacement_uuid, kCFStringEncodingUTF8);
     }
@@ -240,6 +252,208 @@ TEST_FUNC(declarative_topology_capture_is_owned_strict_and_coherent,
     declarative_topology_destroy(&topology);
     declarative_topology_test_fixture_destroy(&fixture);
     TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);
+});
+
+TEST_FUNC(declarative_topology_uuidless_remap_is_never_admitted,
+{
+    TEST_CHECK(space_manager_uuid_can_remap(NULL), false);
+    TEST_CHECK(space_manager_uuid_can_remap(CFSTR("")), false);
+    TEST_CHECK(space_manager_uuid_can_remap(CFSTR("stable-space")), true);
+});
+
+TEST_FUNC(declarative_topology_uuidless_live_shape_has_private_stable_identity,
+{
+    struct declarative_topology_fixture fixture;
+    declarative_topology_test_fixture_init(&fixture, false);
+    for (int i = 0; i < 2; ++i) {
+        CFRelease(fixture.displays[i]);
+        CFRelease(fixture.topology[i]);
+    }
+    uint64_t sids[] = { 143, 1, 54, 53, 52, 51, 50, 48, 470 };
+    const void *display_values[] = { CFSTR("display-a") };
+    fixture.displays[0] = CFArrayCreate(NULL, display_values, 1, &kCFTypeArrayCallBacks);
+    fixture.displays[1] = CFRetain(fixture.displays[0]);
+    fixture.topology[0] = declarative_topology_test_single_topology(CFSTR("display-a"), sids, 9);
+    fixture.topology[1] = CFRetain(fixture.topology[0]);
+    fixture.active_display_count[0] = fixture.active_display_count[1] = 1;
+    fixture.active_displays[0][0] = fixture.active_displays[1][0] = 1;
+    fixture.active_did[0] = fixture.active_did[1] = 1;
+    fixture.active_sid[0] = fixture.active_sid[1] = 54;
+    fixture.empty_uuid_sid = 1;
+
+    struct declarative_topology_capture_ops ops = declarative_topology_test_ops(&fixture);
+    struct declarative_topology topology = {0};
+    TEST_CHECK(declarative_topology_capture(&ops, &topology), true);
+    TEST_CHECK(topology.space_count, 9U);
+    TEST_CHECK(strcmp(topology.spaces[1].uuid, ""), 0);
+    TEST_CHECK(topology.spaces[1].identity.has_uuid, false);
+    TEST_CHECK(topology.spaces[1].identity.sid, 1ULL);
+    TEST_CHECK(topology.spaces[1].identity.kind, 0);
+    TEST_CHECK(topology.spaces[1].identity.mission_control_ordinal, 1);
+    TEST_CHECK(topology.spaces[1].identity.parent_did, 1U);
+    TEST_CHECK(strcmp(topology.spaces[1].identity.parent_display_uuid, "display-a"), 0);
+    TEST_CHECK(declarative_space_identity_valid(&topology.spaces[1].identity), true);
+
+    struct declarative_space_defaults defaults = {
+        .layout = VIEW_BSP, .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
+        .window_placement = CHILD_SECOND, .window_insertion_point = INSERT_FOCUSED,
+        .window_zoom_persist = true
+    };
+    struct declarative_detached_view_table views = {0};
+    TEST_CHECK(declarative_detached_view_table_prepare(&topology, &defaults, &views), true);
+    char public_uuid[2] = { 'x', 0 };
+    TEST_CHECK(CFStringGetCString(views.views[1]->uuid, public_uuid, sizeof(public_uuid), kCFStringEncodingUTF8), true);
+    TEST_CHECK(strcmp(public_uuid, ""), 0);
+    TEST_CHECK(declarative_space_identity_equal(&views.views[1]->declarative_identity,
+                                                &topology.spaces[1].identity), true);
+
+    struct declarative_space_target policy_target = {
+        .view = views.views[1], .sid = 1, .index = 2, .uuid = "", .is_user_space = true,
+        .identity = topology.spaces[1].identity
+    };
+    struct declarative_space_policy policies[2] = {0};
+    policies[0].by_index = true;
+    policies[0].index = 2;
+    policies[0].settings[DECLARATIVE_CONFIG_LAYOUT] = (struct declarative_value) {
+        .present = true, .enumeration = VIEW_STACK
+    };
+    policies[1].uuid = "space-1";
+    policies[1].settings[DECLARATIVE_CONFIG_LAYOUT] = (struct declarative_value) {
+        .present = true, .enumeration = VIEW_FLOAT
+    };
+    struct declarative_config_model policy_model = { .spaces = policies, .space_count = 2 };
+    struct declarative_space_effective policy_effective = {0};
+    TEST_CHECK(declarative_space_resolve_policy(&policy_model, NULL, &defaults, &policy_target,
+                                                 DECLARATIVE_SPACE_PRESERVE_RUNTIME,
+                                                 &policy_effective), true);
+    TEST_CHECK(policy_effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_STACK);
+    policy_model.spaces = &policies[1];
+    policy_model.space_count = 1;
+    TEST_CHECK(declarative_space_resolve_policy(&policy_model, NULL, &defaults, &policy_target,
+                                                 DECLARATIVE_SPACE_PRESERVE_RUNTIME,
+                                                 &policy_effective), true);
+    TEST_CHECK(policy_effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_BSP);
+
+    struct declarative_rule_topology_snapshot snapshot = {0};
+    struct declarative_rule_display_entry *displays = NULL;
+    struct declarative_rule_space_entry *spaces = NULL;
+    TEST_CHECK(declarative_topology_rule_snapshot(&topology, &snapshot, &displays, &spaces), true);
+    struct declarative_rule_model model = { .space_present = true, .space_index = 2 };
+    model.matcher_present[0] = true;
+    model.matchers[0].pattern = "uuidless";
+    struct declarative_prepared_rules prepared = {0};
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &snapshot, DISPLAY_ARRANGEMENT_ORDER_DEFAULT,
+                                         1, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
+    struct rule_fold_context *context = declarative_rule_fold_context_create(&snapshot);
+    TEST_CHECK(context != NULL, true);
+    struct rule_effects effects = {0};
+    TEST_CHECK(rule_combine_rule_effects(&prepared.live[0], &effects, context), RULE_FOLD_OK);
+    TEST_CHECK(effects.sid, 1ULL);
+    struct declarative_space_identity changed = prepared.live[0].space_identity;
+    changed.mission_control_ordinal = 2;
+    changed.fingerprint = declarative_space_identity_fingerprint(&changed);
+    prepared.live[0].space_identity = changed;
+    effects = (struct rule_effects) {0};
+    TEST_CHECK(rule_combine_rule_effects(&prepared.live[0], &effects, context), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(effects.sid, 0ULL);
+
+    struct declarative_space_topology_entry *entries = NULL;
+    size_t entry_count = 0;
+    TEST_CHECK(declarative_topology_space_snapshot(&topology, &entries, &entry_count), true);
+    struct declarative_space_target targets[9] = {0};
+    for (size_t i = 0; i < entry_count; ++i) {
+        targets[i] = (struct declarative_space_target) {
+            .view = views.views[i], .sid = entries[i].sid, .index = entries[i].index,
+            .uuid = entries[i].uuid, .is_user_space = entries[i].is_user_space,
+            .identity = entries[i].identity
+        };
+    }
+    struct declarative_space_table_contract contract = {
+        .hash = views.view_table.hash, .cmp = views.view_table.cmp, .key_size = sizeof(uint64_t)
+    };
+    TEST_CHECK(declarative_space_validate_targets(targets, entry_count, entries, entry_count,
+                                                   &views.view_table, &contract), true);
+
+    struct declarative_space_identity uuidless_forgery = targets[1].identity;
+    uuidless_forgery.has_uuid = true;
+    snprintf(uuidless_forgery.uuid, sizeof(uuidless_forgery.uuid), "%s", "forged");
+    uuidless_forgery.fingerprint = declarative_space_identity_fingerprint(&uuidless_forgery);
+    targets[1].identity = uuidless_forgery;
+    TEST_CHECK(declarative_space_validate_targets(targets, entry_count, entries, entry_count,
+                                                   &views.view_table, &contract), false);
+    targets[1].identity = entries[1].identity;
+
+    struct declarative_space_identity uuid_forgery = targets[0].identity;
+    snprintf(uuid_forgery.uuid, sizeof(uuid_forgery.uuid), "%s", "forged");
+    uuid_forgery.fingerprint = declarative_space_identity_fingerprint(&uuid_forgery);
+    targets[0].identity = uuid_forgery;
+    TEST_CHECK(declarative_space_validate_targets(targets, entry_count, entries, entry_count,
+                                                   &views.view_table, &contract), false);
+    targets[0].identity = entries[0].identity;
+
+    entries[1].identity.has_uuid = true;
+    snprintf(entries[1].identity.uuid, sizeof(entries[1].identity.uuid), "%s", "forged-entry");
+    entries[1].identity.fingerprint = declarative_space_identity_fingerprint(&entries[1].identity);
+    TEST_CHECK(declarative_space_validate_targets(targets, entry_count, entries, entry_count,
+                                                   &views.view_table, &contract), false);
+
+    declarative_topology_space_snapshot_destroy(entries);
+    declarative_rule_fold_context_destroy(context);
+    declarative_prepared_rules_destroy(&prepared);
+    declarative_topology_rule_snapshot_destroy(displays, spaces);
+    declarative_detached_view_table_destroy(&views);
+    declarative_topology_destroy(&topology);
+    declarative_topology_test_fixture_destroy(&fixture);
+    TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);
+});
+
+TEST_FUNC(declarative_topology_uuidless_swap_keeps_identity_with_logical_space,
+{
+    struct view a = { .sid = 1, .uuid = CFStringCreateCopy(NULL, CFSTR("")) };
+    struct view b = { .sid = 2, .uuid = CFStringCreateCopy(NULL, CFSTR("space-2")) };
+    a.declarative_identity = (struct declarative_space_identity) {
+        .parent_did = 1, .parent_display_ordinal = 0, .sid = 1,
+        .kind = 0, .mission_control_ordinal = 1
+    };
+    snprintf(a.declarative_identity.parent_display_uuid,
+             sizeof(a.declarative_identity.parent_display_uuid), "%s", "display-a");
+    a.declarative_identity.fingerprint = declarative_space_identity_fingerprint(&a.declarative_identity);
+    b.declarative_identity = (struct declarative_space_identity) {
+        .has_uuid = true, .sid = 2, .kind = 0, .mission_control_ordinal = 2
+    };
+    snprintf(b.declarative_identity.uuid, sizeof(b.declarative_identity.uuid), "%s", "space-2");
+    b.declarative_identity.fingerprint = declarative_space_identity_fingerprint(&b.declarative_identity);
+    struct declarative_space_identity a_identity = a.declarative_identity;
+    struct declarative_space_identity b_identity = b.declarative_identity;
+    CFStringRef a_uuid = a.uuid;
+    CFStringRef b_uuid = b.uuid;
+
+    space_manager_swap_view_identity(&a, &b);
+    TEST_CHECK(a.uuid, b_uuid);
+    TEST_CHECK(b.uuid, a_uuid);
+    TEST_CHECK(declarative_space_identity_equal(&a.declarative_identity, &b_identity), true);
+    TEST_CHECK(declarative_space_identity_equal(&b.declarative_identity, &a_identity), true);
+
+    struct view c = { .sid = 3, .uuid = CFStringCreateCopy(NULL, CFSTR("")) };
+    struct view d = { .sid = 4, .uuid = CFStringCreateCopy(NULL, CFSTR("")) };
+    c.declarative_identity = a_identity;
+    c.declarative_identity.sid = 3;
+    c.declarative_identity.mission_control_ordinal = 3;
+    c.declarative_identity.fingerprint = declarative_space_identity_fingerprint(&c.declarative_identity);
+    d.declarative_identity = a_identity;
+    d.declarative_identity.sid = 4;
+    d.declarative_identity.mission_control_ordinal = 4;
+    d.declarative_identity.fingerprint = declarative_space_identity_fingerprint(&d.declarative_identity);
+    struct declarative_space_identity c_identity = c.declarative_identity;
+    struct declarative_space_identity d_identity = d.declarative_identity;
+    space_manager_swap_view_identity(&c, &d);
+    TEST_CHECK(declarative_space_identity_equal(&c.declarative_identity, &d_identity), true);
+    TEST_CHECK(declarative_space_identity_equal(&d.declarative_identity, &c_identity), true);
+
+    CFRelease(a.uuid);
+    CFRelease(b.uuid);
+    CFRelease(c.uuid);
+    CFRelease(d.uuid);
 });
 
 TEST_FUNC(declarative_topology_rejects_malformed_incomplete_zero_and_ambiguous_observations,

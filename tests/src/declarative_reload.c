@@ -202,7 +202,9 @@ static bool declarative_reload_test_setup(struct declarative_reload_fixture *fix
     menu_bar_manager_startup_staging_open();
     declarative_install_test_reset();
 
+    uint64_t empty_uuid_sid = fixture->topology.empty_uuid_sid;
     declarative_topology_test_fixture_init(&fixture->topology, false);
+    fixture->topology.empty_uuid_sid = empty_uuid_sid;
     fixture->topology_ops = declarative_topology_test_ops(&fixture->topology);
     struct declarative_startup_state startup = {
         .model = declarative_install_test_model(), .present = true
@@ -610,7 +612,7 @@ TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting
     struct rule_fold_context *context = declarative_installed.fold_context;
     uint64_t topology_fingerprint = declarative_installed.topology.fingerprint;
 
-    /* Every prepublication failure preserves the installed topology/context and Space state. */
+    /* A fold-context allocation failure cannot publish partial current topology. */
     uint64_t sid = 11;
     struct view *preserved_view = table_find(&g_space_manager.view, &sid);
     struct window_node *preserved_root = preserved_view ? preserved_view->root : NULL;
@@ -623,23 +625,27 @@ TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
 
+    /* Failures after complete topology/context preparation refresh rule
+     * validation but preserve the Space forest and runtime ownership. */
     declarative_space_test_fail_allocation_at(1);
     fixture.topology.observation = 0;
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     declarative_space_test_fail_allocation_at(0);
-    TEST_CHECK(declarative_installed.fold_context, context);
+    TEST_CHECK(declarative_installed.fold_context != context, true);
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
+    context = declarative_installed.fold_context;
 
     declarative_space_test_set_admission(9101, false);
     fixture.topology.observation = 0;
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     declarative_space_test_set_admission(9102, true);
-    TEST_CHECK(declarative_installed.fold_context, context);
+    TEST_CHECK(declarative_installed.fold_context != context, true);
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
+    context = declarative_installed.fold_context;
 
     /* Reusing the numeric SID with another identity makes only move/follow stale. */
     fixture.topology.replacement_uuid_sid = 11;
@@ -730,6 +736,127 @@ TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting
 
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
+TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer,
+{
+    static const char candidate_json[] =
+        "{\"version\":1,\"rules\":[{\"label\":\"uuidless-target\","
+        "\"match\":{\"app\":{\"pattern\":\"^App$\"}},"
+        "\"effects\":{\"space\":{\"index\":1},\"follow\":true,\"manage\":true}}]}";
+    struct declarative_reload_fixture fixture = {
+        .json = candidate_json, .path = "/tmp/reconcile-uuidless-drift.jsonc"
+    };
+    fixture.topology.empty_uuid_sid = 11;
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    uint64_t generation = declarative_installed.generation;
+    struct rule *native = &g_window_manager.rules[0];
+    TEST_CHECK(native->space_identity.has_uuid, false);
+    TEST_CHECK(native->space_identity.sid, 11ULL);
+    TEST_CHECK(native->space_identity.mission_control_ordinal, 0);
+
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    TEST_CHECK(view != NULL, true);
+    struct window_node *root = view ? view->root : NULL;
+    struct bucket **managed_buckets = g_window_manager.managed_window.buckets;
+    int managed_count = g_window_manager.managed_window.count;
+    struct declarative_runtime_cell ownership = {
+        .present = true, .source = DECLARATIVE_SETTING_RUNTIME_SPACE,
+        .value.integer = VIEW_STACK
+    };
+    if (view) view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT] = ownership;
+
+    uint64_t reordered[] = { 12, 11 };
+    uint64_t second[] = { 21 };
+    for (int i = 0; i < 2; ++i) {
+        CFRelease(fixture.topology.topology[i]);
+        fixture.topology.topology[i] = declarative_topology_test_topology(
+            CFSTR("display-a"), reordered, 2, CFSTR("display-b"), second, 1);
+        fixture.topology.active_sid[i] = 12;
+    }
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    struct rule_fold_context *context = declarative_installed.fold_context;
+    uint64_t topology_fingerprint = declarative_installed.topology.fingerprint;
+
+    declarative_rules_test_fail_allocation_at(1);
+    TEST_CHECK(declarative_reconcile_run(&ops), false);
+    declarative_rules_test_reset_allocator();
+    TEST_CHECK(declarative_installed.fold_context, context);
+    TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
+    TEST_CHECK(view ? view->root : NULL, root);
+
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    TEST_CHECK(declarative_reconcile_run(&ops), false);
+    TEST_CHECK(declarative_installed.generation, generation);
+    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(declarative_installed.topology.fingerprint != topology_fingerprint, true);
+    TEST_CHECK(view ? view->root : NULL, root);
+    TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
+    TEST_CHECK(g_window_manager.managed_window.count, managed_count);
+    TEST_CHECK(view ? memcmp(&view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT],
+                             &ownership, sizeof(ownership)) : -1, 0);
+    TEST_CHECK(native->effects.sid, 11ULL);
+    TEST_CHECK(native->space_identity.mission_control_ordinal, 0);
+
+    struct rule_effects effects = {0};
+    TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), false);
+    TEST_CHECK(effects.manage, RULE_PROP_ON);
+    TEST_CHECK(rule_acknowledge_stale_warning(native), true);
+    effects = (struct rule_effects) {0};
+    TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_OK);
+    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(effects.manage, RULE_PROP_ON);
+
+    uint64_t missing[] = { 12, 99 };
+    for (int i = 0; i < 2; ++i) {
+        CFRelease(fixture.topology.topology[i]);
+        fixture.topology.topology[i] = declarative_topology_test_topology(
+            CFSTR("display-a"), missing, 2, CFSTR("display-b"), second, 1);
+        fixture.topology.active_sid[i] = 12;
+    }
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    context = declarative_installed.fold_context;
+    int view_count = g_space_manager.view.count;
+    struct bucket **view_buckets = g_space_manager.view.buckets;
+    uint64_t missing_sid = 99;
+    TEST_CHECK(declarative_reconcile_run(&ops), false);
+    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(g_space_manager.view.count, view_count);
+    TEST_CHECK(g_space_manager.view.buckets, view_buckets);
+    TEST_CHECK(table_find(&g_space_manager.view, &missing_sid) == NULL, true);
+    TEST_CHECK(view ? view->root : NULL, root);
+    TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
+    TEST_CHECK(g_window_manager.managed_window.count, managed_count);
+    TEST_CHECK(view ? memcmp(&view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT],
+                             &ownership, sizeof(ownership)) : -1, 0);
+
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    context = declarative_installed.fold_context;
+    generation = declarative_installed.generation;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(declarative_installed.fold_context, context);
+    TEST_CHECK(declarative_installed.generation, generation);
+    TEST_CHECK(g_space_manager.view.count, view_count);
+    TEST_CHECK(g_space_manager.view.buckets, view_buckets);
+    TEST_CHECK(table_find(&g_space_manager.view, &missing_sid) == NULL, true);
+    TEST_CHECK(view ? view->root : NULL, root);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+    TEST_CHECK(declarative_rules_test_outstanding_allocations(), 0U);
+    TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);
 });
 
 TEST_FUNC(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers,

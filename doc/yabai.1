@@ -2,12 +2,12 @@
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
 .\" Generator: Asciidoctor 2.0.23
-.\"      Date: 2026-10-02
+.\"      Date: 2026-10-03
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
 .\"  Language: English
 .\"
-.TH "YABAI" "1" "2026-10-02" "Yabai" "Yabai Manual"
+.TH "YABAI" "1" "2026-10-03" "Yabai" "Yabai Manual"
 .ie \n(.g .ds Aq \(aq
 .el       .ds Aq '
 .ss \n[.ss] 0
@@ -683,7 +683,11 @@ The native \f(CRsticky\fP, \f(CRsub_layer\fP and \f(CRopacity\fP effects call th
 .sp
 Native display and Space targets use one\-based indices only. Display indices resolve using the candidate \f(CRdisplay_arrangement_order\fP; equal coordinates use the captured managed\-display ordinal as the final tie\-break. Space indices use the captured global Mission Control order. Runtime preparation strictly rejects malformed, incomplete, duplicate, zero\-ID or ambiguous display/Space topology instead of filtering it.
 .sp
-Targets resolve once per configuration generation to an internal ID and an identity fingerprint. A later topology change does not retarget a native rule. When the ID disappears, changes kind or maps to another UUID, that rule contributes no move or follow effect, still contributes its independent effects, and emits at most one warning for that rule and generation. A stale Space target does not fall back to a display target in the same rule. A later valid runtime target may still win during rule folding.
+Some macOS topologies expose a user Space whose public UUID is the empty string. Yabai preserves that empty value in query output and it cannot match a declarative UUID selector. Internally, index policy and native index rules use a private fallback identity containing the parent display UUID, display ID and managed ordinal, Space ID and kind, and global Mission Control ordinal. The fallback is never serialized as a public UUID. If any tuple field changes, the installed target becomes stale; yabai does not transfer a UUID\-less view, tree or runtime ownership to another Space ID. A coincidentally reused complete tuple cannot be distinguished because macOS supplied no durable UUID.
+.sp
+Topology reconciliation publishes a fully prepared current\-topology rule context even when fallback\-identity drift prevents safe Space\-policy or forest publication. Native rule targets therefore become stale immediately, while the existing Space roots, managed\-window table and runtime ownership remain unchanged. Yabai does not guess or transfer that state. A coherent Space lifecycle event, configuration reload or daemon restart may be required to construct fresh UUID\-less view state.
+.sp
+Targets resolve once per configuration generation to an internal ID and an identity fingerprint. A later topology change does not retarget a native rule. When the ID disappears, changes kind, maps to another UUID, or changes a UUID\-less fallback tuple, that rule contributes no move or follow effect, still contributes its independent effects, and emits at most one warning for that rule and generation. A stale Space target does not fall back to a display target in the same rule. A later valid runtime target may still win during rule folding.
 .sp
 Native rules remain before runtime rules. Runtime \f(CRrule \-\-add\fP cannot claim a native label, even after a native one\-shot has been consumed, and \f(CRrule \-\-remove\fP cannot remove a native rule. A successful reload recreates native one\-shots and retains runtime rules in their existing order. Direct reapply and delayed window\-created retries fold against the currently installed generation context. Reload changes registrations for future windows; it does not undo or reapply effects on existing windows. Use \f(CRrule \-\-apply\fP for an explicit reapplication where supported.
 .SS "Reload, topology and atomicity"

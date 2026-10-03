@@ -1,6 +1,8 @@
 #ifndef VIEW_H
 #define VIEW_H
 
+#include "declarative_space_identity.h"
+
 #define AX_ABS(a, b) (((a) - (b) < 0) ? (((a) - (b)) * -1) : ((a) - (b)))
 #define AX_DIFF(a, b) (AX_ABS(a, b) >= 1.5f)
 
@@ -207,6 +209,7 @@ struct view
 {
     CFStringRef uuid;
     uint64_t sid;
+    struct declarative_space_identity declarative_identity;
     struct window_node *root;
     uint32_t insertion_point;
     enum view_type layout;

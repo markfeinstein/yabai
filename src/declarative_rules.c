@@ -109,6 +109,22 @@ static bool declarative_rule_usable_uuid(const char *uuid)
     return uuid && uuid[0] != '\0';
 }
 
+static bool declarative_rule_space_identity(const struct declarative_rule_space_entry *space,
+                                            struct declarative_space_identity *identity)
+{
+    if (!space || !identity) return false;
+    *identity = space->identity;
+    if (declarative_space_identity_valid(identity)) return true;
+    if (!space->uuid || !space->uuid[0] || strlen(space->uuid) >= sizeof(identity->uuid)) return false;
+    *identity = (struct declarative_space_identity) {
+        .has_uuid = true, .sid = space->sid, .kind = space->kind,
+        .mission_control_ordinal = space->mission_control_ordinal
+    };
+    memcpy(identity->uuid, space->uuid, strlen(space->uuid) + 1);
+    identity->fingerprint = declarative_space_identity_fingerprint(identity);
+    return declarative_space_identity_valid(identity);
+}
+
 bool declarative_rule_topology_validate(const struct declarative_rule_topology_snapshot *snapshot)
 {
 #ifdef TESTS
@@ -135,10 +151,12 @@ bool declarative_rule_topology_validate(const struct declarative_rule_topology_s
     memset(display_has_space, 0, sizeof(display_has_space));
     for (size_t i = 0; i < snapshot->space_count; ++i) {
         const struct declarative_rule_space_entry *space = &snapshot->spaces[i];
-        if (!space->sid || !declarative_rule_usable_uuid(space->uuid) || space->kind < 0 ||
+        struct declarative_space_identity identity = {0};
+        if (!space->sid || !space->uuid || space->kind < 0 ||
             space->mission_control_ordinal < 0 || (size_t) space->mission_control_ordinal >= snapshot->space_count ||
             !space->parent_did || !declarative_rule_usable_uuid(space->parent_display_uuid) ||
-            space->parent_display_ordinal < 0 || (size_t) space->parent_display_ordinal >= snapshot->display_count) return false;
+            space->parent_display_ordinal < 0 || (size_t) space->parent_display_ordinal >= snapshot->display_count ||
+            !declarative_rule_space_identity(space, &identity)) return false;
 
         const struct declarative_rule_display_entry *parent = NULL;
         for (size_t j = 0; j < snapshot->display_count; ++j) {
@@ -146,11 +164,24 @@ bool declarative_rule_topology_validate(const struct declarative_rule_topology_s
             if (candidate->did == space->parent_did) parent = candidate;
         }
         if (!parent || parent->managed_ordinal != space->parent_display_ordinal ||
-            strcmp(parent->uuid, space->parent_display_uuid) != 0) return false;
+            strcmp(parent->uuid, space->parent_display_uuid) != 0 ||
+            identity.sid != space->sid || identity.kind != space->kind ||
+            identity.mission_control_ordinal != space->mission_control_ordinal ||
+            strcmp(identity.uuid, space->uuid) != 0 ||
+            (!identity.has_uuid &&
+             (identity.parent_did != space->parent_did ||
+              identity.parent_display_ordinal != space->parent_display_ordinal ||
+              strcmp(identity.parent_display_uuid, space->parent_display_uuid) != 0))) return false;
         display_has_space[parent->managed_ordinal] = true;
 
         for (size_t j = 0; j < i; ++j) {
-            if (snapshot->spaces[j].sid == space->sid || strcmp(snapshot->spaces[j].uuid, space->uuid) == 0 ||
+            bool duplicate_uuid = space->uuid[0] && snapshot->spaces[j].uuid[0] &&
+                                  strcmp(snapshot->spaces[j].uuid, space->uuid) == 0;
+            struct declarative_space_identity previous_identity = {0};
+            if (!declarative_rule_space_identity(&snapshot->spaces[j], &previous_identity)) return false;
+            bool same_identity = declarative_space_identity_equal(&previous_identity, &identity);
+            bool collision = previous_identity.fingerprint == identity.fingerprint && !same_identity;
+            if (snapshot->spaces[j].sid == space->sid || duplicate_uuid || same_identity || collision ||
                 snapshot->spaces[j].mission_control_ordinal == space->mission_control_ordinal) return false;
         }
     }
@@ -204,6 +235,7 @@ struct rule_fold_context *declarative_rule_fold_context_create(const struct decl
     }
     for (size_t i = 0; i < context->space_count; ++i) {
         context->spaces[i] = snapshot->spaces[i];
+        if (!declarative_rule_space_identity(&snapshot->spaces[i], &context->spaces[i].identity)) goto fail;
         context->spaces[i].uuid = declarative_rules_strdup(snapshot->spaces[i].uuid);
         context->spaces[i].parent_display_uuid = declarative_rules_strdup(snapshot->spaces[i].parent_display_uuid);
         if (!context->spaces[i].uuid || !context->spaces[i].parent_display_uuid) goto fail;
@@ -216,7 +248,8 @@ fail:
 }
 
 bool rule_fold_context_target_is_valid(const struct rule_fold_context *context, enum rule_target_kind target,
-                                       uint64_t id, const char *uuid, int kind)
+                                       uint64_t id, const char *uuid, int kind,
+                                       const struct declarative_space_identity *identity)
 {
     if (!context || !uuid || !id) return false;
     if (target == RULE_TARGET_DISPLAY) {
@@ -231,7 +264,13 @@ bool rule_fold_context_target_is_valid(const struct rule_fold_context *context, 
 #ifdef TESTS
             ++declarative_rules_target_lookup_count;
 #endif
-            if (context->spaces[i].sid == id) return context->spaces[i].kind == kind && strcmp(context->spaces[i].uuid, uuid) == 0;
+            if (context->spaces[i].sid == id) {
+                if (context->spaces[i].kind != kind) return false;
+                if (declarative_space_identity_valid(identity)) {
+                    return declarative_space_identity_equal(&context->spaces[i].identity, identity);
+                }
+                return uuid && uuid[0] && strcmp(context->spaces[i].uuid, uuid) == 0;
+            }
         }
     }
     return false;
@@ -277,6 +316,7 @@ static bool declarative_rule_clone(const struct rule *source, struct rule *desti
     destination->source_rule_index = source->source_rule_index;
     destination->generation = source->generation;
     destination->expected_space_kind = source->expected_space_kind;
+    destination->space_identity = source->space_identity;
     destination->warning_state = source->warning_state;
     destination->effects = source->effects;
     destination->effects.scratchpad = NULL;
@@ -328,6 +368,7 @@ static enum declarative_rule_prepare_result declarative_rule_from_model(const st
     if (space) {
         rule->effects.sid = space->sid;
         rule->expected_space_kind = space->kind;
+        if (!declarative_rule_space_identity(space, &rule->space_identity)) goto allocation_failure;
         if (!(rule->space_uuid = declarative_rule_strdup(space->uuid))) goto allocation_failure;
     }
     if ((display || space) && model->follow) rule_effects_set_flag(&rule->effects, RULE_FOLLOW_SPACE);

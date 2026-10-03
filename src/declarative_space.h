@@ -8,6 +8,7 @@
 
 #include "declarative_config.h"
 #include "declarative_runtime.h"
+#include "declarative_space_identity.h"
 #include "view.h"
 
 #include "misc/hashtable.h"
@@ -56,6 +57,7 @@ struct declarative_space_target
     int index;
     const char *uuid;
     bool is_user_space;
+    struct declarative_space_identity identity;
 };
 
 /* Immutable Mission Control topology captured for the same event turn. */
@@ -65,6 +67,7 @@ struct declarative_space_topology_entry
     int index;
     const char *uuid;
     bool is_user_space;
+    struct declarative_space_identity identity;
 };
 
 struct declarative_space_table_contract
@@ -126,6 +129,7 @@ struct declarative_space_table_before_image
 
 struct declarative_space_view_before_image
 {
+    struct declarative_space_identity identity;
     enum view_type layout;
     int top_padding;
     int bottom_padding;

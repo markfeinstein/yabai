@@ -182,10 +182,10 @@ enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_e
         if (rule->effects.sid) {
             valid = rule_fold_context_target_is_valid(context, RULE_TARGET_SPACE,
                                                        rule->effects.sid, rule->space_uuid,
-                                                       rule->expected_space_kind);
+                                                       rule->expected_space_kind, &rule->space_identity);
         } else {
             valid = rule_fold_context_target_is_valid(context, RULE_TARGET_DISPLAY,
-                                                       rule->effects.did, rule->display_uuid, 0);
+                                                       rule->effects.did, rule->display_uuid, 0, NULL);
         }
     }
 
