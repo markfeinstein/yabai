@@ -128,6 +128,7 @@ struct declarative_allocator_ops { void *(*calloc_fn)(size_t, size_t); void (*fr
 #ifdef TESTS
 void declarative_config_set_file_ops(const struct declarative_file_ops *ops);
 void declarative_config_set_allocator_ops(const struct declarative_allocator_ops *ops);
+size_t declarative_config_get_structural_traversal_count(void);
 bool declarative_model_budget_charge(size_t *used, size_t amount);
 bool declarative_jsonc_normalize(uint8_t *bytes, size_t length, struct declarative_error *error);
 bool declarative_number_to_int(NSNumber *number, int minimum, int maximum, int *value);

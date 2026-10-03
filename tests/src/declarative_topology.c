@@ -868,6 +868,13 @@ TEST_FUNC(declarative_topology_candidate_bounds_wrapper_preserves_platform_const
     TEST_CHECK(frame.origin.y, 30.0);
     TEST_CHECK(frame.size.height, 760.0);
 
+    frame = display_bounds_constrained_with_external_bar(2, EXTERNAL_BAR_ALL, INT_MIN, INT_MAX);
+    TEST_CHECK(frame.origin.y, 24.0);
+    TEST_CHECK(frame.size.height, -2147482871.0);
+    TEST_CHECK(CGRectEqualToRect(frame,
+                                 display_bounds_constrained_with_external_bar(2, EXTERNAL_BAR_ALL,
+                                                                              INT_MIN, INT_MAX)), true);
+
     fixture.menu_hidden = false;
     fixture.dock_hidden = false;
     fixture.dock_orientation = DOCK_ORIENTATION_LEFT;
@@ -973,6 +980,18 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     TEST_CHECK(table.views[0]->root->area.y, -100.0f);
     TEST_CHECK(table.views[0]->root->area.w, -100.0f);
     TEST_CHECK(table.views[0]->root->area.h, 950.0f);
+    declarative_detached_view_table_destroy(&table);
+
+    defaults.left_padding = INT_MAX;
+    defaults.right_padding = INT_MIN;
+    defaults.top_padding = INT_MIN;
+    defaults.bottom_padding = INT_MAX;
+    TEST_CHECK(declarative_detached_view_table_prepare(&topology, &defaults, &table), true);
+    TEST_CHECK(fixture.query_count, query_count);
+    TEST_CHECK(table.views[0]->root->area.x, (float) INT_MAX);
+    TEST_CHECK(table.views[0]->root->area.y, (float) INT_MIN);
+    TEST_CHECK(table.views[0]->root->area.w, 1001.0f);
+    TEST_CHECK(table.views[0]->root->area.h, 801.0f);
     declarative_detached_view_table_destroy(&table);
 
     defaults.layout = VIEW_ACCORDION_HORIZONTAL;

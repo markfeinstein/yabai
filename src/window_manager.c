@@ -2803,9 +2803,9 @@ enum window_op_error window_manager_apply_grid(struct space_manager *sm, struct 
     if (dview) {
         if (view_check_flag(dview, VIEW_ENABLE_PADDING)) {
             bounds.origin.x    += dview->left_padding;
-            bounds.size.width  -= (dview->left_padding + dview->right_padding);
+            bounds.size.width  -= view_padding_sum(dview->left_padding, dview->right_padding);
             bounds.origin.y    += dview->top_padding;
-            bounds.size.height -= (dview->top_padding + dview->bottom_padding);
+            bounds.size.height -= view_padding_sum(dview->top_padding, dview->bottom_padding);
         }
 
         if (view_check_flag(dview, VIEW_ENABLE_GAP)) {
@@ -3085,9 +3085,9 @@ void window_manager_toggle_window_pip(struct space_manager *sm, struct window *w
     CGRect bounds = display_bounds_constrained(did, false);
     if (dview && view_check_flag(dview, VIEW_ENABLE_PADDING)) {
         bounds.origin.x    += dview->left_padding;
-        bounds.size.width  -= (dview->left_padding + dview->right_padding);
+        bounds.size.width  -= view_padding_sum(dview->left_padding, dview->right_padding);
         bounds.origin.y    += dview->top_padding;
-        bounds.size.height -= (dview->top_padding + dview->bottom_padding);
+        bounds.size.height -= view_padding_sum(dview->top_padding, dview->bottom_padding);
     }
 
     scripting_addition_scale_window(window->id, bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height);

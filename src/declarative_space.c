@@ -1196,19 +1196,8 @@ static struct window_node *declarative_space_select_leaf(struct declarative_spac
 
 static void declarative_space_split_areas(struct window_node *node, int gap)
 {
-    node->left->area = node->area;
-    node->right->area = node->area;
-    if (node->split == SPLIT_Y) {
-        float extent = (node->area.w - gap) * node->ratio;
-        node->left->area.w = (int) extent;
-        node->right->area.w = (int) ((node->area.w - gap) * (1.0f - node->ratio));
-        node->right->area.x += (int) (extent + 0.5f) + gap;
-    } else {
-        float extent = (node->area.h - gap) * node->ratio;
-        node->left->area.h = (int) extent;
-        node->right->area.h = (int) ((node->area.h - gap) * (1.0f - node->ratio));
-        node->right->area.y += (int) (extent + 0.5f) + gap;
-    }
+    area_split_pair(node->split, gap, node->ratio, &node->area,
+                    &node->left->area, &node->right->area);
 }
 
 static bool declarative_space_bsp_add(struct window_node *root, struct window_node *leaf,

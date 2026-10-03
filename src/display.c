@@ -142,8 +142,9 @@ static CGRect display_bounds_apply_constraints(CGRect frame, uint32_t did, uint3
 
     if (menu_bar_hidden) {
         if (notch_height > effective_ext_top_padding) {
-            frame.origin.y += notch_height - effective_ext_top_padding;
-            frame.size.height -= notch_height - effective_ext_top_padding;
+            CGFloat notch_adjustment = (CGFloat) notch_height - (CGFloat) effective_ext_top_padding;
+            frame.origin.y += notch_adjustment;
+            frame.size.height -= notch_adjustment;
         }
     } else {
         frame.origin.y += menu.size.height;
