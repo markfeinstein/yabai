@@ -56,8 +56,8 @@
 
   "spaces": [
     {
-      // This policy follows the ninth Mission Control slot. Focus changes
-      // expand another slot without changing the stable strip order.
+      // This policy follows the ninth Mission Control slot. Windows overlap
+      // with exposed edges; focus raises one without changing stable order.
       "match": { "index": 9 },
       "settings": {
         "layout": "accordion_horizontal",

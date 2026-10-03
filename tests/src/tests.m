@@ -1707,7 +1707,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_and_space_serializers_round_trip_safe_escaped_and_absent_strings) \
     TEST_ENTRY(view_stack_window_node_rejects_full_node_without_mutation) \
     TEST_ENTRY(view_find_window_list_expands_for_full_stack_node) \
-    TEST_ENTRY(accordion_geometry_matrix_is_bounded_stable_and_focus_expanding) \
+    TEST_ENTRY(accordion_geometry_matrix_is_bounded_overlapping_and_focus_stable) \
+    TEST_ENTRY(accordion_geometry_handles_fractional_and_degenerate_axes) \
+    TEST_ENTRY(accordion_single_window_normalizes_only_invalid_selected_axis) \
+    TEST_ENTRY(accordion_geometry_large_origins_keep_equal_finite_frames) \
     TEST_ENTRY(accordion_focus_change_updates_and_flushes_once_without_reordering) \
     TEST_ENTRY(accordion_batched_lifecycle_recomputes_before_visibility_and_deduplicates) \
     TEST_ENTRY(accordion_swap_flush_defers_only_when_focus_notification_will_recompute) \

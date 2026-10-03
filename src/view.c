@@ -1093,39 +1093,46 @@ static void view_update_accordion(struct view *view)
     root->has_window_areas = count > 0;
     if (count <= 0) return;
 
-    int focus_index = 0;
-    for (int i = 0; i < count; ++i) {
-        if (root->window_list[i] == g_window_manager.focused_window_id) {
-            focus_index = i;
-            break;
-        }
-    }
-
     bool horizontal = view->layout == VIEW_ACCORDION_HORIZONTAL;
-    float axis = horizontal ? root->area.w : root->area.h;
-    if (!isfinite(axis) || axis < 0.0f) axis = 0.0f;
-    float request = view->accordion_padding;
-    if (!isfinite(request) || request < 0.0f) request = 0.0f;
-    float strip = count > 1 ? fminf(request, axis / (float) count) : 0.0f;
-    float focused = axis - strip * (float) (count - 1);
-    if (!isfinite(focused) || focused < 0.0f) focused = 0.0f;
+    double axis = horizontal ? root->area.w : root->area.h;
+    if (!isfinite(axis) || axis < 0.0) axis = 0.0;
 
-    float cursor = horizontal ? root->area.x : root->area.y;
-    float limit = cursor + axis;
+    if (count == 1) {
+        root->window_area[0] = root->area;
+        if (horizontal) {
+            root->window_area[0].w = (float) axis;
+        } else {
+            root->window_area[0].h = (float) axis;
+        }
+        return;
+    }
+    double request = view->accordion_padding;
+    if (!isfinite(request) || request < 0.0) request = 0.0;
+    double strip = fmin(request, axis / (double) count);
+    double computed_length = axis - strip * (double) (count - 1);
+    float frame_length = (float) fmax(0.0, computed_length);
+    if (!isfinite(frame_length) || frame_length < 0.0f) frame_length = 0.0f;
+
+    double origin = horizontal ? root->area.x : root->area.y;
+    double max_offset = fmax(0.0, axis - (double) frame_length);
+    double max_origin = origin + max_offset;
     for (int i = 0; i < count; ++i) {
-        float length = count == 1 || i == focus_index ? focused : strip;
-        if (count == 1) length = axis;
-        if (i == count - 1) length = fmaxf(0.0f, limit - cursor);
+        double local_offset = fmin(strip * (double) i, max_offset);
+        double computed_origin = origin + local_offset;
+        float frame_origin = computed_origin > FLT_MAX ? FLT_MAX :
+                             computed_origin < -FLT_MAX ? -FLT_MAX : (float) computed_origin;
+        if ((double) frame_origin > max_origin) frame_origin = nextafterf(frame_origin, -INFINITY);
+        if ((double) frame_origin < origin) frame_origin = nextafterf(frame_origin, INFINITY);
+
         struct area area = root->area;
         if (horizontal) {
-            area.x = cursor;
-            area.w = length;
+            area.x = frame_origin;
+            area.w = frame_length;
         } else {
-            area.y = cursor;
-            area.h = length;
+            area.y = frame_origin;
+            area.h = frame_length;
         }
         root->window_area[i] = area;
-        cursor += length;
     }
 }
 
