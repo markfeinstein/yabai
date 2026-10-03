@@ -57,10 +57,14 @@ TEST_FUNC(declarative_space_phase3c_publication_postcommit_and_retirement_are_or
     struct declarative_space_table_contract vc = { hash_wm, compare_wm, sizeof(uint64_t) };
     struct declarative_space_table_contract mc = { hash_wm, compare_wm, sizeof(uint32_t) };
     struct declarative_space_test_capture capture = { .sids = { sid }, .wids = { { new_wid } }, .counts = { 1 } };
+    struct application application = { .name = "Mail" };
+    capture.windows[new_wid].application = &application;
     struct declarative_space_capture_ops capture_ops = { declarative_space_test_query, declarative_space_test_find,
                                                           declarative_space_test_eligible, &capture };
-    struct declarative_space_defaults defaults = declarative_space_test_defaults(); defaults.layout = VIEW_STACK;
-    struct declarative_config_model native = { 0 };
+    struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_space_policy policy = { .by_index = true, .index = 1, .scaffold_count = 1 };
+    policy.scaffold[0].pattern = "^Mail$";
+    struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
     native.config[DECLARATIVE_CONFIG_WINDOW_GAP] = (struct declarative_value) { .present = true, .integer = 17 };
     struct declarative_space_preparation preparation;
     TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc,
@@ -72,6 +76,10 @@ TEST_FUNC(declarative_space_phase3c_publication_postcommit_and_retirement_are_or
     TEST_CHECK(declarative_space_transition_commit(&transition), true);
     TEST_CHECK(view.root != old_root, true);
     TEST_CHECK(view.window_gap, 17);
+    TEST_CHECK(view.scaffold_fingerprint != 0, true);
+    TEST_CHECK(view.scaffold_primary[0], new_wid);
+    TEST_CHECK(view.scaffold_primary[1], 0U);
+    TEST_CHECK(view.scaffold_primary[2], 0U);
     TEST_CHECK(table_find(&g_window_manager.managed_window, &new_wid), &view);
     TEST_CHECK(table_find(&g_window_manager.managed_window, &old_wid) == NULL, true);
     TEST_CHECK(view_is_invalid(&view), true); TEST_CHECK(view_is_dirty(&view), true);
@@ -245,7 +253,7 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_TABLE_HASH, PHASE3C_TABLE_CMP,
     PHASE3C_SCALAR_LAYOUT, PHASE3C_SCALAR_TOP, PHASE3C_SCALAR_BOTTOM, PHASE3C_SCALAR_LEFT,
     PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_SPLIT, PHASE3C_SCALAR_BALANCE,
-    PHASE3C_INSERTION, PHASE3C_COMPLETE_FLAGS,
+    PHASE3C_INSERTION, PHASE3C_SCAFFOLD_FINGERPRINT, PHASE3C_SCAFFOLD_PRIMARY, PHASE3C_COMPLETE_FLAGS,
     PHASE3C_ROOT_POINTER_NULL, PHASE3C_ROOT_WINDOW_COUNT_NEGATIVE,
     PHASE3C_ROOT_PARENT_SELF, PHASE3C_ROOT_LEFT_SELF, PHASE3C_ROOT_ZOOM_SELF,
     PHASE3C_TABLE_BUCKETS_NULL, PHASE3C_TABLE_BUCKET_HEAD_NULL, PHASE3C_TABLE_BUCKET_SLOT,
@@ -262,7 +270,7 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_STALE_CASE_COUNT
 };
 
-_Static_assert(PHASE3C_STALE_CASE_COUNT == 111, "Phase 3C stale matrix must contain exactly 111 cases");
+_Static_assert(PHASE3C_STALE_CASE_COUNT == 113, "Phase 3C stale matrix must contain exactly 113 cases");
 
 TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
 {
@@ -335,6 +343,8 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         else if (kind == PHASE3C_SCALAR_SPLIT) f.view.split_type = SPLIT_X;
         else if (kind == PHASE3C_SCALAR_BALANCE) f.view.auto_balance = SPLIT_NONE;
         else if (kind == PHASE3C_INSERTION) f.view.insertion_point++;
+        else if (kind == PHASE3C_SCAFFOLD_FINGERPRINT) f.view.scaffold_fingerprint++;
+        else if (kind == PHASE3C_SCAFFOLD_PRIMARY) f.view.scaffold_primary[0]++;
         else if (kind == PHASE3C_COMPLETE_FLAGS) f.view.flags ^= VIEW_IS_DIRTY;
         else if (kind == PHASE3C_ROOT_POINTER_NULL) f.view.root = NULL;
         else if (kind == PHASE3C_ROOT_WINDOW_COUNT_NEGATIVE) f.root->window_count = -1;
@@ -393,7 +403,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         ++cases_run;
     }
-    TEST_CHECK(cases_run, 111UL);
+    TEST_CHECK(cases_run, 113UL);
 })
 
 struct declarative_space_phase3c_outcome_context

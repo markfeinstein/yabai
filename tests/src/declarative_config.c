@@ -174,9 +174,9 @@ static void *declarative_test_calloc(size_t n,size_t s){++declarative_alloc_call
 static void declarative_test_free(void*p){if(p){--declarative_alloc_live;free(p);}}
 
 TEST_FUNC(declarative_model_allocator_is_transactional,
-    const char json[]="{\"version\":1,\"spaces\":[{\"match\":{\"uuid\":\"u\"},\"settings\":{\"layout\":\"bsp\"}}],\"rules\":[{\"label\":\"l\",\"match\":{\"app\":{\"pattern\":\"a\"},\"title\":{\"pattern\":\"t\"},\"role\":{\"pattern\":\"r\"},\"subrole\":{\"pattern\":\"s\"}},\"effects\":{\"scratchpad\":\"p\"}}]}";
+    const char json[]="{\"version\":1,\"spaces\":[{\"match\":{\"uuid\":\"u\"},\"settings\":{\"layout\":\"bsp\"},\"scaffold\":[{\"pattern\":\"m\"},{\"pattern\":\"c\"},{\"pattern\":\"s\"}]}],\"rules\":[{\"label\":\"l\",\"match\":{\"app\":{\"pattern\":\"a\"},\"title\":{\"pattern\":\"t\"},\"role\":{\"pattern\":\"r\"},\"subrole\":{\"pattern\":\"s\"}},\"effects\":{\"scratchpad\":\"p\"}}]}";
     struct declarative_allocator_ops ops={declarative_test_calloc,declarative_test_free};declarative_config_set_allocator_ops(&ops);
-    declarative_alloc_call=declarative_alloc_fail=declarative_alloc_live=0;struct declarative_config_model*m=NULL;struct declarative_error e={0};TEST_CHECK(declarative_config_parse_bytes((uint8_t*)json,strlen(json),"alloc",&m,&e),true);size_t total=declarative_alloc_call;size_t expected=sizeof(*m)+sizeof(*m->spaces)+2+sizeof(*m->rules)+2+2+2+2+2+2;if(m)TEST_CHECK(m->allocated_bytes,expected);declarative_config_destroy(m);TEST_CHECK(declarative_alloc_live,0);
+    declarative_alloc_call=declarative_alloc_fail=declarative_alloc_live=0;struct declarative_config_model*m=NULL;struct declarative_error e={0};TEST_CHECK(declarative_config_parse_bytes((uint8_t*)json,strlen(json),"alloc",&m,&e),true);size_t total=declarative_alloc_call;size_t expected=sizeof(*m)+sizeof(*m->spaces)+2+2+2+2+sizeof(*m->rules)+2+2+2+2+2+2;if(m)TEST_CHECK(m->allocated_bytes,expected);declarative_config_destroy(m);TEST_CHECK(declarative_alloc_live,0);
     for(size_t fail=1;fail<=total;++fail){declarative_alloc_call=declarative_alloc_live=0;declarative_alloc_fail=fail;m=(void*)1;memset(&e,0,sizeof(e));TEST_CHECK(declarative_config_parse_bytes((uint8_t*)json,strlen(json),"alloc",&m,&e),false);TEST_CHECK(m==NULL,true);TEST_CHECK(e.stage,DECLARATIVE_ERROR_ALLOCATION);TEST_CHECK(declarative_alloc_live,0);}
     declarative_config_set_allocator_ops(NULL);size_t used=DECLARATIVE_CONFIG_MAX_MODEL_BYTES-1;TEST_CHECK(declarative_model_budget_charge(&used,1),true);TEST_CHECK(used,DECLARATIVE_CONFIG_MAX_MODEL_BYTES);TEST_CHECK(declarative_model_budget_charge(&used,1),false);used=SIZE_MAX;TEST_CHECK(declarative_model_budget_charge(&used,1),false);
 )
@@ -298,3 +298,31 @@ TEST_FUNC(declarative_phase1_boundary_matrix,
     const char regex[]="{\"version\":1,\"rules\":[{\"match\":{\"app\":{\"pattern\":\"[\"}}}]}";TEST_CHECK(declarative_config_parse_bytes((uint8_t*)regex,strlen(regex),"matrix",&m,&e),false);TEST_CHECK(e.stage,DECLARATIVE_ERROR_REGEX);TEST_CHECK(strstr(e.message,"[")==NULL,true);TEST_CHECK(strcmp(e.json_path,"$.rules[0].match.app.pattern"),0);TEST_CHECK(e.line>0,true);
     char mutable_source[]="{\"version\":1,\"spaces\":[{\"match\":{\"uuid\":\"stable\"},\"settings\":{\"layout\":\"bsp\"}}]}";TEST_CHECK(declarative_config_parse_bytes((uint8_t*)mutable_source,strlen(mutable_source),"owned",&m,&e),true);memset(mutable_source,'x',strlen(mutable_source));if(m)TEST_CHECK(strcmp(m->spaces[0].uuid,"stable"),0);declarative_config_destroy(m);
 )
+
+TEST_FUNC(declarative_scaffold_schema_is_strict_and_owned,
+{
+    char valid[] = "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"pattern\":\"^Mail$\"},{\"pattern\":\"Calendar\",\"exclude\":false},{\"pattern\":\"Messages\"}]}]}";
+    struct declarative_config_model *model = NULL; struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) valid, strlen(valid), "scaffold", &model, &error), true);
+    TEST_CHECK(model != NULL, true);
+    memset(valid, 'x', strlen(valid));
+    if (model) {
+        TEST_CHECK(model->space_count, 1UL);
+        TEST_CHECK(model->spaces[0].scaffold_count, 3UL);
+        TEST_CHECK(strcmp(model->spaces[0].scaffold[0].pattern, "^Mail$"), 0);
+        TEST_CHECK(model->spaces[0].scaffold[1].exclude, false);
+    }
+    declarative_config_destroy(model); model = NULL;
+    const char *invalid[] = {
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[]}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"pattern\":\"a\"},{\"pattern\":\"b\"},{\"pattern\":\"c\"},{\"pattern\":\"d\"}]}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"app\":{\"pattern\":\"Mail\"}}]}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"pattern\":\"Mail\",\"title\":\"x\"}]}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"pattern\":\"[\"}]}]}"
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        memset(&error, 0, sizeof(error));
+        TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) invalid[i], strlen(invalid[i]), "scaffold", &model, &error), false);
+        TEST_CHECK(model == NULL, true);
+    }
+})

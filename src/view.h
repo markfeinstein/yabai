@@ -238,6 +238,8 @@ struct view
     int window_gap;
     int accordion_padding;
     uint32_t auto_balance;
+    uint64_t scaffold_fingerprint;
+    uint32_t scaffold_primary[3];
     uint64_t flags;
     struct declarative_runtime_cell runtime_ownership[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT];
 };

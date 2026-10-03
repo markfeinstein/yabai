@@ -1668,6 +1668,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
     TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
     TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
+    TEST_ENTRY(declarative_scaffold_membership_add_remove_requests_one_reconcile) \
     TEST_ENTRY(declarative_dock_restart_and_system_wake_coalesce_reconcile) \
     TEST_ENTRY(declarative_reconcile_reserves_before_post_and_coalesces) \
     TEST_ENTRY(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result) \
@@ -1737,6 +1738,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
     TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
+    TEST_ENTRY(scaffold_identity_is_invalidated_across_rapid_layout_conversions) \
+    TEST_ENTRY(scaffold_identity_is_invalidated_for_global_layout_batch) \
     TEST_ENTRY(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory) \
     TEST_ENTRY(window_ordered_query_failure_preserves_state)    \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
@@ -1801,6 +1804,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_jsonc_rejects_encoding_duplicates_and_surrogates) \
     TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
     TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
+    TEST_ENTRY(declarative_scaffold_schema_is_strict_and_owned)            \
     TEST_ENTRY(declarative_file_loader_enforces_descriptor_contract)       \
     TEST_ENTRY(declarative_primary_action_classifier_is_exclusive)         \
     TEST_ENTRY(declarative_startup_paths_are_absolute_lexical_and_bounded)  \
@@ -1839,6 +1843,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
     TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
     TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
+    TEST_ENTRY(declarative_scaffold_compacts_subsets_and_ignores_opening_order) \
+    TEST_ENTRY(declarative_scaffold_primary_selection_and_overflow_stability) \
     TEST_ENTRY(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates) \
     TEST_ENTRY(declarative_space_root_validation_rejects_shape_order_parent_and_zoom_corruption) \
     TEST_ENTRY(declarative_space_root_validation_accepts_retained_split_child_and_rejects_invalid_domain) \

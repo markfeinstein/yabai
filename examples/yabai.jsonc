@@ -56,6 +56,16 @@
 
   "spaces": [
     {
+      // Present primaries compact by declaration order: one fills the Space,
+      // two split left/right, and three put the latter two on the right.
+      "match": { "index": 2 },
+      "scaffold": [
+        { "pattern": "^Mail$" },
+        { "pattern": "^Calendar$" },
+        { "pattern": "^Messages$" }
+      ]
+    },
+    {
       // This policy follows the ninth Mission Control slot. Windows overlap
       // with exposed edges; focus raises one without changing stable order.
       "match": { "index": 9 },

@@ -1476,3 +1476,53 @@ TEST_FUNC(window_focus_fallback_selector_matches_public_recent_helper,
     table_free(&wm.managed_window);
     table_free(&wm.window);
 });
+
+TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct table saved_managed = g_window_manager.managed_window;
+    bool saved_has_scaffold = declarative_installed.has_scaffold;
+    uint64_t saved_generation = declarative_installed.generation;
+    g_event_loop = (struct event_loop) {0};
+    g_window_manager.managed_window = (struct table) {0};
+    table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
+    declarative_installed.has_scaffold = true;
+    declarative_installed.generation = 1;
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+
+    TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
+    char semaphore_name[64];
+    snprintf(semaphore_name, sizeof(semaphore_name), "/yabai_sm_%d", getpid());
+    g_event_loop.semaphore = sem_open(semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(semaphore_name);
+    TEST_CHECK(g_event_loop.semaphore != SEM_FAILED, true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+
+    struct application application = { .name = "Mail" };
+    struct window window = { .id = 4242, .application = &application };
+    struct window_node root = { .window_list = { 4242 }, .window_order = { 4242 }, .window_count = 1 };
+    struct view view = { .layout = VIEW_BSP, .root = &root };
+    window_manager_add_managed_window(&g_window_manager, &window, &view);
+    window_manager_remove_managed_window(&g_window_manager, window.id);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
+    struct event event = {0};
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
+
+    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    sem_close(g_event_loop.semaphore);
+    event_queue_destroy(&g_event_loop.queue);
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.managed_window = saved_managed;
+    declarative_installed.has_scaffold = saved_has_scaffold;
+    declarative_installed.generation = saved_generation;
+    g_event_loop = saved_event_loop;
+})

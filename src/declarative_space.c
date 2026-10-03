@@ -621,8 +621,10 @@ void declarative_space_capture_view_before(const struct view *view,
         .split_type = view->split_type,
         .auto_balance = view->auto_balance,
         .insertion_point = view->insertion_point,
+        .scaffold_fingerprint = view->scaffold_fingerprint,
         .flags = view->flags
     };
+    memcpy(out->scaffold_primary, view->scaffold_primary, sizeof(out->scaffold_primary));
 }
 
 bool declarative_space_view_before_matches(const struct view *view,
@@ -642,6 +644,8 @@ bool declarative_space_view_before_matches(const struct view *view,
            view->split_type == image->split_type &&
            view->auto_balance == image->auto_balance &&
            view->insertion_point == image->insertion_point &&
+           view->scaffold_fingerprint == image->scaffold_fingerprint &&
+           memcmp(view->scaffold_primary, image->scaffold_primary, sizeof(view->scaffold_primary)) == 0 &&
            view->flags == image->flags;
 }
 
@@ -1503,6 +1507,76 @@ static int declarative_space_target_gap(const struct declarative_space_prepared_
          ? target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer : 0;
 }
 
+static const struct declarative_space_policy *declarative_space_scaffold_policy(
+    const struct declarative_config_model *native, const struct declarative_space_target *target)
+{
+    if (!native || !target->is_user_space) return NULL;
+    const struct declarative_space_policy *result = NULL;
+    for (size_t i = 0; i < native->space_count; ++i) {
+        const struct declarative_space_policy *policy = &native->spaces[i];
+        bool matches = policy->by_index ? policy->index == target->index
+                                        : policy->uuid && strcmp(policy->uuid, target->uuid) == 0;
+        if (matches && policy->scaffold_count) result = policy;
+    }
+    return result;
+}
+
+static uint64_t declarative_space_scaffold_hash(const struct declarative_config_model *native,
+                                                  const struct declarative_space_policy *policy)
+{
+    uint64_t hash = UINT64_C(1469598103934665603) ^ (uintptr_t) native;
+    hash *= UINT64_C(1099511628211);
+    for (size_t i = 0; i < policy->scaffold_count; ++i) {
+        const unsigned char *at = (const unsigned char *) policy->scaffold[i].pattern;
+        while (*at) { hash ^= *at++; hash *= UINT64_C(1099511628211); }
+        hash ^= policy->scaffold[i].exclude ? 1u : 0u;
+        hash *= UINT64_C(1099511628211);
+    }
+    hash ^= policy->scaffold_count;
+    hash *= UINT64_C(1099511628211);
+    return hash ? hash : 1;
+}
+
+static bool declarative_space_prepare_scaffolds(struct declarative_space_preparation *preparation,
+                                                 const struct declarative_config_model *native)
+{
+    for (size_t i = 0; i < preparation->target_count; ++i) {
+        struct declarative_space_prepared_target *target = &preparation->targets[i];
+        if (declarative_space_final_layout(target) != VIEW_BSP) continue;
+        const struct declarative_space_policy *policy = declarative_space_scaffold_policy(native, &target->target);
+        if (!policy) continue;
+        regex_t regex[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS];
+        size_t compiled = 0;
+        bool valid = true;
+        for (; compiled < policy->scaffold_count; ++compiled) {
+            if (regcomp(&regex[compiled], policy->scaffold[compiled].pattern, REG_EXTENDED)) { valid = false; break; }
+        }
+        if (valid) {
+            target->final_scaffold_count = policy->scaffold_count;
+            target->final_scaffold_fingerprint = declarative_space_scaffold_hash(native, policy);
+            for (size_t wid_index = 0; wid_index < target->final_count; ++wid_index) {
+                uint32_t wid = target->final_wids[wid_index];
+                const struct declarative_space_final_owner *owner =
+                    declarative_space_final_owner_find(preparation, wid);
+                if (!owner || !owner->window || !owner->window->application ||
+                    !owner->window->application->name) { valid = false; break; }
+                const char *app = owner->window->application->name;
+                for (size_t slot = 0; slot < policy->scaffold_count; ++slot) {
+                    bool matched = regexec(&regex[slot], app, 0, NULL, 0) == 0;
+                    if (policy->scaffold[slot].exclude) matched = !matched;
+                    if (!matched) continue;
+                    uint32_t current = target->final_scaffold_primary[slot];
+                    if (!current || wid < current) target->final_scaffold_primary[slot] = wid;
+                    break;
+                }
+            }
+        }
+        for (size_t slot = 0; slot < compiled; ++slot) regfree(&regex[slot]);
+        if (!valid) return false;
+    }
+    return true;
+}
+
 static bool declarative_space_make_converted_root(struct declarative_space_preparation *preparation,
                                                    struct declarative_space_prepared_target *target,
                                                    enum view_type layout,
@@ -1561,6 +1635,63 @@ static bool declarative_space_make_converted_root(struct declarative_space_prepa
     declarative_space_free(context.heap);
     return true;
 bsp_fail:
+    declarative_space_free(context.heap);
+    return false;
+}
+
+static bool declarative_space_make_scaffold_root(struct declarative_space_prepared_target *target,
+                                                  const struct declarative_space_defaults *defaults)
+{
+    if (!declarative_space_build_tree_index(target, target->target.view->root)) return false;
+    struct window_node *root = declarative_space_allocate(1, sizeof(*root));
+    if (!root) return false;
+    target->final_root = root;
+    target->root_owned = true;
+    root->area = target->target.view->root->area;
+    for (size_t i = 0; i < target->tree_index_count; ++i) target->tree_index[i].node = NULL;
+
+    uint32_t primary[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS] = { 0 };
+    size_t primary_count = 0;
+    for (size_t slot = 0; slot < target->final_scaffold_count; ++slot) {
+        if (target->final_scaffold_primary[slot]) primary[primary_count++] = target->final_scaffold_primary[slot];
+    }
+    struct declarative_space_edit_context context = { 0 };
+    int gap = declarative_space_target_gap(target);
+    for (size_t i = 0; i < primary_count; ++i) {
+        uint32_t insertion_point = i ? primary[i - 1] : 0;
+        if (i == 1) {
+            struct declarative_space_tree_index_entry *entry = declarative_space_tree_find(target, primary[0]);
+            if (!entry || !entry->node) goto fail;
+            entry->node->split = SPLIT_Y;
+            entry->node->child = CHILD_SECOND;
+            entry->node->ratio = 0.5f;
+        } else if (i == 2) {
+            struct declarative_space_tree_index_entry *entry = declarative_space_tree_find(target, primary[1]);
+            if (!entry || !entry->node) goto fail;
+            entry->node->split = SPLIT_X;
+            entry->node->child = CHILD_SECOND;
+            entry->node->ratio = 0.5f;
+        }
+        if (!declarative_space_bsp_add_indexed(root, target, &context, primary[i], insertion_point,
+                                               SPLIT_NONE, SPLIT_NONE, gap, defaults)) goto fail;
+        if (i) {
+            struct window_node *parent = declarative_space_tree_find(target, primary[i])->node->parent;
+            if (parent) parent->child = CHILD_NONE;
+        }
+    }
+    for (size_t i = 0; i < target->final_count; ++i) {
+        uint32_t wid = target->final_wids[i];
+        bool is_primary = false;
+        for (size_t j = 0; j < primary_count; ++j) if (primary[j] == wid) { is_primary = true; break; }
+        if (is_primary) continue;
+        if (!declarative_space_bsp_add_indexed(root, target, &context, wid, target->final_insertion_point,
+                target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer,
+                target->effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32,
+                gap, defaults)) goto fail;
+    }
+    declarative_space_free(context.heap);
+    return true;
+fail:
     declarative_space_free(context.heap);
     return false;
 }
@@ -1672,7 +1803,10 @@ static bool declarative_space_build_final_roots(struct declarative_space_prepara
         size_t final_count = target->final_count;
         target->layout_changed = layout != target->target.view->layout;
         target->membership_changed = !old_subset || old_final_count != final_count;
-        target->changed = target->layout_changed || target->membership_changed ||
+        target->scaffold_changed = target->target.view->scaffold_fingerprint != target->final_scaffold_fingerprint ||
+            memcmp(target->target.view->scaffold_primary, target->final_scaffold_primary,
+                   sizeof(target->final_scaffold_primary)) != 0;
+        target->changed = target->layout_changed || target->membership_changed || target->scaffold_changed ||
                           (layout == VIEW_FLOAT && target->root_before.window_count != 0);
         target->final_insertion_point = target->target.view->insertion_point;
         if (!declarative_space_wid_owned_by(preparation, target->final_insertion_point, target->target.view)) {
@@ -1682,7 +1816,9 @@ static bool declarative_space_build_final_roots(struct declarative_space_prepara
             target->final_root = target->target.view->root;
             continue;
         }
-        if (!target->layout_changed && layout != VIEW_FLOAT) {
+        if (layout == VIEW_BSP && target->final_scaffold_fingerprint && target->scaffold_changed) {
+            if (!declarative_space_make_scaffold_root(target, defaults)) return false;
+        } else if (!target->layout_changed && layout != VIEW_FLOAT) {
             if (!declarative_space_reconcile_same_layout(preparation, target, layout, defaults)) return false;
         } else if (!declarative_space_make_converted_root(preparation, target, layout, defaults)) return false;
         struct view validation = *target->target.view;
@@ -2000,6 +2136,7 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
         }
     }
     if (!declarative_space_build_owner_map(out) ||
+        !declarative_space_prepare_scaffolds(out, native) ||
         !declarative_space_build_final_roots(out, defaults) ||
         !declarative_space_build_replacement_table(out, managed_table_contract) ||
         !declarative_space_build_node_indexes(out) ||
@@ -2218,6 +2355,8 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
         view->split_type = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer;
         view->auto_balance = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
         view->insertion_point = target->final_insertion_point;
+        view->scaffold_fingerprint = target->final_scaffold_fingerprint;
+        memcpy(view->scaffold_primary, target->final_scaffold_primary, sizeof(view->scaffold_primary));
         if (p->ownership_mode == DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD) {
             memcpy(view->runtime_ownership, target->ownership_after.view, sizeof(view->runtime_ownership));
             view->flags = target->ownership_after.legacy_flags;

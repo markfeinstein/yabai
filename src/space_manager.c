@@ -224,6 +224,11 @@ static bool space_manager_layout_inventory_is_valid(struct window_manager *wm, e
 
 static void space_manager_commit_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, struct view **mutated_views, int mutated_capacity)
 {
+    if (view->scaffold_fingerprint || view->scaffold_primary[0] ||
+        view->scaffold_primary[1] || view->scaffold_primary[2]) {
+        view->scaffold_fingerprint = 0;
+        memset(view->scaffold_primary, 0, sizeof(view->scaffold_primary));
+    }
     view->layout = layout;
     view_clear(view);
     if (layout != VIEW_FLOAT) {

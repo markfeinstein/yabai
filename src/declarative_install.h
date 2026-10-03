@@ -16,6 +16,7 @@ bool declarative_startup_install(struct declarative_startup_state *startup,
 uint64_t declarative_installed_generation(void);
 const struct declarative_config_model *declarative_installed_model(void);
 const char *declarative_installed_path(void);
+bool declarative_installed_has_scaffold(void);
 bool declarative_config_reload(FILE *response);
 bool declarative_configuration_reconcile(void);
 void declarative_configuration_request_reconcile(void);

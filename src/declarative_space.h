@@ -141,6 +141,8 @@ struct declarative_space_view_before_image
     enum window_node_split split_type;
     uint32_t auto_balance;
     uint32_t insertion_point;
+    uint64_t scaffold_fingerprint;
+    uint32_t scaffold_primary[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS];
     uint64_t flags;
 };
 
@@ -174,9 +176,13 @@ struct declarative_space_prepared_target
     uint64_t final_root_fingerprint;
     size_t final_node_count;
     uint32_t final_insertion_point;
+    uint64_t final_scaffold_fingerprint;
+    uint32_t final_scaffold_primary[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS];
+    size_t final_scaffold_count;
     bool changed;
     bool layout_changed;
     bool membership_changed;
+    bool scaffold_changed;
     bool root_owned;
     /* Preparation-owned edit index and stable flatten sequences. */
     struct declarative_space_tree_index_entry *tree_index;

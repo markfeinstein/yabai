@@ -13,6 +13,7 @@
 #define DECLARATIVE_CONFIG_MAX_OBJECT_MEMBERS 256u
 #define DECLARATIVE_CONFIG_MAX_SPACES 1024u
 #define DECLARATIVE_CONFIG_MAX_RULES 1024u
+#define DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS 3u
 #define DECLARATIVE_CONFIG_MAX_KEY_BYTES 128u
 #define DECLARATIVE_CONFIG_MAX_STRING_BYTES 1024u
 #define DECLARATIVE_CONFIG_MAX_PATTERN_BYTES 4096u
@@ -110,8 +111,8 @@ enum declarative_error_stage { DECLARATIVE_ERROR_NONE, DECLARATIVE_ERROR_PATH, D
 struct declarative_error { enum declarative_error_stage stage; size_t line; size_t column; char path[PATH_MAX * 4]; char json_path[256]; char message[160]; };
 struct declarative_external_bar { int mode; int top_padding; int bottom_padding; };
 struct declarative_value { bool present; union { bool boolean; int integer; uint32_t u32; float real; int enumeration; struct declarative_external_bar external_bar; }; };
-struct declarative_space_policy { bool by_index; int index; char *uuid; struct declarative_value settings[DECLARATIVE_CONFIG_COUNT]; };
 struct declarative_matcher { char *pattern; bool exclude; };
+struct declarative_space_policy { bool by_index; int index; char *uuid; struct declarative_value settings[DECLARATIVE_CONFIG_COUNT]; struct declarative_matcher scaffold[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS]; size_t scaffold_count; };
 struct declarative_rule_model { char *label; bool one_shot; bool matcher_present[4]; struct declarative_matcher matchers[4]; bool display_present, space_present, follow_present, follow; int display_index, space_index; bool grid_present; unsigned grid[6]; bool opacity_present; float opacity; bool manage_present, manage, sticky_present, sticky, mff_present, mff, layer_present; int layer; bool fullscreen_present, fullscreen; char *scratchpad; };
 struct declarative_config_model { struct declarative_value config[DECLARATIVE_CONFIG_COUNT]; struct declarative_space_policy *spaces; size_t space_count; struct declarative_rule_model *rules; size_t rule_count; size_t allocated_bytes; void (*allocator_free)(void *); };
 

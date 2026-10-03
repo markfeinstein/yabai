@@ -341,3 +341,138 @@ TEST_FUNC(declarative_space_target_and_old_table_validation_is_bijective,
     TEST_CHECK(declarative_space_validate_targets(&target, 1, extra, 2, &views, &view_contract), false);
     table_free(&managed); table_free(&views);
 })
+
+static bool declarative_scaffold_test_case(const uint32_t *order, size_t count)
+{
+    struct application applications[3] = { 0 };
+    applications[0].name = "Mail"; applications[1].name = "Calendar"; applications[2].name = "Messages";
+    struct window_node root = { .area = { .w = 1200.0f, .h = 800.0f } };
+    struct view view = { .sid = 200, .uuid = CFSTR("space-2"), .layout = VIEW_BSP, .root = &root };
+    struct table views = { 0 }, managed = { 0 };
+    table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
+    uint64_t sid = 200; table_add(&views, &sid, &view);
+    struct declarative_space_target target = { .view = &view, .sid = 200, .index = 2, .uuid = "space-2", .is_user_space = true };
+    struct declarative_space_topology_entry topology = { .sid = 200, .index = 2, .uuid = "space-2", .is_user_space = true };
+    struct declarative_space_table_contract view_contract = { hash_wm, compare_wm, sizeof(uint64_t) };
+    struct declarative_space_table_contract managed_contract = { hash_wm, compare_wm, sizeof(uint32_t) };
+    struct declarative_space_test_capture capture = { .sids = { 200 }, .counts = { count } };
+    bool present[3] = { false, false, false };
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t wid = order[i]; capture.wids[0][i] = wid;
+        int slot = wid == 10 ? 0 : wid == 20 ? 1 : 2; present[slot] = true;
+        capture.windows[wid].application = &applications[slot];
+    }
+    struct declarative_space_capture_ops ops = { declarative_space_test_query, declarative_space_test_find, declarative_space_test_eligible, &capture };
+    struct declarative_space_policy policy = { .by_index = true, .index = 2, .scaffold_count = 3 };
+    policy.scaffold[0].pattern = "^Mail$"; policy.scaffold[1].pattern = "^Calendar$"; policy.scaffold[2].pattern = "^Messages$";
+    struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
+    struct declarative_runtime_state runtime = { 0 }; struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    defaults.auto_balance = SPLIT_NONE; defaults.focused_window_id = 0;
+    struct declarative_space_preparation preparation; bool result = false;
+    if (!declarative_space_prepare(&target, 1, &topology, 1, &views, &view_contract, &managed, &managed_contract,
+                                   &native, &runtime, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME, &ops, &preparation)) goto out;
+    struct declarative_space_prepared_target *prepared = &preparation.targets[0];
+    uint32_t expected[3] = { 0 }; size_t expected_count = 0;
+    for (int slot = 0; slot < 3; ++slot) if (present[slot]) expected[expected_count++] = (uint32_t) ((slot + 1) * 10);
+    if (!prepared->scaffold_changed || !prepared->final_scaffold_fingerprint) goto destroy;
+    for (int slot = 0; slot < 3; ++slot) if (prepared->final_scaffold_primary[slot] != (present[slot] ? (uint32_t) ((slot + 1) * 10) : 0)) goto destroy;
+    struct window_node *final = prepared->final_root;
+    if (expected_count == 1) {
+        if (final->left || final->window_count != 1 || final->window_list[0] != expected[0]) goto destroy;
+    } else if (expected_count == 2) {
+        if (!final->left || final->split != SPLIT_Y || final->ratio != 0.5f ||
+            final->left->window_list[0] != expected[0] || final->right->window_list[0] != expected[1]) goto destroy;
+    } else if (expected_count == 3) {
+        if (!final->left || final->split != SPLIT_Y || final->ratio != 0.5f || final->left->window_list[0] != 10 ||
+            !final->right->left || final->right->split != SPLIT_X || final->right->ratio != 0.5f ||
+            final->right->left->window_list[0] != 20 || final->right->right->window_list[0] != 30) goto destroy;
+    }
+    result = true;
+destroy:
+    declarative_space_preparation_destroy(&preparation);
+out:
+    table_free(&managed); table_free(&views);
+    return result && declarative_space_test_outstanding_allocations() == 0;
+}
+
+TEST_FUNC(declarative_scaffold_compacts_subsets_and_ignores_opening_order,
+{
+    uint32_t all[] = { 10, 20, 30 };
+    TEST_CHECK(declarative_scaffold_test_case(NULL, 0), true);
+    for (unsigned mask = 1; mask < 8; ++mask) {
+        uint32_t order[3]; size_t count = 0;
+        for (int slot = 0; slot < 3; ++slot) if (mask & (1u << slot)) order[count++] = all[slot];
+        TEST_CHECK(declarative_scaffold_test_case(order, count), true);
+    }
+    uint32_t permutations[6][3] = { {10,20,30}, {10,30,20}, {20,10,30}, {20,30,10}, {30,10,20}, {30,20,10} };
+    for (size_t i = 0; i < 6; ++i) TEST_CHECK(declarative_scaffold_test_case(permutations[i], 3), true);
+})
+
+static bool declarative_scaffold_subtree_contains(struct window_node *node, uint32_t wid)
+{
+    if (!node) return false;
+    if (!node->left) return window_node_contains_window(node, wid);
+    return declarative_scaffold_subtree_contains(node->left, wid) ||
+           declarative_scaffold_subtree_contains(node->right, wid);
+}
+
+TEST_FUNC(declarative_scaffold_primary_selection_and_overflow_stability,
+{
+    struct application apps[2] = { 0 }; apps[0].name = "Mail"; apps[1].name = "Safari";
+    struct window windows[3] = { { .id = 10, .application = &apps[0] }, { .id = 11, .application = &apps[0] }, { .id = 40, .application = &apps[1] } };
+    uint32_t final_wids[] = { 11, 10, 40 };
+    struct declarative_space_inventory_entry inventory_entries[] = {
+        { .wid = 11, .sid = 2, .window = &windows[1], .eligible = true },
+        { .wid = 10, .sid = 2, .window = &windows[0], .eligible = true },
+        { .wid = 40, .sid = 2, .window = &windows[2], .eligible = true }
+    };
+    struct declarative_space_policy policy = { .by_index = true, .index = 2, .scaffold_count = 2 };
+    policy.scaffold[0].pattern = "^Mail$"; policy.scaffold[1].pattern = ".*";
+    struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
+    struct declarative_space_prepared_target target = { .target = { .index = 2, .uuid = "s", .is_user_space = true },
+        .final_wids = final_wids, .final_count = 3 };
+    target.effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer = VIEW_BSP;
+    struct declarative_space_final_owner owners[] = {
+        { .wid = 10, .window = &windows[0] }, { .wid = 11, .window = &windows[1] }, { .wid = 40, .window = &windows[2] }
+    };
+    struct declarative_space_preparation preparation = { .targets = &target, .target_count = 1,
+        .inventory = { .entries = inventory_entries, .count = 3 }, .final_owners = owners, .final_owner_count = 3 };
+    TEST_CHECK(declarative_space_prepare_scaffolds(&preparation, &native), true);
+    TEST_CHECK(target.final_scaffold_primary[0], 10U);
+    TEST_CHECK(target.final_scaffold_primary[1], 40U);
+
+    struct window_node root = { 0 }, left, right;
+    declarative_space_test_init_leaf(&left, 10, 0); declarative_space_test_init_leaf(&right, 40, 0);
+    root.left = &left; root.right = &right; root.split = SPLIT_Y; root.ratio = 0.5f; root.area = (struct area) { .w = 1200, .h = 800 };
+    left.parent = &root; right.parent = &root;
+    struct view view = { .sid = 2, .uuid = CFSTR("s"), .layout = VIEW_BSP, .root = &root,
+        .scaffold_fingerprint = declarative_space_scaffold_hash(&native, &policy), .scaffold_primary = { 10, 40, 0 } };
+    struct table views = { 0 }, managed = { 0 }; table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
+    uint64_t sid = 2; table_add(&views, &sid, &view); table_add(&managed, &windows[0].id, &view); table_add(&managed, &windows[2].id, &view);
+    struct declarative_space_target public_target = { .view = &view, .sid = 2, .index = 2, .uuid = "s", .is_user_space = true };
+    struct declarative_space_topology_entry topology = { .sid = 2, .index = 2, .uuid = "s", .is_user_space = true };
+    struct declarative_space_table_contract view_contract = { hash_wm, compare_wm, sizeof(uint64_t) }, managed_contract = { hash_wm, compare_wm, sizeof(uint32_t) };
+    struct declarative_space_test_capture capture = { .sids = { 2 }, .wids = { { 10, 40, 11 } }, .counts = { 3 } };
+    capture.windows[10].application = &apps[0]; capture.windows[11].application = &apps[0]; capture.windows[40].application = &apps[1];
+    struct declarative_space_capture_ops ops = { declarative_space_test_query, declarative_space_test_find, declarative_space_test_eligible, &capture };
+    struct declarative_runtime_state runtime = { 0 }; struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_space_preparation full;
+    TEST_CHECK(declarative_space_prepare(&public_target, 1, &topology, 1, &views, &view_contract, &managed, &managed_contract,
+        &native, &runtime, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME, &ops, &full), true);
+    TEST_CHECK(full.targets[0].changed, true);
+    TEST_CHECK(full.targets[0].scaffold_changed, false);
+    TEST_CHECK(full.targets[0].final_root != &root, true);
+    struct window_node *final = full.targets[0].final_root;
+    TEST_CHECK(final->split, SPLIT_Y);
+    TEST_CHECK(declarative_scaffold_subtree_contains(final->left, 10), true);
+    TEST_CHECK(declarative_scaffold_subtree_contains(final->right, 40), true);
+    for (uint32_t wid = 10; wid <= 40; wid += wid == 10 ? 1 : 29) {
+        int occurrences = 0;
+        for (struct window_node *leaf = window_node_find_first_leaf(final); leaf; leaf = window_node_find_next_leaf(leaf)) {
+            for (int i = 0; i < leaf->window_count; ++i) if (leaf->window_list[i] == wid) ++occurrences;
+        }
+        TEST_CHECK(occurrences, 1);
+    }
+    declarative_space_preparation_destroy(&full); table_free(&managed); table_free(&views);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
+})

@@ -2,12 +2,12 @@
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
 .\" Generator: Asciidoctor 2.0.26
-.\"      Date: 1980-01-01
+.\"      Date: 2026-10-03
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
 .\"  Language: English
 .\"
-.TH "YABAI" "1" "1980-01-01" "Yabai" "Yabai Manual"
+.TH "YABAI" "1" "2026-10-03" "Yabai" "Yabai Manual"
 .ie \n(.g .ds Aq \(aq
 .el       .ds Aq '
 .ss \n[.ss] 0
@@ -588,7 +588,7 @@ Numeric fields are:
 The native \f(CRwindow_shadow\fP, \f(CRwindow_opacity\fP, \f(CRwindow_opacity_duration\fP, \f(CRactive_window_opacity\fP and \f(CRnormal_window_opacity\fP settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; \f(CRwindow_animation_duration\fP has the separate Screen Recording and SIP preflight described above.
 .SS "Space policy"
 .sp
-Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and \f(CRsettings\fP fields. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above.
+Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. When present, \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above.
 .sp
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native\-fullscreen Spaces remain floating.
 .sp
@@ -603,6 +603,33 @@ built\-in < native global < native Space < runtime global < runtime Space
 .if n .RE
 .sp
 A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+.SS "Managed scaffold"
+.sp
+An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.
+.sp
+The first matching scaffold entry owns a window, so overlapping expressions resolve in array order. The lowest nonzero window ID matching each present entry is its primary window. Other windows from that application and windows matching no entry remain ordinary BSP overflow windows.
+.sp
+Present primaries compact in declaration order. One fills the Space. Two split left and right at \f(CR0.5\fP. Three place the first on the left, the second upper\-right and the third lower\-right, with both splits at \f(CR0.5\fP. Opening order does not affect that primary topology. A primary membership change or successful scaffold generation change rebuilds the detached BSP root transactionally; overflow\-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
+.sp
+.if n .RS 4
+.nf
+.fam C
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 2 },
+      "scaffold": [
+        { "pattern": "^Mail$" },
+        { "pattern": "^Calendar$" },
+        { "pattern": "^Messages$" }
+      ]
+    }
+  ]
+}
+.fam
+.fi
+.if n .RE
 .SS "Accordion geometry"
 .sp
 \f(CRaccordion_horizontal\fP and \f(CRaccordion_vertical\fP are managed layouts. Every managed window remains in the Space forest and managed\-window table; rules with \f(CRmanage=false\fP, native\-fullscreen Spaces and system Spaces remain outside that forest. Accordion does not require the scripting addition.

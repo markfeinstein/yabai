@@ -15,9 +15,17 @@ struct declarative_installed_state
     struct declarative_prepared_rules prepared_rules;
     char **labels;
     size_t label_count;
+    bool has_scaffold;
 };
 
 static struct declarative_installed_state declarative_installed;
+
+static bool declarative_model_has_scaffold(const struct declarative_config_model *model)
+{
+    if (!model) return false;
+    for (size_t i = 0; i < model->space_count; ++i) if (model->spaces[i].scaffold_count) return true;
+    return false;
+}
 
 #ifdef TESTS
 static size_t declarative_install_allocation_ordinal;
@@ -467,6 +475,7 @@ static void declarative_startup_bundle_publish(struct declarative_startup_state 
 
     declarative_installed.generation = 1;
     declarative_installed.model = startup->model;
+    declarative_installed.has_scaffold = declarative_model_has_scaffold(declarative_installed.model);
     startup->model = NULL;
     declarative_installed.path = bundle->path;
     bundle->path = NULL;
@@ -652,6 +661,7 @@ static void declarative_reload_publish(void *context)
 
     declarative_installed.generation = transaction->generation;
     declarative_installed.model = transaction->candidate.model;
+    declarative_installed.has_scaffold = declarative_model_has_scaffold(declarative_installed.model);
     transaction->candidate.model = NULL;
     declarative_installed.path = transaction->bundle.path;
     transaction->bundle.path = NULL;
@@ -1068,6 +1078,7 @@ bool declarative_config_reload(FILE *response)
 uint64_t declarative_installed_generation(void) { return declarative_installed.generation; }
 const struct declarative_config_model *declarative_installed_model(void) { return declarative_installed.model; }
 const char *declarative_installed_path(void) { return declarative_installed.path; }
+bool declarative_installed_has_scaffold(void) { return declarative_installed.has_scaffold; }
 
 #ifdef TESTS
 static struct declarative_reload_ops declarative_reload_ops_from_test(

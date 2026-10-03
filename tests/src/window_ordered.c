@@ -140,8 +140,12 @@ TEST_FUNC(layout_inventory_failure_is_transactional_and_empty_success_applies,
     TEST_CHECK(initialized, true);
     if (!initialized) return result;
 
+    t.view->scaffold_fingerprint = 99;
+    t.view->scaffold_primary[0] = t.a.id;
     TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, NULL, 0, false), false);
     TEST_CHECK(t.view->layout, VIEW_BSP);
+    TEST_CHECK(t.view->scaffold_fingerprint, 99ULL);
+    TEST_CHECK(t.view->scaffold_primary[0], t.a.id);
     TEST_CHECK(view_find_window_node(t.view, t.a.id) != NULL, true);
     TEST_CHECK(view_find_window_node(t.view, t.b.id) != NULL, true);
     TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == t.view, true);
@@ -149,11 +153,57 @@ TEST_FUNC(layout_inventory_failure_is_transactional_and_empty_success_applies,
 
     TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK, NULL, 0, true), true);
     TEST_CHECK(t.view->layout, VIEW_STACK);
+    TEST_CHECK(t.view->scaffold_fingerprint, 0ULL);
+    TEST_CHECK(t.view->scaffold_primary[0], 0U);
     TEST_CHECK(view_find_window_node(t.view, t.a.id) == NULL, true);
     TEST_CHECK(view_find_window_node(t.view, t.b.id) == NULL, true);
     TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a) == NULL, true);
     TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b) == NULL, true);
     test_ordered_free(&t);
+});
+
+TEST_FUNC(scaffold_identity_is_invalidated_across_rapid_layout_conversions,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    uint32_t inventory[] = { t.a.id, t.b.id };
+    t.view->scaffold_fingerprint = 1234;
+    t.view->scaffold_primary[0] = t.a.id;
+    t.view->scaffold_primary[1] = t.b.id;
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_STACK,
+                                                         inventory, 2, true), true);
+    TEST_CHECK(t.view->scaffold_fingerprint, 0ULL);
+    TEST_CHECK(t.view->scaffold_primary[0], 0U);
+    TEST_CHECK(t.view->scaffold_primary[1], 0U);
+    TEST_CHECK(space_manager_apply_layout_with_inventory(&g_window_manager, t.view, VIEW_BSP,
+                                                         inventory, 2, true), true);
+    TEST_CHECK(t.view->scaffold_fingerprint, 0ULL);
+    TEST_CHECK(t.view->scaffold_primary[0], 0U);
+    TEST_CHECK(t.view->scaffold_primary[1], 0U);
+    test_ordered_free(&t);
+});
+
+TEST_FUNC(scaffold_identity_is_invalidated_for_global_layout_batch,
+{
+    struct window_node roots[2] = { 0 };
+    struct view views[2] = {
+        { .layout = VIEW_BSP, .root = &roots[0], .scaffold_fingerprint = 101, .scaffold_primary = { 1, 2, 3 } },
+        { .layout = VIEW_BSP, .root = &roots[1], .scaffold_fingerprint = 202, .scaffold_primary = { 4, 5, 6 } }
+    };
+    struct view *mutated[1] = { 0 };
+    for (size_t i = 0; i < 2; ++i) {
+        space_manager_commit_layout_with_inventory(&g_window_manager, &views[i], VIEW_STACK,
+                                                   NULL, 0, mutated, 1);
+        space_manager_commit_layout_with_inventory(&g_window_manager, &views[i], VIEW_BSP,
+                                                   NULL, 0, mutated, 1);
+        TEST_CHECK(views[i].scaffold_fingerprint, 0ULL);
+        TEST_CHECK(views[i].scaffold_primary[0], 0U);
+        TEST_CHECK(views[i].scaffold_primary[1], 0U);
+        TEST_CHECK(views[i].scaffold_primary[2], 0U);
+    }
 });
 
 TEST_FUNC(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory,
