@@ -1870,6 +1870,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_topology_query_failures_leave_no_partial_capture) \
     TEST_ENTRY(declarative_topology_rejects_duplicates_and_changed_second_observation) \
     TEST_ENTRY(declarative_topology_system_active_display_count_fill_contract_is_strict) \
+    TEST_ENTRY(declarative_topology_system_active_pair_is_preinventory_safe) \
     TEST_ENTRY(declarative_topology_candidate_bounds_wrapper_preserves_platform_constraints) \
     TEST_ENTRY(declarative_topology_candidate_external_bar_bounds_match_view_constraints) \
     TEST_ENTRY(declarative_detached_views_use_only_capture_identity_bounds_kind_and_defaults) \

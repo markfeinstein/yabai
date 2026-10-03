@@ -491,6 +491,79 @@ TEST_FUNC(declarative_topology_system_active_display_count_fill_contract_is_stri
     declarative_topology_active_display_list = saved_active_display_list;
 });
 
+struct declarative_topology_active_pair_fixture
+{
+    uint32_t did;
+    uint64_t sid;
+    uint32_t active_display_calls;
+    uint32_t display_space_calls;
+    uint32_t observed_did;
+};
+
+static struct declarative_topology_active_pair_fixture *declarative_topology_active_pair_fixture;
+
+static uint32_t declarative_topology_test_active_display_id(void)
+{
+    ++declarative_topology_active_pair_fixture->active_display_calls;
+    return declarative_topology_active_pair_fixture->did;
+}
+
+static uint64_t declarative_topology_test_display_space_id(uint32_t did)
+{
+    ++declarative_topology_active_pair_fixture->display_space_calls;
+    declarative_topology_active_pair_fixture->observed_did = did;
+    return declarative_topology_active_pair_fixture->sid;
+}
+
+TEST_FUNC(declarative_topology_system_active_pair_is_preinventory_safe,
+{
+    __auto_type saved_active_display_id = declarative_topology_active_display_id;
+    __auto_type saved_display_space_id = declarative_topology_display_space_id;
+    declarative_topology_active_display_id = declarative_topology_test_active_display_id;
+    declarative_topology_display_space_id = declarative_topology_test_display_space_id;
+
+    struct declarative_topology_active_pair_fixture valid = { .did = 7, .sid = 77 };
+    declarative_topology_active_pair_fixture = &valid;
+    uint32_t did = 0;
+    uint64_t sid = 0;
+    TEST_CHECK(declarative_topology_system_active_pair(&did, &sid, NULL), true);
+    TEST_CHECK(did, 7U);
+    TEST_CHECK(sid, 77ULL);
+    TEST_CHECK(valid.active_display_calls, 1U);
+    TEST_CHECK(valid.display_space_calls, 1U);
+    TEST_CHECK(valid.observed_did, 7U);
+
+    struct declarative_topology_active_pair_fixture zero_did = { .did = 0, .sid = 77 };
+    declarative_topology_active_pair_fixture = &zero_did;
+    did = 99;
+    sid = 99;
+    TEST_CHECK(declarative_topology_system_active_pair(&did, &sid, NULL), false);
+    TEST_CHECK(did, 0U);
+    TEST_CHECK(sid, 0ULL);
+    TEST_CHECK(zero_did.active_display_calls, 1U);
+    TEST_CHECK(zero_did.display_space_calls, 0U);
+
+    struct declarative_topology_active_pair_fixture zero_sid = { .did = 7, .sid = 0 };
+    declarative_topology_active_pair_fixture = &zero_sid;
+    did = 0;
+    sid = 99;
+    TEST_CHECK(declarative_topology_system_active_pair(&did, &sid, NULL), false);
+    TEST_CHECK(did, 7U);
+    TEST_CHECK(sid, 0ULL);
+    TEST_CHECK(zero_sid.active_display_calls, 1U);
+    TEST_CHECK(zero_sid.display_space_calls, 1U);
+    TEST_CHECK(zero_sid.observed_did, 7U);
+
+    TEST_CHECK(declarative_topology_system_active_pair(NULL, &sid, NULL), false);
+    TEST_CHECK(declarative_topology_system_active_pair(&did, NULL, NULL), false);
+    TEST_CHECK(zero_sid.active_display_calls, 1U);
+    TEST_CHECK(zero_sid.display_space_calls, 1U);
+
+    declarative_topology_active_pair_fixture = NULL;
+    declarative_topology_active_display_id = saved_active_display_id;
+    declarative_topology_display_space_id = saved_display_space_id;
+});
+
 struct declarative_display_bounds_fixture
 {
     CGRect bounds;
@@ -730,6 +803,38 @@ static bool declarative_topology_test_prepare_on_worker(struct declarative_start
     return result;
 }
 
+enum
+{
+    DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_PREFIX_SIZE = offsetof(struct window_manager, window_animations_lock),
+    DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_OFFSET = offsetof(struct window_manager, window_animations_lock) +
+                                                        sizeof(((struct window_manager *) 0)->window_animations_lock),
+    DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_SIZE = sizeof(struct window_manager) -
+                                                      DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_OFFSET
+};
+
+struct declarative_topology_window_manager_snapshot
+{
+    unsigned char prefix[DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_PREFIX_SIZE];
+    unsigned char suffix[DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_SIZE];
+};
+
+static struct declarative_topology_window_manager_snapshot declarative_topology_window_manager_capture(void)
+{
+    struct declarative_topology_window_manager_snapshot snapshot;
+    memcpy(snapshot.prefix, &g_window_manager, sizeof(snapshot.prefix));
+    memcpy(snapshot.suffix, (const unsigned char *) &g_window_manager +
+                            DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_OFFSET, sizeof(snapshot.suffix));
+    return snapshot;
+}
+
+static bool declarative_topology_window_manager_equals(
+    const struct declarative_topology_window_manager_snapshot *snapshot)
+{
+    return memcmp(snapshot->prefix, &g_window_manager, sizeof(snapshot->prefix)) == 0 &&
+           memcmp(snapshot->suffix, (const unsigned char *) &g_window_manager +
+                  DECLARATIVE_TOPOLOGY_WINDOW_MANAGER_SUFFIX_OFFSET, sizeof(snapshot->suffix)) == 0;
+}
+
 TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transactional,
 {
     struct declarative_topology_fixture fixture;
@@ -737,7 +842,7 @@ TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transa
     struct declarative_startup_state state = { .present = true };
     struct space_manager space_before = g_space_manager;
     struct display_manager display_before = g_display_manager;
-    struct window_manager window_before = g_window_manager;
+    struct declarative_topology_window_manager_snapshot window_before = declarative_topology_window_manager_capture();
     struct declarative_topology_startup_test_context test = {
         .state = &state,
         .defaults = {
@@ -755,7 +860,7 @@ TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transa
     TEST_CHECK(state.detached_views.count, 3U);
     TEST_CHECK(memcmp(&g_space_manager, &space_before, sizeof(space_before)), 0);
     TEST_CHECK(memcmp(&g_display_manager, &display_before, sizeof(display_before)), 0);
-    TEST_CHECK(memcmp(&g_window_manager, &window_before, sizeof(window_before)), 0);
+    TEST_CHECK(declarative_topology_window_manager_equals(&window_before), true);
     declarative_startup_destroy(&state);
     declarative_topology_test_fixture_destroy(&fixture);
     TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);
@@ -775,7 +880,7 @@ TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transa
     TEST_CHECK(failed.detached_views.views == NULL, true);
     TEST_CHECK(memcmp(&g_space_manager, &space_before, sizeof(space_before)), 0);
     TEST_CHECK(memcmp(&g_display_manager, &display_before, sizeof(display_before)), 0);
-    TEST_CHECK(memcmp(&g_window_manager, &window_before, sizeof(window_before)), 0);
+    TEST_CHECK(declarative_topology_window_manager_equals(&window_before), true);
     declarative_startup_destroy(&failed);
     declarative_topology_test_fixture_destroy(&changed);
     TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);

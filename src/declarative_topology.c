@@ -340,8 +340,12 @@ bool declarative_topology_capture(const struct declarative_topology_capture_ops 
 
 #ifdef TESTS
 static CGError (*declarative_topology_active_display_list)(uint32_t, CGDirectDisplayID *, uint32_t *) = CGGetActiveDisplayList;
+static uint32_t (*declarative_topology_active_display_id)(void) = display_manager_active_display_id;
+static uint64_t (*declarative_topology_display_space_id)(uint32_t) = display_space_id;
 #else
 #define declarative_topology_active_display_list CGGetActiveDisplayList
+#define declarative_topology_active_display_id display_manager_active_display_id
+#define declarative_topology_display_space_id display_space_id
 #endif
 
 static bool declarative_topology_system_active_displays(uint32_t **display_ids, size_t *count, void *context)
@@ -376,8 +380,8 @@ static bool declarative_topology_system_active_pair(uint32_t *did, uint64_t *sid
 {
     (void) context;
     if (!did || !sid) return false;
-    *did = display_manager_active_display_id();
-    *sid = space_manager_active_space();
+    *did = declarative_topology_active_display_id();
+    *sid = *did ? declarative_topology_display_space_id(*did) : 0;
     return *did != 0 && *sid != 0;
 }
 
