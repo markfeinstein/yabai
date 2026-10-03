@@ -53,6 +53,7 @@ static int declarative_install_test_mutex_destroy_counting(pthread_mutex_t *mute
     X(uint32_t, ffm_menu_suspend_count) \
     X(enum purify_mode, purify_mode) \
     X(enum window_origin_mode, window_origin_mode) \
+    X(enum window_focus_fallback, window_focus_fallback) \
     X(bool, enable_window_opacity) \
     X(float, menubar_opacity) \
     X(float, active_window_opacity) \
@@ -138,6 +139,7 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_FFM: return bundle->window_manager.configured_ffm_mode == value->enumeration;
     case DECLARATIVE_CONFIG_DISPLAY_ORDER: return bundle->display_manager.order == value->enumeration;
     case DECLARATIVE_CONFIG_WINDOW_ORIGIN: return bundle->window_manager.window_origin_mode == value->enumeration;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: return bundle->window_manager.window_focus_fallback == value->enumeration;
     case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: return bundle->space_manager.window_placement == value->enumeration;
     case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: return bundle->space_manager.window_insertion_point == value->enumeration;
     case DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST: return bundle->space_manager.window_zoom_persist == value->boolean;
@@ -177,6 +179,8 @@ static bool declarative_install_test_candidate_value_applied(
 
 TEST_FUNC(declarative_startup_install_candidate_mapping_covers_all_settings,
 {
+    struct declarative_startup_bundle defaults = {0};
+    TEST_CHECK(defaults.window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_OFF);
     for (int id = 0; id < DECLARATIVE_CONFIG_COUNT; ++id) {
         struct declarative_startup_bundle bundle = {0};
         struct declarative_value value = { .present = true };
@@ -201,7 +205,7 @@ static struct declarative_config_model *declarative_install_test_model(void)
 {
     static const char json[] =
         "{\"version\":1,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"focus_follows_mouse\":\"autofocus\","
-        "\"menubar\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
+        "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
         "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"stack\","
         "\"top_padding\":1,\"bottom_padding\":2,\"left_padding\":3,\"right_padding\":4,"
         "\"window_gap\":5,\"split_type\":\"horizontal\",\"auto_balance\":\"x-axis\"}}],"
@@ -277,6 +281,7 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(policy_view->split_type, SPLIT_X);
     TEST_CHECK(policy_view->auto_balance, SPLIT_X);
     TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_AUTOFOCUS);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_RECENT);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);

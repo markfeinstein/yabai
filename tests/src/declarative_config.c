@@ -1,5 +1,5 @@
 TEST_FUNC(declarative_inventory_is_canonical,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 35);
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 36);
     TEST_CHECK(DECLARATIVE_RULE_FIELD_COUNT, 17);
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         const char *name = declarative_config_descriptors[i].name;
@@ -104,6 +104,7 @@ TEST_FUNC(declarative_enums_are_runtime_values,
         {"focus_follows_mouse","off",FFM_DISABLED},{"focus_follows_mouse","autofocus",FFM_AUTOFOCUS},{"focus_follows_mouse","autoraise",FFM_AUTORAISE},
         {"display_arrangement_order","default",DISPLAY_ARRANGEMENT_ORDER_DEFAULT},{"display_arrangement_order","horizontal",DISPLAY_ARRANGEMENT_ORDER_X},{"display_arrangement_order","vertical",DISPLAY_ARRANGEMENT_ORDER_Y},
         {"window_origin_display","default",WINDOW_ORIGIN_DEFAULT},{"window_origin_display","focused",WINDOW_ORIGIN_FOCUSED},{"window_origin_display","cursor",WINDOW_ORIGIN_CURSOR},
+        {"window_focus_fallback","off",WINDOW_FOCUS_FALLBACK_OFF},{"window_focus_fallback","recent",WINDOW_FOCUS_FALLBACK_RECENT},
         {"window_placement","first_child",CHILD_FIRST},{"window_placement","second_child",CHILD_SECOND},
         {"window_insertion_point","focused",INSERT_FOCUSED},{"window_insertion_point","first",INSERT_FIRST},{"window_insertion_point","last",INSERT_LAST},
         {"window_shadow","off",PURIFY_ALWAYS},{"window_shadow","float",PURIFY_MANAGED},{"window_shadow","on",PURIFY_DISABLED},
@@ -134,6 +135,31 @@ TEST_FUNC(declarative_enums_are_runtime_values,
     }
     struct enum_case layers[]={{"sub_layer","below",LAYER_BELOW},{"sub_layer","normal",LAYER_NORMAL},{"sub_layer","above",LAYER_ABOVE},{"sub_layer","auto",LAYER_AUTO}};
     for(size_t i=0;i<4;++i){char json[256];snprintf(json,sizeof(json),"{\"version\":1,\"rules\":[{\"match\":{\"app\":{\"pattern\":\"x\"}},\"effects\":{\"sub_layer\":\"%s\"}}]}",layers[i].spelling);struct declarative_config_model*m=NULL;struct declarative_error e={0};TEST_CHECK(declarative_config_parse_bytes((uint8_t*)json,strlen(json),"layer",&m,&e),true);if(m)TEST_CHECK(m->rules[0].layer,layers[i].value);declarative_config_destroy(m);}
+)
+
+TEST_FUNC(declarative_window_focus_fallback_schema_is_strict_and_global_only,
+    const char *accepted[] = {
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":\"off\"}}",
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":\"recent\"}}"
+    };
+    for (size_t i = 0; i < sizeof(accepted) / sizeof(*accepted); ++i) {
+        struct declarative_config_model *model = NULL; struct declarative_error error = {0};
+        TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) accepted[i], strlen(accepted[i]), "fallback", &model, &error), true);
+        declarative_config_destroy(model);
+    }
+    const char *rejected[] = {
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":\"invalid\"}}",
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":true}}",
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":1}}",
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":null}}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":1},\"settings\":{\"window_focus_fallback\":\"recent\"}}]}"
+    };
+    for (size_t i = 0; i < sizeof(rejected) / sizeof(*rejected); ++i) {
+        struct declarative_config_model *model = NULL; struct declarative_error error = {0};
+        TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) rejected[i], strlen(rejected[i]), "fallback", &model, &error), false);
+        TEST_CHECK(error.stage, DECLARATIVE_ERROR_SCHEMA);
+        declarative_config_destroy(model);
+    }
 )
 
 TEST_FUNC(declarative_follow_presence_is_validated,

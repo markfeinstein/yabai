@@ -68,6 +68,18 @@ static const char *window_origin_mode_str[] =
     "cursor"
 };
 
+enum window_focus_fallback
+{
+    WINDOW_FOCUS_FALLBACK_OFF,
+    WINDOW_FOCUS_FALLBACK_RECENT
+};
+
+static const char *window_focus_fallback_str[] =
+{
+    "off",
+    "recent"
+};
+
 struct scratchpad
 {
     char *label;
@@ -96,6 +108,7 @@ struct window_manager
     uint32_t ffm_menu_suspend_count;
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
+    enum window_focus_fallback window_focus_fallback;
     bool enable_window_opacity;
     float menubar_opacity;
     float active_window_opacity;
@@ -137,6 +150,7 @@ struct window *window_manager_find_next_managed_window(struct space_manager *sm,
 struct window *window_manager_find_first_managed_window(struct space_manager *sm, struct window_manager *wm);
 struct window *window_manager_find_last_managed_window(struct space_manager *sm, struct window_manager *wm);
 struct window *window_manager_find_recent_managed_window(struct window_manager *wm);
+bool window_manager_window_is_focus_fallback_eligible(struct window *window);
 struct window *window_manager_find_prev_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);
 struct window *window_manager_find_next_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);
 struct window *window_manager_find_first_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);

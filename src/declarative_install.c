@@ -134,6 +134,7 @@ static bool declarative_install_window_manager_init(struct window_manager *wm)
     window_manager_recompute_effective_ffm_mode(wm);
     wm->purify_mode = PURIFY_DISABLED;
     wm->window_origin_mode = WINDOW_ORIGIN_DEFAULT;
+    wm->window_focus_fallback = WINDOW_FOCUS_FALLBACK_OFF;
     wm->menubar_opacity = 1.0f;
     wm->active_window_opacity = 1.0f;
     wm->normal_window_opacity = 1.0f;
@@ -247,6 +248,7 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_FFM: wm->configured_ffm_mode = value->enumeration; window_manager_recompute_effective_ffm_mode(wm); break;
     case DECLARATIVE_CONFIG_DISPLAY_ORDER: dm->order = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_ORIGIN: wm->window_origin_mode = value->enumeration; break;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: wm->window_focus_fallback = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: sm->window_placement = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: sm->window_insertion_point = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST: sm->window_zoom_persist = value->boolean; break;
@@ -418,6 +420,7 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     destination->ffm_menu_suspend_count = source->ffm_menu_suspend_count;
     destination->purify_mode = source->purify_mode;
     destination->window_origin_mode = source->window_origin_mode;
+    destination->window_focus_fallback = source->window_focus_fallback;
     destination->enable_window_opacity = source->enable_window_opacity;
     destination->menubar_opacity = source->menubar_opacity;
     destination->active_window_opacity = source->active_window_opacity;
@@ -579,6 +582,7 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
     g_window_manager.purify_mode = wm->purify_mode;
     g_window_manager.window_origin_mode = wm->window_origin_mode;
+    g_window_manager.window_focus_fallback = wm->window_focus_fallback;
     g_window_manager.enable_window_opacity = wm->enable_window_opacity;
     g_window_manager.menubar_opacity = wm->menubar_opacity;
     g_window_manager.active_window_opacity = wm->active_window_opacity;

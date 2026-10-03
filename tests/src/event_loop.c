@@ -1198,3 +1198,281 @@ TEST_FUNC(update_window_notifications_append_grows_past_fixed_boundary,
 
     free(window_list);
 });
+
+static struct window *focus_fallback_test_focused;
+static struct window *focus_fallback_test_recent;
+static int focus_fallback_test_focus_count;
+
+static struct window *focus_fallback_test_find_focused(struct window_manager *wm)
+{
+    (void) wm;
+    return focus_fallback_test_focused;
+}
+
+static struct window *focus_fallback_test_find_recent(struct window_manager *wm)
+{
+    (void) wm;
+    return focus_fallback_test_recent && focus_fallback_test_recent->ref ? focus_fallback_test_recent : NULL;
+}
+
+static void focus_fallback_test_focus(struct window *window)
+{
+    if (window == focus_fallback_test_recent) ++focus_fallback_test_focus_count;
+}
+
+static void focus_fallback_test_request_follow_up(void)
+{
+    event_loop_request_window_focus_fallback();
+}
+
+static void focus_fallback_test_retry_during_rejection_return(void)
+{
+    event_loop_focus_fallback_rejection_test_hook = NULL;
+    g_event_queue_test_fail_allocation = false;
+    struct event event;
+    while (event_queue_pop(&g_event_loop.queue, &event)) {
+        event_loop_discard_event(event.type, event.context, event.param1, false);
+    }
+    event_loop_request_window_focus_fallback();
+}
+
+static void focus_fallback_test_open_queue(uint32_t capacity)
+{
+    g_event_loop = (struct event_loop) {0};
+    event_queue_init(&g_event_loop.queue, capacity);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+}
+
+static void focus_fallback_test_close_queue(void)
+{
+    event_loop_close_producer_admission(&g_event_loop);
+    struct event event;
+    while (event_queue_pop(&g_event_loop.queue, &event)) {
+        event_loop_discard_event(event.type, event.context, event.param1, false);
+    }
+    event_queue_destroy(&g_event_loop.queue);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    g_event_loop = (struct event_loop) {0};
+}
+
+TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
+    __auto_type saved_focused = event_loop_focus_fallback_find_focused;
+    __auto_type saved_recent = event_loop_focus_fallback_find_recent;
+    __auto_type saved_focus = event_loop_focus_fallback_focus;
+    __auto_type saved_hook = event_loop_focus_fallback_entry_test_hook;
+    __auto_type saved_rejection_hook = event_loop_focus_fallback_rejection_test_hook;
+    struct application focused_app = { .name = "focused" };
+    struct application recent_app = { .name = "recent" };
+    struct window focused = { .application = &focused_app, .ref = (AXUIElementRef)(intptr_t)1, .id = 41, .is_root = true, .rule_flags = WINDOW_RULE_MANAGED };
+    struct window recent = { .application = &recent_app, .ref = (AXUIElementRef)(intptr_t)2, .id = 42, .is_root = true, .rule_flags = WINDOW_RULE_MANAGED };
+    focused.id_ptr = &focused.id;
+    recent.id_ptr = &recent.id;
+    event_loop_focus_fallback_find_focused = focus_fallback_test_find_focused;
+    event_loop_focus_fallback_find_recent = focus_fallback_test_find_recent;
+    event_loop_focus_fallback_focus = focus_fallback_test_focus;
+    event_loop_focus_fallback_entry_test_hook = NULL;
+    event_loop_focus_fallback_rejection_test_hook = NULL;
+    __atomic_store_n(&window_focus_fallback_reserved, 0, __ATOMIC_RELEASE);
+    focus_fallback_test_open_queue(4);
+
+    enum event_type triggers[] = { WINDOW_DESTROYED, WINDOW_MINIMIZED, APPLICATION_HIDDEN };
+    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_OFF;
+    for (size_t i = 0; i < sizeof(triggers) / sizeof(*triggers); ++i) {
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(g_event_loop.queue.count, 0U);
+    }
+
+    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_RECENT;
+    focus_fallback_test_focus_count = 0;
+    for (size_t i = 0; i < sizeof(triggers) / sizeof(*triggers); ++i) {
+        struct event event;
+        focus_fallback_test_focused = &focused;
+        focus_fallback_test_recent = &recent;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i);
+        focused.ref = NULL;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        focused.ref = (AXUIElementRef)(intptr_t)1;
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i);
+
+        focus_fallback_test_focused = NULL;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+
+        focus_fallback_test_recent = NULL;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+
+        focus_fallback_test_recent = &recent;
+        recent.ref = NULL;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        recent.ref = (AXUIElementRef)(intptr_t)2;
+
+        recent.id_ptr = NULL;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        recent.id_ptr = &recent.id;
+
+        window_set_flag(&recent, WINDOW_MINIMIZE);
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        window_clear_flag(&recent, WINDOW_MINIMIZE);
+
+        recent_app.is_hidden = true;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        recent_app.is_hidden = false;
+
+        recent.rule_flags = 0;
+        recent.is_root = false;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        recent.rule_flags = WINDOW_RULE_MANAGED;
+        recent.is_root = true;
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+
+        focused.flags = WINDOW_FULLSCREEN;
+        focus_fallback_test_focused = &focused;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        focused.flags = 0;
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+    }
+
+    focus_fallback_test_close_queue();
+    event_loop_focus_fallback_find_focused = saved_focused;
+    event_loop_focus_fallback_find_recent = saved_recent;
+    event_loop_focus_fallback_focus = saved_focus;
+    event_loop_focus_fallback_entry_test_hook = saved_hook;
+    event_loop_focus_fallback_rejection_test_hook = saved_rejection_hook;
+    g_window_manager.window_focus_fallback = saved_policy;
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(window_focus_fallback_queue_reservation_coalesces_retries_and_clears,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
+    __auto_type saved_focused = event_loop_focus_fallback_find_focused;
+    __auto_type saved_recent = event_loop_focus_fallback_find_recent;
+    __auto_type saved_focus = event_loop_focus_fallback_focus;
+    __auto_type saved_hook = event_loop_focus_fallback_entry_test_hook;
+    __auto_type saved_rejection_hook = event_loop_focus_fallback_rejection_test_hook;
+    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_RECENT;
+    event_loop_focus_fallback_find_focused = focus_fallback_test_find_focused;
+    event_loop_focus_fallback_find_recent = focus_fallback_test_find_recent;
+    event_loop_focus_fallback_focus = focus_fallback_test_focus;
+    focus_fallback_test_focused = NULL;
+    focus_fallback_test_recent = NULL;
+    event_loop_focus_fallback_entry_test_hook = NULL;
+    event_loop_focus_fallback_rejection_test_hook = NULL;
+    __atomic_store_n(&window_focus_fallback_reserved, 0, __ATOMIC_RELEASE);
+    focus_fallback_test_open_queue(2);
+
+    event_loop_request_window_focus_fallback_for_event(WINDOW_DESTROYED);
+    event_loop_request_window_focus_fallback_for_event(WINDOW_MINIMIZED);
+    event_loop_request_window_focus_fallback_for_event(APPLICATION_HIDDEN);
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 1U);
+
+    struct event event;
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, WINDOW_FOCUS_FALLBACK);
+    event_loop_focus_fallback_entry_test_hook = focus_fallback_test_request_follow_up;
+    EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 1U);
+    event_loop_focus_fallback_entry_test_hook = NULL;
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    event_loop_discard_event(event.type, event.context, event.param1, false);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 0U);
+
+    struct event replaced = {0}; uint32_t capacity = 0; bool wake = false;
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED }, false, &replaced, &capacity, &wake), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_RESIZED }, false, &replaced, &capacity, &wake), EVENT_QUEUE_ADDED);
+    g_event_queue_test_fail_allocation = true;
+    event_loop_request_window_focus_fallback();
+    g_event_queue_test_fail_allocation = false;
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 0U);
+    TEST_CHECK(g_event_loop.queue.count, 2U);
+    while (event_queue_pop(&g_event_loop.queue, &event)) event_loop_discard_event(event.type, event.context, event.param1, false);
+    event_loop_request_window_focus_fallback();
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 1U);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    event_loop_discard_event(event.type, event.context, event.param1, false);
+
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED }, false, &replaced, &capacity, &wake), EVENT_QUEUE_ADDED);
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_RESIZED }, false, &replaced, &capacity, &wake), EVENT_QUEUE_ADDED);
+    event_loop_focus_fallback_rejection_test_hook = focus_fallback_test_retry_during_rejection_return;
+    g_event_queue_test_fail_allocation = true;
+    event_loop_request_window_focus_fallback();
+    g_event_queue_test_fail_allocation = false;
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 1U);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+    TEST_CHECK(event.type, WINDOW_FOCUS_FALLBACK);
+    event_loop_discard_event(event.type, event.context, event.param1, false);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 0U);
+
+    event_loop_request_window_focus_fallback();
+    event_loop_cleanup(&g_event_loop);
+    TEST_CHECK(__atomic_load_n(&window_focus_fallback_reserved, __ATOMIC_ACQUIRE), 0U);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    printf("                   focus fallback queue accepted=5 skipped=2 rejected=2 discarded=2 shutdown=1 followup=1 aba_retry=1 owned_contexts=0 owned_sockets=0\n");
+
+    event_loop_focus_fallback_find_focused = saved_focused;
+    event_loop_focus_fallback_find_recent = saved_recent;
+    event_loop_focus_fallback_focus = saved_focus;
+    event_loop_focus_fallback_entry_test_hook = saved_hook;
+    event_loop_focus_fallback_rejection_test_hook = saved_rejection_hook;
+    g_window_manager.window_focus_fallback = saved_policy;
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(window_focus_fallback_selector_matches_public_recent_helper,
+{
+    struct window_manager wm = {0};
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+    table_init(&wm.managed_window, 4, hash_wm, compare_wm);
+    struct application application = { .name = "recent" };
+    struct window recent = { .application = &application, .ref = (AXUIElementRef)(intptr_t)1, .id = 73, .is_root = true, .rule_flags = WINDOW_RULE_MANAGED };
+    recent.id_ptr = &recent.id;
+    struct view view = {0};
+    table_add(&wm.window, &recent.id, &recent);
+    table_add(&wm.managed_window, &recent.id, &view);
+    wm.last_window_id = recent.id;
+    struct window *public_target = window_manager_find_recent_managed_window(&wm);
+    struct window *native_target = event_loop_focus_fallback_recent_window(&wm);
+    TEST_CHECK(public_target == &recent, true);
+    TEST_CHECK(native_target == public_target, true);
+    window_set_flag(&recent, WINDOW_MINIMIZE);
+    TEST_CHECK(window_manager_find_recent_managed_window(&wm) == NULL, true);
+    TEST_CHECK(event_loop_focus_fallback_recent_window(&wm) == NULL, true);
+    table_remove(&wm.managed_window, &recent.id);
+    table_remove(&wm.window, &recent.id);
+    table_free(&wm.managed_window);
+    table_free(&wm.window);
+});

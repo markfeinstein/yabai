@@ -1628,15 +1628,20 @@ struct window *window_manager_find_last_managed_window(struct space_manager *sm,
     return window_manager_find_window(wm, last->window_order[0]);
 }
 
+bool window_manager_window_is_focus_fallback_eligible(struct window *window)
+{
+    if (!window || !window->application || !window->id) return false;
+    if (!__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) return false;
+    if (!window_manager_is_window_eligible(window)) return false;
+    if (window_check_flag(window, WINDOW_MINIMIZE) || window_check_flag(window, WINDOW_ORDERED_OUT)) return false;
+    return !window->application->is_hidden;
+}
+
 struct window *window_manager_find_recent_managed_window(struct window_manager *wm)
 {
     struct window *window = window_manager_find_window(wm, wm->last_window_id);
-    if (!window) return NULL;
-
-    struct view *view = window_manager_find_managed_window(wm, window);
-    if (!view) return NULL;
-
-    return window;
+    if (!window_manager_window_is_focus_fallback_eligible(window) || !window->ref) return NULL;
+    return window_manager_find_managed_window(wm, window) ? window : NULL;
 }
 
 struct window *window_manager_find_prev_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window)
@@ -3417,6 +3422,7 @@ void window_manager_init(struct window_manager *wm)
     window_manager_recompute_effective_ffm_mode(wm);
     wm->purify_mode = PURIFY_DISABLED;
     wm->window_origin_mode = WINDOW_ORIGIN_DEFAULT;
+    wm->window_focus_fallback = WINDOW_FOCUS_FALLBACK_OFF;
     wm->enable_mff = false;
     wm->enable_window_opacity = false;
     wm->menubar_opacity = 1.0f;

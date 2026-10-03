@@ -69,6 +69,7 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(MENU_BAR_ACTION) \
     EVENT_TYPE_ENTRY(CONFIGURATION_RECONCILE) \
     EVENT_TYPE_ENTRY(EVENT_LOOP_SYNC) \
+    EVENT_TYPE_ENTRY(WINDOW_FOCUS_FALLBACK) \
     EVENT_TYPE_ENTRY(DAEMON_MESSAGE)
 
 enum event_type
@@ -132,5 +133,6 @@ bool event_loop_is_worker_thread(struct event_loop *event_loop);
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_window_inventory_did_change(void);
+void event_loop_request_window_focus_fallback(void);
 
 #endif

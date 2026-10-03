@@ -34,6 +34,7 @@ extern bool g_verbose;
 #define ARGUMENT_CONFIG_WINDOW_ORIGIN_DEFAULT "default"
 #define ARGUMENT_CONFIG_WINDOW_ORIGIN_FOCUSED "focused"
 #define ARGUMENT_CONFIG_WINDOW_ORIGIN_CURSOR  "cursor"
+#define ARGUMENT_CONFIG_FOCUS_FALLBACK_RECENT "recent"
 #define ARGUMENT_CONFIG_WINDOW_PLACEMENT_FST  "first_child"
 #define ARGUMENT_CONFIG_WINDOW_PLACEMENT_SND  "second_child"
 #define ARGUMENT_CONFIG_WINDOW_INSERT_FOCUSED "focused"
@@ -1436,6 +1437,21 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ORIGIN, &(struct declarative_value) { .present = true, .enumeration = WINDOW_ORIGIN_FOCUSED }, 0);
             } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_ORIGIN_CURSOR)) {
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ORIGIN, &(struct declarative_value) { .present = true, .enumeration = WINDOW_ORIGIN_CURSOR }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_FOCUS_FALLBACK)) {
+            if (sel_sid) {
+                daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", command.length, command.text, domain.length, domain.text);
+                return;
+            }
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", window_focus_fallback_str[g_window_manager.window_focus_fallback]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, &(struct declarative_value) { .present = true, .enumeration = WINDOW_FOCUS_FALLBACK_OFF }, 0);
+            } else if (token_equals(value, ARGUMENT_CONFIG_FOCUS_FALLBACK_RECENT)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, &(struct declarative_value) { .present = true, .enumeration = WINDOW_FOCUS_FALLBACK_RECENT }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }

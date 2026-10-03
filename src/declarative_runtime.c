@@ -195,6 +195,7 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_FFM: return value->enumeration >= FFM_DISABLED && value->enumeration <= FFM_AUTORAISE;
     case DECLARATIVE_CONFIG_DISPLAY_ORDER: return value->enumeration >= DISPLAY_ARRANGEMENT_ORDER_DEFAULT && value->enumeration <= DISPLAY_ARRANGEMENT_ORDER_Y;
     case DECLARATIVE_CONFIG_WINDOW_ORIGIN: return value->enumeration >= WINDOW_ORIGIN_DEFAULT && value->enumeration <= WINDOW_ORIGIN_CURSOR;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: return value->enumeration >= WINDOW_FOCUS_FALLBACK_OFF && value->enumeration <= WINDOW_FOCUS_FALLBACK_RECENT;
     case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: return value->enumeration == CHILD_FIRST || value->enumeration == CHILD_SECOND;
     case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: return value->enumeration >= INSERT_FOCUSED && value->enumeration <= INSERT_LAST;
     case DECLARATIVE_CONFIG_OPACITY_DURATION: return value->real >= 0.0f && isfinite(value->real) && sa_opacity_duration_is_safe(value->real);
@@ -254,6 +255,7 @@ enum declarative_apply_result declarative_apply_runtime_setting(enum declarative
         declarative_runtime_operation_ops.mark_menu_bar_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_DISPLAY);
         break;
     case DECLARATIVE_CONFIG_WINDOW_ORIGIN: g_window_manager.window_origin_mode = value->enumeration; break;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: g_window_manager.window_focus_fallback = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: g_space_manager.window_placement = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: g_space_manager.window_insertion_point = value->enumeration; break;
     case DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST: g_space_manager.window_zoom_persist = value->boolean; break;

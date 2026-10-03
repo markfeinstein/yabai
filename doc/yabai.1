@@ -1,7 +1,7 @@
 '\" t
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
-.\" Generator: Asciidoctor 2.0.23
+.\" Generator: Asciidoctor 2.0.26
 .\"      Date: 2026-10-03
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
@@ -347,6 +347,17 @@ Enum fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
+\f(CRwindow_focus_fallback\fP: \f(CRoff\fP, \f(CRrecent\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
 \f(CRwindow_placement\fP: \f(CRfirst_child\fP, \f(CRsecond_child\fP;
 .RE
 .sp
@@ -580,7 +591,7 @@ built\-in < native global < native Space < runtime global < runtime Space
 .fi
 .if n .RE
 .sp
-A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. \f(CRspace \-\-layout\fP uses runtime Space ownership. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
 .SS "Native rules"
 .sp
 Each \f(CRrules\fP entry accepts exactly \f(CRlabel\fP, \f(CRone_shot\fP, \f(CRmatch\fP and \f(CReffects\fP. \f(CRmatch\fP is required and nonempty. \f(CRlabel\fP is optional, nonempty, unique within the file and at most 1,024 UTF\-8 bytes. \f(CRone_shot\fP is an optional boolean, defaulting to \f(CRfalse\fP. \f(CReffects\fP is optional and may be empty, so an effectless persistent rule is valid.
@@ -868,6 +879,15 @@ Specify which display a newly created window should be managed in.
 \fIfocused\fP: The display that has focus when the window is created.
 .br
 \fIcursor\fP: The display that currently holds the mouse cursor.
+.RE
+.sp
+\fBwindow_focus_fallback\fP [\fIoff|recent\fP]
+.RS 4
+Select the native policy used after \f(CRWINDOW_DESTROYED\fP, \f(CRWINDOW_MINIMIZED\fP and \f(CRAPPLICATION_HIDDEN\fP. The default is \fIoff\fP.
+.br
+\fIrecent\fP: After the triggering handler finishes mutating manager state, queue one event\-loop follow\-up. When that follow\-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as \f(CRwindow \-\-focus recent\fP and focuses it through the normal focus path. Destroyed, minimized, hidden, ineligible, invalid and unavailable recent windows are ignored; no candidate is a no\-op. Duplicate triggers coalesce while one follow\-up is pending.
+.br
+This is a typed focus policy. It does not execute generic signals, invoke a shell, spawn a process, or route a synthetic command through the daemon socket. Existing user\-configured signals keep their normal behavior and order.
 .RE
 .sp
 \fBwindow_placement\fP [\fIfirst_child|second_child\fP]

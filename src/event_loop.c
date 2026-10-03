@@ -9,6 +9,7 @@ extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
 volatile uint32_t __pending_window_focus;
+static volatile uint32_t window_focus_fallback_reserved;
 volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
@@ -119,6 +120,53 @@ void event_loop_window_inventory_did_change(void)
 
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         update_window_notifications();
+    }
+}
+
+static struct window *event_loop_focus_fallback_focused_window(struct window_manager *wm)
+{
+    return window_manager_focused_window(wm);
+}
+
+static struct window *event_loop_focus_fallback_recent_window(struct window_manager *wm)
+{
+    return window_manager_find_recent_managed_window(wm);
+}
+
+static void event_loop_focus_fallback_focus_window(struct window *window)
+{
+    window_manager_focus_window_with_raise(&window->application->psn, window->id, window->ref);
+}
+
+#ifdef TESTS
+static struct window *(*event_loop_focus_fallback_find_focused)(struct window_manager *) = event_loop_focus_fallback_focused_window;
+static struct window *(*event_loop_focus_fallback_find_recent)(struct window_manager *) = event_loop_focus_fallback_recent_window;
+static void (*event_loop_focus_fallback_focus)(struct window *) = event_loop_focus_fallback_focus_window;
+static void (*event_loop_focus_fallback_entry_test_hook)(void);
+static void (*event_loop_focus_fallback_rejection_test_hook)(void);
+#else
+#define event_loop_focus_fallback_find_focused event_loop_focus_fallback_focused_window
+#define event_loop_focus_fallback_find_recent event_loop_focus_fallback_recent_window
+#define event_loop_focus_fallback_focus event_loop_focus_fallback_focus_window
+#endif
+
+void event_loop_request_window_focus_fallback(void)
+{
+    if (g_window_manager.window_focus_fallback != WINDOW_FOCUS_FALLBACK_RECENT) return;
+    uint32_t expected = 0;
+    if (!__atomic_compare_exchange_n(&window_focus_fallback_reserved, &expected, 1, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    if (!event_loop_try_post(&g_event_loop, WINDOW_FOCUS_FALLBACK, NULL, 0)) {
+#ifdef TESTS
+        if (event_loop_focus_fallback_rejection_test_hook) event_loop_focus_fallback_rejection_test_hook();
+#endif
+    }
+}
+
+static void event_loop_request_window_focus_fallback_for_event(enum event_type type)
+{
+    if (type == WINDOW_DESTROYED || type == WINDOW_MINIMIZED || type == APPLICATION_HIDDEN) {
+        event_loop_request_window_focus_fallback();
     }
 }
 
@@ -401,6 +449,7 @@ static void event_loop_clear_terminated_front_identity(struct process *process)
 static EVENT_HANDLER(APPLICATION_TERMINATED)
 {
     struct process *process = context;
+    bool destroyed_windows = false;
     window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
 
     struct application *application = window_manager_find_application(&g_window_manager, process->pid);
@@ -425,6 +474,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
 
     int window_count;
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
+    destroyed_windows = window_count > 0;
 
     int view_count = 0;
     struct view **view_list = ts_alloc_list(struct view *, window_count);
@@ -494,6 +544,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
     }
 
 out:
+    if (destroyed_windows) event_loop_request_window_focus_fallback_for_event(WINDOW_DESTROYED);
     process_destroy(process);
 }
 
@@ -685,7 +736,10 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
 static EVENT_HANDLER(APPLICATION_HIDDEN)
 {
     struct application *application = window_manager_find_application(&g_window_manager, (pid_t)(intptr_t) context);
-    if (!application) return;
+    if (!application) {
+        event_loop_request_window_focus_fallback_for_event(APPLICATION_HIDDEN);
+        return;
+    }
 
     debug("%s: %s\n", __FUNCTION__, application->name);
     application->is_hidden = true;
@@ -742,6 +796,7 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
 
     event_signal_push(SIGNAL_APPLICATION_HIDDEN, application);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    event_loop_request_window_focus_fallback_for_event(APPLICATION_HIDDEN);
 }
 
 static EVENT_HANDLER(WINDOW_CREATED)
@@ -794,6 +849,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     struct window *window = context;
     if (!window || window->id == 0) {
         debug("%s: window has already been destroyed, ignoring event..\n", __FUNCTION__);
+        event_loop_request_window_focus_fallback_for_event(WINDOW_DESTROYED);
         return;
     }
 
@@ -819,6 +875,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     window_destroy(window);
 
     event_loop_window_inventory_did_change();
+    event_loop_request_window_focus_fallback_for_event(WINDOW_DESTROYED);
 }
 
 static void event_loop_consume_window_focus(int ownership)
@@ -1026,10 +1083,14 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
 {
     uint32_t window_id = (uint32_t)(intptr_t) context;
     struct window *window = window_manager_find_window(&g_window_manager, window_id);
-    if (!window) return;
+    if (!window) {
+        event_loop_request_window_focus_fallback_for_event(WINDOW_MINIMIZED);
+        return;
+    }
 
     if (!__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, window->id);
+        event_loop_request_window_focus_fallback_for_event(WINDOW_MINIMIZED);
         return;
     }
 
@@ -1067,6 +1128,7 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
 
     event_signal_push(SIGNAL_WINDOW_MINIMIZED, window);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    event_loop_request_window_focus_fallback_for_event(WINDOW_MINIMIZED);
 }
 
 static EVENT_HANDLER(WINDOW_DEMINIMIZED)
@@ -2002,6 +2064,22 @@ static EVENT_HANDLER(EVENT_LOOP_SYNC)
     event_loop_sync_complete(sync, result);
 }
 
+static EVENT_HANDLER(WINDOW_FOCUS_FALLBACK)
+{
+    __atomic_store_n(&window_focus_fallback_reserved, 0, __ATOMIC_RELEASE);
+#ifdef TESTS
+    if (event_loop_focus_fallback_entry_test_hook) event_loop_focus_fallback_entry_test_hook();
+#endif
+    if (g_window_manager.window_focus_fallback != WINDOW_FOCUS_FALLBACK_RECENT) return;
+
+    struct window *focused = event_loop_focus_fallback_find_focused(&g_window_manager);
+    if (window_manager_window_is_focus_fallback_eligible(focused)) return;
+
+    struct window *recent = event_loop_focus_fallback_find_recent(&g_window_manager);
+    if (!window_manager_window_is_focus_fallback_eligible(recent)) return;
+    event_loop_focus_fallback_focus(recent);
+}
+
 static EVENT_HANDLER(DAEMON_MESSAGE)
 {
     daemon_message_admission_release(&g_daemon_message_admission);
@@ -2107,6 +2185,10 @@ static void *event_loop_run(void *context)
 
 static void event_loop_release_event_context(enum event_type type, void *context)
 {
+    if (type == WINDOW_FOCUS_FALLBACK) {
+        __atomic_store_n(&window_focus_fallback_reserved, 0, __ATOMIC_RELEASE);
+        return;
+    }
     if (!context) return;
 
     switch (type) {

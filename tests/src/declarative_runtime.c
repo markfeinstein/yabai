@@ -166,6 +166,7 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_FFM, "off", "disabled\n", DECLARATIVE_TEST_EFFECT_FFM },
     { DECLARATIVE_CONFIG_DISPLAY_ORDER, "horizontal", "horizontal\n", DECLARATIVE_TEST_EFFECT_DISPLAY_DIRTY },
     { DECLARATIVE_CONFIG_WINDOW_ORIGIN, "cursor", "cursor\n", -1 },
+    { DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, "recent", "recent\n", -1 },
     { DECLARATIVE_CONFIG_WINDOW_PLACEMENT, "second_child", "second_child\n", -1 },
     { DECLARATIVE_CONFIG_WINDOW_INSERT_POINT, "last", "last\n", -1 },
     { DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST, "on", "on\n", -1 },
@@ -236,6 +237,17 @@ static char *declarative_test_run_space_layout_surface(bool config_surface)
     return output;
 }
 
+static char *declarative_test_run_scoped_focus_fallback(void)
+{
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    char message[] = "--space\0recent\0window_focus_fallback\0recent\0";
+    handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+    fclose(rsp);
+    return output;
+}
+
 static struct declarative_value declarative_test_value(enum declarative_config_id id)
 {
     struct declarative_value value = { .present = true };
@@ -243,6 +255,7 @@ static struct declarative_value declarative_test_value(enum declarative_config_i
     case DECLARATIVE_CONFIG_FFM: value.enumeration = FFM_DISABLED; break;
     case DECLARATIVE_CONFIG_DISPLAY_ORDER: value.enumeration = DISPLAY_ARRANGEMENT_ORDER_DEFAULT; break;
     case DECLARATIVE_CONFIG_WINDOW_ORIGIN: value.enumeration = WINDOW_ORIGIN_DEFAULT; break;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: value.enumeration = WINDOW_FOCUS_FALLBACK_OFF; break;
     case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: value.enumeration = CHILD_FIRST; break;
     case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: value.enumeration = INSERT_FOCUSED; break;
     case DECLARATIVE_CONFIG_OPACITY_DURATION: value.real = 0.1f; break;
@@ -300,8 +313,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_35_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 35);
+TEST_FUNC(declarative_command_matrix_covers_all_36_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 36);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -347,8 +360,26 @@ TEST_FUNC(declarative_command_matrix_covers_all_35_query_invalid_and_mutation_pa
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_35_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 35);
+TEST_FUNC(declarative_window_focus_fallback_scoped_command_rejects_before_mutation,
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
+    struct declarative_runtime_cell saved_ownership = g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK];
+    g_space_manager.last_space_id = UINT64_MAX - 60;
+    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_OFF;
+    memset(&g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK], 0,
+           sizeof(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK]));
+    char *output = declarative_test_run_scoped_focus_fallback();
+    TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'window_focus_fallback' for domain 'config' is global-only.\n"), 0);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_OFF);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present, false);
+    free(output);
+    g_space_manager.last_space_id = saved_last_space_id;
+    g_window_manager.window_focus_fallback = saved_policy;
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK] = saved_ownership;
+)
+
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_36_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 36);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);

@@ -24,6 +24,7 @@
     X(FFM,                   COMMAND_CONFIG_FFM,                   "focus_follows_mouse",         ENUM,       GLOBAL, FFM,              FFM) \
     X(DISPLAY_ORDER,         COMMAND_CONFIG_DISPLAY_ORDER,         "display_arrangement_order",   ENUM,       GLOBAL, DISPLAY_ORDER,    DISPLAY_ORDER) \
     X(WINDOW_ORIGIN,         COMMAND_CONFIG_WINDOW_ORIGIN,         "window_origin_display",       ENUM,       GLOBAL, WINDOW_ORIGIN,    WINDOW_ORIGIN) \
+    X(WINDOW_FOCUS_FALLBACK, COMMAND_CONFIG_WINDOW_FOCUS_FALLBACK, "window_focus_fallback",       ENUM,       GLOBAL, FOCUS_FALLBACK,   WINDOW_FOCUS_FALLBACK) \
     X(WINDOW_PLACEMENT,      COMMAND_CONFIG_WINDOW_PLACEMENT,      "window_placement",            ENUM,       GLOBAL, WINDOW_PLACEMENT, WINDOW_PLACEMENT) \
     X(WINDOW_INSERT_POINT,   COMMAND_CONFIG_WINDOW_INSERT_POINT,   "window_insertion_point",       ENUM,       GLOBAL, INSERT_POINT,     INSERT_POINT) \
     X(WINDOW_ZOOM_PERSIST,   COMMAND_CONFIG_WINDOW_ZOOM_PERSIST,   "window_zoom_persist",          BOOL,       GLOBAL, BOOL,             WINDOW_ZOOM_PERSIST) \

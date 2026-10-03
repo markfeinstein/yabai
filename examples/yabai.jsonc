@@ -18,6 +18,9 @@
     "focus_follows_mouse": "off",
     "display_arrangement_order": "default",
     "window_origin_display": "default",
+    // "recent" natively replaces shell signals that focus the recent managed
+    // window after a destroyed, minimized, or hidden focus owner.
+    "window_focus_fallback": "off",
     "window_placement": "second_child",
     "window_insertion_point": "focused",
     "window_zoom_persist": true,

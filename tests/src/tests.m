@@ -1682,6 +1682,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
+    TEST_ENTRY(window_focus_fallback_trigger_policy_and_behavior_are_deterministic) \
+    TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \
+    TEST_ENTRY(window_focus_fallback_selector_matches_public_recent_helper) \
     TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
@@ -1797,6 +1800,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_daemon_flags_preserve_legacy_and_native_independence) \
     TEST_ENTRY(declarative_startup_selection_obeys_discovery_and_missing_policy) \
     TEST_ENTRY(declarative_enums_are_runtime_values)                       \
+    TEST_ENTRY(declarative_window_focus_fallback_schema_is_strict_and_global_only) \
     TEST_ENTRY(declarative_follow_presence_is_validated)                   \
     TEST_ENTRY(declarative_model_allocator_is_transactional)               \
     TEST_ENTRY(declarative_file_ops_cover_detectable_changes)              \
@@ -1811,8 +1815,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_numeric_field_matrix)                           \
     TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
     TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
-    TEST_ENTRY(declarative_command_matrix_covers_all_35_query_invalid_and_mutation_paths) \
-    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_35_typed_setters)   \
+    TEST_ENTRY(declarative_command_matrix_covers_all_36_query_invalid_and_mutation_paths) \
+    TEST_ENTRY(declarative_window_focus_fallback_scoped_command_rejects_before_mutation) \
+    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_36_typed_setters)   \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
     TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
     TEST_ENTRY(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership) \

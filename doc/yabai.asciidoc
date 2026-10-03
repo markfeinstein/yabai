@@ -158,6 +158,7 @@ Enum fields are:
 * `focus_follows_mouse`: `off`, `autofocus`, `autoraise`;
 * `display_arrangement_order`: `default`, `horizontal`, `vertical`;
 * `window_origin_display`: `default`, `focused`, `cursor`;
+* `window_focus_fallback`: `off`, `recent`;
 * `window_placement`: `first_child`, `second_child`;
 * `window_insertion_point`: `focused`, `first`, `last`;
 * `window_shadow`: `off`, `float`, `on`;
@@ -199,7 +200,7 @@ Effective precedence is:
 built-in < native global < native Space < runtime global < runtime Space
 ----
 
-A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. `space --layout` uses runtime Space ownership. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. `space --layout` uses runtime Space ownership. For `window_focus_fallback`, this means `yabai -m config window_focus_fallback recent` overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built-in `off` value. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
 
 Native rules
 ~~~~~~~~~~~~
@@ -370,6 +371,11 @@ Global Settings
     'default': The display in which the window is created (standard macOS behaviour). +
     'focused': The display that has focus when the window is created. +
     'cursor': The display that currently holds the mouse cursor.
+
+*window_focus_fallback* ['off|recent']::
+    Select the native policy used after `WINDOW_DESTROYED`, `WINDOW_MINIMIZED` and `APPLICATION_HIDDEN`. The default is 'off'. +
+    'recent': After the triggering handler finishes mutating manager state, queue one event-loop follow-up. When that follow-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as `window --focus recent` and focuses it through the normal focus path. Destroyed, minimized, hidden, ineligible, invalid and unavailable recent windows are ignored; no candidate is a no-op. Duplicate triggers coalesce while one follow-up is pending. +
+    This is a typed focus policy. It does not execute generic signals, invoke a shell, spawn a process, or route a synthetic command through the daemon socket. Existing user-configured signals keep their normal behavior and order.
 
 *window_placement* ['first_child|second_child']::
     Specify whether managed windows should become the first or second leaf-node.

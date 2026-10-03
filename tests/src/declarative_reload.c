@@ -299,7 +299,9 @@ static void declarative_reload_set_inventory(struct declarative_reload_fixture *
 
 static bool declarative_reload_ownership_present(void)
 {
-    if (!g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP].present) return false;
+    if (!g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP].present ||
+        !g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present ||
+        g_window_manager.window_focus_fallback != WINDOW_FOCUS_FALLBACK_RECENT) return false;
     uint64_t sid = 11;
     struct view *view = table_find(&g_space_manager.view, &sid);
     return view && view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].present;
@@ -310,6 +312,10 @@ static void declarative_reload_set_ownership(void)
     g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_GAP] = (struct declarative_runtime_cell) {
         .present = true, .source = DECLARATIVE_SETTING_RUNTIME_GLOBAL, .value.integer = 73
     };
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK] = (struct declarative_runtime_cell) {
+        .present = true, .source = DECLARATIVE_SETTING_RUNTIME_GLOBAL, .value.integer = WINDOW_FOCUS_FALLBACK_RECENT
+    };
+    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_RECENT;
     uint64_t sid = 11;
     struct view *view = table_find(&g_space_manager.view, &sid);
     if (view) view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP] = (struct declarative_runtime_cell) {
@@ -545,6 +551,8 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(rule_check_flag(&g_window_manager.rules[0], RULE_ONE_SHOT), true);
     TEST_CHECK(rule_native_label_is_protected("native-once"), true);
     TEST_CHECK(declarative_reload_ownership_present(), false);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present, false);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_OFF);
     TEST_CHECK(g_space_manager.window_placement, CHILD_SECOND);
     TEST_CHECK(g_space_manager.window_insertion_point, INSERT_FOCUSED);
     TEST_CHECK(g_space_manager.split_ratio, 0.5f);
@@ -569,6 +577,7 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     char *fixed_path = declarative_installed.path;
     TEST_CHECK(declarative_reconcile_run(&ops), true);
     TEST_CHECK(declarative_reload_ownership_present(), true);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_RECENT);
     TEST_CHECK(declarative_installed.generation, fixed_generation);
     TEST_CHECK(declarative_installed.fold_context != fixed_context, true);
     TEST_CHECK(declarative_installed.model, fixed_model);
@@ -576,6 +585,20 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(rule_native_generation(), fixed_generation);
     TEST_CHECK(strcmp(g_window_manager.rules[1].label, "runtime-a"), 0);
     TEST_CHECK(strcmp(g_window_manager.rules[2].label, "runtime-b"), 0);
+
+    static const char native_focus_json[] =
+        "{\"version\":1,\"config\":{\"window_focus_fallback\":\"recent\"}}";
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK,
+                                                 &(struct declarative_value) { .present = true, .enumeration = WINDOW_FOCUS_FALLBACK_OFF }, 0),
+               DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_OFF);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present, true);
+    fixture.json = native_focus_json;
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_RECENT);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present, false);
 
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
