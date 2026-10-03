@@ -1904,6 +1904,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
     TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
+    TEST_ENTRY(declarative_reconcile_omits_floating_windows_from_published_management) \
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
     TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \

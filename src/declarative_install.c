@@ -592,7 +592,7 @@ static struct window *declarative_reload_find_window(uint32_t wid, void *context
 static bool declarative_reload_window_is_eligible(struct window *window, void *context)
 {
     (void) context;
-    return window && window_manager_is_window_eligible(window);
+    return window && window_manager_should_manage_window(window);
 }
 
 static void declarative_reload_apply_scalars(const struct declarative_startup_bundle *bundle)

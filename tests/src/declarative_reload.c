@@ -323,6 +323,50 @@ static void declarative_reload_set_ownership(void)
     };
 }
 
+TEST_FUNC(declarative_reconcile_omits_floating_windows_from_published_management,
+{
+    static const char candidate_json[] = "{\"version\":1,\"config\":{\"layout\":\"bsp\"},\"rules\":[]}";
+    struct declarative_reload_fixture fixture = {
+        .json = candidate_json, .path = "/tmp/reconcile-floating-window.jsonc"
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    const uint32_t floating_wid = UINT32_C(0xfffffff0);
+    const uint32_t managed_wid = UINT32_C(0xfffffff1);
+    struct application application = {0};
+    fixture.window_count = 2;
+    fixture.wids[0] = floating_wid;
+    fixture.windows[0] = (struct window) {
+        .application = &application, .id = floating_wid, .is_root = true,
+        .role = kAXWindowRole, .subrole = kAXStandardWindowSubrole,
+        .flags = WINDOW_FLOAT | WINDOW_MOVABLE
+    };
+    fixture.wids[1] = managed_wid;
+    fixture.windows[1] = (struct window) {
+        .application = &application, .id = managed_wid, .is_root = true,
+        .role = kAXWindowRole, .subrole = kAXDialogSubrole,
+        .rule_flags = WINDOW_RULE_MANAGED
+    };
+
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    ops.is_eligible = declarative_reload_window_is_eligible;
+    TEST_CHECK(declarative_reconcile_run(&ops), true);
+
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    TEST_CHECK(view != NULL, true);
+    TEST_CHECK(view ? declarative_reload_find_wid(view->root, floating_wid) == NULL : false, true);
+    TEST_CHECK(view ? declarative_reload_find_wid(view->root, managed_wid) != NULL : false, true);
+    TEST_CHECK(table_find(&g_window_manager.managed_window, &fixture.wids[0]) == NULL, true);
+    TEST_CHECK(table_find(&g_window_manager.managed_window, &fixture.wids[1]), view);
+    TEST_CHECK(g_window_manager.managed_window.count, 1);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
 TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 {
     static const char candidate_json[] =
