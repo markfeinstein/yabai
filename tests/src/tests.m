@@ -39,6 +39,7 @@ typedef TEST_SIG(function);
 #include "accordion.c"
 #include "window_manager.c"
 #include "event_loop.c"
+#include "inactive_space_launch.c"
 #include "space_gesture.c"
 #include "window_ordered.c"
 #include "event_queue.c"
@@ -1666,6 +1667,15 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
+    TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
+    TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
+    TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
+    TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
+    TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
+    TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \
+    TEST_ENTRY(inactive_space_launch_global_probe_budget_round_robins_queue) \
+    TEST_ENTRY(inactive_space_launch_retry_survives_finalization_and_rejects_stale_pid_reuse) \
+    TEST_ENTRY(inactive_space_launch_termination_cancels_reservation_and_real_queue_entry) \
     TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
     TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
     TEST_ENTRY(declarative_scaffold_membership_add_remove_requests_one_reconcile) \

@@ -77,6 +77,8 @@ struct application
     bool is_observing;
     bool is_hidden;
     bool ax_retry;
+    bool launch_refresh;
+    uint16_t inactive_probe_cursor;
 };
 
 bool application_is_frontmost(struct application *application);

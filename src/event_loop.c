@@ -275,6 +275,74 @@ out:
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
+void event_loop_process_application_windows(struct window **window_list, int window_count)
+{
+    uint32_t prev_window_id = g_window_manager.focused_window_id;
+
+    uint64_t sid;
+    bool default_origin = g_window_manager.window_origin_mode == WINDOW_ORIGIN_DEFAULT;
+
+    if (!default_origin) {
+        if (g_window_manager.window_origin_mode == WINDOW_ORIGIN_FOCUSED) {
+            sid = g_space_manager.current_space_id;
+        } else /* if (g_window_manager.window_origin_mode == WINDOW_ORIGIN_CURSOR) */ {
+            sid = space_manager_cursor_space();
+        }
+    }
+
+    int view_count = 0;
+    struct view **view_list = ts_alloc_list(struct view *, window_count);
+
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_list[i];
+
+        if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
+            if (default_origin) sid = window_space(window->id);
+
+            struct view *view = space_manager_find_view(&g_space_manager, sid);
+            if (view->layout != VIEW_FLOAT) {
+                //
+                // @cleanup
+                //
+                // :AXBatching
+                //
+                // NOTE(asmvik): Batch all operations and mark the view as dirty so that we can perform a single flush,
+                // making sure that each window is only moved and resized a single time, when the final layout has been computed.
+                // This is necessary to make sure that we do not call the AX API for each modification to the tree.
+                //
+
+                window_manager_adjust_layer(window, LAYER_BELOW);
+                struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
+                if (!node) {
+                    window_manager_adjust_layer(window, LAYER_NORMAL);
+                } else {
+                    window_manager_add_managed_window(&g_window_manager, window, view);
+
+                    view_set_flag(view, VIEW_IS_DIRTY);
+                    view_list[view_count++] = view;
+
+                    prev_window_id = window->id;
+                }
+            }
+        }
+
+        if (window_manager_is_window_eligible(window)) {
+            event_signal_push(SIGNAL_WINDOW_CREATED, window);
+        }
+    }
+
+    //
+    // @cleanup
+    //
+    // :AXBatching
+    //
+    // NOTE(asmvik): Flush previously batched operations if the view is marked as dirty.
+    // This is necessary to make sure that we do not call the AX API for each modification to the tree.
+    //
+
+    event_loop_flush_batched_views(view_list, view_count);
+}
+
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
 {
     struct process *process = context;
@@ -381,72 +449,9 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     // an inactive space while launching (e.g. relaunch after an update) would otherwise never have them tracked.
     //
 
-    window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, -1);
     application_window_collection_update_inventory(previous_window_count, g_window_manager.window.count);
-    uint32_t prev_window_id = g_window_manager.focused_window_id;
-
-    uint64_t sid;
-    bool default_origin = g_window_manager.window_origin_mode == WINDOW_ORIGIN_DEFAULT;
-
-    if (!default_origin) {
-        if (g_window_manager.window_origin_mode == WINDOW_ORIGIN_FOCUSED) {
-            sid = g_space_manager.current_space_id;
-        } else /* if (g_window_manager.window_origin_mode == WINDOW_ORIGIN_CURSOR) */ {
-            sid = space_manager_cursor_space();
-        }
-    }
-
-    int view_count = 0;
-    struct view **view_list = ts_alloc_list(struct view *, window_count);
-
-    for (int i = 0; i < window_count; ++i) {
-        struct window *window = window_list[i];
-
-        if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
-            if (default_origin) sid = window_space(window->id);
-
-            struct view *view = space_manager_find_view(&g_space_manager, sid);
-            if (view->layout != VIEW_FLOAT) {
-                //
-                // @cleanup
-                //
-                // :AXBatching
-                //
-                // NOTE(asmvik): Batch all operations and mark the view as dirty so that we can perform a single flush,
-                // making sure that each window is only moved and resized a single time, when the final layout has been computed.
-                // This is necessary to make sure that we do not call the AX API for each modification to the tree.
-                //
-
-                window_manager_adjust_layer(window, LAYER_BELOW);
-                struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
-                if (!node) {
-                    window_manager_adjust_layer(window, LAYER_NORMAL);
-                } else {
-                    window_manager_add_managed_window(&g_window_manager, window, view);
-
-                    view_set_flag(view, VIEW_IS_DIRTY);
-                    view_list[view_count++] = view;
-
-                    prev_window_id = window->id;
-                }
-            }
-        }
-
-        if (window_manager_is_window_eligible(window)) {
-            event_signal_push(SIGNAL_WINDOW_CREATED, window);
-        }
-    }
-
-    //
-    // @cleanup
-    //
-    // :AXBatching
-    //
-    // NOTE(asmvik): Flush previously batched operations if the view is marked as dirty.
-    // This is necessary to make sure that we do not call the AX API for each modification to the tree.
-    //
-
-    event_loop_flush_batched_views(view_list, view_count);
+    event_loop_process_application_windows(window_list, window_count);
+    buf_free(window_list);
 }
 
 static void event_loop_clear_window_identity(struct window_manager *wm, uint32_t window_id)
@@ -479,8 +484,8 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
 
     struct application *application = window_manager_find_application(&g_window_manager, process->pid);
 
-    if (!application) {
-        debug("%s: %s (%d) (not observed)\n", __FUNCTION__, process->name, process->pid);
+    if (!application || !psn_equals(&application->psn, &process->psn)) {
+        debug("%s: %s (%d) (not observed or stale)\n", __FUNCTION__, process->name, process->pid);
         event_loop_clear_terminated_front_identity(process);
         goto out;
     }
@@ -489,13 +494,10 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
     event_signal_push(SIGNAL_APPLICATION_TERMINATED, application);
     event_loop_clear_terminated_front_identity(process);
     window_manager_remove_application(&g_window_manager, application->pid);
+    rule_cancel_one_shots(application);
+    application->launch_refresh = false;
 
-    for (int i = 0; i < buf_len(g_window_manager.applications_to_refresh); ++i) {
-        if (application == g_window_manager.applications_to_refresh[i]) {
-            buf_del(g_window_manager.applications_to_refresh, i);
-            break;
-        }
-    }
+    window_manager_remove_application_refresh(&g_window_manager, application);
 
     int window_count;
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
@@ -644,9 +646,14 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
         if (application == g_window_manager.applications_to_refresh[i]) {
             debug("%s: %s has windows that are not yet resolved\n", __FUNCTION__, application->name);
             int previous_window_count = g_window_manager.window.count;
-            window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, i);
+            int window_count = 0;
+            struct window **window_list = NULL;
+            window_manager_begin_inactive_probe_pass(4096);
+            window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, i, &window_list, &window_count);
             // Resolution controls retry state independently: a false result can still add windows.
             application_window_collection_update_inventory(previous_window_count, g_window_manager.window.count);
+            event_loop_process_application_windows(window_list, window_count);
+            buf_free(window_list);
             break;
         }
     }
@@ -803,25 +810,22 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
     event_loop_request_window_focus_fallback_for_event(APPLICATION_HIDDEN);
 }
 
-static EVENT_HANDLER(WINDOW_CREATED)
+static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
-    uint32_t window_id = ax_window_id(context);
-    if (!window_id) { CFRelease(context); return; }
+    uint32_t window_id = ax_window_id(window_ref);
+    if (!window_id || window_manager_find_window(&g_window_manager, window_id)) { CFRelease(window_ref); return; }
 
-    struct window *existing_window = window_manager_find_window(&g_window_manager, window_id);
-    if (existing_window) { CFRelease(context); return; }
+    if (!application) {
+        pid_t window_pid = ax_window_pid(window_ref);
+        if (window_pid) application = window_manager_find_application(&g_window_manager, window_pid);
+    }
+    if (!application) { CFRelease(window_ref); return; }
 
-    pid_t window_pid = ax_window_pid(context);
-    if (!window_pid) { CFRelease(context); return; }
-
-    struct application *application = window_manager_find_application(&g_window_manager, window_pid);
-    if (!application) { CFRelease(context); return; }
-
-    CFRetain(context);
+    CFRetain(window_ref);
     bool retry = false;
-    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, context, window_id, true, &retry);
-    if (!window && retry) window_manager_schedule_window_created_retry(context);
-    CFRelease(context);
+    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id, one_shot_rules, one_shot_owner_pid, &retry);
+    if (!window && retry) window_manager_schedule_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
+    CFRelease(window_ref);
     if (!window) return;
 
     rule_cleanup_one_shots();
@@ -846,6 +850,27 @@ static EVENT_HANDLER(WINDOW_CREATED)
     }
 
     event_loop_window_inventory_did_change();
+}
+
+static EVENT_HANDLER(WINDOW_CREATED)
+{
+    event_loop_handle_window_created(context, NULL, true, 0);
+}
+
+static EVENT_HANDLER(WINDOW_CREATED_RETRY)
+{
+    struct window_created_retry *retry = context;
+    struct application *application = window_manager_resolve_window_created_retry(&g_window_manager, retry);
+    AXUIElementRef window_ref = retry->window_ref;
+    if (!application) {
+        window_manager_destroy_window_created_retry(retry);
+        return;
+    }
+    pid_t one_shot_owner_pid = window_manager_window_created_retry_owner(application, retry);
+    bool one_shot_rules = window_manager_window_created_retry_uses_one_shots(application, retry);
+    retry->window_ref = NULL;
+    window_manager_destroy_window_created_retry(retry);
+    event_loop_handle_window_created(window_ref, application, one_shot_rules, one_shot_owner_pid);
 }
 
 static EVENT_HANDLER(WINDOW_DESTROYED)
@@ -2205,6 +2230,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     case MOUSE_DRAGGED:
     case MOUSE_MOVED: {
         CFRelease(context);
+    } break;
+    case WINDOW_CREATED_RETRY: {
+        window_manager_destroy_window_created_retry(context);
     } break;
     case MENU_BAR_ACTION: {
         menu_bar_manager_release_action(context);

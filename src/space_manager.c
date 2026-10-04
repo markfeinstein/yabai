@@ -1166,13 +1166,24 @@ bool space_manager_refresh_application_windows(struct space_manager *sm)
     int refresh_count = buf_len(g_window_manager.applications_to_refresh);
     if (!refresh_count) return false;
     int window_count = g_window_manager.window.count;
-    for (int i = 0; i < refresh_count; ++i) {
-        struct application *application = g_window_manager.applications_to_refresh[i];
+    int visited = 0;
+    g_window_manager.application_refresh_cursor %= refresh_count;
+    window_manager_begin_inactive_probe_pass(4096);
+    while (refresh_count > 0 && visited < refresh_count && window_manager_inactive_probe_budget_remaining() > 0) {
+        int index = g_window_manager.application_refresh_cursor;
+        struct application *application = g_window_manager.applications_to_refresh[index];
         debug("%s: %s has windows that are not yet resolved\n", __FUNCTION__, application->name);
-        bool result = window_manager_add_existing_application_windows(sm, &g_window_manager, application, i);
+        int created_count = 0;
+        struct window **created_windows = NULL;
+        bool result = window_manager_add_existing_application_windows(sm, &g_window_manager, application, index, &created_windows, &created_count);
+        event_loop_process_application_windows(created_windows, created_count);
+        buf_free(created_windows);
         if (result) {
             --refresh_count;
-            --i;
+            if (refresh_count) g_window_manager.application_refresh_cursor %= refresh_count;
+        } else {
+            g_window_manager.application_refresh_cursor = (index + 1) % refresh_count;
+            ++visited;
         }
     }
     return window_count != g_window_manager.window.count;

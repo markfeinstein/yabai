@@ -432,6 +432,7 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     destination->insert_feedback = source->insert_feedback;
     destination->rules = source->rules;
     destination->applications_to_refresh = source->applications_to_refresh;
+    destination->application_refresh_cursor = source->application_refresh_cursor;
     destination->focused_window_id = source->focused_window_id;
     destination->focused_window_psn = source->focused_window_psn;
     destination->last_window_id = source->last_window_id;

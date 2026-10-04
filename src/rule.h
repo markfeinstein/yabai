@@ -1,6 +1,8 @@
 #ifndef RULE_H
 #define RULE_H
 
+struct application;
+
 #include "declarative_space_identity.h"
 
 #define RULE_PROP_UD  0
@@ -112,6 +114,8 @@ struct rule
     int expected_space_kind;
     struct declarative_space_identity space_identity;
     struct rule_warning_state *warning_state;
+    int one_shot_owner_pid;
+    uint32_t one_shot_window_id;
 };
 
 static inline bool rule_check_flag(struct rule *r, enum rule_flag x) { return r->flags & x; }
@@ -140,6 +144,10 @@ void rule_native_generation_clear(void);
 uint64_t rule_native_generation(void);
 size_t rule_native_prefix_length(void);
 bool rule_native_label_is_protected(const char *label);
+void rule_reserve_one_shots(struct application *application);
+void rule_finalize_one_shots(struct application *application);
+void rule_cancel_one_shots(struct application *application);
+void rule_cleanup_consumed_one_shots(struct application *application);
 void rule_cleanup_one_shots(void);
 enum rule_add_result rule_add(struct rule *rule);
 enum rule_remove_result rule_remove_by_index(int index);

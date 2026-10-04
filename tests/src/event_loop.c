@@ -81,6 +81,57 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     application_observer_add_run_loop_source = saved_add_source;
 });
 
+TEST_FUNC(application_termination_rejects_stale_pid_reuse_identity,
+{
+    struct table saved_applications = g_window_manager.application;
+    struct table saved_windows = g_window_manager.window;
+    struct table saved_lost = g_window_manager.application_lost_front_switched_event;
+    struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    struct rule *saved_rules = g_window_manager.rules;
+    g_window_manager.application = (struct table) {0};
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.application_lost_front_switched_event = (struct table) {0};
+    g_window_manager.applications_to_refresh = NULL;
+    g_window_manager.rules = NULL;
+    table_init(&g_window_manager.application, 4, hash_wm, compare_wm);
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    table_init(&g_window_manager.application_lost_front_switched_event, 4, hash_psn, compare_psn);
+
+    ProcessSerialNumber old_psn = { .highLongOfPSN = 1, .lowLongOfPSN = 1 };
+    ProcessSerialNumber replacement_psn = { .highLongOfPSN = 2, .lowLongOfPSN = 2 };
+    struct application replacement = { .pid = 404, .psn = replacement_psn, .name = "replacement", .launch_refresh = true };
+    struct window replacement_window = { .id = 505, .application = &replacement };
+    struct rule reserved = { .flags = RULE_ONE_SHOT, .one_shot_owner_pid = 404 };
+    table_add(&g_window_manager.application, &replacement.pid, &replacement);
+    table_add(&g_window_manager.window, &replacement_window.id, &replacement_window);
+    buf_push(g_window_manager.applications_to_refresh, &replacement);
+    buf_push(g_window_manager.rules, reserved);
+
+    struct process *stale = calloc(1, sizeof(*stale));
+    stale->pid = replacement.pid;
+    stale->psn = old_psn;
+    stale->name = strdup("stale");
+    EVENT_HANDLER_APPLICATION_TERMINATED(stale, 0);
+
+    TEST_CHECK(window_manager_find_application(&g_window_manager, replacement.pid) == &replacement, true);
+    TEST_CHECK(window_manager_find_window(&g_window_manager, replacement_window.id) == &replacement_window, true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 1);
+    TEST_CHECK(g_window_manager.applications_to_refresh[0] == &replacement, true);
+    TEST_CHECK(buf_len(g_window_manager.rules), 1);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, replacement.pid);
+
+    buf_free(g_window_manager.applications_to_refresh);
+    buf_free(g_window_manager.rules);
+    table_free(&g_window_manager.application);
+    table_free(&g_window_manager.window);
+    table_free(&g_window_manager.application_lost_front_switched_event);
+    g_window_manager.application = saved_applications;
+    g_window_manager.window = saved_windows;
+    g_window_manager.application_lost_front_switched_event = saved_lost;
+    g_window_manager.applications_to_refresh = saved_refresh;
+    g_window_manager.rules = saved_rules;
+})
+
 static uint64_t test_publish_tracked_front_switch(ProcessSerialNumber psn)
 {
     pthread_mutex_lock(&g_process_manager_front_switch_lock);

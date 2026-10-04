@@ -44,6 +44,7 @@ static int declarative_install_test_mutex_destroy_counting(pthread_mutex_t *mute
     X(struct table, insert_feedback) \
     X(struct rule *, rules) \
     X(struct application **, applications_to_refresh) \
+    X(int, application_refresh_cursor) \
     X(uint32_t, focused_window_id) \
     X(ProcessSerialNumber, focused_window_psn) \
     X(uint32_t, last_window_id) \

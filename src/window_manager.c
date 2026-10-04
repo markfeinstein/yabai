@@ -168,13 +168,20 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
     }
 }
 
-void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules)
+static bool window_manager_rule_is_available(struct rule *rule, bool one_shot_rules, pid_t one_shot_owner_pid, uint32_t window_id)
+{
+    return !rule_check_flag(rule, RULE_ONE_SHOT) ||
+           (one_shot_rules && rule->one_shot_owner_pid == one_shot_owner_pid &&
+            (!rule->one_shot_window_id || rule->one_shot_window_id == window_id));
+}
+
+void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
     bool match = false;
     struct rule_effects effects = {0};
 
     for (int i = 0; i < buf_len(wm->rules); ++i) {
-        if (one_shot_rules || !rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
+        if (window_manager_rule_is_available(&wm->rules[i], one_shot_rules, one_shot_owner_pid, window->id)) {
             if (window_manager_rule_matches_window(&wm->rules[i], window, window_title, window_role, window_subrole)) {
                 if (wm->rules[i].effects.manage == RULE_PROP_ON) {
                     if (!rule_check_flag(&wm->rules[i], RULE_ROLE_VALID)    && !string_equals(window_role   , "AXWindow"))         continue;
@@ -185,7 +192,10 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
                 enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
                 rule_report_fold_warning(&wm->rules[i], fold);
 
-                if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
+                if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
+                    rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
+                    wm->rules[i].one_shot_window_id = window->id;
+                }
             }
         }
     }
@@ -194,13 +204,13 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
     free(effects.scratchpad);
 }
 
-void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules)
+void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
     bool match = false;
     struct rule_effects effects = {0};
 
     for (int i = 0; i < buf_len(wm->rules); ++i) {
-        if (one_shot_rules || !rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
+        if (window_manager_rule_is_available(&wm->rules[i], one_shot_rules, one_shot_owner_pid, window->id)) {
             if (window_manager_rule_matches_window(&wm->rules[i], window, window_title, window_role, window_subrole)) {
                 if (!window_check_rule_flag(window, WINDOW_RULE_MANAGED)) {
                     if (!rule_check_flag(&wm->rules[i], RULE_ROLE_VALID)    && !string_equals(window_role   , "AXWindow"))         continue;
@@ -211,7 +221,10 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
                 enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
                 rule_report_fold_warning(&wm->rules[i], fold);
 
-                if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
+                if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
+                    rule_set_flag(&wm->rules[i], RULE_ONE_SHOT_REMOVE);
+                    wm->rules[i].one_shot_window_id = window->id;
+                }
             }
         }
     }
@@ -2031,15 +2044,70 @@ struct window **window_manager_find_application_windows(struct window_manager *w
     return window_list;
 }
 
-void window_manager_schedule_window_created_retry(AXUIElementRef window_ref)
+#ifdef TESTS
+static CFTypeRef (*window_manager_test_retry_retain)(CFTypeRef);
+static void (*window_manager_test_retry_release)(CFTypeRef);
+#endif
+
+struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
-    CFRetain(window_ref);
+    struct window_created_retry *retry = malloc(sizeof(*retry));
+    if (!retry) return NULL;
+#ifdef TESTS
+    AXUIElementRef retained_ref = window_manager_test_retry_retain ? (AXUIElementRef) window_manager_test_retry_retain(window_ref) : CFRetain(window_ref);
+#else
+    AXUIElementRef retained_ref = CFRetain(window_ref);
+#endif
+    *retry = (struct window_created_retry) {
+        .window_ref = retained_ref,
+        .application_psn = application->psn,
+        .application_pid = application->pid,
+        .one_shot_rules = one_shot_rules,
+        .one_shot_owner_pid = one_shot_owner_pid
+    };
+    return retry;
+}
+
+void window_manager_destroy_window_created_retry(struct window_created_retry *retry)
+{
+    if (!retry) return;
+    if (retry->window_ref) {
+#ifdef TESTS
+        if (window_manager_test_retry_release) window_manager_test_retry_release(retry->window_ref); else CFRelease(retry->window_ref);
+#else
+        CFRelease(retry->window_ref);
+#endif
+    }
+    free(retry);
+}
+
+void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
+{
+    struct window_created_retry *retry = window_manager_create_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
+    if (!retry) return;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        event_loop_post(&g_event_loop, WINDOW_CREATED, (void *) window_ref, 0);
+        event_loop_post(&g_event_loop, WINDOW_CREATED_RETRY, retry, 0);
     });
 }
 
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, bool *retry)
+struct application *window_manager_resolve_window_created_retry(struct window_manager *wm, struct window_created_retry *retry)
+{
+    struct application *application = window_manager_find_application(wm, retry->application_pid);
+    if (!application || !psn_equals(&application->psn, &retry->application_psn)) return NULL;
+    return application;
+}
+
+pid_t window_manager_window_created_retry_owner(struct application *application, struct window_created_retry *retry)
+{
+    return application->launch_refresh && retry->one_shot_owner_pid == application->pid ? retry->one_shot_owner_pid : 0;
+}
+
+bool window_manager_window_created_retry_uses_one_shots(struct application *application, struct window_created_retry *retry)
+{
+    return retry->one_shot_owner_pid ? window_manager_window_created_retry_owner(application, retry) != 0 : retry->one_shot_rules;
+}
+
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool *retry)
 {
     if (retry) *retry = false;
     struct window *window = window_create(application, window_ref, window_id);
@@ -2089,11 +2157,11 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
         // no such rule matches this window, it will be ignored if it does not have a role of kAXWindowRole.
         //
 
-        window_manager_apply_manage_rules_to_window(sm, wm, window, window_title, window_role, window_subrole, one_shot_rules);
+        window_manager_apply_manage_rules_to_window(sm, wm, window, window_title, window_role, window_subrole, one_shot_rules, one_shot_owner_pid);
 
         if (window_manager_is_window_eligible(window)) {
             window->is_eligible = true;
-            window_manager_apply_rules_to_window(sm, wm, window, window_title, window_role, window_subrole, one_shot_rules);
+            window_manager_apply_rules_to_window(sm, wm, window, window_title, window_role, window_subrole, one_shot_rules, one_shot_owner_pid);
             window_manager_purify_window(wm, window);
             window_manager_set_window_opacity(wm, window, wm->normal_window_opacity);
 
@@ -2145,44 +2213,64 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     }
 
 out:
+    if (one_shot_owner_pid) rule_cleanup_consumed_one_shots(application);
     return window;
 }
 
 struct window **window_manager_add_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int *count)
 {
     *count = 0;
+    struct window **list = NULL;
+    rule_reserve_one_shots(application);
+    application->launch_refresh = true;
     CFArrayRef window_list = application_window_list(application);
-    if (!window_list) return NULL;
 
-    int window_count = CFArrayGetCount(window_list);
-    struct window **list = ts_alloc_list(struct window *, window_count);
+    if (window_list) {
+        int window_count = CFArrayGetCount(window_list);
+        for (int i = 0; i < window_count; ++i) {
+            AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list, i);
+            uint32_t window_id = ax_window_id(window_ref);
+            if (!window_id || window_manager_find_window(wm, window_id)) continue;
 
-    for (int i = 0; i < window_count; ++i) {
-        AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list, i);
-
-        uint32_t window_id = ax_window_id(window_ref);
-        if (!window_id || window_manager_find_window(wm, window_id)) continue;
-
-        bool retry = false;
-        struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true, &retry);
-        if (window) {
-            list[(*count)++] = window;
-        } else if (retry) {
-            window_manager_schedule_window_created_retry(window_ref);
+            bool retry = false;
+            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true, application->pid, &retry);
+            if (window) {
+                buf_push(list, window);
+            } else if (retry) {
+                window_manager_schedule_window_created_retry(window_ref, application, true, application->pid);
+            }
         }
+        CFRelease(window_list);
     }
 
-    rule_cleanup_one_shots();
-
-    CFRelease(window_list);
+    window_manager_add_existing_application_windows(sm, wm, application, -1, &list, count);
+    *count = buf_len(list);
     return list;
 }
 
-static uint32_t *window_manager_existing_application_window_list(struct application *application, int *window_count)
+#ifdef TESTS
+static bool (*window_manager_test_existing_application_window_list)(struct application *, uint32_t **, int *);
+static CFArrayRef (*window_manager_test_application_window_list)(struct application *);
+static AXUIElementRef (*window_manager_test_remote_token)(CFDataRef);
+static AXError (*window_manager_test_copy_role)(AXUIElementRef, CFTypeRef *);
+static bool (*window_manager_test_role_is_window)(CFTypeRef);
+static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
+static void (*window_manager_test_cf_release)(CFTypeRef);
+static struct window *(*window_manager_test_create_window)(struct space_manager *, struct window_manager *, struct application *, AXUIElementRef, uint32_t, bool, pid_t);
+#endif
+
+static bool window_manager_existing_application_window_list_with_status(struct application *application, uint32_t **window_list, int *window_count)
 {
+#ifdef TESTS
+    if (window_manager_test_existing_application_window_list) {
+        return window_manager_test_existing_application_window_list(application, window_list, window_count);
+    }
+#endif
+    *window_list = NULL;
+    *window_count = 0;
     int display_count;
     uint32_t *display_list = display_manager_active_display_list(&display_count);
-    if (!display_list) return NULL;
+    if (!display_list) return false;
 
     int space_count = 0;
     uint64_t *space_list = NULL;
@@ -2190,7 +2278,7 @@ static uint32_t *window_manager_existing_application_window_list(struct applicat
     for (int i = 0; i < display_count; ++i) {
         int count;
         uint64_t *list = display_space_list(display_list[i], &count);
-        if (!list) continue;
+        if (!list) return false;
 
         //
         // NOTE(asmvik): display_space_list(..) uses a linear allocator,
@@ -2202,7 +2290,17 @@ static uint32_t *window_manager_existing_application_window_list(struct applicat
         space_count += count;
     }
 
-    return space_list ? space_window_list_for_connection(space_list, space_count, application ? application->connection : 0, window_count, true) : NULL;
+    if (!space_list) return display_count == 0;
+    bool inventory_succeeded = false;
+    *window_list = space_window_list_for_connection_with_status(space_list, space_count, application ? application->connection : 0,
+                                                                 window_count, true, &inventory_succeeded);
+    return inventory_succeeded;
+}
+
+static uint32_t *window_manager_existing_application_window_list(struct application *application, int *window_count)
+{
+    uint32_t *window_list;
+    return window_manager_existing_application_window_list_with_status(application, &window_list, window_count) ? window_list : NULL;
 }
 
 static bool window_manager_window_list_is_resolved(struct window_manager *wm, uint32_t *window_list, int window_count)
@@ -2213,15 +2311,57 @@ static bool window_manager_window_list_is_resolved(struct window_manager *wm, ui
     return true;
 }
 
-bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index)
+static void window_manager_enqueue_application_refresh(struct window_manager *wm, struct application *application)
 {
+    for (int i = 0; i < buf_len(wm->applications_to_refresh); ++i) {
+        if (wm->applications_to_refresh[i] == application) return;
+    }
+    buf_push(wm->applications_to_refresh, application);
+}
+
+bool window_manager_remove_application_refresh(struct window_manager *wm, struct application *application)
+{
+    for (int i = 0; i < buf_len(wm->applications_to_refresh); ++i) {
+        if (wm->applications_to_refresh[i] == application) {
+            buf_del(wm->applications_to_refresh, i);
+            return true;
+        }
+    }
+    return false;
+}
+
+static int window_manager_inactive_probe_budget;
+
+void window_manager_begin_inactive_probe_pass(int budget)
+{
+    window_manager_inactive_probe_budget = max(0, budget);
+}
+
+int window_manager_inactive_probe_budget_remaining(void)
+{
+    return window_manager_inactive_probe_budget;
+}
+
+bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index, struct window ***created_windows, int *created_count)
+{
+    if (refresh_index == -1) window_manager_begin_inactive_probe_pass(4096);
     bool result = false;
+    bool one_shot_rules = application->launch_refresh;
+    pid_t one_shot_owner_pid = one_shot_rules ? application->pid : 0;
+    if (created_count) *created_count = 0;
 
     int global_window_count;
-    uint32_t *global_window_list = window_manager_existing_application_window_list(application, &global_window_count);
-    if (!global_window_list) return result;
+    uint32_t *global_window_list;
+    if (!window_manager_existing_application_window_list_with_status(application, &global_window_list, &global_window_count)) {
+        window_manager_enqueue_application_refresh(wm, application);
+        return false;
+    }
 
+#ifdef TESTS
+    CFArrayRef window_list_ref = window_manager_test_application_window_list ? window_manager_test_application_window_list(application) : application_window_list(application);
+#else
     CFArrayRef window_list_ref = application_window_list(application);
+#endif
     int window_count = window_list_ref ? CFArrayGetCount(window_list_ref) : 0;
 
     for (int i = 0; i < window_count; ++i) {
@@ -2240,12 +2380,12 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
         if (!window_id) continue;
 
         if (!window_manager_find_window(wm, window_id)) {
-            window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, false, NULL);
+            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, one_shot_rules, one_shot_owner_pid, NULL);
+            if (window && created_windows) buf_push(*created_windows, window);
         }
     }
 
     if (!window_manager_window_list_is_resolved(wm, global_window_list, global_window_count)) {
-        if (refresh_index == -1) {
             bool missing_window = false;
             uint32_t *app_window_list = NULL;
 
@@ -2281,22 +2421,44 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                 *(uint32_t *) (data + 0x0) = application->pid;
                 *(uint32_t *) (data + 0x8) = 0x636f636f;
 
-                for (uint64_t element_id = 0; element_id < 0x7fff; ++element_id) {
+                enum { INACTIVE_WINDOW_PROBE_LIMIT = 0x7fff };
+                while (window_manager_inactive_probe_budget > 0) {
+                    --window_manager_inactive_probe_budget;
                     int app_window_list_len = ts_buf_len(app_window_list);
                     if (app_window_list_len == 0) break;
 
+                    uint64_t element_id = application->inactive_probe_cursor;
+                    application->inactive_probe_cursor = (application->inactive_probe_cursor + 1) % INACTIVE_WINDOW_PROBE_LIMIT;
                     memcpy(data+0xc, &element_id, sizeof(uint64_t));
+#ifdef TESTS
+                    AXUIElementRef element_ref = window_manager_test_remote_token ? window_manager_test_remote_token(data_ref) : _AXUIElementCreateWithRemoteToken(data_ref);
+#else
                     AXUIElementRef element_ref = _AXUIElementCreateWithRemoteToken(data_ref);
+#endif
                     if (!element_ref) continue;
                     bool element_consumed = false;
 
-                    const void *role = NULL;
+                    CFTypeRef role = NULL;
+#ifdef TESTS
+                    if (window_manager_test_copy_role) window_manager_test_copy_role(element_ref, &role);
+                    else AXUIElementCopyAttributeValue(element_ref, kAXRoleAttribute, &role);
+#else
                     AXUIElementCopyAttributeValue(element_ref, kAXRoleAttribute, &role);
+#endif
 
                     if (role) {
                         ++probe_role_count;
-                        if (CFEqual(role, kAXWindowRole)) {
+#ifdef TESTS
+                        bool role_is_window = window_manager_test_role_is_window ? window_manager_test_role_is_window(role) : CFEqual(role, kAXWindowRole);
+#else
+                        bool role_is_window = CFEqual(role, kAXWindowRole);
+#endif
+                        if (role_is_window) {
+#ifdef TESTS
+                            uint32_t element_wid = window_manager_test_ax_window_id ? window_manager_test_ax_window_id(element_ref) : ax_window_id(element_ref);
+#else
                             uint32_t element_wid = ax_window_id(element_ref);
+#endif
                             bool matched = false;
 
                             ++probe_window_count;
@@ -2316,15 +2478,33 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 
                             if (matched) {
                                 element_consumed = true;
-                                if (window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, false, NULL)) {
+#ifdef TESTS
+                                struct window *window = window_manager_test_create_window ?
+                                    window_manager_test_create_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid) :
+                                    window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid, NULL);
+#else
+                                struct window *window = window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid, NULL);
+#endif
+                                if (window) {
+                                    if (created_windows) buf_push(*created_windows, window);
                                     ts_buf_del(app_window_list, match_index);
                                 }
                             }
                         }
 
+#ifdef TESTS
+                        if (window_manager_test_cf_release) window_manager_test_cf_release(role); else CFRelease(role);
+#else
                         CFRelease(role);
+#endif
                     }
-                    if (!element_consumed) CFRelease(element_ref);
+                    if (!element_consumed) {
+#ifdef TESTS
+                        if (window_manager_test_cf_release) window_manager_test_cf_release(element_ref); else CFRelease(element_ref);
+#else
+                        CFRelease(element_ref);
+#endif
+                    }
                 }
 
                 CFRelease(data_ref);
@@ -2337,20 +2517,31 @@ probe_complete:
                 for (int i = 0; i < ts_buf_len(app_window_list); ++i) {
                     debug("%s:   unresolved wid=%d for %s\n", __FUNCTION__, app_window_list[i], application->name);
                 }
-                buf_push(wm->applications_to_refresh, application);
+                window_manager_enqueue_application_refresh(wm, application);
             } else {
                 debug("%s: workaround resolved all windows for %s\n", __FUNCTION__, application->name);
             }
-        }
-    } else if (refresh_index != -1) {
+    }
+
+    bool fully_resolved = window_manager_window_list_is_resolved(wm, global_window_list, global_window_count);
+    if (fully_resolved && refresh_index != -1 && refresh_index < buf_len(wm->applications_to_refresh) &&
+        wm->applications_to_refresh[refresh_index] == application) {
         debug("%s: all windows for %s are now resolved\n", __FUNCTION__, application->name);
         buf_del(wm->applications_to_refresh, refresh_index);
         result = true;
     }
 
     if (window_list_ref) CFRelease(window_list_ref);
+    if (created_count && created_windows) *created_count = buf_len(*created_windows);
+    if (fully_resolved) {
+        application->inactive_probe_cursor = 0;
+        if (application->launch_refresh) {
+            rule_finalize_one_shots(application);
+            application->launch_refresh = false;
+        }
+    }
 
-    return result;
+    return result || (refresh_index == -1 && fully_resolved);
 }
 
 enum window_op_error window_manager_set_window_insertion(struct space_manager *sm, struct window *window, int direction)
@@ -3479,7 +3670,7 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
 
             if (application_observe(application)) {
                 window_manager_add_application(wm, application);
-                window_manager_add_existing_application_windows(sm, wm, application, -1);
+                window_manager_add_existing_application_windows(sm, wm, application, -1, NULL, NULL);
             } else {
                 bool ax_retry = application->ax_retry;
 
