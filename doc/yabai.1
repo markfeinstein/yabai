@@ -2,12 +2,12 @@
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
 .\" Generator: Asciidoctor 2.0.26
-.\"      Date: 2026-10-03
+.\"      Date: 2026-10-04
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
 .\"  Language: English
 .\"
-.TH "YABAI" "1" "2026-10-03" "Yabai" "Yabai Manual"
+.TH "YABAI" "1" "2026-10-04" "Yabai" "Yabai Manual"
 .ie \n(.g .ds Aq \(aq
 .el       .ds Aq '
 .ss \n[.ss] 0
@@ -118,7 +118,7 @@ Success prints \f(CRconfiguration is valid; runtime preparation was not checked\
 .sp
 \fB\-\-doctor\fP
 .RS 4
-Run bounded, read\-only diagnostics and exit with classified mechanisms and next actions. Checks include binary slices and translation, Accessibility, core and optional SIP requirements, the exact Apple Silicon arm64e boot argument token (including x86_64 under Rosetta and omitted only on native Intel), canonical launch agent fields read from one no\-follow descriptor snapshot, CFBoolean types, safe ownership/modes, and a program resolving to the running yabai executable. A matching path\-component symlink warns rather than passes after lexical and canonical parent checks, re\-resolution, and final identity, ownership, mode, and execute revalidation. Known legacy plist filenames, runtime\-ordered configuration candidates, descriptor\-snapshot running binary data, and scripting\-addition metadata are also checked. Absence comes from the top\-level yabai.osax bundle; missing nested metadata after bundle observation is \f(CRUNKNOWN\fP. Identity comes from the real uid or valid nonroot \f(CRSUDO_UID\fP through the passwd database, not \f(CRHOME\fP or \f(CRUSER\fP. Elevated permission checks use POSIX owner/group/other selection with target uid, primary and resolved supplementary groups, and mode bits; unavailable group membership remains \f(CRUNKNOWN\fP. Legacy config directories and symlinks to directories are skipped, while a selected non\-regular file fails. launchd runtime state and scripting\-addition responsiveness remain \f(CRUNKNOWN\fP because doctor does not contact them. Transient inspection errors are also \f(CRUNKNOWN\fP; only permission denial or a contractually absent or invalid state is definitive. It does not prompt, invoke \f(CRsudo\fP, mutate state, or inspect skhd. The exit status is zero without \f(CRFAIL\fP results and nonzero otherwise. Output does not dump paths, environment, plist, or configuration contents.
+Run bounded, read\-only installation diagnostics and exit. Each diagnostic is classified as \f(CRPASS\fP, \f(CRWARN\fP, \f(CRFAIL\fP, or \f(CRUNKNOWN\fP, names the inspection mechanism, and gives a next action. The checks cover the running binary, version, native slices and translation; Accessibility trust; core and optional scripting\-addition SIP requirements; the Apple Silicon arm64e boot argument, including when the x86_64 slice runs under Rosetta (omitted only on native Intel); canonical launch agent plist fields read from one no\-follow descriptor snapshot, CFBoolean types, safe type, ownership and mode, and a program that resolves to the running yabai executable (a matching path\-component symlink warns rather than passes, after both lexical and canonical parent chains are checked and the original path is re\-resolved with final identity, owner, group, mode and execute permission revalidated); the known \f(CRcom.koekeishiya.yabai.plist\fP and \f(CRhomebrew.mxcl.yabai.plist\fP collisions; selected native and legacy configuration readability; and descriptor\-snapshot running\-binary and scripting\-addition bundle/socket metadata. Scripting\-addition absence is determined from the top\-level \f(CRyabai.osax\fP bundle; once that bundle is observed, missing or raced nested metadata is \f(CRUNKNOWN\fP, not absent. User paths and the socket name are derived from the real uid, or from a valid nonroot \f(CRSUDO_UID\fP when invoked as root, using the passwd database rather than \f(CRHOME\fP or \f(CRUSER\fP. During an elevated inspection, permissions are evaluated with POSIX owner/group/other selection using the target uid, primary and resolved supplementary groups, and mode bits; unavailable or unrepresentable group membership remains \f(CRUNKNOWN\fP rather than using root\(cqs \f(CRaccess\fP result. Legacy configuration directories, including symlinks to directories, are skipped according to runtime precedence, while a selected non\-regular file fails. launchd loaded/running state and scripting\-addition responsiveness remain \f(CRUNKNOWN\fP because doctor does not contact either service. It does not prompt for permissions, contact or load the scripting addition, invoke \f(CRsudo\fP, change launchd services, or inspect skhd. Unavailable privileged information and transient inspection errors are \f(CRUNKNOWN\fP; only permission denial or a contractually absent/invalid state is definitive. Optional prerequisites are warnings. The exit status is zero when there are no \f(CRFAIL\fP results and nonzero otherwise. Output is deliberately limited and does not dump paths, the environment, plist contents, or configuration contents.
 .RE
 .sp
 \fB\-\-verbose\fP, \fB\-V\fP
@@ -161,7 +161,7 @@ The reader opens the selected path once with \f(CRO_RDONLY | O_CLOEXEC\fP, follo
 .sp
 Raw NUL bytes, malformed UTF\-8, a BOM away from byte zero, UTF\-16 or UTF\-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and \f(CRnull\fP are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
 .sp
-Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 also accepts \f(CRmodes\fP and \f(CRactive_mode\fP. \f(CRversion\fP is required and must equal 1 or 2; mode fields are rejected in version 1.
+Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 accepts those fields plus \f(CRmodes\fP and \f(CRactive_mode\fP. \f(CRversion\fP is required and must have the mathematical integer value 1 or 2; \f(CRmodes\fP and \f(CRactive_mode\fP are rejected in version 1. All other fields shown here are optional:
 .sp
 .if n .RS 4
 .nf
@@ -170,7 +170,9 @@ Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP
   "version": 2,
   "config": {},
   "spaces": [],
-  "modes": [ { "name": "work", "spaces": [] } ],
+  "modes": [
+    { "name": "work", "spaces": [] }
+  ],
   "active_mode": "work",
   "rules": []
 }
@@ -587,7 +589,7 @@ Numeric fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
-\f(CRinsert_feedback_width\fP: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
+\f(CRinsert_feedback_width\fP: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame\(cqs shorter dimension;
 .RE
 .sp
 .RS 4
@@ -628,7 +630,7 @@ Numeric fields are:
 The native \f(CRwindow_shadow\fP, \f(CRwindow_opacity\fP, \f(CRwindow_opacity_duration\fP, \f(CRactive_window_opacity\fP and \f(CRnormal_window_opacity\fP settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; \f(CRwindow_animation_duration\fP has the separate Screen Recording and SIP preflight described above.
 .SS "Space policy"
 .sp
-Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. When present, \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above.
+Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. When present, \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsplit_ratio\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above. A Space \f(CRsplit_ratio\fP uses the existing \f(CR0.1...0.9\fP range and controls the default ratio for new BSP splits on that Space.
 .sp
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native\-fullscreen Spaces remain floating.
 .sp
@@ -642,17 +644,27 @@ built\-in < native global < native Space < runtime global < runtime Space
 .fi
 .if n .RE
 .sp
-A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When scaffolds are installed, successful imperative global or scoped layout changes request coalesced reconciliation so BSP scaffold state is restored after stack\-to\-BSP without changing inventory or runtime ownership. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When an installed policy has a scaffold, successful imperative global or scoped layout changes request coalesced reconciliation so a BSP scaffold is restored after a stack\-to\-BSP transition without changing inventory or runtime ownership. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
 .SS "Named modes"
 .sp
-Version 2 modes have unique nonempty UTF\-8 names and overlay base Space policies in source order. Every policy requires match and at least settings or scaffold. A scaffold omitted from a settings policy inherits; an explicit empty array clears it. Missing applications leave scaffold slots vacant and are never launched. \f(CRactive_mode\fP selects startup and reload state. Runtime activation and deactivation preserve imperative overrides; deactivation selects base policies only. Unknown names, malformed internal state, and invariant/admission/commit failures are terminal; unavailable means no installed mode runtime; allocation/resource failures and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve and wait for asynchronous runtime reconciliation. Snapshot creation is worker\-only, requires fresh or destroyed output, returns owned copies, and requires destruction. Success does not claim reconciliation is complete. Query and list output is stable escaped JSON copied from the installed model. Modes do not export, import, save, capture, undo, launch applications, or persist selection.
+Version 2 may declare up to 64 uniquely named modes in source order. A mode is an exact object containing \f(CRname\fP (a nonempty UTF\-8 string of at most 1,024 bytes) and \f(CRspaces\fP (an array using the version 2 Space\-policy form). Base \f(CRspaces\fP are evaluated first, then the selected mode\(cqs policies overlay them in declaration order. Thus later matching mode fields override native base fields while runtime global and runtime Space ownership still have higher precedence.
+.sp
+Every base or mode Space policy requires \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. For scaffold specifically, omission from a policy that has \f(CRsettings\fP means inherit the last matching base or earlier mode scaffold, while \f(CR"scaffold": []\fP explicitly clears it. A nonempty mode scaffold replaces the earlier scaffold. Missing applications simply leave their scaffold primary slots vacant; mode selection never launches applications.
+.sp
+\f(CRactive_mode\fP, when present, must exactly name a declared mode and selects it during startup and every successful reload. At runtime, \f(CRyabai \-m mode \-\-activate <name>\fP selects an overlay and \f(CR\-\-deactivate\fP selects base policies only; deactivation does not restore the file\(cqs \f(CRactive_mode\fP and does not clear imperative runtime overrides. Reload selects the newly authored \f(CRactive_mode\fP (or no mode when omitted) and, like every successful reload, clears runtime setting ownership under the normal reload contract.
+.sp
+Runtime selection is transactional and errors are typed through topology capture/snapshot and Space preparation/commit. An unknown explicit name, malformed internal state, or invariant/admission/commit failure is terminal; an unavailable error means no installed native mode runtime; allocation/resource exhaustion and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve runtime\-owned reconciliation and are retried after it settles. A successful command reports selection publication, not completion of the follow\-up asynchronous reconciliation, and the client performs exactly one activation/deactivation operation with no retry loop. Failed selection produces no query/list JSON and preserves the installed selection, rules, runtime ownership and Space state.
+.sp
+\f(CR\-\-query\fP returns the active mode as one escaped JSON string, or JSON \f(CRnull\fP. \f(CR\-\-list\fP returns stable JSON with declared names in source order and \f(CRactive\fP set to that same string or \f(CRnull\fP. Snapshot creation is worker\-only and requires a fresh\-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
+.sp
+Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored\-file, mode\-count, aggregate\-policy, string, model\-memory and topology limits above all continue to apply.
 .SS "Managed scaffold"
 .sp
 An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.
 .sp
 The first matching scaffold entry owns a window, so overlapping expressions resolve in array order. The lowest nonzero window ID matching each present entry is its primary window. Other windows from that application and windows matching no entry remain ordinary BSP overflow windows.
 .sp
-Present primaries compact in declaration order. One fills the Space. Two split left and right at \f(CR0.5\fP. Three place the first on the left, the second upper\-right and the third lower\-right, with both splits at \f(CR0.5\fP. Opening order does not affect that primary topology. A primary membership change or successful scaffold generation change rebuilds the detached BSP root transactionally; overflow\-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
+Present primaries compact in declaration order. One fills the Space. With two primaries, the first occupies the effective Space \f(CRsplit_ratio\fP on the left and the second gets the remainder. With three primaries, the first occupies that ratio on the left; the right branch keeps an equal \f(CR0.5\fP split, placing the second upper\-right and the third lower\-right. The default remains \f(CR0.5\fP. Opening order does not affect that primary topology. A primary membership change, successful scaffold generation change, or effective ratio change rebuilds the detached BSP root transactionally; overflow\-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
 .sp
 .if n .RS 4
 .nf
@@ -893,22 +905,22 @@ EASING\&      := ease_in_sine\&  | ease_out_sine\&  | ease_in_out_sine\&  |
 .sp
 yabai \-m mode \-\-activate \fI<name>\fP
 .RS 4
-Select exactly one declared mode. Unknown names are terminal; other failures advise retry after asynchronous reconciliation settles.
+Select exactly one declared version 2 mode. The command accepts one name and no trailing token. Unknown names are terminal; other activation failures advise retry only after asynchronous reconciliation settles.
 .RE
 .sp
 yabai \-m mode \-\-deactivate
 .RS 4
-Select base policies only and preserve imperative runtime overrides.
+Select base Space policies only while preserving imperative runtime overrides. No argument or trailing token is accepted.
 .RE
 .sp
 yabai \-m mode \-\-query
 .RS 4
-Print the active mode as an escaped JSON string or null.
+Print the selected mode as an escaped JSON string or \f(CRnull\fP. No argument or trailing token is accepted.
 .RE
 .sp
 yabai \-m mode \-\-list
 .RS 4
-Print declared names in source order and the active name or null as valid JSON. Mode commands reject missing, extra and trailing tokens.
+Print \f(CR{\(rs"modes\(rs":[...],\(rs"active\(rs":...}\fP as valid JSON, preserving declaration order. No argument or trailing token is accepted.
 .RE
 .SS "Config"
 .SS "General Syntax"
@@ -1122,7 +1134,7 @@ Rendering clamps the width to half the shorter feedback\-frame dimension. (defau
 .sp
 \fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]
 .RS 4
-Specify the size distribution when a window is split.
+Set the default size distribution for new BSP splits on Spaces without a higher\-precedence scoped value. The valid range is \f(CR0.1...0.9\fP.
 .RE
 .sp
 \fBmouse_modifier\fP [\fIcmd|alt|shift|ctrl|fn\fP]
@@ -1190,6 +1202,11 @@ Size of the gap that separates windows for the selected space.
 \fBaccordion_padding\fP [\fI<nonnegative integer number>\fP]
 .RS 4
 Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on \f(CRbsp\fP, \f(CRstack\fP or \f(CRfloat\fP geometry.
+.RE
+.sp
+\fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]
+.RS 4
+Set the default ratio for new BSP splits on the selected Space. The valid range is \f(CR0.1...0.9\fP. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right\-side subdivision remains \f(CR0.5\fP. Native and imperative values follow \f(CRbuilt\-in < native global < native Space < runtime global < runtime Space\fP, and runtime ownership clears on the next successful native reload like other Space settings.
 .RE
 .sp
 \fBauto_balance\fP [\fI<BOOL_SEL>|x\-axis|y\-axis\fP]
@@ -1576,7 +1593,7 @@ DISPLAY
 .fi
 .if n .RE
 .sp
-The display \f(CRframe\fP is the full display bounds. The \f(CRvisible\-frame\fP excludes the system menu bar or notch and the Dock, matching \f(CRNSScreen.visibleFrame\fP; it does not exclude yabai's configured external bar.
+The display \f(CRframe\fP is the full display bounds. The \f(CRvisible\-frame\fP excludes the system menu bar or notch and the Dock, matching \f(CRNSScreen.visibleFrame\fP; it does not exclude yabai\(cqs configured external bar.
 .sp
 SPACE
 .sp

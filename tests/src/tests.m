@@ -1972,6 +1972,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_encoding)                          \
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(view_padding_sum_widens_before_addition)         \
+    TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
     TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
     TEST_ENTRY(scaffold_identity_is_invalidated_across_rapid_layout_conversions) \
@@ -2041,6 +2042,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_jsonc_rejects_encoding_duplicates_and_surrogates) \
     TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
     TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
+    TEST_ENTRY(declarative_split_ratio_is_valid_globally_and_in_space_policy) \
     TEST_ENTRY(declarative_scaffold_schema_is_strict_and_owned)            \
     TEST_ENTRY(declarative_modes_v1_compatibility_and_v2_schema)            \
     TEST_ENTRY(declarative_modes_schema_errors_and_limits)                  \
@@ -2073,6 +2075,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(focus_follows_mouse_query_is_canonical_and_round_trips)       \
     TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
     TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
+    TEST_ENTRY(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space) \
+    TEST_ENTRY(space_manager_global_split_ratio_preserves_runtime_space_ownership) \
     TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
     TEST_ENTRY(declarative_runtime_live_matrix_covers_all_39_typed_setters)   \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
@@ -2086,9 +2090,12 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_per_space_ownership_follows_retained_view_identity) \
     TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
     TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
+    TEST_ENTRY(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay) \
     TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
     TEST_ENTRY(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash) \
     TEST_ENTRY(declarative_scaffold_compacts_subsets_and_ignores_opening_order) \
+    TEST_ENTRY(declarative_scaffold_uses_effective_ratio_only_for_its_root_split) \
+    TEST_ENTRY(declarative_scaffold_ratio_change_rebuilds_existing_canonical_root) \
     TEST_ENTRY(declarative_scaffold_primary_selection_and_overflow_stability) \
     TEST_ENTRY(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates) \
     TEST_ENTRY(declarative_space_root_validation_rejects_shape_order_parent_and_zoom_corruption) \

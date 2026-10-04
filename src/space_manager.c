@@ -444,6 +444,17 @@ void space_manager_set_right_padding_for_all_spaces(struct space_manager *sm, in
     })
 }
 
+void space_manager_set_split_ratio_for_all_spaces(struct space_manager *sm, float split_ratio)
+{
+    sm->split_ratio = split_ratio;
+    table_for (struct view *view, sm->view, {
+        if (!view_check_flag(view, VIEW_SPLIT_RATIO)) {
+            view->split_ratio = split_ratio;
+            if (view->scaffold_fingerprint) view->scaffold_fingerprint = 0;
+        }
+    })
+}
+
 void space_manager_set_split_type_for_all_spaces(struct space_manager *sm, enum window_node_split split_type)
 {
     sm->split_type = split_type;
@@ -533,7 +544,7 @@ bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32
     struct view *view = space_manager_find_view(sm, sid);
     if (view->layout != VIEW_BSP) return false;
 
-    window_node_equalize(view->root, axis_flag);
+    window_node_equalize(view->root, axis_flag, view->split_ratio);
     view_update(view);
     view_flush(view);
 

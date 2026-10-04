@@ -86,6 +86,31 @@ TEST_FUNC(declarative_exact_schema_builds_owned_model,
     TEST_CHECK(declarative_config_parse_bytes((uint8_t *)conflict, strlen(conflict), "x", &model, &error), false);
 )
 
+TEST_FUNC(declarative_split_ratio_is_valid_globally_and_in_space_policy,
+    const char *accepted[] = {
+        "{\"version\":1,\"config\":{\"split_ratio\":0.5}}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":0.6}}]}",
+        "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":0.7}}]}]}"
+    };
+    for (size_t i = 0; i < sizeof(accepted) / sizeof(*accepted); ++i) {
+        struct declarative_config_model *model = NULL; struct declarative_error error = {0};
+        TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) accepted[i], strlen(accepted[i]), "ratio", &model, &error), true);
+        declarative_config_destroy(model);
+    }
+    const char *rejected[] = {
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":0.099}}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":0.901}}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":true}}]}",
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"split_ratio\":\"0.6\"}}]}"
+    };
+    for (size_t i = 0; i < sizeof(rejected) / sizeof(*rejected); ++i) {
+        struct declarative_config_model *model = NULL; struct declarative_error error = {0};
+        TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) rejected[i], strlen(rejected[i]), "ratio", &model, &error), false);
+        TEST_CHECK(error.stage, DECLARATIVE_ERROR_SCHEMA);
+        declarative_config_destroy(model);
+    }
+)
+
 TEST_FUNC(declarative_file_loader_enforces_descriptor_contract,
     char path[] = "/tmp/yabai-jsonc-XXXXXX"; int fd = mkstemp(path);
     TEST_CHECK(fd >= 0, true);

@@ -350,6 +350,7 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, DECLARATIVE_CONFIG_RIGHT_PADDING, right_padding);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, DECLARATIVE_CONFIG_WINDOW_GAP, window_gap);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, DECLARATIVE_CONFIG_ACCORDION_PADDING, accordion_padding);
+        view->split_ratio = effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, DECLARATIVE_CONFIG_SPLIT_TYPE, split_type);
         view->auto_balance = effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
 #undef APPLY_SPACE

@@ -79,7 +79,8 @@ static uint64_t declarative_space_legacy_flag(enum declarative_runtime_space_fie
 {
     static const uint64_t flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
+        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_RATIO,
+        VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
     return flags[field];
 }
@@ -91,6 +92,7 @@ static union declarative_runtime_scalar declarative_space_scalar(enum declarativ
     switch (id) {
     case DECLARATIVE_CONFIG_LAYOUT:
     case DECLARATIVE_CONFIG_SPLIT_TYPE: scalar.integer = value->enumeration; break;
+    case DECLARATIVE_CONFIG_SPLIT_RATIO: scalar.real = value->real; break;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: scalar.u32 = value->u32; break;
     default: scalar.integer = value->integer; break;
     }
@@ -139,6 +141,7 @@ static void declarative_space_set_current_non_user(const struct view *view,
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, right_padding, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
+    SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE, auto_balance, u32);
 #undef SET_CURRENT
@@ -169,6 +172,7 @@ bool declarative_space_resolve_effective_policy(const struct declarative_config_
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, right_padding, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
+    SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE, auto_balance, u32);
 #undef SET_DEFAULT
@@ -663,6 +667,7 @@ void declarative_space_capture_view_before(const struct view *view,
         .right_padding = view->right_padding,
         .window_gap = view->window_gap,
         .accordion_padding = view->accordion_padding,
+        .split_ratio = view->split_ratio,
         .split_type = view->split_type,
         .auto_balance = view->auto_balance,
         .insertion_point = view->insertion_point,
@@ -686,6 +691,7 @@ bool declarative_space_view_before_matches(const struct view *view,
            view->right_padding == image->right_padding &&
            view->window_gap == image->window_gap &&
            view->accordion_padding == image->accordion_padding &&
+           view->split_ratio == image->split_ratio &&
            view->split_type == image->split_type &&
            view->auto_balance == image->auto_balance &&
            view->insertion_point == image->insertion_point &&
@@ -1618,6 +1624,9 @@ static bool declarative_space_make_converted_root(struct declarative_space_prepa
                                                    enum view_type layout,
                                                    const struct declarative_space_defaults *defaults)
 {
+    struct declarative_space_defaults effective_defaults = *defaults;
+    effective_defaults.split_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
+    defaults = &effective_defaults;
     if (!declarative_space_build_tree_index(target, target->target.view->root)) return false;
     struct window_node *root = declarative_space_allocate(1, sizeof(*root));
     if (!root) return false;
@@ -1678,6 +1687,9 @@ bsp_fail:
 static bool declarative_space_make_scaffold_root(struct declarative_space_prepared_target *target,
                                                   const struct declarative_space_defaults *defaults)
 {
+    struct declarative_space_defaults effective_defaults = *defaults;
+    effective_defaults.split_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
+    defaults = &effective_defaults;
     if (!declarative_space_build_tree_index(target, target->target.view->root)) return false;
     struct window_node *root = declarative_space_allocate(1, sizeof(*root));
     if (!root) return false;
@@ -1700,7 +1712,7 @@ static bool declarative_space_make_scaffold_root(struct declarative_space_prepar
             if (!entry || !entry->node) goto fail;
             entry->node->split = SPLIT_Y;
             entry->node->child = CHILD_SECOND;
-            entry->node->ratio = 0.5f;
+            entry->node->ratio = defaults->split_ratio;
         } else if (i == 2) {
             struct declarative_space_tree_index_entry *entry = declarative_space_tree_find(target, primary[1]);
             if (!entry || !entry->node) goto fail;
@@ -1737,6 +1749,9 @@ static bool declarative_space_reconcile_same_layout(struct declarative_space_pre
                                                      enum view_type layout,
                                                      const struct declarative_space_defaults *defaults)
 {
+    struct declarative_space_defaults effective_defaults = *defaults;
+    effective_defaults.split_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
+    defaults = &effective_defaults;
     struct window_node *root = declarative_space_clone_root(target->target.view->root);
     if (!root) return false;
     target->final_root = root;
@@ -1841,7 +1856,10 @@ static bool declarative_space_build_final_roots(struct declarative_space_prepara
         target->membership_changed = !old_subset || old_final_count != final_count;
         target->scaffold_changed = target->target.view->scaffold_fingerprint != target->final_scaffold_fingerprint ||
             memcmp(target->target.view->scaffold_primary, target->final_scaffold_primary,
-                   sizeof(target->final_scaffold_primary)) != 0;
+                   sizeof(target->final_scaffold_primary)) != 0 ||
+            (target->final_scaffold_fingerprint &&
+             target->target.view->split_ratio !=
+             target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real);
         target->changed = target->layout_changed || target->membership_changed || target->scaffold_changed ||
                           (layout == VIEW_FLOAT && target->root_before.window_count != 0);
         target->final_insertion_point = target->target.view->insertion_point;
@@ -2388,7 +2406,9 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             view->left_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING].value.integer ||
             view->right_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer ||
             view->window_gap != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer ||
-            view->accordion_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer;
+            view->accordion_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer ||
+            (target->final_scaffold_fingerprint &&
+             view->split_ratio != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real);
         if (target->changed) view->root = target->final_root;
         view->declarative_identity = target->target.identity;
         view->layout = declarative_space_final_layout(target);
@@ -2398,6 +2418,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
         view->right_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING].value.integer;
         view->window_gap = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer;
         view->accordion_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer;
+        view->split_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
         view->split_type = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer;
         view->auto_balance = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32;
         view->insertion_point = target->final_insertion_point;

@@ -201,7 +201,7 @@ The native `window_shadow`, `window_opacity`, `window_opacity_duration`, `active
 Space policy
 ~~~~~~~~~~~~
 
-Each `spaces` entry is an exact object with required `match` and at least one of `settings` or `scaffold`. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. When present, `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `split_type` and `auto_balance`, using the types and ranges above.
+Each `spaces` entry is an exact object with required `match` and at least one of `settings` or `scaffold`. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. When present, `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `split_ratio`, `split_type` and `auto_balance`, using the types and ranges above. A Space `split_ratio` uses the existing `0.1...0.9` range and controls the default ratio for new BSP splits on that Space.
 
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. An index follows its Mission Control slot; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native-fullscreen Spaces remain floating.
 
@@ -235,7 +235,7 @@ An optional Space `scaffold` is an array of one to three app matchers. Each entr
 
 The first matching scaffold entry owns a window, so overlapping expressions resolve in array order. The lowest nonzero window ID matching each present entry is its primary window. Other windows from that application and windows matching no entry remain ordinary BSP overflow windows.
 
-Present primaries compact in declaration order. One fills the Space. Two split left and right at `0.5`. Three place the first on the left, the second upper-right and the third lower-right, with both splits at `0.5`. Opening order does not affect that primary topology. A primary membership change or successful scaffold generation change rebuilds the detached BSP root transactionally; overflow-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
+Present primaries compact in declaration order. One fills the Space. With two primaries, the first occupies the effective Space `split_ratio` on the left and the second gets the remainder. With three primaries, the first occupies that ratio on the left; the right branch keeps an equal `0.5` split, placing the second upper-right and the third lower-right. The default remains `0.5`. Opening order does not affect that primary topology. A primary membership change, successful scaffold generation change, or effective ratio change rebuilds the detached BSP root transactionally; overflow-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
 
 [source,jsonc]
 ----
@@ -529,7 +529,7 @@ Global Settings
     Rendering clamps the width to half the shorter feedback-frame dimension. (default: 2)
 
 *split_ratio* ['<FLOAT_SEL>']::
-    Specify the size distribution when a window is split.
+    Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value. The valid range is `0.1...0.9`.
 
 *mouse_modifier* ['cmd|alt|shift|ctrl|fn']::
     Keyboard modifier used for moving and resizing windows.
@@ -572,6 +572,9 @@ Space Settings
 
 *accordion_padding* ['<nonnegative integer number>']::
     Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on `bsp`, `stack` or `float` geometry.
+
+*split_ratio* ['<FLOAT_SEL>']::
+    Set the default ratio for new BSP splits on the selected Space. The valid range is `0.1...0.9`. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.
 
 *auto_balance* ['<BOOL_SEL>|x-axis|y-axis']::
     Balance the window tree upon change, so that all windows occupy an equally sized area.

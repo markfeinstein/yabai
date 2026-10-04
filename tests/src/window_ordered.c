@@ -14,6 +14,24 @@ TEST_FUNC(view_padding_sum_widens_before_addition,
     TEST_CHECK(view_padding_sum(INT_MIN, INT_MIN), -4294967296.0);
 });
 
+TEST_FUNC(view_bsp_insertion_and_equalization_use_the_space_split_ratio,
+{
+    struct view view = { .layout = VIEW_BSP, .split_type = SPLIT_Y, .split_ratio = 0.6f };
+    view.root = calloc(1, sizeof(*view.root));
+    view.root->area = (struct area) { .w = 1000.0f, .h = 700.0f };
+    struct window first = { .id = 101 }, second = { .id = 102 };
+    TEST_CHECK(view_add_window_node(&view, &first) != NULL, true);
+    TEST_CHECK(view_add_window_node(&view, &second) != NULL, true);
+    TEST_CHECK(view.root->split, SPLIT_Y);
+    TEST_CHECK(view.root->ratio, 0.6f);
+    view.root->ratio = 0.4f;
+    window_node_equalize(view.root, SPLIT_Y, view.split_ratio);
+    TEST_CHECK(view.root->ratio, 0.6f);
+    free(view.root->left);
+    free(view.root->right);
+    free(view.root);
+});
+
 static CGError test_ordered_query_failure(int connection, uint32_t wid, uint8_t *ordered_in)
 {
     (void) connection;
@@ -78,6 +96,7 @@ static bool test_ordered_init(struct test_ordered *t)
     }
     t->view->sid = sid;
     t->view->layout = VIEW_BSP;
+    t->view->split_ratio = 0.5f;
     table_remove(&g_space_manager.view, &sid);
     table_add(&g_space_manager.view, &sid, t->view);
 

@@ -1878,9 +1878,16 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             struct token_value value = token_to_value(get_token(&message));
             float real;
             if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.4f\n", g_space_manager.split_ratio);
+                float split_ratio = sel_sid ? space_manager_find_view(&g_space_manager, sel_sid)->split_ratio
+                                            : g_space_manager.split_ratio;
+                fprintf(rsp, "%.4f\n", split_ratio);
             } else if (token_value_to_float(value, &real) && in_range_ii(real, 0.1f, 0.9f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_RATIO, &(struct declarative_value) { .present = true, .real = real }, 0);
+                enum declarative_apply_result result = declarative_apply_runtime_setting(
+                    DECLARATIVE_CONFIG_SPLIT_RATIO,
+                    &(struct declarative_value) { .present = true, .real = real }, sel_sid);
+                if (result == DECLARATIVE_APPLY_OK && declarative_installed_has_scaffold()) {
+                    declarative_configuration_request_reconcile();
+                }
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }

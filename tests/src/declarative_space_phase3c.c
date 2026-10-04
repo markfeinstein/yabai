@@ -252,7 +252,8 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_TABLE_COUNT, PHASE3C_TABLE_CAPACITY, PHASE3C_TABLE_MAX_LOAD,
     PHASE3C_TABLE_HASH, PHASE3C_TABLE_CMP,
     PHASE3C_SCALAR_LAYOUT, PHASE3C_SCALAR_TOP, PHASE3C_SCALAR_BOTTOM, PHASE3C_SCALAR_LEFT,
-    PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_SPLIT, PHASE3C_SCALAR_BALANCE,
+    PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_RATIO, PHASE3C_SCALAR_SPLIT,
+    PHASE3C_SCALAR_BALANCE,
     PHASE3C_INSERTION, PHASE3C_SCAFFOLD_FINGERPRINT, PHASE3C_SCAFFOLD_PRIMARY, PHASE3C_COMPLETE_FLAGS,
     PHASE3C_ROOT_POINTER_NULL, PHASE3C_ROOT_WINDOW_COUNT_NEGATIVE,
     PHASE3C_ROOT_PARENT_SELF, PHASE3C_ROOT_LEFT_SELF, PHASE3C_ROOT_ZOOM_SELF,
@@ -270,13 +271,14 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_STALE_CASE_COUNT
 };
 
-_Static_assert(PHASE3C_STALE_CASE_COUNT == 115, "Phase 3C stale matrix must contain exactly 115 cases");
+_Static_assert(PHASE3C_STALE_CASE_COUNT == 118, "Phase 3C stale matrix must contain exactly 118 cases");
 
 TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
 {
     static const uint64_t legacy_flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
+        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_RATIO,
+        VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
     size_t cases_run = 0;
     for (int kind = 0; kind < PHASE3C_STALE_CASE_COUNT; ++kind) {
@@ -340,6 +342,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         else if (kind == PHASE3C_SCALAR_LEFT) f.view.left_padding++;
         else if (kind == PHASE3C_SCALAR_RIGHT) f.view.right_padding++;
         else if (kind == PHASE3C_SCALAR_GAP) f.view.window_gap++;
+        else if (kind == PHASE3C_SCALAR_RATIO) f.view.split_ratio = 0.6f;
         else if (kind == PHASE3C_SCALAR_SPLIT) f.view.split_type = SPLIT_X;
         else if (kind == PHASE3C_SCALAR_BALANCE) f.view.auto_balance = SPLIT_NONE;
         else if (kind == PHASE3C_INSERTION) f.view.insertion_point++;
@@ -403,7 +406,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         ++cases_run;
     }
-    TEST_CHECK(cases_run, 115UL);
+    TEST_CHECK(cases_run, 118UL);
 })
 
 struct declarative_space_phase3c_outcome_context

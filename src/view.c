@@ -245,9 +245,9 @@ static inline enum window_node_split window_node_get_split(struct view *view, st
     return node->area.w >= node->area.h ? SPLIT_Y : SPLIT_X;
 }
 
-static inline float window_node_get_ratio(struct window_node *node)
+static inline float window_node_get_ratio(struct view *view, struct window_node *node)
 {
-    return in_range_ii(node->ratio, 0.1f, 0.9f) ? node->ratio : g_space_manager.split_ratio;
+    return in_range_ii(node->ratio, 0.1f, 0.9f) ? node->ratio : view->split_ratio;
 }
 
 static inline int window_node_get_gap(struct view *view)
@@ -263,7 +263,7 @@ static void area_make_pair(enum window_node_split split, int gap, float ratio, s
 static void area_make_pair_for_node(struct view *view, struct window_node *node)
 {
     enum window_node_split split = window_node_get_split(view, node);
-    float ratio = window_node_get_ratio(node);
+    float ratio = window_node_get_ratio(view, node);
     int gap     = window_node_get_gap(view);
 
     area_make_pair(split, gap, ratio, &node->area, &node->left->area, &node->right->area);
@@ -297,17 +297,17 @@ static inline bool window_node_is_right_child(struct window_node *node)
     return node->parent && node->parent->right == node;
 }
 
-static void window_node_equalize(struct window_node *node, uint32_t axis_flag)
+static void window_node_equalize(struct window_node *node, uint32_t axis_flag, float split_ratio)
 {
-    if (node->left)  window_node_equalize(node->left, axis_flag);
-    if (node->right) window_node_equalize(node->right, axis_flag);
+    if (node->left)  window_node_equalize(node->left, axis_flag, split_ratio);
+    if (node->right) window_node_equalize(node->right, axis_flag, split_ratio);
 
     if ((axis_flag & SPLIT_Y) && node->split == SPLIT_Y) {
-        node->ratio = g_space_manager.split_ratio;
+        node->ratio = split_ratio;
     }
 
     if ((axis_flag & SPLIT_X) && node->split == SPLIT_X) {
-        node->ratio = g_space_manager.split_ratio;
+        node->ratio = split_ratio;
     }
 }
 
@@ -1246,6 +1246,7 @@ struct view *view_create(uint64_t sid)
         if (!view_check_flag(view, VIEW_WINDOW_GAP))     view->window_gap     = g_space_manager.window_gap;
         if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) view->accordion_padding = g_space_manager.accordion_padding;
         if (!view_check_flag(view, VIEW_AUTO_BALANCE))   view->auto_balance   = g_space_manager.auto_balance;
+        if (!view_check_flag(view, VIEW_SPLIT_RATIO))    view->split_ratio    = g_space_manager.split_ratio;
         if (!view_check_flag(view, VIEW_SPLIT_TYPE))     view->split_type     = g_space_manager.split_type;
         view_update(view);
     } else {

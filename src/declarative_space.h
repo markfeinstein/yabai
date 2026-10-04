@@ -155,6 +155,7 @@ struct declarative_space_view_before_image
     int right_padding;
     int window_gap;
     int accordion_padding;
+    float split_ratio;
     enum window_node_split split_type;
     uint32_t auto_balance;
     uint32_t insertion_point;

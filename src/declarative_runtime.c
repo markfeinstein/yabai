@@ -50,6 +50,10 @@ static bool declarative_operation_set_space_layout(void *manager, uint64_t sid, 
 {
     return space_manager_set_layout_for_space(manager, sid, layout);
 }
+static void declarative_operation_set_split_ratio(void *manager, float split_ratio)
+{
+    space_manager_set_split_ratio_for_all_spaces(manager, split_ratio);
+}
 static void declarative_operation_set_split_type(void *manager, int split_type)
 {
     space_manager_set_split_type_for_all_spaces(manager, split_type);
@@ -95,6 +99,7 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .set_focus_follows_mouse = declarative_operation_set_ffm, \
     .set_layout_for_all_spaces = declarative_operation_set_global_layout, \
     .set_layout_for_space = declarative_operation_set_space_layout, \
+    .set_split_ratio_for_all_spaces = declarative_operation_set_split_ratio, \
     .set_split_type_for_all_spaces = declarative_operation_set_split_type, \
     .set_auto_balance_for_all_spaces = declarative_operation_set_auto_balance, \
     .update_and_flush_space = declarative_operation_update_and_flush_space, \
@@ -165,6 +170,7 @@ int declarative_space_field_for_id(enum declarative_config_id id)
     case DECLARATIVE_CONFIG_RIGHT_PADDING:  return DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING;
     case DECLARATIVE_CONFIG_WINDOW_GAP:     return DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: return DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING;
+    case DECLARATIVE_CONFIG_SPLIT_RATIO:    return DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO;
     case DECLARATIVE_CONFIG_SPLIT_TYPE:     return DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE;
     case DECLARATIVE_CONFIG_AUTO_BALANCE:   return DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE;
     default: return -1;
@@ -329,7 +335,15 @@ enum declarative_apply_result declarative_apply_runtime_setting(enum declarative
     case DECLARATIVE_CONFIG_LAYOUT:
         if (!declarative_runtime_operation_ops.set_layout_for_all_spaces(&g_space_manager, value->enumeration)) return DECLARATIVE_APPLY_LAYOUT_FAILED;
         break;
-    case DECLARATIVE_CONFIG_SPLIT_RATIO: g_space_manager.split_ratio = value->real; break;
+    case DECLARATIVE_CONFIG_SPLIT_RATIO:
+        if (view) {
+            view_set_flag(view, VIEW_SPLIT_RATIO);
+            view->split_ratio = value->real;
+            if (view->scaffold_fingerprint) view->scaffold_fingerprint = 0;
+        } else {
+            declarative_runtime_operation_ops.set_split_ratio_for_all_spaces(&g_space_manager, value->real);
+        }
+        break;
     case DECLARATIVE_CONFIG_SPLIT_TYPE:
         if (view) { view_set_flag(view, VIEW_SPLIT_TYPE); view->split_type = value->enumeration; }
         else declarative_runtime_operation_ops.set_split_type_for_all_spaces(&g_space_manager, value->enumeration);

@@ -23,6 +23,7 @@ enum declarative_test_effect {
     DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY,
     DECLARATIVE_TEST_EFFECT_SPACE_GEOMETRY,
     DECLARATIVE_TEST_EFFECT_LAYOUT,
+    DECLARATIVE_TEST_EFFECT_SPLIT_RATIO,
     DECLARATIVE_TEST_EFFECT_SPLIT_TYPE,
     DECLARATIVE_TEST_EFFECT_AUTO_BALANCE,
     DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER,
@@ -68,6 +69,11 @@ static bool declarative_test_set_space_layout(void *manager, uint64_t sid, int l
     if (!view) return false;
     view->layout = layout;
     return true;
+}
+static void declarative_test_set_split_ratio(void *manager, float value)
+{
+    ((struct space_manager *) manager)->split_ratio = value;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SPLIT_RATIO];
 }
 static void declarative_test_set_split_type(void *manager, int value)
 {
@@ -120,6 +126,7 @@ static const struct declarative_runtime_operation_ops declarative_test_operation
     .set_focus_follows_mouse = declarative_test_set_ffm,
     .set_layout_for_all_spaces = declarative_test_set_global_layout,
     .set_layout_for_space = declarative_test_set_space_layout,
+    .set_split_ratio_for_all_spaces = declarative_test_set_split_ratio,
     .set_split_type_for_all_spaces = declarative_test_set_split_type,
     .set_auto_balance_for_all_spaces = declarative_test_set_auto_balance,
     .update_and_flush_space = declarative_test_update_and_flush_space,
@@ -195,7 +202,7 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_LAYOUT, "bsp", "bsp\n", DECLARATIVE_TEST_EFFECT_LAYOUT },
     { DECLARATIVE_CONFIG_WINDOW_GAP, "15", "15\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_ACCORDION_PADDING, "30", "30\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
-    { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", -1 },
+    { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", DECLARATIVE_TEST_EFFECT_SPLIT_RATIO },
     { DECLARATIVE_CONFIG_SPLIT_TYPE, "auto", "auto\n", DECLARATIVE_TEST_EFFECT_SPLIT_TYPE },
     { DECLARATIVE_CONFIG_AUTO_BALANCE, "on", "on\n", DECLARATIVE_TEST_EFFECT_AUTO_BALANCE },
     { DECLARATIVE_CONFIG_MOUSE_MOD, "alt", "alt\n", DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER },
@@ -501,6 +508,60 @@ TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_be
     memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
     g_space_manager.last_space_id = saved_last_space_id;
 )
+
+TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space,
+{
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 62;
+    struct view view = { .sid = sid, .split_ratio = 0.5f, .scaffold_fingerprint = 99 };
+    table_add(&g_space_manager.view, &sid, &view);
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+    char *output = declarative_test_run_scoped_config("split_ratio", NULL);
+    TEST_CHECK(output != NULL && strcmp(output, "0.5000\n") == 0, true);
+    free(output);
+    output = declarative_test_run_scoped_config("split_ratio", "0.6");
+    TEST_CHECK(output != NULL && strcmp(output, "") == 0, true);
+    free(output);
+    TEST_CHECK(view.split_ratio, 0.6f);
+    TEST_CHECK(view_check_flag(&view, VIEW_SPLIT_RATIO) != 0, true);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].present, true);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].source,
+               DECLARATIVE_SETTING_RUNTIME_SPACE);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.6f);
+    TEST_CHECK(view.scaffold_fingerprint, 0ULL);
+
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = saved_last_space_id;
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+})
+
+TEST_FUNC(space_manager_global_split_ratio_preserves_runtime_space_ownership,
+{
+    struct space_manager manager = { 0 };
+    table_init(&manager.view, 8, hash_view, compare_view);
+    struct view inherited = { .sid = 1, .split_ratio = 0.5f, .scaffold_fingerprint = 10 };
+    struct view owned = { .sid = 2, .split_ratio = 0.7f, .scaffold_fingerprint = 20, .flags = VIEW_SPLIT_RATIO };
+    table_add(&manager.view, &inherited.sid, &inherited);
+    table_add(&manager.view, &owned.sid, &owned);
+    space_manager_set_split_ratio_for_all_spaces(&manager, 0.6f);
+    TEST_CHECK(manager.split_ratio, 0.6f);
+    TEST_CHECK(inherited.split_ratio, 0.6f);
+    TEST_CHECK(inherited.scaffold_fingerprint, 0ULL);
+    TEST_CHECK(owned.split_ratio, 0.7f);
+    TEST_CHECK(owned.scaffold_fingerprint, 20ULL);
+    table_free(&manager.view);
+})
 
 TEST_FUNC(declarative_scoped_mixed_batch_preflights_before_space_mutation,
     bool initialized_view_table = false;

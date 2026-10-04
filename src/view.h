@@ -251,6 +251,7 @@ enum view_flag
     VIEW_IS_DIRTY         = 0x400,
     VIEW_SPLIT_TYPE       = 0x800,
     VIEW_ACCORDION_PADDING = 0x1000,
+    VIEW_SPLIT_RATIO       = 0x2000,
 };
 
 struct view
@@ -268,6 +269,7 @@ struct view
     int right_padding;
     int window_gap;
     int accordion_padding;
+    float split_ratio;
     uint32_t auto_balance;
     uint64_t scaffold_fingerprint;
     uint32_t scaffold_primary[3];

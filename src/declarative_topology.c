@@ -665,6 +665,7 @@ static struct view *declarative_detached_view_create(const struct declarative_to
         view->right_padding = defaults->right_padding;
         view->window_gap = defaults->window_gap;
         view->accordion_padding = defaults->accordion_padding;
+        view->split_ratio = defaults->split_ratio;
         view->auto_balance = defaults->auto_balance;
         view->split_type = defaults->split_type;
         CGRect bounds = display->bounds;

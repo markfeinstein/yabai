@@ -51,6 +51,45 @@ TEST_FUNC(declarative_space_resolver_is_fieldwise_and_mode_explicit,
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer, 5);
 })
 
+TEST_FUNC(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay,
+{
+    struct view view = { .sid = 92, .split_ratio = 0.5f };
+    struct declarative_space_target target = { .view = &view, .sid = 92, .index = 2, .uuid = "ratio-space", .is_user_space = true };
+    struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_config_model native = { 0 };
+    native.config[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_value) { .present = true, .real = 0.55f };
+    struct declarative_space_effective effective;
+    TEST_CHECK(declarative_space_resolve_effective_policy(&native, NULL, 0, NULL, &defaults, &target,
+                                                          DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.55f);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].source, DECLARATIVE_SETTING_NATIVE_GLOBAL);
+
+    struct declarative_space_policy policies[2] = { 0 };
+    policies[0].by_index = true; policies[0].index = 2;
+    policies[0].settings[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_value) { .present = true, .real = 0.6f };
+    policies[1].uuid = "ratio-space";
+    policies[1].settings[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_value) { .present = true, .real = 0.65f };
+    struct declarative_runtime_state runtime = { 0 };
+    runtime.global[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_runtime_cell) {
+        .present = true, .source = DECLARATIVE_SETTING_RUNTIME_GLOBAL, .value.real = 0.7f
+    };
+    view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO] = (struct declarative_runtime_cell) {
+        .present = true, .source = DECLARATIVE_SETTING_RUNTIME_SPACE, .value.real = 0.75f
+    };
+    TEST_CHECK(declarative_space_resolve_effective_policy(&native, policies, 2, &runtime, &defaults, &target,
+                                                          DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.75f);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].source, DECLARATIVE_SETTING_RUNTIME_SPACE);
+    memset(&view.runtime_ownership, 0, sizeof(view.runtime_ownership));
+    TEST_CHECK(declarative_space_resolve_effective_policy(&native, policies, 2, &runtime, &defaults, &target,
+                                                          DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.7f);
+    TEST_CHECK(declarative_space_resolve_effective_policy(&native, policies, 2, &runtime, &defaults, &target,
+                                                          DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.65f);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].source, DECLARATIVE_SETTING_NATIVE_SPACE);
+})
+
 TEST_FUNC(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars,
 {
     struct declarative_space_defaults defaults = declarative_space_test_defaults();
@@ -342,12 +381,14 @@ TEST_FUNC(declarative_space_target_and_old_table_validation_is_bijective,
     table_free(&managed); table_free(&views);
 })
 
-static bool declarative_scaffold_test_case(const uint32_t *order, size_t count)
+static bool declarative_scaffold_test_case(const uint32_t *order, size_t count,
+                                            bool ratio_present, float split_ratio)
 {
     struct application applications[3] = { 0 };
     applications[0].name = "Mail"; applications[1].name = "Calendar"; applications[2].name = "Messages";
     struct window_node root = { .area = { .w = 1200.0f, .h = 800.0f } };
-    struct view view = { .sid = 200, .uuid = CFSTR("space-2"), .layout = VIEW_BSP, .root = &root };
+    struct view view = { .sid = 200, .uuid = CFSTR("space-2"), .layout = VIEW_BSP,
+                         .split_ratio = 0.5f, .root = &root };
     struct table views = { 0 }, managed = { 0 };
     table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
     uint64_t sid = 200; table_add(&views, &sid, &view);
@@ -365,6 +406,11 @@ static bool declarative_scaffold_test_case(const uint32_t *order, size_t count)
     struct declarative_space_capture_ops ops = { declarative_space_test_query, declarative_space_test_find, declarative_space_test_eligible, &capture };
     struct declarative_space_policy policy = { .by_index = true, .index = 2, .scaffold_count = 3 };
     policy.scaffold[0].pattern = "^Mail$"; policy.scaffold[1].pattern = "^Calendar$"; policy.scaffold[2].pattern = "^Messages$";
+    if (ratio_present) {
+        policy.settings[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_value) {
+            .present = true, .real = split_ratio
+        };
+    }
     struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
     struct declarative_runtime_state runtime = { 0 }; struct declarative_space_defaults defaults = declarative_space_test_defaults();
     defaults.auto_balance = SPLIT_NONE; defaults.focused_window_id = 0;
@@ -380,12 +426,19 @@ static bool declarative_scaffold_test_case(const uint32_t *order, size_t count)
     if (expected_count == 1) {
         if (final->left || final->window_count != 1 || final->window_list[0] != expected[0]) goto destroy;
     } else if (expected_count == 2) {
-        if (!final->left || final->split != SPLIT_Y || final->ratio != 0.5f ||
-            final->left->window_list[0] != expected[0] || final->right->window_list[0] != expected[1]) goto destroy;
+        float expected_ratio = ratio_present ? split_ratio : 0.5f;
+        if (!final->left || final->split != SPLIT_Y || final->ratio != expected_ratio ||
+            final->left->window_list[0] != expected[0] || final->right->window_list[0] != expected[1] ||
+            final->left->area.w != truncf(1200.0f * expected_ratio) ||
+            final->right->area.w != truncf(1200.0f * (1.0f - expected_ratio))) goto destroy;
     } else if (expected_count == 3) {
-        if (!final->left || final->split != SPLIT_Y || final->ratio != 0.5f || final->left->window_list[0] != 10 ||
+        float expected_ratio = ratio_present ? split_ratio : 0.5f;
+        if (!final->left || final->split != SPLIT_Y || final->ratio != expected_ratio || final->left->window_list[0] != 10 ||
             !final->right->left || final->right->split != SPLIT_X || final->right->ratio != 0.5f ||
-            final->right->left->window_list[0] != 20 || final->right->right->window_list[0] != 30) goto destroy;
+            final->right->left->window_list[0] != 20 || final->right->right->window_list[0] != 30 ||
+            final->left->area.w != truncf(1200.0f * expected_ratio) ||
+            final->right->area.w != truncf(1200.0f * (1.0f - expected_ratio)) ||
+            final->right->left->area.h != 400.0f || final->right->right->area.h != 400.0f) goto destroy;
     }
     result = true;
 destroy:
@@ -426,14 +479,22 @@ TEST_FUNC(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_ha
 TEST_FUNC(declarative_scaffold_compacts_subsets_and_ignores_opening_order,
 {
     uint32_t all[] = { 10, 20, 30 };
-    TEST_CHECK(declarative_scaffold_test_case(NULL, 0), true);
+    TEST_CHECK(declarative_scaffold_test_case(NULL, 0, false, 0.5f), true);
     for (unsigned mask = 1; mask < 8; ++mask) {
         uint32_t order[3]; size_t count = 0;
         for (int slot = 0; slot < 3; ++slot) if (mask & (1u << slot)) order[count++] = all[slot];
-        TEST_CHECK(declarative_scaffold_test_case(order, count), true);
+        TEST_CHECK(declarative_scaffold_test_case(order, count, false, 0.5f), true);
     }
     uint32_t permutations[6][3] = { {10,20,30}, {10,30,20}, {20,10,30}, {20,30,10}, {30,10,20}, {30,20,10} };
-    for (size_t i = 0; i < 6; ++i) TEST_CHECK(declarative_scaffold_test_case(permutations[i], 3), true);
+    for (size_t i = 0; i < 6; ++i) TEST_CHECK(declarative_scaffold_test_case(permutations[i], 3, false, 0.5f), true);
+})
+
+TEST_FUNC(declarative_scaffold_uses_effective_ratio_only_for_its_root_split,
+{
+    uint32_t two[] = { 10, 20 };
+    uint32_t three[] = { 10, 20, 30 };
+    TEST_CHECK(declarative_scaffold_test_case(two, 2, true, 0.6f), true);
+    TEST_CHECK(declarative_scaffold_test_case(three, 3, true, 0.6f), true);
 })
 
 static bool declarative_scaffold_subtree_contains(struct window_node *node, uint32_t wid)
@@ -443,6 +504,49 @@ static bool declarative_scaffold_subtree_contains(struct window_node *node, uint
     return declarative_scaffold_subtree_contains(node->left, wid) ||
            declarative_scaffold_subtree_contains(node->right, wid);
 }
+
+TEST_FUNC(declarative_scaffold_ratio_change_rebuilds_existing_canonical_root,
+{
+    struct application apps[2] = { { .name = "Mail" }, { .name = "Calendar" } };
+    struct window_node root = { .area = { .w = 1000.0f, .h = 700.0f }, .split = SPLIT_Y, .ratio = 0.5f };
+    struct window_node left = { .parent = &root, .window_list = { 10 }, .window_order = { 10 }, .window_count = 1 };
+    struct window_node right = { .parent = &root, .window_list = { 20 }, .window_order = { 20 }, .window_count = 1 };
+    root.left = &left; root.right = &right;
+    struct declarative_space_policy policy = { .by_index = true, .index = 2, .scaffold_count = 2 };
+    policy.scaffold[0].pattern = "^Mail$"; policy.scaffold[1].pattern = "^Calendar$";
+    policy.settings[DECLARATIVE_CONFIG_SPLIT_RATIO] = (struct declarative_value) { .present = true, .real = 0.6f };
+    struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
+    struct view view = { .sid = 202, .uuid = CFSTR("ratio-rebuild"), .layout = VIEW_BSP,
+        .split_ratio = 0.5f, .root = &root,
+        .scaffold_fingerprint = declarative_space_scaffold_hash(8, &policy),
+        .scaffold_primary = { 10, 20, 0 } };
+    struct table views = { 0 }, managed = { 0 };
+    table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
+    uint64_t sid = view.sid; table_add(&views, &sid, &view);
+    struct declarative_space_test_capture capture = { .sids = { sid }, .wids = { { 10, 20 } }, .counts = { 2 } };
+    capture.windows[10].id = 10; capture.windows[20].id = 20;
+    capture.windows[10].application = &apps[0]; capture.windows[20].application = &apps[1];
+    table_add(&managed, &capture.windows[10].id, &view); table_add(&managed, &capture.windows[20].id, &view);
+    struct declarative_space_target target = { .view = &view, .sid = sid, .index = 2, .uuid = "ratio-rebuild", .is_user_space = true };
+    struct declarative_space_topology_entry topology = { .sid = sid, .index = 2, .uuid = "ratio-rebuild", .is_user_space = true };
+    struct declarative_space_table_contract vc = { hash_wm, compare_wm, sizeof(uint64_t) };
+    struct declarative_space_table_contract mc = { hash_wm, compare_wm, sizeof(uint32_t) };
+    struct declarative_space_capture_ops ops = { declarative_space_test_query, declarative_space_test_find,
+        declarative_space_test_eligible, &capture };
+    struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_runtime_state runtime = { 0 };
+    struct declarative_space_preparation preparation;
+    TEST_CHECK(declarative_space_prepare_effective(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
+        &native, native.spaces, native.space_count, 8, &runtime, &defaults,
+        DECLARATIVE_SPACE_PRESERVE_RUNTIME, &ops, &preparation), true);
+    TEST_CHECK(preparation.targets[0].scaffold_changed, true);
+    TEST_CHECK(preparation.targets[0].changed, true);
+    TEST_CHECK(preparation.targets[0].final_root != &root, true);
+    TEST_CHECK(preparation.targets[0].final_root->ratio, 0.6f);
+    declarative_space_preparation_destroy(&preparation);
+    table_free(&managed); table_free(&views);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
+})
 
 TEST_FUNC(declarative_scaffold_primary_selection_and_overflow_stability,
 {
@@ -473,7 +577,7 @@ TEST_FUNC(declarative_scaffold_primary_selection_and_overflow_stability,
     declarative_space_test_init_leaf(&left, 10, 0); declarative_space_test_init_leaf(&right, 40, 0);
     root.left = &left; root.right = &right; root.split = SPLIT_Y; root.ratio = 0.5f; root.area = (struct area) { .w = 1200, .h = 800 };
     left.parent = &root; right.parent = &root;
-    struct view view = { .sid = 2, .uuid = CFSTR("s"), .layout = VIEW_BSP, .root = &root,
+    struct view view = { .sid = 2, .uuid = CFSTR("s"), .layout = VIEW_BSP, .split_ratio = 0.5f, .root = &root,
         .scaffold_fingerprint = declarative_space_scaffold_hash(0, &policy), .scaffold_primary = { 10, 40, 0 } };
     struct table views = { 0 }, managed = { 0 }; table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
     uint64_t sid = 2; table_add(&views, &sid, &view); table_add(&managed, &windows[0].id, &view); table_add(&managed, &windows[2].id, &view);
