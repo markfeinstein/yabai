@@ -83,14 +83,24 @@ static void source_position_bytes(const uint8_t *bytes, size_t length, size_t at
 }
 
 struct numeric_offsets {
-    size_t space_count, rule_count;
+    size_t space_count, mode_count, policy_count, rule_count;
     size_t version;
     size_t config[DECLARATIVE_CONFIG_COUNT];
     size_t external_bar[2];
     size_t slots[];
 };
-static size_t *numeric_space_offsets(struct numeric_offsets *offsets, size_t index) { return offsets->slots + index * (DECLARATIVE_CONFIG_COUNT + 1); }
-static size_t *numeric_rule_offsets(struct numeric_offsets *offsets, size_t index) { return offsets->slots + offsets->space_count * (DECLARATIVE_CONFIG_COUNT + 1) + index * 8; }
+static size_t *numeric_mode_prefixes(struct numeric_offsets *offsets) { return offsets->slots; }
+static size_t *numeric_policy_slots(struct numeric_offsets *offsets) { return offsets->slots + offsets->mode_count + 1; }
+static size_t *numeric_space_offsets(struct numeric_offsets *offsets, size_t index)
+{
+    if (!offsets || index >= offsets->policy_count) return NULL;
+    return numeric_policy_slots(offsets) + index * (DECLARATIVE_CONFIG_COUNT + 1);
+}
+static size_t *numeric_rule_offsets(struct numeric_offsets *offsets, size_t index)
+{
+    if (!offsets || index >= offsets->rule_count) return NULL;
+    return numeric_policy_slots(offsets) + offsets->policy_count * (DECLARATIVE_CONFIG_COUNT + 1) + index * 8;
+}
 
 struct structural_parser { uint8_t *b; size_t n, p, depth; struct declarative_error *e; const char *target_path; bool target_found; size_t target_at; struct numeric_offsets *numeric_offsets; };
 #ifdef TESTS
@@ -144,7 +154,7 @@ static bool parse_string(struct structural_parser *p, uint8_t **decoded, size_t 
 static bool parse_structural_value(struct structural_parser *p,const char *path);
 static bool schema_known_key(const uint8_t*key,size_t length)
 {
-    static const char*fixed[]={"version","config","spaces","rules","match","settings","scaffold","effects","index","uuid","pattern","exclude","mode","top_padding","bottom_padding"};
+    static const char*fixed[]={"version","config","spaces","modes","active_mode","name","rules","match","settings","scaffold","effects","index","uuid","pattern","exclude","mode","top_padding","bottom_padding"};
     for(size_t i=0;i<sizeof(fixed)/sizeof(*fixed);++i)if(strlen(fixed[i])==length&&!memcmp(key,fixed[i],length))return true;
     return declarative_config_id_for_name((const char*)key,length)>=0||declarative_rule_field_for_json_name((const char*)key,length)>=0;
 }
@@ -179,9 +189,11 @@ static size_t *numeric_offset_for_path(struct numeric_offsets *offsets, const ch
         if(!strcmp(name,"external_bar.top_padding"))return &offsets->external_bar[0];if(!strcmp(name,"external_bar.bottom_padding"))return &offsets->external_bar[1];return NULL;
     }
     size_t index=0;int consumed=0;
-    if(sscanf(path,"$.spaces[%zu].%n",&index,&consumed)==1&&consumed>0&&index<offsets->space_count){const char *tail=path+consumed;size_t *space=numeric_space_offsets(offsets,index);if(!strcmp(tail,"match.index"))return &space[0];static const char settings_prefix[]="settings.";if(!strncmp(tail,settings_prefix,sizeof(settings_prefix)-1)){const char*name=tail+sizeof(settings_prefix)-1;int id=declarative_config_id_for_name(name,strlen(name));if(id>=0&&declarative_config_descriptors[id].kind==DECLARATIVE_VALUE_INT)return &space[1+id];}return NULL;}
+    if(sscanf(path,"$.spaces[%zu].%n",&index,&consumed)==1&&consumed>0&&index<offsets->space_count){const char *tail=path+consumed;size_t *space=numeric_space_offsets(offsets,index);if(!space)return NULL;if(!strcmp(tail,"match.index"))return &space[0];static const char settings_prefix[]="settings.";if(!strncmp(tail,settings_prefix,sizeof(settings_prefix)-1)){const char*name=tail+sizeof(settings_prefix)-1;int id=declarative_config_id_for_name(name,strlen(name));if(id>=0&&declarative_config_descriptors[id].kind==DECLARATIVE_VALUE_INT)return &space[1+id];}return NULL;}
+    size_t mode=0;consumed=0;
+    if(sscanf(path,"$.modes[%zu].spaces[%zu].%n",&mode,&index,&consumed)==2&&consumed>0&&mode<offsets->mode_count){size_t*prefix=numeric_mode_prefixes(offsets);if(prefix[mode]>prefix[mode+1]||index>=prefix[mode+1]-prefix[mode])return NULL;size_t flat=prefix[mode]+index;size_t*space=numeric_space_offsets(offsets,flat);if(!space)return NULL;const char*tail=path+consumed;if(!strcmp(tail,"match.index"))return &space[0];static const char settings_prefix[]="settings.";if(!strncmp(tail,settings_prefix,sizeof(settings_prefix)-1)){const char*name=tail+sizeof(settings_prefix)-1;int id=declarative_config_id_for_name(name,strlen(name));if(id>=0&&declarative_config_descriptors[id].kind==DECLARATIVE_VALUE_INT)return &space[1+id];}return NULL;}
     consumed=0;
-    if(sscanf(path,"$.rules[%zu].effects.%n",&index,&consumed)==1&&consumed>0&&index<offsets->rule_count){const char *tail=path+consumed;size_t *rule=numeric_rule_offsets(offsets,index);if(!strcmp(tail,"display.index"))return &rule[0];if(!strcmp(tail,"space.index"))return &rule[1];size_t grid=0;int end=0;if(sscanf(tail,"grid[%zu]%n",&grid,&end)==1&&tail[end]=='\0'&&grid<6)return &rule[2+grid];}
+    if(sscanf(path,"$.rules[%zu].effects.%n",&index,&consumed)==1&&consumed>0&&index<offsets->rule_count){const char *tail=path+consumed;size_t *rule=numeric_rule_offsets(offsets,index);if(!rule)return NULL;if(!strcmp(tail,"display.index"))return &rule[0];if(!strcmp(tail,"space.index"))return &rule[1];size_t grid=0;int end=0;if(sscanf(tail,"grid[%zu]%n",&grid,&end)==1&&tail[end]=='\0'&&grid<6)return &rule[2+grid];}
     return NULL;
 }
 static bool parse_structural_value(struct structural_parser*p,const char*path)
@@ -228,14 +240,31 @@ static bool builder_value_offset(struct model_builder *b, const char *path, size
     size_t *indexed=numeric_offset_for_path(b->numeric_offsets,path);if(!indexed||*indexed==SIZE_MAX)return false;*offset=*indexed;return true;
 }
 
+static bool checked_size_add(size_t a,size_t b,size_t*out){if(a>SIZE_MAX-b)return false;*out=a+b;return true;}
+static bool checked_size_mul(size_t a,size_t b,size_t*out){if(a&&b>SIZE_MAX/a)return false;*out=a*b;return true;}
 static struct numeric_offsets *numeric_offsets_create(id root, const uint8_t *source, size_t length, struct declarative_error *error)
 {
-    size_t spaces=0,rules=0;if([root isKindOfClass:[NSDictionary class]]){id value=root[@"spaces"];if([value isKindOfClass:[NSArray class]]&&[value count]<=DECLARATIVE_CONFIG_MAX_SPACES)spaces=[value count];value=root[@"rules"];if([value isKindOfClass:[NSArray class]]&&[value count]<=DECLARATIVE_CONFIG_MAX_RULES)rules=[value count];}
-    size_t slot_count=spaces*(DECLARATIVE_CONFIG_COUNT+1)+rules*8;size_t bytes=sizeof(struct numeric_offsets)+slot_count*sizeof(size_t);
-    struct numeric_offsets *offsets=allocator_ops->calloc_fn(1,bytes);if(!offsets){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return NULL;}offsets->space_count=spaces;offsets->rule_count=rules;offsets->version=SIZE_MAX;for(size_t i=0;i<DECLARATIVE_CONFIG_COUNT;++i)offsets->config[i]=SIZE_MAX;offsets->external_bar[0]=offsets->external_bar[1]=SIZE_MAX;for(size_t i=0;i<slot_count;++i)offsets->slots[i]=SIZE_MAX;
+    size_t spaces=0,modes=0,policies=0,rules=0;NSArray*mode_array=nil;
+    if([root isKindOfClass:[NSDictionary class]]){
+        id value=root[@"spaces"];
+        if([value isKindOfClass:[NSArray class]]){spaces=[value count];if(spaces>DECLARATIVE_CONFIG_MAX_SPACES){set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,"$.spaces","total Space policy limit exceeded");return NULL;}policies=spaces;}
+        value=root[@"modes"];
+        if([value isKindOfClass:[NSArray class]]){mode_array=value;modes=[mode_array count];if(modes>DECLARATIVE_CONFIG_MAX_MODES){set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,"$.modes","mode limit exceeded");return NULL;}for(size_t i=0;i<modes;++i){id mode=mode_array[i];id list=[mode isKindOfClass:[NSDictionary class]]?mode[@"spaces"]:nil;if([list isKindOfClass:[NSArray class]]){size_t count=[list count];char path[96];snprintf(path,sizeof(path),"$.modes[%zu].spaces",i);if(count>DECLARATIVE_CONFIG_MAX_SPACES){set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,path,"total Space policy limit exceeded");return NULL;}size_t next;if(!checked_size_add(policies,count,&next)||next>DECLARATIVE_CONFIG_MAX_SPACES){set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,path,"total Space policy limit exceeded");return NULL;}policies=next;}}}
+        value=root[@"rules"];if([value isKindOfClass:[NSArray class]]&&[value count]<=DECLARATIVE_CONFIG_MAX_RULES)rules=[value count];
+    }
+    size_t prefix_slots;if(!checked_size_add(modes,1,&prefix_slots))goto overflow;
+    size_t policy_slots;if(!checked_size_mul(policies,DECLARATIVE_CONFIG_COUNT+1,&policy_slots))goto overflow;
+    size_t rule_slots;if(!checked_size_mul(rules,8,&rule_slots))goto overflow;
+    size_t slot_count;if(!checked_size_add(prefix_slots,policy_slots,&slot_count)||!checked_size_add(slot_count,rule_slots,&slot_count))goto overflow;
+    size_t slot_bytes,bytes;if(!checked_size_mul(slot_count,sizeof(size_t),&slot_bytes)||!checked_size_add(sizeof(struct numeric_offsets),slot_bytes,&bytes))goto overflow;
+    struct numeric_offsets *offsets=allocator_ops->calloc_fn(1,bytes);if(!offsets){set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return NULL;}
+    offsets->space_count=spaces;offsets->mode_count=modes;offsets->policy_count=policies;offsets->rule_count=rules;offsets->version=SIZE_MAX;for(size_t i=0;i<DECLARATIVE_CONFIG_COUNT;++i)offsets->config[i]=SIZE_MAX;offsets->external_bar[0]=offsets->external_bar[1]=SIZE_MAX;
+    size_t*prefix=numeric_mode_prefixes(offsets);prefix[0]=spaces;for(size_t i=0;i<modes;++i){id mode=mode_array[i];id list=[mode isKindOfClass:[NSDictionary class]]?mode[@"spaces"]:nil;size_t count=[list isKindOfClass:[NSArray class]]?[list count]:0;if(!checked_size_add(prefix[i],count,&prefix[i+1])||prefix[i+1]>policies){allocator_ops->free_fn(offsets);set_error(error,DECLARATIVE_ERROR_SCHEMA,0,0,"$.modes","invalid Space policy prefix");return NULL;}}
+    for(size_t i=prefix_slots;i<slot_count;++i)offsets->slots[i]=SIZE_MAX;
     struct structural_parser parser={.b=(uint8_t*)source,.n=length,.e=error,.numeric_offsets=offsets};if(!structural_parse_document(&parser,"$")){allocator_ops->free_fn(offsets);if(!error||error->stage==DECLARATIVE_ERROR_NONE)set_error(error,DECLARATIVE_ERROR_JSONC,0,0,"$","invalid structural index");return NULL;}return offsets;
+overflow:
+    set_error(error,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","numeric index exceeds limit");return NULL;
 }
-
 /* Parse a strict-JSON decimal lexeme exactly. Foundation's NSNumber remains the
  * type check, but binary floating point is never used to prove integrality. */
 static bool exact_integer_at(struct model_builder *b, size_t at, bool signed_value, int64_t minimum, uint64_t maximum, uint64_t *magnitude, bool *negative)
@@ -332,13 +361,37 @@ static bool convert_rules(struct model_builder*b,id object)
         if(r->follow_present&&!r->display_present&&!r->space_present){snprintf(path,sizeof(path),"%s.effects.follow",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"follow requires display or space");}if(r->scratchpad&&r->manage_present){snprintf(path,sizeof(path),"%s.effects",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"scratchpad conflicts with manage");}
     }return true;
 }
+static bool convert_spaces(struct model_builder*b,id object,struct declarative_space_policy**out,size_t*out_count,const char*array_path,bool allow_empty_scaffold)
+{
+    if(![object isKindOfClass:[NSArray class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,array_path,"expected spaces array");
+    NSArray*a=object;size_t count=[a count];*out_count=count;if(!count)return true;
+    struct declarative_space_policy*policies=model_alloc(b,sizeof(*policies)*count);if(!policies)return false;*out=policies;
+    for(size_t i=0;i<count;++i){char base[128];snprintf(base,sizeof(base),"%s[%zu]",array_path,i);id item=a[i];if(![item isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,base,"expected Space policy object");NSDictionary*s=item;
+        for(NSString*key in s)if(!([key isEqualToString:@"match"]||[key isEqualToString:@"settings"]||[key isEqualToString:@"scaffold"])){char path[160];snprintf(path,sizeof(path),"%s.<unknown>",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"unknown Space policy field");}
+        char match_path[160];snprintf(match_path,sizeof(match_path),"%s.match",base);if(!s[@"match"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"missing required match");
+        bool has_scaffold=s[@"scaffold"]!=nil;if(!s[@"settings"]&&!has_scaffold){char path[160];snprintf(path,sizeof(path),"%s.settings",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"Space policy requires settings or scaffold");}
+        id match=s[@"match"];if(![match isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match must be an object");NSDictionary*m=match;for(NSString*key in m)if(!([key isEqualToString:@"index"]||[key isEqualToString:@"uuid"])){char path[176];snprintf(path,sizeof(path),"%s.<unknown>",match_path);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"unknown Space matcher field");}if([m count]!=1)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match requires exactly one selector");
+        struct declarative_space_policy*policy=&policies[i];if(m[@"index"]){char path[176];snprintf(path,sizeof(path),"%s.index",match_path);if(!builder_number_to_int(b,m[@"index"],path,1,INT_MAX,&policy->index))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"invalid Space index");policy->by_index=true;}else if(m[@"uuid"]){char path[176];snprintf(path,sizeof(path),"%s.uuid",match_path);policy->uuid=model_string(b,m[@"uuid"],DECLARATIVE_CONFIG_MAX_STRING_BYTES,true);if(!policy->uuid)return b->error&&b->error->stage==DECLARATIVE_ERROR_ALLOCATION?false:builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"invalid Space uuid");}else return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match requires a selector");
+        if(has_scaffold){char scaffold_path[160];snprintf(scaffold_path,sizeof(scaffold_path),"%s.scaffold",base);id scaffold=s[@"scaffold"];if(![scaffold isKindOfClass:[NSArray class]]||(!allow_empty_scaffold&&![scaffold count])||[scaffold count]>DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,scaffold_path,allow_empty_scaffold?"scaffold must contain zero to three app matchers":"scaffold must contain one to three app matchers");policy->scaffold_present=true;policy->scaffold_count=[scaffold count];for(size_t slot=0;slot<policy->scaffold_count;++slot){char slot_path[176];snprintf(slot_path,sizeof(slot_path),"%s[%zu]",scaffold_path,slot);if(!convert_scaffold_matcher(b,scaffold[slot],&policy->scaffold[slot],slot_path))return false;}}
+        if(s[@"settings"]){char settings_path[160];snprintf(settings_path,sizeof(settings_path),"%s.settings",base);if(!convert_config_object(b,s[@"settings"],policy->settings,true,settings_path))return false;}
+    }return true;
+}
 static bool convert_root(id root,struct model_builder*b)
 {
-    if(![root isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$","expected top-level object");NSDictionary*d=root;for(NSString*k in d)if(!([k isEqualToString:@"version"]||[k isEqualToString:@"config"]||[k isEqualToString:@"spaces"]||[k isEqualToString:@"rules"]))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.<unknown>","unknown top-level field");int version;if(!d[@"version"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.version","missing required version");if(!builder_number_to_int(b,d[@"version"],"$.version",1,1,&version))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.version","version must equal 1");if(d[@"config"]&&!convert_config_object(b,d[@"config"],b->model->config,false,"$.config"))return false;
-    if(d[@"spaces"]){id spaces=d[@"spaces"];if(![spaces isKindOfClass:[NSArray class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.spaces","expected spaces array");NSArray*a=spaces;if([a count]>DECLARATIVE_CONFIG_MAX_SPACES)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.spaces","Space policy limit exceeded");b->model->space_count=[a count];if(b->model->space_count){b->model->spaces=model_alloc(b,sizeof(*b->model->spaces)*b->model->space_count);if(!b->model->spaces)return false;}for(size_t i=0;i<b->model->space_count;++i){char base[96];snprintf(base,sizeof(base),"$.spaces[%zu]",i);id item=a[i];if(![item isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,base,"expected Space policy object");NSDictionary*s=item;for(NSString *key in s)if(!([key isEqualToString:@"match"]||[key isEqualToString:@"settings"]||[key isEqualToString:@"scaffold"])){char pth[112];snprintf(pth,sizeof(pth),"%s.<unknown>",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,pth,"unknown Space policy field");}char match_path[112];snprintf(match_path,sizeof(match_path),"%s.match",base);if(!s[@"match"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"missing required match");if(!s[@"settings"]&&!s[@"scaffold"]){char pth[112];snprintf(pth,sizeof(pth),"%s.settings",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,pth,"Space policy requires settings or scaffold");}id match=s[@"match"];if(![match isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match must be an object");NSDictionary*m=match;for(NSString*key in m)if(!([key isEqualToString:@"index"]||[key isEqualToString:@"uuid"])){char pth[128];snprintf(pth,sizeof(pth),"%s.<unknown>",match_path);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,pth,"unknown Space matcher field");}if([m count]!=1)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match requires exactly one selector");struct declarative_space_policy*p=&b->model->spaces[i];if(m[@"index"]){char pth[128];snprintf(pth,sizeof(pth),"%s.index",match_path);if(!builder_number_to_int(b,m[@"index"],pth,1,INT_MAX,&p->index))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,pth,"invalid Space index");p->by_index=true;}else if(m[@"uuid"]){char pth[128];snprintf(pth,sizeof(pth),"%s.uuid",match_path);p->uuid=model_string(b,m[@"uuid"],DECLARATIVE_CONFIG_MAX_STRING_BYTES,true);if(!p->uuid)return b->error&&b->error->stage==DECLARATIVE_ERROR_ALLOCATION?false:builder_error(b,DECLARATIVE_ERROR_SCHEMA,pth,"invalid Space uuid");}else return builder_error(b,DECLARATIVE_ERROR_SCHEMA,match_path,"Space match requires a selector");if(s[@"scaffold"]){char scaffold_path[112];snprintf(scaffold_path,sizeof(scaffold_path),"%s.scaffold",base);id scaffold=s[@"scaffold"];if(![scaffold isKindOfClass:[NSArray class]]||![scaffold count]||[scaffold count]>DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,scaffold_path,"scaffold must contain one to three app matchers");p->scaffold_count=[scaffold count];for(size_t slot=0;slot<p->scaffold_count;++slot){char slot_path[128];snprintf(slot_path,sizeof(slot_path),"%s[%zu]",scaffold_path,slot);if(!convert_scaffold_matcher(b,scaffold[slot],&p->scaffold[slot],slot_path))return false;}}if(s[@"settings"]){char settings_path[112];snprintf(settings_path,sizeof(settings_path),"%s.settings",base);if(!convert_config_object(b,s[@"settings"],p->settings,true,settings_path))return false;}}}
+    if(![root isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$","expected top-level object");NSDictionary*d=root;
+    for(NSString*k in d)if(!([k isEqualToString:@"version"]||[k isEqualToString:@"config"]||[k isEqualToString:@"spaces"]||[k isEqualToString:@"modes"]||[k isEqualToString:@"active_mode"]||[k isEqualToString:@"rules"]))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.<unknown>","unknown top-level field");
+    int version;if(!d[@"version"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.version","missing required version");if(!builder_number_to_int(b,d[@"version"],"$.version",1,2,&version))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.version","version must equal 1 or 2");b->model->version=version;
+    if(version==1&&(d[@"modes"]||d[@"active_mode"]))return builder_error(b,DECLARATIVE_ERROR_SCHEMA,d[@"modes"]?"$.modes":"$.active_mode","field requires version 2");
+    if(d[@"config"]&&!convert_config_object(b,d[@"config"],b->model->config,false,"$.config"))return false;
+    size_t total=0;if(d[@"spaces"]){if(![d[@"spaces"] isKindOfClass:[NSArray class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.spaces","expected spaces array");total=[d[@"spaces"] count];if(total>DECLARATIVE_CONFIG_MAX_SPACES)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.spaces","total Space policy limit exceeded");if(!convert_spaces(b,d[@"spaces"],&b->model->spaces,&b->model->space_count,"$.spaces",version==2))return false;}
+    NSMutableSet*names=[NSMutableSet set];if(d[@"modes"]){if(![d[@"modes"] isKindOfClass:[NSArray class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.modes","expected modes array");NSArray*modes=d[@"modes"];if([modes count]>DECLARATIVE_CONFIG_MAX_MODES)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.modes","mode limit exceeded");b->model->mode_count=[modes count];if(b->model->mode_count){b->model->modes=model_alloc(b,sizeof(*b->model->modes)*b->model->mode_count);if(!b->model->modes)return false;}
+        for(size_t i=0;i<b->model->mode_count;++i){char base[96];snprintf(base,sizeof(base),"$.modes[%zu]",i);id item=modes[i];if(![item isKindOfClass:[NSDictionary class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,base,"expected mode object");NSDictionary*mode=item;for(NSString*k in mode)if(!([k isEqualToString:@"name"]||[k isEqualToString:@"spaces"])){char path[128];snprintf(path,sizeof(path),"%s.<unknown>",base);return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"unknown mode field");}char path[128];snprintf(path,sizeof(path),"%s.name",base);if(!mode[@"name"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"missing required mode name");struct declarative_mode_model*out=&b->model->modes[i];out->name=model_string(b,mode[@"name"],DECLARATIVE_CONFIG_MAX_STRING_BYTES,true);if(!out->name)return b->error&&b->error->stage==DECLARATIVE_ERROR_ALLOCATION?false:builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"invalid mode name");if([names containsObject:mode[@"name"]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"mode names must be unique");[names addObject:mode[@"name"]];snprintf(path,sizeof(path),"%s.spaces",base);if(!mode[@"spaces"])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"missing required mode spaces");if(![mode[@"spaces"] isKindOfClass:[NSArray class]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"expected spaces array");size_t count=[mode[@"spaces"] count];if(count>DECLARATIVE_CONFIG_MAX_SPACES-total)return builder_error(b,DECLARATIVE_ERROR_SCHEMA,path,"total Space policy limit exceeded");total+=count;if(!convert_spaces(b,mode[@"spaces"],&out->spaces,&out->space_count,path,true))return false;}}
+    if(d[@"active_mode"]){b->model->active_mode=model_string(b,d[@"active_mode"],DECLARATIVE_CONFIG_MAX_STRING_BYTES,true);if(!b->model->active_mode)return b->error&&b->error->stage==DECLARATIVE_ERROR_ALLOCATION?false:builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.active_mode","invalid active_mode");if(![names containsObject:d[@"active_mode"]])return builder_error(b,DECLARATIVE_ERROR_SCHEMA,"$.active_mode","active_mode must reference a declared mode");}
     if(d[@"rules"]&&!convert_rules(b,d[@"rules"]))return false;return true;
 }
-void declarative_config_destroy(struct declarative_config_model*m){if(!m)return;void(*release)(void*)=m->allocator_free?m->allocator_free:default_model_free;if(m->spaces)for(size_t i=0;i<m->space_count;++i){release(m->spaces[i].uuid);for(size_t slot=0;slot<m->spaces[i].scaffold_count;++slot)release(m->spaces[i].scaffold[slot].pattern);}if(m->rules)for(size_t i=0;i<m->rule_count;++i){struct declarative_rule_model*r=&m->rules[i];release(r->label);for(int j=0;j<4;++j)release(r->matchers[j].pattern);release(r->scratchpad);}release(m->spaces);release(m->rules);release(m);}
+static void destroy_spaces(struct declarative_space_policy*spaces,size_t count,void(*release)(void*))
+{if(!spaces)return;for(size_t i=0;i<count;++i){release(spaces[i].uuid);for(size_t slot=0;slot<spaces[i].scaffold_count;++slot)release(spaces[i].scaffold[slot].pattern);}release(spaces);}
+void declarative_config_destroy(struct declarative_config_model*m){if(!m)return;void(*release)(void*)=m->allocator_free?m->allocator_free:default_model_free;destroy_spaces(m->spaces,m->space_count,release);if(m->modes)for(size_t i=0;i<m->mode_count;++i){release(m->modes[i].name);destroy_spaces(m->modes[i].spaces,m->modes[i].space_count,release);}release(m->modes);release(m->active_mode);if(m->rules)for(size_t i=0;i<m->rule_count;++i){struct declarative_rule_model*r=&m->rules[i];release(r->label);for(int j=0;j<4;++j)release(r->matchers[j].pattern);release(r->scratchpad);}release(m->rules);release(m);}
 
 bool declarative_config_parse_bytes(const uint8_t*source,size_t length,const char*path,struct declarative_config_model**out,struct declarative_error*error)
 {
