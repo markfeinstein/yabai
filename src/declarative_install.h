@@ -19,7 +19,17 @@ const struct declarative_config_model *declarative_installed_model(void);
 const char *declarative_installed_path(void);
 bool declarative_installed_has_scaffold(void);
 const char *declarative_installed_selected_mode(void);
-/* Lane C may call these worker-thread helpers; message grammar is intentionally separate. */
+struct declarative_mode_snapshot {
+    char **names;
+    size_t count;
+    char *active_name;
+};
+/* Worker-only. `snapshot` must be fresh-zeroed or previously destroyed. On
+ * success it owns the names array, every name, and active_name (NULL means no
+ * selection) independently of installed-model reload; destroy is required. */
+bool declarative_mode_snapshot_create(struct declarative_mode_snapshot *snapshot);
+void declarative_mode_snapshot_destroy(struct declarative_mode_snapshot *snapshot);
+/* Worker-thread helpers; message grammar is intentionally separate. */
 bool declarative_mode_activate(const char *name, struct declarative_modes_error *error);
 bool declarative_mode_deactivate(struct declarative_modes_error *error);
 bool declarative_config_reload(FILE *response);
@@ -61,7 +71,10 @@ struct declarative_reload_test_ops
                    struct declarative_error *error, void *context);
     bool (*capture_topology)(const struct declarative_topology_bounds_config *bounds,
                              struct declarative_topology *topology, void *context);
+    int (*capture_topology_result)(const struct declarative_topology_bounds_config *bounds,
+                                   struct declarative_topology *topology, void *context);
     bool (*query_sid)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
+    int (*query_sid_result)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     const struct declarative_space_postcommit_ops *postcommit_ops;

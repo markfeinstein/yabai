@@ -18,7 +18,10 @@ TEST_FUNC(declarative_modes_v1_compatibility_and_v2_schema,
         {"{\"version\":1,\"spaces\":[{\"match\":{\"index\":1},\"scaffold\":[]}]}", "$.spaces[0].scaffold"},
         {"{\"version\":2,\"modes\":{}}", "$.modes"},
         {"{\"version\":2,\"modes\":[{\"name\":1,\"spaces\":[]}]}", "$.modes[0].name"},
+        {"{\"version\":2,\"modes\":[{\"name\":\"\",\"spaces\":[]}]}", "$.modes[0].name"},
         {"{\"version\":2,\"modes\":[{\"name\":\"x\",\"spaces\":{}}]}", "$.modes[0].spaces"},
+        {"{\"version\":2,\"spaces\":[{\"match\":{\"index\":1}}]}", "$.spaces[0].settings"},
+        {"{\"version\":2,\"modes\":[{\"name\":\"x\",\"spaces\":[{\"match\":{\"index\":1}}]}]}", "$.modes[0].spaces[0].settings"},
         {"{\"version\":2,\"modes\":[],\"active_mode\":1}", "$.active_mode"},
         {"{\"version\":2,\"modes\":[{\"name\":\"x\",\"spaces\":[]}],\"active_mode\":\"y\"}", "$.active_mode"}
     };
@@ -124,6 +127,6 @@ TEST_FUNC(declarative_modes_composition_is_pure_stable_and_transactional,
     declarative_modes_composition_destroy(&composition);
 
     struct declarative_allocator_ops model_ops={declarative_test_calloc,declarative_test_free};declarative_config_set_allocator_ops(&model_ops);declarative_alloc_call=declarative_alloc_fail=declarative_alloc_live=0;struct declarative_config_model*allocated=NULL;TEST_CHECK(declarative_config_parse_bytes((const uint8_t*)json,strlen(json),"mode-alloc",&allocated,&parse_error),true);size_t model_calls=declarative_alloc_call;declarative_config_destroy(allocated);TEST_CHECK(declarative_alloc_live,0UL);for(size_t fail=1;fail<=model_calls;++fail){declarative_alloc_call=declarative_alloc_live=0;declarative_alloc_fail=fail;allocated=(void*)1;TEST_CHECK(declarative_config_parse_bytes((const uint8_t*)json,strlen(json),"mode-alloc",&allocated,&parse_error),false);TEST_CHECK(allocated==NULL,true);TEST_CHECK(parse_error.stage,DECLARATIVE_ERROR_ALLOCATION);TEST_CHECK(declarative_alloc_live,0UL);}declarative_config_set_allocator_ops(NULL);
-    struct declarative_allocator_ops ops={modes_test_calloc,modes_test_free};declarative_modes_set_allocator_ops(&ops);modes_alloc_call=modes_alloc_fail=modes_alloc_live=0;TEST_CHECK(declarative_modes_compose(model,NULL,&composition,&error),true);size_t calls=modes_alloc_call;declarative_modes_composition_destroy(&composition);TEST_CHECK(modes_alloc_live,0UL);for(size_t fail=1;fail<=calls;++fail){modes_alloc_call=modes_alloc_live=0;modes_alloc_fail=fail;TEST_CHECK(declarative_modes_compose(model,NULL,&composition,&error),false);TEST_CHECK(error.code,DECLARATIVE_MODES_ERROR_ALLOCATION);TEST_CHECK(modes_alloc_live,0UL);}declarative_modes_set_allocator_ops(NULL);
+    struct declarative_allocator_ops ops={modes_test_calloc,modes_test_free};declarative_modes_set_allocator_ops(&ops);modes_alloc_call=modes_alloc_fail=modes_alloc_live=0;TEST_CHECK(declarative_modes_compose(model,NULL,&composition,&error),true);size_t calls=modes_alloc_call;declarative_modes_composition_destroy(&composition);TEST_CHECK(modes_alloc_live,0UL);for(size_t fail=1;fail<=calls;++fail){modes_alloc_call=modes_alloc_live=0;modes_alloc_fail=fail;TEST_CHECK(declarative_modes_compose(model,NULL,&composition,&error),false);TEST_CHECK(error.code,DECLARATIVE_MODES_ERROR_RESOURCE);TEST_CHECK(modes_alloc_live,0UL);}declarative_modes_set_allocator_ops(NULL);
     declarative_config_destroy(model);
 })

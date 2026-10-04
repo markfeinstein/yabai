@@ -116,14 +116,18 @@ The reader opens the selected path once with `O_RDONLY | O_CLOEXEC`, follows ord
 
 Raw NUL bytes, malformed UTF-8, a BOM away from byte zero, UTF-16 or UTF-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and `null` are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
 
-The top-level object accepts exactly `version`, `config`, `spaces` and `rules`. `version` is required and must have the mathematical integer value 1. The other three keys are optional:
+Version 1 remains compatible and accepts exactly `version`, `config`, `spaces` and `rules`. Version 2 accepts those fields plus `modes` and `active_mode`. `version` is required and must have the mathematical integer value 1 or 2; `modes` and `active_mode` are rejected in version 1. All other fields shown here are optional:
 
 [source,json]
 ----
 {
-  "version": 1,
+  "version": 2,
   "config": {},
   "spaces": [],
+  "modes": [
+    { "name": "work", "spaces": [] }
+  ],
+  "active_mode": "work",
   "rules": []
 }
 ----
@@ -140,7 +144,8 @@ Parser and copied-model limits are:
 * authored file: 1 MiB, including comments and a BOM;
 * nesting depth: 64 containers;
 * members in one object: 256;
-* Space policies: 1,024;
+* base and mode Space policies: 1,024 total;
+* named modes: 64;
 * native rules: 1,024;
 * decoded key: 128 UTF-8 bytes;
 * Space UUID, rule label or scratchpad: 1,024 UTF-8 bytes;
@@ -206,7 +211,22 @@ Effective precedence is:
 built-in < native global < native Space < runtime global < runtime Space
 ----
 
-A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. `space --layout` uses runtime Space ownership. For `window_focus_fallback`, this means `yabai -m config window_focus_fallback recent` overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built-in `off` value. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When an installed policy has a scaffold, successful imperative global or scoped layout changes request coalesced reconciliation so a BSP scaffold is restored after a stack-to-BSP transition without changing inventory or runtime ownership. `space --layout` uses runtime Space ownership. For `window_focus_fallback`, this means `yabai -m config window_focus_fallback recent` overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built-in `off` value. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+
+Named modes
+~~~~~~~~~~~
+
+Version 2 may declare up to 64 uniquely named modes in source order. A mode is an exact object containing `name` (a nonempty UTF-8 string of at most 1,024 bytes) and `spaces` (an array using the version 2 Space-policy form). Base `spaces` are evaluated first, then the selected mode's policies overlay them in declaration order. Thus later matching mode fields override native base fields while runtime global and runtime Space ownership still have higher precedence.
+
+Every base or mode Space policy requires `match` and at least one of `settings` or `scaffold`. For scaffold specifically, omission from a policy that has `settings` means inherit the last matching base or earlier mode scaffold, while `"scaffold": []` explicitly clears it. A nonempty mode scaffold replaces the earlier scaffold. Missing applications simply leave their scaffold primary slots vacant; mode selection never launches applications.
+
+`active_mode`, when present, must exactly name a declared mode and selects it during startup and every successful reload. At runtime, `yabai -m mode --activate <name>` selects an overlay and `--deactivate` selects base policies only; deactivation does not restore the file's `active_mode` and does not clear imperative runtime overrides. Reload selects the newly authored `active_mode` (or no mode when omitted) and, like every successful reload, clears runtime setting ownership under the normal reload contract.
+
+Runtime selection is transactional and errors are typed through topology capture/snapshot and Space preparation/commit. An unknown explicit name, malformed internal state, or invariant/admission/commit failure is terminal; an unavailable error means no installed native mode runtime; allocation/resource exhaustion and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve runtime-owned reconciliation and are retried after it settles. A successful command reports selection publication, not completion of the follow-up asynchronous reconciliation, and the client performs exactly one activation/deactivation operation with no retry loop. Failed selection produces no query/list JSON and preserves the installed selection, rules, runtime ownership and Space state.
+
+`--query` returns the active mode as one escaped JSON string, or JSON `null`. `--list` returns stable JSON with declared names in source order and `active` set to that same string or `null`. Snapshot creation is worker-only and requires a fresh-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
+
+Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored-file, mode-count, aggregate-policy, string, model-memory and topology limits above all continue to apply.
 
 Managed scaffold
 ~~~~~~~~~~~~~~~~
@@ -367,6 +387,21 @@ EASING      := ease_in_sine  | ease_out_sine  | ease_in_out_sine  |
 
 Domains
 -------
+
+Mode
+~~~~
+
+yabai -m mode --activate '<name>'::
+    Select exactly one declared version 2 mode. The command accepts one name and no trailing token. Unknown names are terminal; other activation failures advise retry only after asynchronous reconciliation settles.
+
+yabai -m mode --deactivate::
+    Select base Space policies only while preserving imperative runtime overrides. No argument or trailing token is accepted.
+
+yabai -m mode --query::
+    Print the selected mode as an escaped JSON string or `null`. No argument or trailing token is accepted.
+
+yabai -m mode --list::
+    Print `{\"modes\":[...],\"active\":...}` as valid JSON, preserving declaration order. No argument or trailing token is accepted.
 
 Config
 ~~~~~~

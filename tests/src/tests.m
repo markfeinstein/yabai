@@ -2028,6 +2028,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
     TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
     TEST_ENTRY(message_utf8_ingress_validation)                            \
+    TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
     TEST_ENTRY(message_space_create_destroy_success_requests_one_reconcile) \
     TEST_ENTRY(declarative_inventory_is_canonical)                         \
@@ -2143,6 +2144,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
     TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
+    TEST_ENTRY(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable) \
     TEST_ENTRY(declarative_reconcile_omits_floating_windows_from_published_management) \
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
@@ -2150,6 +2152,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
     TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
     TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
+    TEST_ENTRY(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile) \
     TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \
     TEST_ENTRY(declarative_modes_runtime_second_topology_gate_and_recovery) \
     TEST_ENTRY(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact) \

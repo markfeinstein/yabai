@@ -2213,7 +2213,7 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
     }
 
     debug_message(__FUNCTION__, message);
-    handle_message(response.stream, message);
+    handle_message(response.stream, message, (size_t) bytes_to_read);
 
     (void) daemon_response_buffer_send_until(param1, &response,
                                               socket_io_deadline_after_ms(DAEMON_RESPONSE_WRITE_TIMEOUT_MS));

@@ -49,6 +49,14 @@ struct declarative_topology_bounds_config
     int external_bar_bottom_padding;
 };
 
+enum declarative_topology_result
+{
+    DECLARATIVE_TOPOLOGY_OK,
+    DECLARATIVE_TOPOLOGY_RESOURCE,
+    DECLARATIVE_TOPOLOGY_INVALID,
+    DECLARATIVE_TOPOLOGY_SETTLING
+};
+
 struct declarative_topology_capture_ops
 {
     bool (*copy_active_displays)(uint32_t **display_ids, size_t *count, void *context);
@@ -71,8 +79,12 @@ struct declarative_detached_view_table
     size_t count;
 };
 
+enum declarative_topology_result declarative_topology_capture_result(
+    const struct declarative_topology_capture_ops *ops, struct declarative_topology *out);
 bool declarative_topology_capture(const struct declarative_topology_capture_ops *ops,
                                   struct declarative_topology *out);
+enum declarative_topology_result declarative_topology_capture_system_result(
+    const struct declarative_topology_bounds_config *bounds_config, struct declarative_topology *out);
 bool declarative_topology_capture_system(const struct declarative_topology_bounds_config *bounds_config,
                                          struct declarative_topology *out);
 void declarative_topology_destroy(struct declarative_topology *topology);
@@ -82,6 +94,9 @@ bool declarative_topology_rule_snapshot(const struct declarative_topology *topol
                                         struct declarative_rule_topology_snapshot *snapshot,
                                         struct declarative_rule_display_entry **owned_displays,
                                         struct declarative_rule_space_entry **owned_spaces);
+enum declarative_topology_result declarative_topology_space_snapshot_result(
+    const struct declarative_topology *topology,
+    struct declarative_space_topology_entry **entries, size_t *count);
 bool declarative_topology_space_snapshot(const struct declarative_topology *topology,
                                          struct declarative_space_topology_entry **entries,
                                          size_t *count);

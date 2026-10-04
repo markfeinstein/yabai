@@ -600,16 +600,31 @@ struct declarative_reload_transaction
     size_t retired_native_count;
 };
 
-static bool declarative_reload_query_sid(uint64_t sid, const uint32_t **wids, size_t *count, void *context)
+#ifdef TESTS
+static uint32_t *(*declarative_mode_space_window_list)(uint64_t *, int, int, int *, bool, bool *) =
+    space_window_list_for_connection_with_status;
+#else
+#define declarative_mode_space_window_list space_window_list_for_connection_with_status
+#endif
+
+static enum declarative_space_query_result declarative_reload_query_sid_result(
+    uint64_t sid, const uint32_t **wids, size_t *count, void *context)
 {
     (void) context;
+    if (!wids || !count) return DECLARATIVE_SPACE_QUERY_TERMINAL;
     int result_count = 0;
     bool success = false;
-    uint32_t *result = space_window_list_for_connection_with_status(&sid, 1, 0, &result_count, true, &success);
-    if (!success || result_count < 0) return false;
+    uint32_t *result = declarative_mode_space_window_list(&sid, 1, 0, &result_count, true, &success);
+    if (!success || result_count < 0) return DECLARATIVE_SPACE_QUERY_RESOURCE;
+    if (result_count && !result) return DECLARATIVE_SPACE_QUERY_TERMINAL;
     *wids = result;
     *count = (size_t) result_count;
-    return true;
+    return DECLARATIVE_SPACE_QUERY_OK;
+}
+
+static bool declarative_reload_query_sid(uint64_t sid, const uint32_t **wids, size_t *count, void *context)
+{
+    return declarative_reload_query_sid_result(sid, wids, count, context) == DECLARATIVE_SPACE_QUERY_OK;
 }
 
 static struct window *declarative_reload_find_window(uint32_t wid, void *context)
@@ -1003,7 +1018,7 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
     if (!declarative_modes_compose_selection(declarative_installed.model,
                                              declarative_installed.selected_mode, false,
                                              &composition, &modes_error)) {
-        outcome = modes_error.code == DECLARATIVE_MODES_ERROR_ALLOCATION
+        outcome = modes_error.code == DECLARATIVE_MODES_ERROR_RESOURCE
                 ? DECLARATIVE_RECONCILE_TRANSIENT_FAILURE
                 : DECLARATIVE_RECONCILE_TERMINAL_FAILURE;
         declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity,
@@ -1382,11 +1397,13 @@ static void declarative_mode_publish(void *context)
     declarative_installed.has_scaffold = publication->has_scaffold;
 }
 
-static void declarative_mode_runtime_error(struct declarative_modes_error *error, const char *message)
+static void declarative_mode_runtime_error(struct declarative_modes_error *error,
+                                           enum declarative_modes_error_code code,
+                                           const char *message)
 {
     if (!error) return;
     memset(error, 0, sizeof(*error));
-    error->code = DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED;
+    error->code = code;
     error->detail.stage = DECLARATIVE_ERROR_RUNTIME;
     snprintf(error->detail.path, sizeof(error->detail.path), "%s",
              declarative_installed.path ? declarative_installed.path : "<none>");
@@ -1413,17 +1430,23 @@ static bool declarative_mode_topology_matches(const struct declarative_space_top
     return true;
 }
 
-static bool declarative_mode_capture_topology(const struct declarative_topology_bounds_config *bounds,
-                                              struct declarative_topology *topology)
+static enum declarative_topology_result declarative_mode_capture_topology(
+    const struct declarative_topology_bounds_config *bounds, struct declarative_topology *topology)
 {
 #ifdef TESTS
     if (declarative_reload_message_test_ops) {
+        if (declarative_reload_message_test_ops->capture_topology_result) {
+            return (enum declarative_topology_result)
+                declarative_reload_message_test_ops->capture_topology_result(
+                    bounds, topology, declarative_reload_message_test_ops->context);
+        }
         return declarative_reload_message_test_ops->capture_topology &&
                declarative_reload_message_test_ops->capture_topology(
-                   bounds, topology, declarative_reload_message_test_ops->context);
+                   bounds, topology, declarative_reload_message_test_ops->context)
+             ? DECLARATIVE_TOPOLOGY_OK : DECLARATIVE_TOPOLOGY_SETTLING;
     }
 #endif
-    return declarative_reload_capture_topology_system(bounds, topology, NULL);
+    return declarative_topology_capture_system_result(bounds, topology);
 }
 
 static bool declarative_mode_select(const char *name, bool active,
@@ -1431,8 +1454,14 @@ static bool declarative_mode_select(const char *name, bool active,
 {
     if (error) memset(error, 0, sizeof(*error));
     if (!event_loop_is_worker_thread(&g_event_loop) || !declarative_installed.generation ||
-        !declarative_installed.model || (active && (!name || !name[0]))) {
-        declarative_mode_runtime_error(error, "mode activation is unavailable");
+        !declarative_installed.model) {
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_UNAVAILABLE,
+                                       "mode activation is unavailable");
+        return false;
+    }
+    if (active && (!name || !name[0])) {
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_TERMINAL,
+                                       "mode name invariant rejected");
         return false;
     }
 
@@ -1449,7 +1478,8 @@ static bool declarative_mode_select(const char *name, bool active,
     if (!declarative_modes_compose_selection(declarative_installed.model, active ? name : NULL,
                                              false, &composition, error)) goto out;
     if (active && !(publication.selected_mode = declarative_install_strdup(name))) {
-        declarative_mode_runtime_error(error, "mode selection allocation failed");
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_RESOURCE,
+                                       "mode selection allocation failed");
         goto out;
     }
     publication.has_scaffold = declarative_policies_have_scaffold(composition.spaces,
@@ -1462,28 +1492,46 @@ static bool declarative_mode_select(const char *name, bool active,
         bounds.external_bar_top_padding = bar->top_padding;
         bounds.external_bar_bottom_padding = bar->bottom_padding;
     }
-    if (!declarative_mode_capture_topology(&bounds, &current_topology) ||
-        !declarative_topology_space_snapshot(&declarative_installed.topology,
-                                             &installed_entries, &installed_count) ||
-        !declarative_topology_space_snapshot(&current_topology, &entries, &count)) {
-        declarative_configuration_request_reconcile();
-        declarative_mode_runtime_error(error, "strict current topology capture failed");
+    enum declarative_topology_result topology_result =
+        declarative_mode_capture_topology(&bounds, &current_topology);
+    if (topology_result == DECLARATIVE_TOPOLOGY_OK) {
+        topology_result = declarative_topology_space_snapshot_result(
+            &declarative_installed.topology, &installed_entries, &installed_count);
+    }
+    if (topology_result == DECLARATIVE_TOPOLOGY_OK) {
+        topology_result = declarative_topology_space_snapshot_result(
+            &current_topology, &entries, &count);
+    }
+    if (topology_result != DECLARATIVE_TOPOLOGY_OK) {
+        enum declarative_modes_error_code code = topology_result == DECLARATIVE_TOPOLOGY_RESOURCE
+                                               ? DECLARATIVE_MODES_ERROR_RESOURCE
+                                               : topology_result == DECLARATIVE_TOPOLOGY_SETTLING
+                                               ? DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED
+                                               : DECLARATIVE_MODES_ERROR_TERMINAL;
+        if (code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED) {
+            declarative_configuration_request_reconcile();
+        }
+        declarative_mode_runtime_error(error, code, "strict current topology capture failed");
         goto out;
     }
     if (!declarative_mode_topology_matches(installed_entries, installed_count, entries, count)) {
         declarative_configuration_request_reconcile();
-        declarative_mode_runtime_error(error, "Space topology changed; reconciliation is required before retry");
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED,
+                                       "Space topology changed; reconciliation is required before retry");
         goto out;
     }
     targets = declarative_install_calloc(count, sizeof(*targets));
     if (!targets && count) {
-        declarative_mode_runtime_error(error, "Space target allocation failed");
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_RESOURCE,
+                                       "Space target allocation failed");
         goto out;
     }
     for (size_t i = 0; i < count; ++i) {
         struct view *view = table_find(&g_space_manager.view, &entries[i].sid);
         if (!view) {
-            declarative_mode_runtime_error(error, "installed topology no longer matches Space views");
+            declarative_configuration_request_reconcile();
+            declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED,
+                                           "installed topology no longer matches Space views");
             goto out;
         }
         targets[i] = (struct declarative_space_target) {
@@ -1502,6 +1550,7 @@ static bool declarative_mode_select(const char *name, bool active,
     };
     struct declarative_space_capture_ops capture = {
         .query_sid = declarative_reload_query_sid,
+        .query_sid_result = declarative_reload_query_sid_result,
         .find_window = declarative_reload_find_window,
         .is_eligible = declarative_reload_window_is_eligible
     };
@@ -1509,17 +1558,29 @@ static bool declarative_mode_select(const char *name, bool active,
 #ifdef TESTS
     if (declarative_reload_message_test_ops) {
         capture.query_sid = declarative_reload_message_test_ops->query_sid;
+        capture.query_sid_result = (enum declarative_space_query_result (*)(uint64_t, const uint32_t **, size_t *, void *))
+            declarative_reload_message_test_ops->query_sid_result;
         capture.find_window = declarative_reload_message_test_ops->find_window;
         capture.is_eligible = declarative_reload_message_test_ops->is_eligible;
         capture.context = declarative_reload_message_test_ops->context;
         postcommit_ops = declarative_reload_message_test_ops->postcommit_ops;
     }
 #endif
-    if (!declarative_mode_capture_topology(&bounds, &verification_topology) ||
-        !declarative_topology_space_snapshot(&verification_topology,
-                                             &verification_entries, &verification_count)) {
-        declarative_configuration_request_reconcile();
-        declarative_mode_runtime_error(error, "mode topology verification capture failed");
+    topology_result = declarative_mode_capture_topology(&bounds, &verification_topology);
+    if (topology_result == DECLARATIVE_TOPOLOGY_OK) {
+        topology_result = declarative_topology_space_snapshot_result(
+            &verification_topology, &verification_entries, &verification_count);
+    }
+    if (topology_result != DECLARATIVE_TOPOLOGY_OK) {
+        enum declarative_modes_error_code code = topology_result == DECLARATIVE_TOPOLOGY_RESOURCE
+                                               ? DECLARATIVE_MODES_ERROR_RESOURCE
+                                               : topology_result == DECLARATIVE_TOPOLOGY_SETTLING
+                                               ? DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED
+                                               : DECLARATIVE_MODES_ERROR_TERMINAL;
+        if (code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED) {
+            declarative_configuration_request_reconcile();
+        }
+        declarative_mode_runtime_error(error, code, "mode topology verification capture failed");
         goto out;
     }
     if (current_topology.fingerprint != verification_topology.fingerprint ||
@@ -1527,17 +1588,26 @@ static bool declarative_mode_select(const char *name, bool active,
         current_topology.active_sid != verification_topology.active_sid ||
         !declarative_mode_topology_matches(entries, count, verification_entries, verification_count)) {
         declarative_configuration_request_reconcile();
-        declarative_mode_runtime_error(error, "mode topology changed during activation; reconciliation is required before retry");
+        declarative_mode_runtime_error(error, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED,
+                                       "mode topology changed during activation; reconciliation is required before retry");
         goto out;
     }
-    result = declarative_space_apply_with_effective_publication(
-        targets, count, entries, count, &g_space_manager.view, &view_contract, &managed_contract,
-        declarative_installed.model, composition.spaces, composition.space_count,
-        declarative_installed.generation, &g_declarative_runtime_state, &defaults,
-        DECLARATIVE_SPACE_PRESERVE_RUNTIME, &capture, postcommit_ops, NULL,
-        declarative_mode_publish, &publication);
-    if (!result) declarative_mode_runtime_error(error, "mode Space transaction failed");
-    else declarative_configuration_request_reconcile();
+    enum declarative_space_apply_result space_result =
+        declarative_space_apply_with_effective_publication_result(
+            targets, count, entries, count, &g_space_manager.view, &view_contract, &managed_contract,
+            declarative_installed.model, composition.spaces, composition.space_count,
+            declarative_installed.generation, &g_declarative_runtime_state, &defaults,
+            DECLARATIVE_SPACE_PRESERVE_RUNTIME, &capture, postcommit_ops, NULL,
+            declarative_mode_publish, &publication);
+    result = space_result == DECLARATIVE_SPACE_APPLY_OK;
+    if (!result) {
+        declarative_mode_runtime_error(error,
+            space_result == DECLARATIVE_SPACE_APPLY_RESOURCE
+                ? DECLARATIVE_MODES_ERROR_RESOURCE : DECLARATIVE_MODES_ERROR_TERMINAL,
+            "mode Space transaction failed");
+    } else {
+        declarative_configuration_request_reconcile();
+    }
 out:
     declarative_install_free(publication.selected_mode);
     declarative_install_free(publication.retired_selected_mode);
@@ -1559,6 +1629,37 @@ bool declarative_mode_activate(const char *name, struct declarative_modes_error 
 bool declarative_mode_deactivate(struct declarative_modes_error *error)
 {
     return declarative_mode_select(NULL, false, error);
+}
+
+void declarative_mode_snapshot_destroy(struct declarative_mode_snapshot *snapshot)
+{
+    if (!snapshot) return;
+    for (size_t i = 0; i < snapshot->count; ++i) declarative_install_free(snapshot->names[i]);
+    declarative_install_free(snapshot->names);
+    declarative_install_free(snapshot->active_name);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+bool declarative_mode_snapshot_create(struct declarative_mode_snapshot *snapshot)
+{
+    if (!snapshot || snapshot->names || snapshot->count || snapshot->active_name ||
+        !event_loop_is_worker_thread(&g_event_loop)) return false;
+    const struct declarative_config_model *model = declarative_installed.model;
+    if (!model) return true;
+    snapshot->names = declarative_install_calloc(model->mode_count, sizeof(*snapshot->names));
+    if (!snapshot->names && model->mode_count) return false;
+    for (; snapshot->count < model->mode_count; ++snapshot->count) {
+        snapshot->names[snapshot->count] = declarative_install_strdup(model->modes[snapshot->count].name);
+        if (!snapshot->names[snapshot->count]) goto fail;
+    }
+    if (declarative_installed.selected_mode) {
+        snapshot->active_name = declarative_install_strdup(declarative_installed.selected_mode);
+        if (!snapshot->active_name) goto fail;
+    }
+    return true;
+fail:
+    declarative_mode_snapshot_destroy(snapshot);
+    return false;
 }
 
 uint64_t declarative_installed_generation(void) { return declarative_installed.generation; }

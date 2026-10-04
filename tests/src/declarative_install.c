@@ -490,3 +490,52 @@ TEST_FUNC(declarative_startup_install_failure_preserves_live_managers,
     g_event_loop = saved_event_loop;
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
+
+struct declarative_mode_snapshot_test_context {
+    struct declarative_mode_snapshot snapshot;
+    bool created;
+    bool rejected_populated;
+};
+
+static bool declarative_mode_snapshot_test_worker(void *opaque)
+{
+    struct declarative_mode_snapshot_test_context *context = opaque;
+    context->created = declarative_mode_snapshot_create(&context->snapshot);
+    struct declarative_mode_snapshot populated = { .names = (char **) (uintptr_t) 1 };
+    context->rejected_populated = !declarative_mode_snapshot_create(&populated) &&
+                                  populated.names == (char **) (uintptr_t) 1;
+    return true;
+}
+
+TEST_FUNC(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable,
+{
+    declarative_install_test_reset();
+    const char json[] = "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[]},{\"name\":\"模式\",\"spaces\":[]}],\"active_mode\":\"work\"}";
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) json, strlen(json), "snapshot", &declarative_installed.model, &error), true);
+    declarative_installed.selected_mode = declarative_install_strdup("work");
+    struct declarative_mode_snapshot off_worker = {0};
+    TEST_CHECK(declarative_mode_snapshot_create(&off_worker), false);
+
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    struct declarative_mode_snapshot_test_context context = {0};
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, declarative_mode_snapshot_test_worker, &context), true);
+    event_loop_end(&g_event_loop);
+    TEST_CHECK(context.created, true);
+    TEST_CHECK(context.rejected_populated, true);
+    TEST_CHECK(context.snapshot.count, 2UL);
+    TEST_CHECK(strcmp(context.snapshot.names[0], "work"), 0);
+    TEST_CHECK(strcmp(context.snapshot.names[1], "模式"), 0);
+    TEST_CHECK(strcmp(context.snapshot.active_name, "work"), 0);
+    declarative_installed.model->modes[0].name[0] = 'X';
+    declarative_installed.selected_mode[0] = 'X';
+    TEST_CHECK(strcmp(context.snapshot.names[0], "work"), 0);
+    TEST_CHECK(strcmp(context.snapshot.active_name, "work"), 0);
+    declarative_mode_snapshot_destroy(&context.snapshot);
+    TEST_CHECK(context.snapshot.names == NULL, true);
+    TEST_CHECK(context.snapshot.count, 0UL);
+    TEST_CHECK(context.snapshot.active_name == NULL, true);
+    g_event_loop = saved_event_loop;
+    declarative_install_test_reset();
+});

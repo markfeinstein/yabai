@@ -7,6 +7,8 @@
 static size_t declarative_space_allocation_ordinal;
 static size_t declarative_space_fail_ordinal;
 static size_t declarative_space_outstanding;
+static _Thread_local bool declarative_space_allocation_failed;
+static _Thread_local enum declarative_space_apply_result declarative_space_prepare_failure;
 #ifdef TESTS
 static bool declarative_space_commit_active;
 static size_t declarative_space_commit_forbidden_calls;
@@ -21,12 +23,16 @@ static void *declarative_space_allocate(size_t count, size_t size)
 #ifdef TESTS
     if (declarative_space_commit_active) ++declarative_space_commit_forbidden_calls;
 #endif
-    if (count && size > SIZE_MAX / count) return NULL;
+    if (count && size > SIZE_MAX / count) { declarative_space_allocation_failed = true; return NULL; }
     ++declarative_space_allocation_ordinal;
 #ifdef TESTS
-    if (declarative_space_fail_ordinal && declarative_space_allocation_ordinal == declarative_space_fail_ordinal) return NULL;
+    if (declarative_space_fail_ordinal && declarative_space_allocation_ordinal == declarative_space_fail_ordinal) {
+        declarative_space_allocation_failed = true;
+        return NULL;
+    }
 #endif
     void *result = calloc(count, size);
+    if (!result) declarative_space_allocation_failed = true;
     if (result) ++declarative_space_outstanding;
     return result;
 }
@@ -424,18 +430,33 @@ void declarative_space_inventory_destroy(struct declarative_space_inventory *inv
     memset(inventory, 0, sizeof(*inventory));
 }
 
-bool declarative_space_capture_inventory(const struct declarative_space_target *targets,
+enum declarative_space_apply_result declarative_space_capture_inventory_result(
+                                         const struct declarative_space_target *targets,
                                          size_t target_count,
                                          const struct declarative_space_capture_ops *ops,
                                          struct declarative_space_inventory *out)
 {
-    if (!out || (!targets && target_count) || !ops || !ops->query_sid || !ops->find_window || !ops->is_eligible) return false;
+    if (!out || (!targets && target_count) || !ops ||
+        (!ops->query_sid && !ops->query_sid_result) || !ops->find_window || !ops->is_eligible) {
+        return DECLARATIVE_SPACE_APPLY_TERMINAL;
+    }
     memset(out, 0, sizeof(*out));
+    declarative_space_allocation_failed = false;
+    enum declarative_space_apply_result failure = DECLARATIVE_SPACE_APPLY_TERMINAL;
     size_t capacity = 0;
     for (size_t i = 0; i < target_count; ++i) {
         const uint32_t *wids = NULL;
         size_t count = 0;
-        if (!ops->query_sid(targets[i].sid, &wids, &count, ops->context) || (count && !wids) || count > SIZE_MAX - out->count) goto fail;
+        enum declarative_space_query_result query = ops->query_sid_result
+            ? ops->query_sid_result(targets[i].sid, &wids, &count, ops->context)
+            : ops->query_sid(targets[i].sid, &wids, &count, ops->context)
+            ? DECLARATIVE_SPACE_QUERY_OK : DECLARATIVE_SPACE_QUERY_TERMINAL;
+        if (query != DECLARATIVE_SPACE_QUERY_OK) {
+            failure = query == DECLARATIVE_SPACE_QUERY_RESOURCE
+                    ? DECLARATIVE_SPACE_APPLY_RESOURCE : DECLARATIVE_SPACE_APPLY_TERMINAL;
+            goto fail;
+        }
+        if ((count && !wids) || count > SIZE_MAX - out->count) goto fail;
         for (size_t j = 0; j < count; ++j) {
             if (!wids[j] || !declarative_space_grow((void **) &out->entries, &capacity, out->count + 1,
                                                      sizeof(*out->entries))) goto fail;
@@ -460,10 +481,20 @@ bool declarative_space_capture_inventory(const struct declarative_space_target *
             if (out->wid_index[i - 1].wid == out->wid_index[i].wid) goto fail;
         }
     }
-    return true;
+    return DECLARATIVE_SPACE_APPLY_OK;
 fail:
+    if (declarative_space_allocation_failed) failure = DECLARATIVE_SPACE_APPLY_RESOURCE;
     declarative_space_inventory_destroy(out);
-    return false;
+    return failure;
+}
+
+bool declarative_space_capture_inventory(const struct declarative_space_target *targets,
+                                         size_t target_count,
+                                         const struct declarative_space_capture_ops *ops,
+                                         struct declarative_space_inventory *out)
+{
+    return declarative_space_capture_inventory_result(targets, target_count, ops, out) ==
+           DECLARATIVE_SPACE_APPLY_OK;
 }
 
 static uint64_t declarative_space_hash_u64(uint64_t hash, uint64_t value)
@@ -2045,7 +2076,8 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
         (defaults->window_placement != CHILD_FIRST && defaults->window_placement != CHILD_SECOND) ||
         defaults->window_insertion_point < INSERT_FOCUSED || defaults->window_insertion_point > INSERT_LAST ||
         (policy_count && !policies) || !capture_ops ||
-        !capture_ops->query_sid || !capture_ops->find_window || !capture_ops->is_eligible ||
+        (!capture_ops->query_sid && !capture_ops->query_sid_result) ||
+        !capture_ops->find_window || !capture_ops->is_eligible ||
         !declarative_space_validate_targets(targets, target_count, topology, topology_count,
                                             current_views, view_table_contract)) return false;
     out->ownership_mode = mode;
@@ -2114,7 +2146,12 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
     }
     for (size_t i = 0; i < target_count; ++i) out->targets[i].root_before = root_images[i];
     declarative_space_free(root_images);
-    if (!declarative_space_capture_inventory(targets, target_count, capture_ops, &out->inventory)) goto fail;
+    enum declarative_space_apply_result inventory_result = declarative_space_capture_inventory_result(
+        targets, target_count, capture_ops, &out->inventory);
+    if (inventory_result != DECLARATIVE_SPACE_APPLY_OK) {
+        declarative_space_prepare_failure = inventory_result;
+        goto fail;
+    }
 
     for (size_t i = 0; i < out->inventory.count; ++i) {
         const struct declarative_space_inventory_entry *entry = &out->inventory.entries[i];
@@ -2624,7 +2661,8 @@ bool declarative_space_prepare(const struct declarative_space_target *targets, s
 }
 #endif
 
-bool declarative_space_apply_with_effective_publication(const struct declarative_space_target *targets,
+enum declarative_space_apply_result declarative_space_apply_with_effective_publication_result(
+                                              const struct declarative_space_target *targets,
                                               size_t target_count,
                                               const struct declarative_space_topology_entry *topology,
                                               size_t topology_count,
@@ -2646,18 +2684,23 @@ bool declarative_space_apply_with_effective_publication(const struct declarative
 {
     struct declarative_space_preparation preparation;
     struct declarative_space_transition transition;
+    declarative_space_allocation_failed = false;
+    declarative_space_prepare_failure = DECLARATIVE_SPACE_APPLY_TERMINAL;
     if (!declarative_space_prepare_effective(targets, target_count, topology, topology_count,
                                              current_views, view_table_contract,
                                              &g_window_manager.managed_window, managed_table_contract,
                                              native, policies, policy_count, policy_generation,
-                                             runtime, defaults, mode, capture_ops, &preparation)) return false;
+                                             runtime, defaults, mode, capture_ops, &preparation)) {
+        return declarative_space_allocation_failed ? DECLARATIVE_SPACE_APPLY_RESOURCE
+                                                   : declarative_space_prepare_failure;
+    }
     if (!declarative_space_transition_begin(&transition, &preparation)) {
         declarative_space_preparation_destroy(&preparation);
-        return false;
+        return DECLARATIVE_SPACE_APPLY_TERMINAL;
     }
     if (!declarative_space_transition_commit_impl(&transition)) {
         declarative_space_transition_destroy(&transition);
-        return false;
+        return DECLARATIVE_SPACE_APPLY_TERMINAL;
     }
     if (publish) publish(publish_context);
     (void) declarative_space_transition_postcommit_impl(&transition, postcommit_ops);
@@ -2665,7 +2708,34 @@ bool declarative_space_apply_with_effective_publication(const struct declarative
     (void) declarative_space_retire_old_roots_impl(&transition, postcommit_ops);
     if (diagnostics) *diagnostics = transition.diagnostics;
     declarative_space_transition_destroy(&transition);
-    return true;
+    return DECLARATIVE_SPACE_APPLY_OK;
+}
+
+bool declarative_space_apply_with_effective_publication(const struct declarative_space_target *targets,
+                                              size_t target_count,
+                                              const struct declarative_space_topology_entry *topology,
+                                              size_t topology_count,
+                                              const struct table *current_views,
+                                              const struct declarative_space_table_contract *view_table_contract,
+                                              const struct declarative_space_table_contract *managed_table_contract,
+                                              const struct declarative_config_model *native,
+                                              const struct declarative_space_policy *policies,
+                                              size_t policy_count,
+                                              uint64_t policy_generation,
+                                              struct declarative_runtime_state *runtime,
+                                              const struct declarative_space_defaults *defaults,
+                                              enum declarative_space_ownership_mode mode,
+                                              const struct declarative_space_capture_ops *capture_ops,
+                                              const struct declarative_space_postcommit_ops *postcommit_ops,
+                                              struct declarative_space_postcommit_diagnostics *diagnostics,
+                                              declarative_space_publication_callback publish,
+                                              void *publish_context)
+{
+    return declarative_space_apply_with_effective_publication_result(
+        targets, target_count, topology, topology_count, current_views, view_table_contract,
+        managed_table_contract, native, policies, policy_count, policy_generation, runtime,
+        defaults, mode, capture_ops, postcommit_ops, diagnostics, publish, publish_context) ==
+        DECLARATIVE_SPACE_APPLY_OK;
 }
 
 bool declarative_space_apply_with_publication(const struct declarative_space_target *targets,

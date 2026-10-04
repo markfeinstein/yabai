@@ -559,3 +559,133 @@ TEST_FUNC(message_window_float_commands_are_strict,
         TEST_CHECK(parse_window_ratio_command(invalid_ratio[i], &type, &ratio), false);
     }
 });
+
+static size_t message_mode_test_activate_calls;
+static size_t message_mode_test_deactivate_calls;
+static enum declarative_modes_error_code message_mode_test_error;
+static bool message_mode_test_fail;
+static bool message_mode_test_name_ok;
+static bool message_mode_test_activate(const char *name, struct declarative_modes_error *error)
+{
+    ++message_mode_test_activate_calls;
+    message_mode_test_name_ok = strcmp(name, "work") == 0;
+    if (message_mode_test_fail) { error->code = message_mode_test_error; return false; }
+    return true;
+}
+static bool message_mode_test_deactivate(struct declarative_modes_error *error)
+{
+    ++message_mode_test_deactivate_calls;
+    if (message_mode_test_fail) { error->code = message_mode_test_error; return false; }
+    return true;
+}
+static bool message_mode_test_snapshot(struct declarative_mode_snapshot *snapshot)
+{
+    static char *names[] = { "plain", "quo\"te\\line\n", "模式" };
+    *snapshot = (struct declarative_mode_snapshot) { .names = names, .count = 3, .active_name = names[1] };
+    return true;
+}
+static void message_mode_test_snapshot_destroy(struct declarative_mode_snapshot *snapshot) { (void) snapshot; }
+
+static void message_mode_test_run(char *message, size_t message_length,
+                                  char *output, size_t capacity)
+{
+    FILE *response = tmpfile();
+    if (!response) { if (capacity) output[0] = '\0'; return; }
+    handle_message(response, message, message_length);
+    rewind(response);
+    size_t count = fread(output, 1, capacity - 1, response);
+    output[count] = '\0';
+    fclose(response);
+}
+
+#define MESSAGE_MODE_RUN(frame) message_mode_test_run((frame), sizeof(frame), output, sizeof(output))
+#define MESSAGE_MODE_REJECT(frame) do { MESSAGE_MODE_RUN(frame); TEST_CHECK((unsigned char) output[0], (unsigned char) FAILURE_MESSAGE[0]); } while (0)
+TEST_FUNC(message_mode_domain_is_exclusive_strict_and_json_safe,
+{
+    __auto_type saved_activate = message_mode_activate;
+    __auto_type saved_deactivate = message_mode_deactivate;
+    __auto_type saved_snapshot = message_mode_snapshot_create;
+    __auto_type saved_destroy = message_mode_snapshot_destroy;
+    message_mode_activate = message_mode_test_activate;
+    message_mode_deactivate = message_mode_test_deactivate;
+    message_mode_snapshot_create = message_mode_test_snapshot;
+    message_mode_snapshot_destroy = message_mode_test_snapshot_destroy;
+    message_mode_test_activate_calls = 0;
+    message_mode_test_deactivate_calls = 0;
+    message_mode_test_error = DECLARATIVE_MODES_ERROR_NONE;
+    message_mode_test_fail = false;
+    message_mode_test_name_ok = false;
+    char output[512];
+
+    char activate[] = "mode\0--activate\0work\0";
+    MESSAGE_MODE_RUN(activate);
+    TEST_CHECK(output[0], '\0');
+    TEST_CHECK(message_mode_test_activate_calls, 1UL);
+    TEST_CHECK(message_mode_test_name_ok, true);
+
+    char invalid_missing[] = "mode\0--activate\0";
+    char invalid_trailing[] = "mode\0--activate\0work\0extra\0";
+    char invalid_combined[] = "mode\0--activate\0work\0--query\0";
+    char invalid_deactivate[] = "mode\0--deactivate\0extra\0";
+    char invalid_query[] = "mode\0--query\0extra\0";
+    char invalid_list[] = "mode\0--list\0extra\0";
+    char invalid_empty[] = "mode\0";
+    char activate_hidden[] = "mode\0--activate\0work\0\0--query\0";
+    char deactivate_hidden[] = "mode\0--deactivate\0\0ignored\0";
+    char query_hidden[] = "mode\0--query\0\0ignored\0";
+    char list_hidden[] = "mode\0--list\0\0ignored\0";
+    MESSAGE_MODE_REJECT(invalid_missing); MESSAGE_MODE_REJECT(invalid_trailing); MESSAGE_MODE_REJECT(invalid_combined);
+    MESSAGE_MODE_REJECT(invalid_deactivate); MESSAGE_MODE_REJECT(invalid_query); MESSAGE_MODE_REJECT(invalid_list);
+    MESSAGE_MODE_REJECT(invalid_empty); MESSAGE_MODE_REJECT(activate_hidden); MESSAGE_MODE_REJECT(deactivate_hidden);
+    MESSAGE_MODE_REJECT(query_hidden); MESSAGE_MODE_REJECT(list_hidden);
+    TEST_CHECK(message_mode_test_activate_calls, 1UL);
+    TEST_CHECK(message_mode_test_deactivate_calls, 0UL);
+
+    char deactivate[] = "mode\0--deactivate\0";
+    MESSAGE_MODE_RUN(deactivate);
+    TEST_CHECK(output[0], '\0');
+    TEST_CHECK(message_mode_test_deactivate_calls, 1UL);
+
+    char query[] = "mode\0--query\0";
+    MESSAGE_MODE_RUN(query);
+    TEST_CHECK(strcmp(output, "\"quo\\\"te\\\\line\\u000a\"\n"), 0);
+    char list[] = "mode\0--list\0";
+    MESSAGE_MODE_RUN(list);
+    TEST_CHECK(strcmp(output, "{\"modes\":[\"plain\",\"quo\\\"te\\\\line\\u000a\",\"模式\"],\"active\":\"quo\\\"te\\\\line\\u000a\"}\n"), 0);
+
+    struct declarative_mode_snapshot null_snapshot = { .names = (char *[]) { "plain" }, .count = 1 };
+    char *null_json = mode_json_snapshot(&null_snapshot, true);
+    TEST_CHECK(null_json != NULL, true);
+    if (null_json) { TEST_CHECK(strcmp(null_json, "{\"modes\":[\"plain\"],\"active\":null}\n"), 0); free(null_json); }
+
+    struct error_case { enum declarative_modes_error_code code; const char *text; bool retry; } errors[] = {
+        { DECLARATIVE_MODES_ERROR_EXPLICIT_MODE_NOT_FOUND, "not declared", false },
+        { DECLARATIVE_MODES_ERROR_INVALID_MODEL, "terminal runtime invariant", false },
+        { DECLARATIVE_MODES_ERROR_ACTIVE_MODE_NOT_FOUND, "terminal runtime invariant", false },
+        { DECLARATIVE_MODES_ERROR_TERMINAL, "terminal runtime invariant", false },
+        { DECLARATIVE_MODES_ERROR_NONE, "terminal runtime invariant", false },
+        { DECLARATIVE_MODES_ERROR_RESOURCE, "runtime resource is unavailable", true },
+        { DECLARATIVE_MODES_ERROR_UNAVAILABLE, "mode runtime is unavailable", false },
+        { DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED, "asynchronous reconciliation settles", true }
+    };
+    message_mode_test_fail = true;
+    for (size_t i = 0; i < array_count(errors); ++i) {
+        message_mode_test_error = errors[i].code;
+        char failure[] = "mode\0--activate\0work\0";
+        MESSAGE_MODE_RUN(failure);
+        TEST_CHECK(strstr(output, errors[i].text) != NULL, true);
+        TEST_CHECK(strstr(output, "retry") != NULL, errors[i].retry);
+    }
+    TEST_CHECK(message_mode_test_activate_calls, 1UL + array_count(errors));
+    message_mode_test_error = DECLARATIVE_MODES_ERROR_RESOURCE;
+    char deactivate_failure[] = "mode\0--deactivate\0";
+    MESSAGE_MODE_RUN(deactivate_failure);
+    TEST_CHECK(strstr(output, "runtime resource is unavailable") != NULL, true);
+    TEST_CHECK(message_mode_test_deactivate_calls, 2UL);
+    message_mode_activate = saved_activate;
+    message_mode_deactivate = saved_deactivate;
+    message_mode_snapshot_create = saved_snapshot;
+    message_mode_snapshot_destroy = saved_destroy;
+});
+#undef MESSAGE_MODE_REJECT
+#undef MESSAGE_MODE_RUN

@@ -161,15 +161,17 @@ The reader opens the selected path once with \f(CRO_RDONLY | O_CLOEXEC\fP, follo
 .sp
 Raw NUL bytes, malformed UTF\-8, a BOM away from byte zero, UTF\-16 or UTF\-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and \f(CRnull\fP are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
 .sp
-The top\-level object accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. \f(CRversion\fP is required and must have the mathematical integer value 1. The other three keys are optional:
+Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 also accepts \f(CRmodes\fP and \f(CRactive_mode\fP. \f(CRversion\fP is required and must equal 1 or 2; mode fields are rejected in version 1.
 .sp
 .if n .RS 4
 .nf
 .fam C
 {
-  "version": 1,
+  "version": 2,
   "config": {},
   "spaces": [],
+  "modes": [ { "name": "work", "spaces": [] } ],
+  "active_mode": "work",
   "rules": []
 }
 .fam
@@ -224,7 +226,18 @@ members in one object: 256;
 .  sp -1
 .  IP \(bu 2.3
 .\}
-Space policies: 1,024;
+base and mode Space policies: 1,024 total;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+named modes: 64;
 .RE
 .sp
 .RS 4
@@ -629,7 +642,10 @@ built\-in < native global < native Space < runtime global < runtime Space
 .fi
 .if n .RE
 .sp
-A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation and Space remapping, then clears only after a successful JSONC reload. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When scaffolds are installed, successful imperative global or scoped layout changes request coalesced reconciliation so BSP scaffold state is restored after stack\-to\-BSP without changing inventory or runtime ownership. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+.SS "Named modes"
+.sp
+Version 2 modes have unique nonempty UTF\-8 names and overlay base Space policies in source order. Every policy requires match and at least settings or scaffold. A scaffold omitted from a settings policy inherits; an explicit empty array clears it. Missing applications leave scaffold slots vacant and are never launched. \f(CRactive_mode\fP selects startup and reload state. Runtime activation and deactivation preserve imperative overrides; deactivation selects base policies only. Unknown names, malformed internal state, and invariant/admission/commit failures are terminal; unavailable means no installed mode runtime; allocation/resource failures and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve and wait for asynchronous runtime reconciliation. Snapshot creation is worker\-only, requires fresh or destroyed output, returns owned copies, and requires destruction. Success does not claim reconciliation is complete. Query and list output is stable escaped JSON copied from the installed model. Modes do not export, import, save, capture, undo, launch applications, or persist selection.
 .SS "Managed scaffold"
 .sp
 An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.
@@ -873,6 +889,27 @@ EASING\&      := ease_in_sine\&  | ease_out_sine\&  | ease_in_out_sine\&  |
 .fi
 .if n .RE
 .SH "DOMAINS"
+.SS "Mode"
+.sp
+yabai \-m mode \-\-activate \fI<name>\fP
+.RS 4
+Select exactly one declared mode. Unknown names are terminal; other failures advise retry after asynchronous reconciliation settles.
+.RE
+.sp
+yabai \-m mode \-\-deactivate
+.RS 4
+Select base policies only and preserve imperative runtime overrides.
+.RE
+.sp
+yabai \-m mode \-\-query
+.RS 4
+Print the active mode as an escaped JSON string or null.
+.RE
+.sp
+yabai \-m mode \-\-list
+.RS 4
+Print declared names in source order and the active name or null as valid JSON. Mode commands reject missing, extra and trailing tokens.
+.RE
 .SS "Config"
 .SS "General Syntax"
 .sp
