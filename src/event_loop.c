@@ -372,9 +372,17 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     window_manager_add_application(&g_window_manager, application);
     event_signal_push(SIGNAL_APPLICATION_LAUNCHED, application);
 
+    int previous_window_count = g_window_manager.window.count;
     int window_count;
     struct window **window_list = window_manager_add_application_windows(&g_space_manager, &g_window_manager, application, &window_count);
-    application_window_collection_update_inventory(0, window_count);
+
+    //
+    // NOTE: The AX API only returns windows on visible spaces. An application that restores its windows on
+    // an inactive space while launching (e.g. relaunch after an update) would otherwise never have them tracked.
+    //
+
+    window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager, application, -1);
+    application_window_collection_update_inventory(previous_window_count, g_window_manager.window.count);
     uint32_t prev_window_id = g_window_manager.focused_window_id;
 
     uint64_t sid;
