@@ -197,8 +197,8 @@ TEST_FUNC(inactive_space_launch_overlapping_reservations_are_application_owned,
     rule_reserve_one_shots(&beta);
     TEST_CHECK(wm.rules[0].one_shot_owner_pid, 51);
     TEST_CHECK(wm.rules[1].one_shot_owner_pid, 52);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 51, 1), true);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 52, 1), false);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &alpha, true, 51, 1), true);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &beta, true, 52, 1), false);
     rule_cancel_one_shots(&alpha);
     rule_cancel_one_shots(&beta);
     g_window_manager = saved;
@@ -216,11 +216,11 @@ TEST_FUNC(inactive_space_launch_reserved_one_shot_is_available_to_only_one_windo
     g_window_manager.rules = wm.rules;
     struct application owner = { .pid = 60, .name = "Owner" };
     rule_reserve_one_shots(&owner);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 60, 100), true);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &owner, true, 60, 100), true);
     wm.rules[0].one_shot_window_id = 100;
     rule_set_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 60, 100), true);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 60, 101), false);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &owner, true, 60, 100), true);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &owner, true, 60, 101), false);
     rule_cleanup_consumed_one_shots(&owner);
     TEST_CHECK(buf_len(wm.rules), 0);
     g_window_manager = saved;
@@ -237,11 +237,85 @@ TEST_FUNC(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cl
     struct application owner = { .pid = 61, .name = "Owner" };
     rule_reserve_one_shots(&owner);
     rule_set_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE);
-    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], true, 0, 1), false);
+    TEST_CHECK(window_manager_rule_is_available(&wm.rules[0], &owner, true, 0, 1), false);
     rule_cleanup_one_shots();
     TEST_CHECK(buf_len(wm.rules), 1);
     rule_cancel_one_shots(&owner);
     TEST_CHECK(rule_check_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE), false);
+    g_window_manager = saved;
+    rule_destroy(&wm.rules[0]);
+    launch_test_end(&wm);
+})
+
+static void launch_test_reset_refresh_queue(struct window_manager *wm,
+                                            struct application *a, struct application *b,
+                                            struct application *c, struct application *d, int cursor)
+{
+    buf_free(wm->applications_to_refresh);
+    wm->applications_to_refresh = NULL;
+    buf_push(wm->applications_to_refresh, a);
+    buf_push(wm->applications_to_refresh, b);
+    buf_push(wm->applications_to_refresh, c);
+    buf_push(wm->applications_to_refresh, d);
+    wm->application_refresh_cursor = cursor;
+}
+
+TEST_FUNC(inactive_space_launch_refresh_cursor_tracks_swap_deleted_identity,
+{
+    struct application a = { .pid = 610, .name = "A" };
+    struct application b = { .pid = 611, .name = "B" };
+    struct application c = { .pid = 612, .name = "C" };
+    struct application d = { .pid = 613, .name = "D" };
+    struct window_manager wm = {0};
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 2);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &b), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &c);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 1);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &b), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &d);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 1);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &c), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &b);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 3);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &b), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &d);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 1);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &d), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &b);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 3);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &d), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &a);
+    launch_test_reset_refresh_queue(&wm, &a, &b, &c, &d, 5);
+    TEST_CHECK(window_manager_remove_application_refresh(&wm, &b), true);
+    TEST_CHECK(wm.applications_to_refresh[wm.application_refresh_cursor], &d);
+    buf_free(wm.applications_to_refresh);
+
+    launch_test_begin(&wm);
+    table_init(&wm.application, 4, hash_wm, compare_wm);
+    struct window_manager saved = g_window_manager;
+    g_window_manager = wm;
+    a.launch_refresh = true; b.launch_refresh = true; c.launch_refresh = true;
+    window_manager_add_application(&g_window_manager, &a);
+    window_manager_add_application(&g_window_manager, &b);
+    window_manager_add_application(&g_window_manager, &c);
+    buf_push(g_window_manager.applications_to_refresh, &a);
+    buf_push(g_window_manager.applications_to_refresh, &b);
+    buf_push(g_window_manager.applications_to_refresh, &c);
+    g_window_manager.application_refresh_cursor = 2;
+    struct rule title_only = { .flags = RULE_ONE_SHOT | RULE_TITLE_VALID };
+    TEST_CHECK(regcomp(&title_only.title_regex, "^Next$", REG_EXTENDED | REG_NOSUB), 0);
+    buf_push(g_window_manager.rules, title_only);
+    TEST_CHECK(rule_reserve_one_shots(&b), true);
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &b, 1, NULL, NULL), true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 2);
+    TEST_CHECK(g_window_manager.applications_to_refresh[g_window_manager.application_refresh_cursor], &c);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, c.pid);
+    window_manager_remove_application(&g_window_manager, a.pid);
+    window_manager_remove_application(&g_window_manager, b.pid);
+    window_manager_remove_application(&g_window_manager, c.pid);
+    table_free(&g_window_manager.application);
+    wm = g_window_manager;
     g_window_manager = saved;
     rule_destroy(&wm.rules[0]);
     launch_test_end(&wm);
@@ -293,6 +367,268 @@ TEST_FUNC(inactive_space_launch_retry_survives_finalization_and_rejects_stale_pi
     window_manager_destroy_window_created_retry(owned_retry);
     TEST_CHECK(launch_test_release_count, 1);
     table_free(&wm.application);
+    launch_test_end(&wm);
+})
+
+TEST_FUNC(inactive_space_launch_window_creation_defers_all_rule_effects_until_retry,
+{
+    struct window_manager wm;
+    launch_test_begin(&wm);
+    table_init(&wm.application, 4, hash_wm, compare_wm);
+    struct window_manager saved = g_window_manager;
+    g_window_manager = wm;
+    struct application terminated = { .pid = 570, .psn = { 3, 1 }, .name = "Old", .launch_refresh = true };
+    struct application pending = { .pid = 571, .psn = { 3, 2 }, .name = "New", .launch_refresh = true };
+    window_manager_add_application(&g_window_manager, &terminated);
+    window_manager_add_application(&g_window_manager, &pending);
+    buf_push(g_window_manager.applications_to_refresh, &pending);
+
+    struct rule rule = {
+        .flags = RULE_ONE_SHOT | RULE_APP_VALID,
+        .effects = { .manage = RULE_PROP_ON, .mff = RULE_PROP_ON }
+    };
+    TEST_CHECK(regcomp(&rule.app_regex, ".*", REG_EXTENDED | REG_NOSUB), 0);
+    buf_push(g_window_manager.rules, rule);
+    TEST_CHECK(rule_reserve_one_shots(&terminated), true);
+    window_manager_remove_application(&g_window_manager, terminated.pid);
+    rule_test_fail_reservation_match_at(1, REG_ESPACE);
+    TEST_CHECK(rule_cancel_one_shots(&terminated), false);
+    rule_test_fail_reservation_match_at(1, REG_ESPACE);
+
+    struct window test_window = {0};
+    window_manager_test_rule_window = &test_window;
+    bool retry = false;
+    AXUIElementRef owned_ref = (AXUIElementRef) (uintptr_t) 99;
+    TEST_CHECK(window_manager_create_and_add_window(&g_space_manager, &g_window_manager,
+                                                    &pending, owned_ref, 900, true,
+                                                    pending.pid, &retry), NULL);
+    TEST_CHECK(retry, true);
+    TEST_CHECK(g_window_manager.window.count, 0);
+    TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MANAGED), false);
+    TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MFF), false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, 0U);
+
+    rule_test_set_reservation_match_result(-1);
+    retry = false;
+    TEST_CHECK(window_manager_create_and_add_window(&g_space_manager, &g_window_manager,
+                                                    &pending, owned_ref, 900, true,
+                                                    pending.pid, &retry), &test_window);
+    TEST_CHECK(retry, false);
+    TEST_CHECK(g_window_manager.window.count, 1);
+    TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MANAGED), true);
+    TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MFF), true);
+    TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MFF_VALUE), true);
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    window_manager_remove_window(&g_window_manager, test_window.id);
+    test_window.ref = NULL;
+    window_manager_test_rule_window = NULL;
+    window_manager_remove_application(&g_window_manager, pending.pid);
+    table_free(&g_window_manager.application);
+    wm = g_window_manager;
+    g_window_manager = saved;
+    launch_test_end(&wm);
+})
+
+TEST_FUNC(inactive_space_launch_unreserved_one_shots_preserve_ordinary_semantics,
+{
+    struct window_manager wm;
+    launch_test_begin(&wm);
+    struct window_manager saved = g_window_manager;
+    g_window_manager = wm;
+    struct application running = { .pid = 580, .psn = { 1, 8 }, .name = "Running" };
+
+    struct rule runtime = { .flags = RULE_ONE_SHOT | RULE_TITLE_VALID };
+    TEST_CHECK(regcomp(&runtime.title_regex, "^Runtime$", REG_EXTENDED | REG_NOSUB), 0);
+    TEST_CHECK(rule_add(&runtime), RULE_ADD_OK);
+    struct window first = { .id = 800, .application = &running };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &first,
+                                         "Runtime", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, first.id);
+    rule_cleanup_one_shots();
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    struct application launcher = { .pid = 581, .psn = { 1, 9 }, .name = "Launcher" };
+    struct rule native = { .flags = RULE_ONE_SHOT | RULE_TITLE_VALID };
+    TEST_CHECK(regcomp(&native.title_regex, "^Native$", REG_EXTENDED | REG_NOSUB), 0);
+    buf_push(g_window_manager.rules, native);
+    TEST_CHECK(rule_reserve_one_shots(&launcher), true);
+    TEST_CHECK(rule_finalize_one_shots(&launcher), true);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, 0);
+    struct window nonmatch = { .id = 801, .application = &running };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &nonmatch,
+                                         "Other", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, 0U);
+    struct window match = { .id = 802, .application = &running };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &match,
+                                         "Native", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, match.id);
+    rule_cleanup_one_shots();
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    wm = g_window_manager;
+    g_window_manager = saved;
+    launch_test_end(&wm);
+})
+
+TEST_FUNC(inactive_space_launch_initial_reservation_failures_are_atomic_and_retried,
+{
+    struct window_manager wm;
+    launch_test_begin(&wm);
+    table_init(&wm.application, 8, hash_wm, compare_wm);
+    struct window_manager saved = g_window_manager;
+    g_window_manager = wm;
+    buf_push(g_window_manager.rules, launch_test_app_rule("^Pending$"));
+    buf_push(g_window_manager.rules, launch_test_app_rule("^Pending$"));
+    struct application pending = { .pid = 590, .psn = { 2, 1 }, .name = "Pending" };
+    window_manager_add_application(&g_window_manager, &pending);
+
+    rule_test_fail_reservation_match_at(2, REG_ESPACE);
+    int created_count = -1;
+    TEST_CHECK(window_manager_add_application_windows(&g_space_manager, &g_window_manager,
+                                                      &pending, &created_count), NULL);
+    TEST_CHECK(created_count, 0);
+    TEST_CHECK(pending.launch_refresh, true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 1);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, 0);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, 0);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), true);
+
+    rule_test_set_reservation_match_result(-1);
+    launch_test_inventory_success = false;
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &pending, 0, NULL, NULL), false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, pending.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, pending.pid);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), false);
+
+    TEST_CHECK(rule_cancel_one_shots(&pending), true);
+    window_manager_remove_application_refresh(&g_window_manager, &pending);
+    pending.launch_refresh = false;
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, 0);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, 0);
+
+    rule_test_fail_reservation_allocation_at(1);
+    pending.launch_refresh = false;
+    TEST_CHECK(window_manager_add_application_windows(&g_space_manager, &g_window_manager,
+                                                      &pending, &created_count), NULL);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, 0);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, 0);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), true);
+    rule_test_fail_reservation_allocation_at(0);
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &pending, 0, NULL, NULL), false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, pending.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, pending.pid);
+
+    TEST_CHECK(rule_cancel_one_shots(&pending), true);
+    window_manager_remove_application(&g_window_manager, pending.pid);
+    table_free(&g_window_manager.application);
+    wm = g_window_manager;
+    g_window_manager = saved;
+    rule_destroy(&wm.rules[0]);
+    rule_destroy(&wm.rules[1]);
+    launch_test_end(&wm);
+})
+
+TEST_FUNC(inactive_space_launch_one_shot_handoff_is_cursor_ordered_and_psn_stable,
+{
+    struct window_manager wm;
+    launch_test_begin(&wm);
+    table_init(&wm.application, 8, hash_wm, compare_wm);
+    struct window_manager saved = g_window_manager;
+    g_window_manager = wm;
+
+    struct application stale = { .pid = 600, .name = "Stale", .launch_refresh = true };
+    struct application first = { .pid = 601, .psn = { 1, 11 }, .name = "First", .launch_refresh = true };
+    struct application second = { .pid = 602, .psn = { 1, 12 }, .name = "Second", .launch_refresh = true };
+    window_manager_add_application(&g_window_manager, &first);
+    window_manager_add_application(&g_window_manager, &second);
+    buf_push(g_window_manager.applications_to_refresh, &stale);
+    buf_push(g_window_manager.applications_to_refresh, &first);
+    buf_push(g_window_manager.applications_to_refresh, &first);
+    buf_push(g_window_manager.applications_to_refresh, &second);
+    g_window_manager.application_refresh_cursor = 1;
+
+    for (int i = 0; i < 2; ++i) {
+        struct rule rule = { .flags = RULE_ONE_SHOT | RULE_APP_VALID | RULE_TITLE_VALID };
+        TEST_CHECK(regcomp(&rule.app_regex, ".*", REG_EXTENDED | REG_NOSUB), 0);
+        TEST_CHECK(regcomp(&rule.title_regex, "^Wanted$", REG_EXTENDED | REG_NOSUB), 0);
+        buf_push(g_window_manager.rules, rule);
+    }
+    TEST_CHECK(rule_reserve_one_shots(&first), true);
+    rule_test_fail_reservation_allocation_at(1);
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &first, 1, NULL, NULL), false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, first.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, first.pid);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), true);
+    rule_test_fail_reservation_allocation_at(0);
+    rule_test_fail_reservation_match_at(2, REG_ESPACE);
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &first, 1, NULL, NULL), false);
+    TEST_CHECK(first.launch_refresh, true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 4);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, first.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, first.pid);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), true);
+
+    rule_test_set_reservation_match_result(-1);
+    TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &g_window_manager,
+                                                               &first, 1, NULL, NULL), true);
+    TEST_CHECK(first.launch_refresh, false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, second.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, second.pid);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_psn_low, (uint32_t) second.psn.lowLongOfPSN);
+
+    struct application reused = { .pid = second.pid, .psn = { 9, 99 }, .name = "Reused", .launch_refresh = true };
+    TEST_CHECK(window_manager_rule_is_available(&g_window_manager.rules[0], &reused,
+                                                true, reused.pid, 700), false);
+    struct window matching = { .id = 700, .application = &second };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &matching,
+                                         "Wanted", "AXWindow", "AXStandardWindow", true, second.pid);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, matching.id);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_window_id, matching.id);
+    rule_cleanup_consumed_one_shots(&second);
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    for (int i = 0; i < 2; ++i) {
+        struct rule rule = { .flags = RULE_ONE_SHOT | RULE_APP_VALID | RULE_TITLE_VALID };
+        TEST_CHECK(regcomp(&rule.app_regex, ".*", REG_EXTENDED | REG_NOSUB), 0);
+        TEST_CHECK(regcomp(&rule.title_regex, "^Wanted$", REG_EXTENDED | REG_NOSUB), 0);
+        buf_push(g_window_manager.rules, rule);
+    }
+    first.launch_refresh = true;
+    TEST_CHECK(rule_reserve_one_shots(&first), true);
+    window_manager_remove_application(&g_window_manager, first.pid);
+    rule_test_fail_reservation_match_at(2, REG_ESPACE);
+    TEST_CHECK(rule_cancel_one_shots(&first), false);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, first.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, first.pid);
+    TEST_CHECK(rule_one_shot_reassignment_is_pending(), true);
+
+    rule_test_fail_reservation_match_at(2, REG_ESPACE);
+    struct window ordinary = { .id = 701, .application = &reused };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &ordinary,
+                                         "Wanted", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, 0U);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_window_id, 0U);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, first.pid);
+
+    rule_test_set_reservation_match_result(-1);
+    TEST_CHECK(rule_retry_pending_one_shots(), true);
+    matching.id = 702;
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &matching,
+                                         "Wanted", "AXWindow", "AXStandardWindow", true, second.pid);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, second.pid);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, matching.id);
+    rule_cleanup_consumed_one_shots(&second);
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    window_manager_remove_application(&g_window_manager, second.pid);
+    table_free(&g_window_manager.application);
+    wm = g_window_manager;
+    g_window_manager = saved;
     launch_test_end(&wm);
 })
 

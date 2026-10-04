@@ -363,51 +363,254 @@ static void rule_remove_one_shot_at(int index)
     if (native && rule_native_state.native_prefix_length) --rule_native_state.native_prefix_length;
 }
 
-void rule_reserve_one_shots(struct application *application)
+struct rule_one_shot_owner_plan
 {
-    for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
-        struct rule *rule = &g_window_manager.rules[i];
-        if (!rule_check_flag(rule, RULE_ONE_SHOT) || rule->one_shot_owner_pid) continue;
-        int excluded = rule_check_flag(rule, RULE_APP_EXCLUDE) ? REGEX_MATCH_YES : REGEX_MATCH_NO;
-        if (regex_match(rule_check_flag(rule, RULE_APP_VALID), &rule->app_regex, application->name) != excluded) {
-            rule->one_shot_owner_pid = application->pid;
-        }
+    pid_t pid;
+    uint32_t psn_high;
+    uint32_t psn_low;
+    bool remove;
+};
+
+static bool rule_one_shot_reassignment_pending;
+
+#ifdef TESTS
+static int rule_test_reservation_result = -1;
+static size_t rule_test_reservation_calls;
+static size_t rule_test_reservation_fail_ordinal;
+static size_t rule_test_reservation_allocation_ordinal;
+static size_t rule_test_reservation_allocation_fail_ordinal;
+void rule_test_set_reservation_match_result(int result)
+{
+    rule_test_reservation_result = result;
+    rule_test_reservation_fail_ordinal = 0;
+    rule_test_reservation_calls = 0;
+}
+void rule_test_fail_reservation_match_at(size_t ordinal, int result)
+{
+    rule_test_reservation_result = result;
+    rule_test_reservation_fail_ordinal = ordinal;
+    rule_test_reservation_calls = 0;
+}
+void rule_test_fail_reservation_allocation_at(size_t ordinal)
+{
+    rule_test_reservation_allocation_fail_ordinal = ordinal;
+    rule_test_reservation_allocation_ordinal = 0;
+}
+size_t rule_test_reservation_match_calls(void) { return rule_test_reservation_calls; }
+#endif
+
+static void *rule_reservation_calloc(size_t count, size_t size)
+{
+#ifdef TESTS
+    if (++rule_test_reservation_allocation_ordinal == rule_test_reservation_allocation_fail_ordinal) return NULL;
+#endif
+    return calloc(count, size);
+}
+
+static int rule_reservation_app_match(struct rule *rule, const char *name)
+{
+    if (!rule_check_flag(rule, RULE_APP_VALID)) return 0;
+#ifdef TESTS
+    ++rule_test_reservation_calls;
+    if (rule_test_reservation_result >= 0 &&
+        (!rule_test_reservation_fail_ordinal ||
+         rule_test_reservation_calls == rule_test_reservation_fail_ordinal)) return rule_test_reservation_result;
+#endif
+    return regexec(&rule->app_regex, name, 0, NULL, 0);
+}
+
+static bool rule_one_shot_owned_by(const struct rule *rule, const struct application *application)
+{
+    return application && rule->one_shot_owner_pid == application->pid &&
+           rule->one_shot_owner_psn_high == (uint32_t) application->psn.highLongOfPSN &&
+           rule->one_shot_owner_psn_low == (uint32_t) application->psn.lowLongOfPSN;
+}
+
+static void rule_owner_plan_init(struct rule_one_shot_owner_plan *plan,
+                                 struct rule *rules, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        plan[i].pid = rules[i].one_shot_owner_pid;
+        plan[i].psn_high = rules[i].one_shot_owner_psn_high;
+        plan[i].psn_low = rules[i].one_shot_owner_psn_low;
     }
 }
 
-void rule_finalize_one_shots(struct application *application)
+static bool rule_owner_plan_reserve(struct rule_one_shot_owner_plan *plan,
+                                    struct rule *rules, size_t count,
+                                    struct application *application)
 {
-    for (int i = 0; i < buf_len(g_window_manager.rules);) {
-        struct rule *rule = &g_window_manager.rules[i];
-        if (rule->one_shot_owner_pid != application->pid) { ++i; continue; }
-        if (rule->one_shot_window_id || rule_check_flag(rule, RULE_ONE_SHOT_REMOVE)) {
-            rule_remove_one_shot_at(i);
-        } else {
-            rule->one_shot_owner_pid = 0;
-            ++i;
+    for (size_t i = 0; i < count; ++i) {
+        if (!rule_check_flag(&rules[i], RULE_ONE_SHOT) || plan[i].pid || plan[i].remove) continue;
+        int match = rule_reservation_app_match(&rules[i], application->name);
+        if (match != 0 && match != REG_NOMATCH) return false;
+        bool excluded = rule_check_flag(&rules[i], RULE_APP_EXCLUDE);
+        if ((match == 0) != excluded) {
+            plan[i].pid = application->pid;
+            plan[i].psn_high = (uint32_t) application->psn.highLongOfPSN;
+            plan[i].psn_low = (uint32_t) application->psn.lowLongOfPSN;
         }
+    }
+    return true;
+}
+
+static void rule_owner_plan_commit(struct rule_one_shot_owner_plan *plan,
+                                   struct rule *rules, size_t count, bool allow_remove)
+{
+    for (size_t i = 0; i < count; ++i) {
+        if (plan[i].remove) continue;
+        rules[i].one_shot_owner_pid = plan[i].pid;
+        rules[i].one_shot_owner_psn_high = plan[i].psn_high;
+        rules[i].one_shot_owner_psn_low = plan[i].psn_low;
+    }
+    if (allow_remove) {
+        for (size_t i = count; i > 0; --i) if (plan[i - 1].remove) rule_remove_one_shot_at((int) i - 1);
     }
 }
 
-void rule_cancel_one_shots(struct application *application)
+bool rule_reserve_one_shots_in_buffer(struct rule *rules, size_t count, struct application *application)
 {
-    for (int i = 0; i < buf_len(g_window_manager.rules);) {
-        struct rule *rule = &g_window_manager.rules[i];
-        if (rule->one_shot_owner_pid != application->pid) { ++i; continue; }
-        if (rule->one_shot_window_id || rule_check_flag(rule, RULE_ONE_SHOT_REMOVE)) {
-            rule_remove_one_shot_at(i);
+    if (!application) return false;
+    if (!count) return true;
+    struct rule_one_shot_owner_plan *plan = rule_reservation_calloc(count, sizeof(*plan));
+    if (!plan) return false;
+    rule_owner_plan_init(plan, rules, count);
+    bool result = rule_owner_plan_reserve(plan, rules, count, application);
+    if (result) rule_owner_plan_commit(plan, rules, count, false);
+    free(plan);
+    return result;
+}
+
+bool rule_reserve_one_shots(struct application *application)
+{
+    bool result = rule_reserve_one_shots_in_buffer(g_window_manager.rules,
+                                                   (size_t) buf_len(g_window_manager.rules), application);
+    if (!result) rule_one_shot_reassignment_pending = true;
+    return result;
+}
+
+static bool rule_refresh_application_is_live(struct application *application)
+{
+    if (!application) return false;
+    bool registered = false;
+    table_for (struct application *candidate, g_window_manager.application, {
+        if (candidate == application) registered = true;
+    });
+    return registered && application->launch_refresh && application->pid > 0 &&
+           window_manager_find_application(&g_window_manager, application->pid) == application;
+}
+
+static bool rule_owner_plan_has_live_owner(const struct rule_one_shot_owner_plan *owner)
+{
+    int count = buf_len(g_window_manager.applications_to_refresh);
+    for (int i = 0; i < count; ++i) {
+        struct application *application = g_window_manager.applications_to_refresh[i];
+        if (rule_refresh_application_is_live(application) && owner->pid == application->pid &&
+            owner->psn_high == (uint32_t) application->psn.highLongOfPSN &&
+            owner->psn_low == (uint32_t) application->psn.lowLongOfPSN) return true;
+    }
+    return false;
+}
+
+static bool rule_owner_plan_reserve_queue(struct rule_one_shot_owner_plan *plan,
+                                          struct rule *rules, size_t rule_count,
+                                          struct application *skip)
+{
+    int count = buf_len(g_window_manager.applications_to_refresh);
+    if (!count) return true;
+    int cursor = g_window_manager.application_refresh_cursor % count;
+    if (cursor < 0) cursor += count;
+    for (int offset = 0; offset < count; ++offset) {
+        struct application *application = g_window_manager.applications_to_refresh[(cursor + offset) % count];
+        if (application == skip || !rule_refresh_application_is_live(application)) continue;
+        bool duplicate = false;
+        for (int previous = 0; previous < offset; ++previous) {
+            if (g_window_manager.applications_to_refresh[(cursor + previous) % count] == application) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && !rule_owner_plan_reserve(plan, rules, rule_count, application)) return false;
+    }
+    return true;
+}
+
+static bool rule_plan_release_and_handoff(struct application *application)
+{
+    size_t count = (size_t) buf_len(g_window_manager.rules);
+    if (!count) { rule_one_shot_reassignment_pending = false; return true; }
+    struct rule_one_shot_owner_plan *plan = rule_reservation_calloc(count, sizeof(*plan));
+    if (!plan) { rule_one_shot_reassignment_pending = true; return false; }
+    rule_owner_plan_init(plan, g_window_manager.rules, count);
+    for (size_t i = 0; i < count; ++i) {
+        bool release = rule_one_shot_owned_by(&g_window_manager.rules[i], application) ||
+                       (plan[i].pid && !rule_owner_plan_has_live_owner(&plan[i]));
+        if (!release) continue;
+        if (g_window_manager.rules[i].one_shot_window_id ||
+            rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT_REMOVE)) {
+            plan[i].remove = true;
         } else {
-            rule->one_shot_owner_pid = 0;
-            ++i;
+            plan[i].pid = 0;
+            plan[i].psn_high = 0;
+            plan[i].psn_low = 0;
         }
     }
+    bool result = rule_owner_plan_reserve_queue(plan, g_window_manager.rules, count, application);
+    if (result) {
+        rule_owner_plan_commit(plan, g_window_manager.rules, count, true);
+        rule_one_shot_reassignment_pending = false;
+    } else {
+        rule_one_shot_reassignment_pending = true;
+    }
+    free(plan);
+    return result;
+}
+
+bool rule_retry_pending_one_shots(void)
+{
+    if (!rule_one_shot_reassignment_pending) return true;
+    size_t count = (size_t) buf_len(g_window_manager.rules);
+    if (!count) { rule_one_shot_reassignment_pending = false; return true; }
+    struct rule_one_shot_owner_plan *plan = rule_reservation_calloc(count, sizeof(*plan));
+    if (!plan) return false;
+    rule_owner_plan_init(plan, g_window_manager.rules, count);
+    for (size_t i = 0; i < count; ++i) {
+        if (!plan[i].pid || rule_owner_plan_has_live_owner(&plan[i])) continue;
+        if (g_window_manager.rules[i].one_shot_window_id ||
+            rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT_REMOVE)) {
+            plan[i].remove = true;
+        } else {
+            plan[i].pid = 0;
+            plan[i].psn_high = 0;
+            plan[i].psn_low = 0;
+        }
+    }
+    bool result = rule_owner_plan_reserve_queue(plan, g_window_manager.rules, count, NULL);
+    if (result) {
+        rule_owner_plan_commit(plan, g_window_manager.rules, count, true);
+        rule_one_shot_reassignment_pending = false;
+    }
+    free(plan);
+    return result;
+}
+
+bool rule_one_shot_reassignment_is_pending(void) { return rule_one_shot_reassignment_pending; }
+
+bool rule_finalize_one_shots(struct application *application)
+{
+    return rule_plan_release_and_handoff(application);
+}
+
+bool rule_cancel_one_shots(struct application *application)
+{
+    return rule_plan_release_and_handoff(application);
 }
 
 void rule_cleanup_consumed_one_shots(struct application *application)
 {
     for (int i = 0; i < buf_len(g_window_manager.rules);) {
         struct rule *rule = &g_window_manager.rules[i];
-        if (rule->one_shot_owner_pid == application->pid && rule->one_shot_window_id) {
+        if (rule_one_shot_owned_by(rule, application) && rule->one_shot_window_id) {
             rule_remove_one_shot_at(i);
         } else {
             ++i;

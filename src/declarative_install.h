@@ -88,6 +88,7 @@ bool declarative_config_reload_with_test_ops(FILE *response,
 bool declarative_configuration_reconcile_with_test_ops(const struct declarative_reload_test_ops *ops);
 void declarative_reload_test_set_message_ops(const struct declarative_reload_test_ops *ops);
 void declarative_reload_test_set_reconcile_entry_hook(void (*hook)(void));
+void declarative_reload_test_set_prepublication_hook(void (*hook)(void));
 void declarative_reload_test_fail_stage(enum declarative_reload_test_stage stage);
 uint32_t declarative_reload_test_reconcile_reservation(void);
 uint64_t declarative_reload_test_reconcile_token(void);

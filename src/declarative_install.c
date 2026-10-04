@@ -35,10 +35,13 @@ static size_t declarative_install_outstanding;
 static enum declarative_reload_test_stage declarative_reload_fail_stage;
 static const struct declarative_reload_test_ops *declarative_reload_message_test_ops;
 static void (*declarative_reload_reconcile_entry_test_hook)(void);
+static void (*declarative_reload_prepublication_test_hook)(void);
 void declarative_reload_test_set_message_ops(const struct declarative_reload_test_ops *ops)
 { declarative_reload_message_test_ops = ops; }
 void declarative_reload_test_set_reconcile_entry_hook(void (*hook)(void))
 { declarative_reload_reconcile_entry_test_hook = hook; }
+void declarative_reload_test_set_prepublication_hook(void (*hook)(void))
+{ declarative_reload_prepublication_test_hook = hook; }
 void declarative_reload_test_fail_stage(enum declarative_reload_test_stage stage)
 { declarative_reload_fail_stage = stage; }
 static bool declarative_reload_stage_failed(enum declarative_reload_test_stage stage)
@@ -580,6 +583,15 @@ static struct declarative_reload_ops declarative_reload_ops_from_test(
     const struct declarative_reload_test_ops *test_ops);
 #endif
 
+struct declarative_refresh_snapshot_entry
+{
+    struct application *application;
+    pid_t pid;
+    ProcessSerialNumber psn;
+    bool launch_refresh;
+    bool live;
+};
+
 struct declarative_reload_transaction
 {
     struct declarative_startup_state candidate;
@@ -588,6 +600,9 @@ struct declarative_reload_transaction
     struct declarative_space_topology_entry *space_topology;
     struct declarative_space_target *targets;
     size_t target_count;
+    struct declarative_refresh_snapshot_entry *refresh_snapshot;
+    size_t refresh_count;
+    int refresh_cursor;
     uint64_t generation;
     struct menu_bar_settings previous_menu_settings;
     bool previous_opacity_enabled;
@@ -761,6 +776,7 @@ static void declarative_reload_transaction_destroy(struct declarative_reload_tra
 {
     declarative_topology_space_snapshot_destroy(transaction->space_topology);
     declarative_install_free(transaction->targets);
+    declarative_install_free(transaction->refresh_snapshot);
     declarative_startup_bundle_destroy(&transaction->bundle);
     declarative_startup_destroy(&transaction->candidate);
     declarative_reload_retire(transaction);
@@ -777,6 +793,85 @@ static bool declarative_reload_fail(struct declarative_reload_transaction *trans
         snprintf(transaction->diagnostic.message, sizeof(transaction->diagnostic.message), "%s", message);
     }
     return false;
+}
+
+static struct application *declarative_reload_registered_refresh_application(struct application *pointer)
+{
+    if (!pointer) return NULL;
+    struct application *registered = NULL;
+    table_for (struct application *candidate, g_window_manager.application, {
+        if (candidate == pointer) registered = candidate;
+    });
+    return registered;
+}
+
+static bool declarative_reload_prepare_refresh_plan(struct declarative_reload_transaction *transaction)
+{
+    int count = buf_len(g_window_manager.applications_to_refresh);
+    if (count < 0) return false;
+    transaction->refresh_count = (size_t) count;
+    transaction->refresh_cursor = g_window_manager.application_refresh_cursor;
+    if (!count) return true;
+    transaction->refresh_snapshot = declarative_install_calloc((size_t) count,
+                                                               sizeof(*transaction->refresh_snapshot));
+    if (!transaction->refresh_snapshot) return false;
+    int cursor = transaction->refresh_cursor % count;
+    if (cursor < 0) cursor += count;
+    for (int offset = 0; offset < count; ++offset) {
+        struct application *pointer = g_window_manager.applications_to_refresh[(cursor + offset) % count];
+        struct application *application = declarative_reload_registered_refresh_application(pointer);
+        struct declarative_refresh_snapshot_entry *entry = &transaction->refresh_snapshot[offset];
+        entry->application = pointer;
+        entry->live = application != NULL;
+        if (application) {
+            entry->pid = application->pid;
+            entry->psn = application->psn;
+            entry->launch_refresh = application->launch_refresh;
+        }
+    }
+
+    size_t native_count = transaction->bundle.rules.count;
+    for (size_t i = 0; i < native_count; ++i) {
+        transaction->bundle.rule_buffer[i].one_shot_owner_pid = 0;
+        transaction->bundle.rule_buffer[i].one_shot_owner_psn_high = 0;
+        transaction->bundle.rule_buffer[i].one_shot_owner_psn_low = 0;
+        transaction->bundle.rule_buffer[i].one_shot_window_id = 0;
+    }
+    for (int offset = 0; offset < count; ++offset) {
+        struct declarative_refresh_snapshot_entry *entry = &transaction->refresh_snapshot[offset];
+        if (!entry->live || !entry->launch_refresh || entry->pid <= 0) continue;
+        bool duplicate = false;
+        for (int previous = 0; previous < offset; ++previous) {
+            if (transaction->refresh_snapshot[previous].application == entry->application) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && !rule_reserve_one_shots_in_buffer(transaction->bundle.rule_buffer,
+                                                             native_count, entry->application)) return false;
+    }
+    return true;
+}
+
+static bool declarative_reload_validate_refresh_plan(const struct declarative_reload_transaction *transaction)
+{
+    int count = buf_len(g_window_manager.applications_to_refresh);
+    if (count < 0 || (size_t) count != transaction->refresh_count ||
+        g_window_manager.application_refresh_cursor != transaction->refresh_cursor) return false;
+    if (!count) return true;
+    int cursor = transaction->refresh_cursor % count;
+    if (cursor < 0) cursor += count;
+    for (int offset = 0; offset < count; ++offset) {
+        const struct declarative_refresh_snapshot_entry *entry = &transaction->refresh_snapshot[offset];
+        struct application *pointer = g_window_manager.applications_to_refresh[(cursor + offset) % count];
+        if (pointer != entry->application) return false;
+        struct application *application = declarative_reload_registered_refresh_application(pointer);
+        if ((application != NULL) != entry->live) return false;
+        if (application && (application->pid != entry->pid ||
+            !psn_equals(&application->psn, (ProcessSerialNumber *) &entry->psn) ||
+            application->launch_refresh != entry->launch_refresh)) return false;
+    }
+    return true;
 }
 
 static bool declarative_reload_prepare(struct declarative_reload_transaction *transaction,
@@ -886,6 +981,9 @@ static bool declarative_reload_prepare(struct declarative_reload_transaction *tr
         !(bundle->path = declarative_install_strdup(transaction->candidate.path))) {
         return declarative_reload_fail(transaction, "rule generation preparation failed");
     }
+    if (!declarative_reload_prepare_refresh_plan(transaction)) {
+        return declarative_reload_fail(transaction, "refresh one-shot reservation preparation failed");
+    }
 
     if (declarative_reload_stage_failed(DECLARATIVE_RELOAD_TEST_STAGE_SPACE_SNAPSHOT) ||
         !declarative_topology_space_snapshot(&transaction->candidate.topology,
@@ -925,6 +1023,15 @@ enum declarative_reconcile_result
     DECLARATIVE_RECONCILE_TRANSIENT_FAILURE,
     DECLARATIVE_RECONCILE_TERMINAL_FAILURE
 };
+
+static struct declarative_topology_bounds_config declarative_live_topology_bounds_config(void)
+{
+    return (struct declarative_topology_bounds_config) {
+        .external_bar_mode = g_display_manager.mode,
+        .external_bar_top_padding = g_display_manager.top_padding,
+        .external_bar_bottom_padding = g_display_manager.bottom_padding
+    };
+}
 
 static struct declarative_space_defaults declarative_reconcile_view_defaults(void)
 {
@@ -990,13 +1097,9 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
     if (declarative_reload_reconcile_entry_test_hook) declarative_reload_reconcile_entry_test_hook();
 #endif
 
-    struct declarative_topology_bounds_config bounds = { .external_bar_mode = EXTERNAL_BAR_OFF };
-    if (declarative_installed.model->config[DECLARATIVE_CONFIG_EXTERNAL_BAR].present) {
-        const struct declarative_external_bar *bar = &declarative_installed.model->config[DECLARATIVE_CONFIG_EXTERNAL_BAR].external_bar;
-        bounds.external_bar_mode = bar->mode;
-        bounds.external_bar_top_padding = bar->top_padding;
-        bounds.external_bar_bottom_padding = bar->bottom_padding;
-    }
+    /* Preserve-runtime reconciliation must observe one coherent effective
+     * external-bar snapshot for both topology captures. */
+    struct declarative_topology_bounds_config bounds = declarative_live_topology_bounds_config();
     struct declarative_topology topology = {0};
     struct declarative_topology verification_topology = {0};
     struct declarative_rule_topology_snapshot rule_topology = {0};
@@ -1321,7 +1424,14 @@ static bool declarative_config_reload_with_ops(FILE *response,
         .context = ops->context
     };
     bool result = false;
-    if (!declarative_reload_stage_failed(DECLARATIVE_RELOAD_TEST_STAGE_FOREST)) {
+#ifdef TESTS
+    if (declarative_reload_prepublication_test_hook) declarative_reload_prepublication_test_hook();
+#endif
+    bool refresh_plan_valid = declarative_reload_validate_refresh_plan(&transaction);
+    if (!refresh_plan_valid) {
+        declarative_report_runtime_client(response, "runtime", transaction.candidate.path, "$", 0, 0,
+                                          "refresh queue changed during reload preparation");
+    } else if (!declarative_reload_stage_failed(DECLARATIVE_RELOAD_TEST_STAGE_FOREST)) {
         result = declarative_space_apply_with_effective_publication(transaction.targets, transaction.target_count,
                                                            transaction.space_topology, transaction.target_count,
                                                            &g_space_manager.view, &view_contract, &managed_contract,
@@ -1334,10 +1444,10 @@ static bool declarative_config_reload_with_ops(FILE *response,
                                                            &capture, ops->postcommit_ops, NULL,
                                                            declarative_reload_publish, &transaction);
     }
-    if (!result) {
+    if (!result && refresh_plan_valid) {
         declarative_report_runtime_client(response, "runtime", transaction.candidate.path, "$", 0, 0,
                                           "forest and managed-window preparation failed");
-    } else {
+    } else if (result) {
         declarative_reload_retire(&transaction);
         menu_bar_manager_settings_postcommit(&transaction.previous_menu_settings);
         if (transaction.previous_opacity_enabled != g_window_manager.enable_window_opacity) {
@@ -1484,14 +1594,9 @@ static bool declarative_mode_select(const char *name, bool active,
     }
     publication.has_scaffold = declarative_policies_have_scaffold(composition.spaces,
                                                                    composition.space_count);
-    struct declarative_topology_bounds_config bounds = { .external_bar_mode = EXTERNAL_BAR_OFF };
-    if (declarative_installed.model->config[DECLARATIVE_CONFIG_EXTERNAL_BAR].present) {
-        const struct declarative_external_bar *bar =
-            &declarative_installed.model->config[DECLARATIVE_CONFIG_EXTERNAL_BAR].external_bar;
-        bounds.external_bar_mode = bar->mode;
-        bounds.external_bar_top_padding = bar->top_padding;
-        bounds.external_bar_bottom_padding = bar->bottom_padding;
-    }
+    /* Mode changes preserve runtime ownership, so both topology observations
+     * use the same effective live external-bar snapshot. */
+    struct declarative_topology_bounds_config bounds = declarative_live_topology_bounds_config();
     enum declarative_topology_result topology_result =
         declarative_mode_capture_topology(&bounds, &current_topology);
     if (topology_result == DECLARATIVE_TOPOLOGY_OK) {
@@ -1799,6 +1904,7 @@ void declarative_install_test_reset(void)
     declarative_reload_fail_stage = DECLARATIVE_RELOAD_TEST_STAGE_NONE;
     declarative_reload_message_test_ops = NULL;
     declarative_reload_reconcile_entry_test_hook = NULL;
+    declarative_reload_prepublication_test_hook = NULL;
     declarative_reconcile_retry_test_hook = NULL;
     declarative_reconcile_retry_test_context = NULL;
     pthread_mutex_lock(&declarative_reconcile_lock);

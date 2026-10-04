@@ -330,7 +330,7 @@ Reload parses and prepares the entire candidate before changing installed state.
 
 The event-loop worker publishes prepared settings, views, forest, managed-window table, native rule prefix, native label index, model, path, fold context and generation through a no-allocation, no-post boundary. Allocation-capable refreshes, tree flushes, animations, notifications and logging run afterward as best-effort reconciliation. A failure after publication does not roll back the committed generation.
 
-Topology lifecycle work uses a binary reservation before queue admission. Duplicate triggers coalesce. The event handler clears the reservation on entry so a trigger during processing can queue one follow-up. Queue admission owns event context and daemon response/socket cleanup on both acceptance and rejection.
+Topology lifecycle work uses one active reservation token spanning the queued event and its retry/backoff lifecycle. Intervening triggers coalesce into that reservation; each retry reconciles the latest live topology and runtime state. The token clears only after success, terminal failure, retry exhaustion, rejected retry scheduling, explicit cancellation or shutdown. Queue admission owns event context and daemon response/socket cleanup on both acceptance and rejection.
 
 Focus follows mouse uses one daemon-lifetime event tap with the superset event mask. `configured_ffm_mode` holds the configured value. Nested menu tracking forces the atomic effective mode to `off`; closing the final menu derives the effective mode from the latest configured value rather than restoring a saved stale value.
 
