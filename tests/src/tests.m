@@ -66,6 +66,7 @@ typedef TEST_SIG(function);
 #include "sa_message.c"
 #include "deferred_convergence.c"
 #include "animation_failure.c"
+#include "doctor.c"
 #undef TEST_ENTRY
 
 static bool test_temp_storage_ensure(uint64_t size)
@@ -1859,6 +1860,16 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
+    TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
+    TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
+    TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
+    TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
+    TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
+    TEST_ENTRY(doctor_service_requires_canonical_fields_mode_and_executable) \
+    TEST_ENTRY(doctor_root_permission_checks_use_resolved_supplementary_groups) \
+    TEST_ENTRY(doctor_runtime_orchestration_and_exact_cli_are_injectable) \
+    TEST_ENTRY(doctor_sa_bundle_absence_and_nested_metadata_are_distinct) \
+    TEST_ENTRY(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded) \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
     TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \

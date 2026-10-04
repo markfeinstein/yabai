@@ -3,7 +3,7 @@ extern struct event_loop g_event_loop;
 static bool declarative_token_is_established_primary(const char *token)
 {
     static const char *tokens[] = {
-        "--help", "-h", "--version", "-v", "--message", "-m",
+        "--help", "-h", "--version", "-v", "--doctor", "--message", "-m",
         "--load-sa", "--uninstall-sa", "--install-service", "--uninstall-service",
         "--start-service", "--restart-service", "--stop-service"
     };

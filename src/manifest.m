@@ -4,6 +4,7 @@
 #include <CoreVideo/CoreVideo.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
+#include <mach-o/fat.h>
 #include <mach-o/swap.h>
 #include <bootstrap.h>
 
@@ -15,12 +16,14 @@
 
 #include <stdio.h>
 #include <stddef.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <dirent.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <regex.h>
 #include <execinfo.h>
@@ -31,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
+#include <sys/utsname.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -79,6 +83,7 @@
 #include "declarative_space.h"
 #include "declarative_topology.h"
 #include "declarative_install.h"
+#include "doctor.h"
 #include "message.h"
 #include "display.h"
 #include "space.h"
@@ -126,3 +131,4 @@
 #include "declarative_space.c"
 #include "declarative_install.c"
 #include "yabai.c"
+#include "doctor.m"
