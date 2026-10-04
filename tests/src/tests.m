@@ -1670,6 +1670,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
     TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
     TEST_ENTRY(declarative_scaffold_membership_add_remove_requests_one_reconcile) \
+    TEST_ENTRY(declarative_reconcile_reservation_token_cancellation_is_generation_safe) \
     TEST_ENTRY(declarative_dock_restart_and_system_wake_coalesce_reconcile) \
     TEST_ENTRY(declarative_reconcile_reserves_before_post_and_coalesces) \
     TEST_ENTRY(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result) \
@@ -1853,6 +1854,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
     TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
     TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
+    TEST_ENTRY(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash) \
     TEST_ENTRY(declarative_scaffold_compacts_subsets_and_ignores_opening_order) \
     TEST_ENTRY(declarative_scaffold_primary_selection_and_overflow_stability) \
     TEST_ENTRY(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates) \
@@ -1920,6 +1922,13 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
     TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
     TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
+    TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
+    TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \
+    TEST_ENTRY(declarative_modes_runtime_second_topology_gate_and_recovery) \
+    TEST_ENTRY(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact) \
+    TEST_ENTRY(declarative_reconcile_second_topology_gate_and_recovery) \
+    TEST_ENTRY(declarative_modes_runtime_allocation_failure_publication_matrix) \
+    TEST_ENTRY(declarative_reconcile_retry_backoff_terminal_and_recovery) \
     TEST_ENTRY(declarative_reload_generation_zero_rediscovers_then_pins_installed_path) \
     TEST_ENTRY(declarative_reporter_bounds_redacts_and_escapes_structural_fields) \
     TEST_ENTRY(declarative_reporter_isolates_sinks_and_uses_literal_bounded_payloads) \

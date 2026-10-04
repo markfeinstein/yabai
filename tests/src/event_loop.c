@@ -614,9 +614,9 @@ TEST_FUNC(declarative_space_create_destroy_and_absent_event_coalesce_reconcile,
     struct event event = {0};
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
     TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
-    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.context != NULL, true);
     TEST_CHECK(event.param1, 0);
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
 
     event_loop_close_producer_admission(&g_event_loop);
@@ -640,6 +640,27 @@ static void declarative_reconcile_entry_test_hook(void)
     declarative_reconcile_entry_test_queue_count = event_loop_test_queue_count(&g_event_loop);
 }
 
+TEST_FUNC(declarative_reconcile_reservation_token_cancellation_is_generation_safe,
+{
+    pthread_mutex_lock(&declarative_reconcile_lock);
+    uint64_t old_token = ++declarative_reconcile_token_counter;
+    declarative_reconcile_active_token = old_token;
+    pthread_mutex_unlock(&declarative_reconcile_lock);
+    declarative_configuration_reconcile_cancel(old_token);
+
+    pthread_mutex_lock(&declarative_reconcile_lock);
+    uint64_t new_token = ++declarative_reconcile_token_counter;
+    declarative_reconcile_active_token = new_token;
+    pthread_mutex_unlock(&declarative_reconcile_lock);
+    declarative_configuration_reconcile_cancel(old_token);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(declarative_reload_test_reconcile_token(), new_token);
+
+    /* Queue rejection/shutdown discard owns and releases only its token. */
+    event_loop_discard_event(CONFIGURATION_RECONCILE, (void *) (uintptr_t) new_token, 0, false);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+})
+
 TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
 {
     struct event_loop saved_event_loop = g_event_loop;
@@ -660,7 +681,7 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     g_menu_bar_manager.initialized = false;
     workspace_set_macos_version(10);
     declarative_install_test_set_generation(1);
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
 
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
     char semaphore_name[64];
@@ -681,10 +702,10 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     struct event event = {0};
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
     TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
-    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.context != NULL, true);
     TEST_CHECK(event.param1, 0);
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
 
     EVENT_HANDLER_SYSTEM_WOKE(NULL, 0);
     EVENT_HANDLER_SYSTEM_WOKE(NULL, 0);
@@ -692,11 +713,11 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
     TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
-    TEST_CHECK(event.context == NULL, true);
+    TEST_CHECK(event.context != NULL, true);
     TEST_CHECK(event.param1, 0);
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
 
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
     event_loop_close_producer_admission(&g_event_loop);
     pthread_cond_destroy(&g_event_loop.producer_cond);
     pthread_mutex_destroy(&g_event_loop.producer_lock);
@@ -750,13 +771,13 @@ TEST_FUNC(declarative_reconcile_reserves_before_post_and_coalesces,
     pthread_join(begin_thread, NULL);
     TEST_CHECK(begin.result, true);
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
-    TEST_CHECK(declarative_reconcile_entry_test_reserved, 1U);
-    TEST_CHECK(declarative_reconcile_entry_test_queue_count >= 1U, true);
-    /* The first barrier may already have been queued ahead of the admitted follow-up. */
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
-    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    /* Invalid installed arguments are rejected before reservation ownership is consumed. */
+    TEST_CHECK(declarative_reconcile_entry_test_reserved, 0U);
+    TEST_CHECK(declarative_reconcile_entry_test_queue_count, 0U);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
     TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 0U);
-    printf("                   phase5 reconcile queue accepted=2 skipped=1 rejected=1 followup=1 owned_contexts=0 owned_sockets=0\n");
+    declarative_reload_test_clear_reconcile_reservation();
+    printf("                   phase5 reconcile queue accepted=1 skipped=2 rejected=1 preserved_invalid=1 owned_contexts=0 owned_sockets=0\n");
     declarative_install_test_set_generation(0);
     event_loop_end(&g_event_loop);
 
@@ -827,6 +848,13 @@ TEST_FUNC(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close
     struct event_loop saved_event_loop = g_event_loop;
     g_event_loop = (struct event_loop) {0};
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+    uint64_t saved_installed_generation = declarative_installed.generation;
+    uint64_t pre_shutdown_generation = g_event_loop.generation;
+    pthread_mutex_lock(&declarative_reconcile_lock);
+    uint64_t pre_shutdown_token = ++declarative_reconcile_token_counter;
+    declarative_reconcile_active_token = pre_shutdown_token;
+    declarative_reconcile_retry_waiting = true;
+    pthread_mutex_unlock(&declarative_reconcile_lock);
 
     pthread_mutex_lock(&g_event_loop.queue.lock);
     pthread_t producer;
@@ -877,6 +905,20 @@ TEST_FUNC(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close
     pthread_mutex_destroy(&leave.mutex);
     TEST_CHECK(g_event_loop.semaphore == NULL, true);
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(declarative_reconcile_retry_ready(pre_shutdown_token, pre_shutdown_generation), false);
+
+    /* A late pre-shutdown callback cannot post into or cancel a restarted loop. */
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
+    declarative_install_test_set_generation(1);
+    declarative_configuration_request_reconcile();
+    uint64_t restarted_token = declarative_reload_test_reconcile_token();
+    TEST_CHECK(restarted_token != 0 && restarted_token != pre_shutdown_token, true);
+    TEST_CHECK(declarative_reconcile_retry_ready(pre_shutdown_token, pre_shutdown_generation), false);
+    TEST_CHECK(declarative_reload_test_reconcile_token(), restarted_token);
+    event_loop_end(&g_event_loop);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    declarative_installed.generation = saved_installed_generation;
     g_event_loop = saved_event_loop;
 });
 
@@ -1488,7 +1530,7 @@ TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
     table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
     declarative_installed.has_scaffold = true;
     declarative_installed.generation = 1;
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
 
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 4), true);
     char semaphore_name[64];
@@ -1514,7 +1556,7 @@ TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
     TEST_CHECK(event.type, CONFIGURATION_RECONCILE);
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), false);
 
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
     event_loop_close_producer_admission(&g_event_loop);
     pthread_cond_destroy(&g_event_loop.producer_cond);
     pthread_mutex_destroy(&g_event_loop.producer_lock);

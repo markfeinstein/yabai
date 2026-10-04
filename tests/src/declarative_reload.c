@@ -10,6 +10,9 @@ struct declarative_reload_fixture
     char observed_home[PATH_MAX];
     size_t select_calls;
     size_t topology_calls;
+    size_t mutate_topology_at_call;
+    uint64_t mutate_uuid_sid;
+    const char *mutate_uuid;
     size_t query_calls;
     size_t postcommit_calls;
     size_t postcommit_failures;
@@ -63,6 +66,15 @@ static bool declarative_reload_test_capture_topology(const struct declarative_to
     (void) bounds;
     struct declarative_reload_fixture *fixture = context;
     ++fixture->topology_calls;
+    if (fixture->mutate_topology_at_call) {
+        if (fixture->topology_calls >= fixture->mutate_topology_at_call) {
+            fixture->topology.replacement_uuid_sid = fixture->mutate_uuid_sid;
+            fixture->topology.replacement_uuid = fixture->mutate_uuid;
+        } else {
+            fixture->topology.replacement_uuid_sid = 0;
+            fixture->topology.replacement_uuid = NULL;
+        }
+    }
     return declarative_topology_capture(&fixture->topology_ops, topology);
 }
 
@@ -256,6 +268,65 @@ static bool declarative_reconcile_test_worker(void *context)
     struct declarative_reload_worker_context *reconcile = context;
     reconcile->result = declarative_configuration_reconcile_with_test_ops(reconcile->ops);
     return true;
+}
+
+struct declarative_mode_worker_context
+{
+    const char *name;
+    bool activate;
+    bool result;
+    struct declarative_modes_error error;
+    size_t install_allocations;
+    size_t space_allocations;
+    size_t *query_counter;
+    size_t query_calls_after;
+    char selected[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
+};
+
+static bool declarative_mode_test_worker(void *context)
+{
+    struct declarative_mode_worker_context *mode = context;
+    mode->result = mode->activate ? declarative_mode_activate(mode->name, &mode->error)
+                                  : declarative_mode_deactivate(&mode->error);
+    const char *selected = declarative_installed_selected_mode();
+    mode->install_allocations = declarative_install_test_allocation_count();
+    mode->space_allocations = declarative_space_test_allocation_count();
+    if (mode->query_counter) mode->query_calls_after = *mode->query_counter;
+    snprintf(mode->selected, sizeof(mode->selected), "%s", selected ? selected : "");
+    return true;
+}
+
+static bool declarative_mode_run(struct declarative_mode_worker_context *mode)
+{
+    return event_loop_perform_sync(&g_event_loop, declarative_mode_test_worker, mode);
+}
+
+static bool declarative_reload_barrier(void *context)
+{
+    (void) context;
+    return true;
+}
+
+struct declarative_reconcile_diagnostic_context
+{
+    const struct declarative_reload_test_ops *test_ops;
+    enum declarative_reconcile_result outcome;
+    char diagnostic[160];
+};
+
+static bool declarative_reconcile_diagnostic_worker(void *context)
+{
+    struct declarative_reconcile_diagnostic_context *check = context;
+    struct declarative_reload_ops ops = declarative_reload_ops_from_test(check->test_ops);
+    check->outcome = declarative_configuration_reconcile_with_ops(
+        &ops, check->diagnostic, sizeof(check->diagnostic));
+    return true;
+}
+
+static bool declarative_reconcile_diagnostic_run(struct declarative_reconcile_diagnostic_context *check)
+{
+    memset(check->diagnostic, 0, sizeof(check->diagnostic));
+    return event_loop_perform_sync(&g_event_loop, declarative_reconcile_diagnostic_worker, check);
 }
 
 static bool declarative_reload_run(struct declarative_reload_test_ops *ops, FILE *response)
@@ -703,27 +774,24 @@ TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
 
-    /* Failures after complete topology/context preparation refresh rule
-     * validation but preserve the Space forest and runtime ownership. */
+    /* Failures after complete topology/context preparation publish nothing. */
     declarative_space_test_fail_allocation_at(1);
     fixture.topology.observation = 0;
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     declarative_space_test_fail_allocation_at(0);
-    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(declarative_installed.fold_context, context);
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
-    context = declarative_installed.fold_context;
 
     declarative_space_test_set_admission(9101, false);
     fixture.topology.observation = 0;
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     declarative_space_test_set_admission(9102, true);
-    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(declarative_installed.fold_context, context);
     TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(preserved_view ? preserved_view->root : NULL, preserved_root);
-    context = declarative_installed.fold_context;
 
     /* Reusing the numeric SID with another identity makes only move/follow stale. */
     fixture.topology.replacement_uuid_sid = 11;
@@ -874,8 +942,8 @@ TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     TEST_CHECK(declarative_installed.generation, generation);
-    TEST_CHECK(declarative_installed.fold_context != context, true);
-    TEST_CHECK(declarative_installed.topology.fingerprint != topology_fingerprint, true);
+    TEST_CHECK(declarative_installed.fold_context, context);
+    TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
     TEST_CHECK(view ? view->root : NULL, root);
     TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
     TEST_CHECK(g_window_manager.managed_window.count, managed_count);
@@ -885,14 +953,9 @@ TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_
     TEST_CHECK(native->space_identity.mission_control_ordinal, 0);
 
     struct rule_effects effects = {0};
-    TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
-    TEST_CHECK(effects.sid, 0ULL);
-    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), false);
-    TEST_CHECK(effects.manage, RULE_PROP_ON);
-    TEST_CHECK(rule_acknowledge_stale_warning(native), true);
-    effects = (struct rule_effects) {0};
     TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_OK);
-    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(effects.sid, 11ULL);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), true);
     TEST_CHECK(effects.manage, RULE_PROP_ON);
 
     uint64_t missing[] = { 12, 99 };
@@ -909,7 +972,7 @@ TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_
     struct bucket **view_buckets = g_space_manager.view.buckets;
     uint64_t missing_sid = 99;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
-    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(declarative_installed.fold_context, context);
     TEST_CHECK(g_space_manager.view.count, view_count);
     TEST_CHECK(g_space_manager.view.buckets, view_buckets);
     TEST_CHECK(table_find(&g_space_manager.view, &missing_sid) == NULL, true);
@@ -999,6 +1062,512 @@ TEST_FUNC(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_li
     TEST_CHECK(g_space_manager.split_ratio, 0.73f);
     TEST_CHECK(g_space_manager.window_zoom_persist, false);
 
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
+{
+    static const char candidate_json[] =
+        "{\"version\":2,\"config\":{\"layout\":\"bsp\",\"window_gap\":1},"
+        "\"spaces\":[{\"match\":{\"index\":1},\"settings\":{\"window_gap\":2},"
+        "\"scaffold\":[{\"pattern\":\"^Base$\"}]}],"
+        "\"modes\":[{\"name\":\"home\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":3}}]},{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":4},\"scaffold\":[]}]}],\"active_mode\":\"home\","
+        "\"rules\":[{\"label\":\"mode-invariant\",\"one_shot\":true,"
+        "\"match\":{\"app\":{\"pattern\":\"^Never$\"}},\"effects\":{\"manage\":true}}]}";
+    struct declarative_reload_fixture fixture = {
+        .json = candidate_json, .path = "/tmp/modes-runtime.jsonc"
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    TEST_CHECK(view != NULL, true);
+    TEST_CHECK(view ? view->window_gap : 0, 3);
+    TEST_CHECK(view && view->scaffold_fingerprint != 0, true);
+
+    struct rule *rules = g_window_manager.rules;
+    uint64_t generation = rule_native_generation();
+    size_t native_count = rule_native_prefix_length();
+    if (view) view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP] =
+        (struct declarative_runtime_cell) { .present = true, .source = DECLARATIVE_SETTING_RUNTIME_SPACE,
+                                            .value.integer = 77 };
+    declarative_reload_test_set_message_ops(&ops);
+    size_t topology_before = fixture.topology_calls;
+    char mutable_name[] = "work";
+    struct declarative_mode_worker_context mode = { .name = mutable_name, .activate = true };
+    TEST_CHECK(declarative_mode_run(&mode), true);
+    TEST_CHECK(mode.result, true);
+    mutable_name[0] = 'X';
+    TEST_CHECK(strcmp(mode.selected, "work"), 0);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
+    TEST_CHECK(view ? view->window_gap : 0, 77);
+    TEST_CHECK(view ? view->scaffold_fingerprint : 1, 0ULL);
+    TEST_CHECK(g_window_manager.rules, rules);
+    TEST_CHECK(rule_native_generation(), generation);
+    TEST_CHECK(rule_native_prefix_length(), native_count);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(fixture.topology_calls, topology_before + 4);
+
+    struct window_node *root_before = view ? view->root : NULL;
+    struct declarative_mode_worker_context unknown = { .name = "missing", .activate = true };
+    TEST_CHECK(declarative_mode_run(&unknown), true);
+    TEST_CHECK(unknown.result, false);
+    TEST_CHECK(unknown.error.code, DECLARATIVE_MODES_ERROR_EXPLICIT_MODE_NOT_FOUND);
+    TEST_CHECK(strcmp(unknown.error.detail.json_path, "$.selected_mode"), 0);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
+    TEST_CHECK(view ? view->root : NULL, root_before);
+    TEST_CHECK(g_window_manager.rules, rules);
+
+    fixture.postcommit_fail = true;
+    struct declarative_mode_worker_context committed = { .name = "home", .activate = true };
+    TEST_CHECK(declarative_mode_run(&committed), true);
+    TEST_CHECK(committed.result, true);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
+    TEST_CHECK(fixture.postcommit_failures > 0, true);
+    fixture.postcommit_fail = false;
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+
+    struct declarative_mode_worker_context deactivate = { .activate = false };
+    TEST_CHECK(declarative_mode_run(&deactivate), true);
+    TEST_CHECK(deactivate.result, true);
+    TEST_CHECK(declarative_installed_selected_mode(), NULL);
+    TEST_CHECK(view ? view->window_gap : 0, 77);
+    TEST_CHECK(g_window_manager.rules, rules);
+    TEST_CHECK(rule_native_generation(), generation);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+
+    struct declarative_modes_error worker_error = {0};
+    TEST_CHECK(declarative_mode_activate("work", &worker_error), false);
+    TEST_CHECK(worker_error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(declarative_installed_selected_mode(), NULL);
+
+    fixture.topology.replacement_uuid_sid = 11;
+    fixture.topology.replacement_uuid = "changed-space-uuid";
+    fixture.query_fail = true;
+    root_before = view ? view->root : NULL;
+    struct declarative_mode_worker_context stale = { .name = "work", .activate = true };
+    TEST_CHECK(declarative_mode_run(&stale), true);
+    TEST_CHECK(stale.result, false);
+    TEST_CHECK(stale.error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(declarative_installed_selected_mode(), NULL);
+    TEST_CHECK(view ? view->root : NULL, root_before);
+    TEST_CHECK(g_window_manager.rules, rules);
+    TEST_CHECK(rule_native_generation(), generation);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_installed_selected_mode(), NULL);
+    TEST_CHECK(view ? view->root : NULL, root_before);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+static bool declarative_mode_stale_topology_case(int scenario)
+{
+    static const char json[] =
+        "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":9}}]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/mode-stale.jsonc" };
+    struct declarative_reload_saved_state saved;
+    bool ok = declarative_reload_test_setup(&fixture, &saved);
+    if (!ok || !g_event_loop.semaphore) return false;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    ok = declarative_reload_run(&ops, NULL);
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    struct window_node *root = view ? view->root : NULL;
+    struct rule *rules = g_window_manager.rules;
+    uint64_t generation = rule_native_generation();
+    if (scenario <= 2) {
+        uint64_t reordered[] = { 12, 11 }, added[] = { 11, 12, 13 }, removed[] = { 11 };
+        const uint64_t *first = scenario == 0 ? reordered : scenario == 1 ? added : removed;
+        size_t first_count = scenario == 1 ? 3 : scenario == 0 ? 2 : 1;
+        uint64_t second[] = { 21 };
+        for (int i = 0; i < 2; ++i) {
+            CFRelease(fixture.topology.topology[i]);
+            fixture.topology.topology[i] = declarative_topology_test_topology(
+                CFSTR("display-a"), first, first_count, CFSTR("display-b"), second, 1);
+        }
+    } else if (scenario == 3) {
+        fixture.topology.replacement_uuid_sid = 11;
+        fixture.topology.replacement_uuid = "replacement-space";
+    } else {
+        fixture.topology.empty_uuid_sid = 11;
+    }
+    declarative_reload_test_set_message_ops(&ops);
+    size_t query_before = fixture.query_calls;
+    struct declarative_mode_worker_context mode = {
+        .name = "work", .activate = true, .query_counter = &fixture.query_calls
+    };
+    ok = ok && declarative_mode_run(&mode) && !mode.result &&
+         mode.query_calls_after == query_before &&
+         mode.error.code == DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED &&
+         declarative_installed_selected_mode() == NULL &&
+         (!view || view->root == root) && g_window_manager.rules == rules &&
+         rule_native_generation() == generation;
+    (void) event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL);
+    ok = ok && declarative_installed_selected_mode() == NULL && (!view || view->root == root);
+    declarative_reload_test_teardown(&fixture, &saved);
+    return ok && declarative_install_test_outstanding_allocations() == 0;
+}
+
+TEST_FUNC(declarative_modes_runtime_stale_topology_matrix,
+{
+    const char *names[] = { "reorder", "add", "remove", "uuid-change", "uuidless-drift" };
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        TEST_CHECK(declarative_mode_stale_topology_case(scenario), true);
+        if (!result) fprintf(stderr, "mode stale topology scenario: %s\n", names[scenario]);
+    }
+})
+
+struct declarative_reconcile_retry_capture
+{
+    uint64_t delays[8];
+    size_t count;
+    bool accept;
+    size_t reports;
+    char payload[512];
+};
+
+static bool declarative_reconcile_retry_capture_hook(uint64_t delay_ms, void *context)
+{
+    struct declarative_reconcile_retry_capture *capture = context;
+    if (capture->count < sizeof(capture->delays) / sizeof(*capture->delays)) {
+        capture->delays[capture->count] = delay_ms;
+    }
+    ++capture->count;
+    return capture->accept;
+}
+
+static bool declarative_reconcile_retry_report(const char *format, const char *payload, void *context)
+{
+    (void) format;
+    struct declarative_reconcile_retry_capture *capture = context;
+    ++capture->reports;
+    snprintf(capture->payload, sizeof(capture->payload), "%s", payload ? payload : "");
+    return true;
+}
+
+TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
+{
+    static const char json[] =
+        "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":9}}]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/mode-second-gate.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    declarative_reload_test_set_message_ops(&ops);
+    struct declarative_reconcile_retry_capture capture = { .accept = true };
+    declarative_reload_test_set_reconcile_retry_hook(declarative_reconcile_retry_capture_hook, &capture);
+
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    struct window_node *root = view ? view->root : NULL;
+    struct bucket **managed_buckets = g_window_manager.managed_window.buckets;
+    int managed_count = g_window_manager.managed_window.count;
+    struct declarative_runtime_cell ownership = view
+        ? view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP]
+        : (struct declarative_runtime_cell) {0};
+    struct rule *rules = g_window_manager.rules;
+    uint64_t generation = rule_native_generation();
+    size_t query_before = fixture.query_calls;
+    fixture.mutate_topology_at_call = fixture.topology_calls + 2;
+    fixture.mutate_uuid_sid = 11;
+    fixture.mutate_uuid = "mode-between-captures";
+
+    struct declarative_mode_worker_context mode = {
+        .name = "work", .activate = true, .query_counter = &fixture.query_calls
+    };
+    TEST_CHECK(declarative_mode_run(&mode), true);
+    TEST_CHECK(mode.result, false);
+    TEST_CHECK(mode.error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(strcmp(mode.error.detail.message,
+                      "mode topology changed during activation; reconciliation is required before retry"), 0);
+    TEST_CHECK(mode.query_calls_after, query_before);
+    TEST_CHECK(declarative_installed_selected_mode(), NULL);
+    TEST_CHECK(view ? view->root : NULL, root);
+    TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
+    TEST_CHECK(g_window_manager.managed_window.count, managed_count);
+    TEST_CHECK(view ? memcmp(&view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP],
+                             &ownership, sizeof(ownership)) : -1, 0);
+    TEST_CHECK(g_window_manager.rules, rules);
+    TEST_CHECK(rule_native_generation(), generation);
+
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    fixture.mutate_topology_at_call = 0;
+    fixture.topology.replacement_uuid_sid = 0;
+    fixture.topology.replacement_uuid = NULL;
+    TEST_CHECK(declarative_reload_test_fire_reconcile_retry(), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+
+    mode = (struct declarative_mode_worker_context) { .name = "work", .activate = true };
+    TEST_CHECK(declarative_mode_run(&mode), true);
+    TEST_CHECK(mode.result, true);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
+    TEST_CHECK(g_window_manager.rules, rules);
+    TEST_CHECK(rule_native_generation(), generation);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+
+    declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact,
+{
+    static const char json[] = "{\"version\":2,\"modes\":[],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/reconcile-diagnostics.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    struct declarative_reconcile_diagnostic_context check = { .test_ops = &ops };
+
+    fixture.topology.fail_copy_query = fixture.topology.query_count + 1;
+    TEST_CHECK(declarative_reconcile_diagnostic_run(&check), true);
+    TEST_CHECK(check.outcome, DECLARATIVE_RECONCILE_TRANSIENT_FAILURE);
+    TEST_CHECK(strcmp(check.diagnostic, "strict topology capture failed"), 0);
+    fixture.topology.fail_copy_query = 0;
+
+    declarative_install_test_fail_allocation_at(1);
+    TEST_CHECK(declarative_reconcile_diagnostic_run(&check), true);
+    TEST_CHECK(check.outcome, DECLARATIVE_RECONCILE_TRANSIENT_FAILURE);
+    TEST_CHECK(strcmp(check.diagnostic, "Space target allocation failed"), 0);
+    declarative_install_test_fail_allocation_at(0);
+
+    fixture.query_fail = true;
+    TEST_CHECK(declarative_reconcile_diagnostic_run(&check), true);
+    TEST_CHECK(check.outcome, DECLARATIVE_RECONCILE_TRANSIENT_FAILURE);
+    TEST_CHECK(strcmp(check.diagnostic, "inventory capture or Space preparation failed"), 0);
+    fixture.query_fail = false;
+
+    uint64_t missing_sid = 21;
+    struct view *missing = table_find(&g_space_manager.view, &missing_sid);
+    table_remove(&g_space_manager.view, &missing_sid);
+    TEST_CHECK(missing != NULL, true);
+    TEST_CHECK(declarative_reconcile_diagnostic_run(&check), true);
+    TEST_CHECK(check.outcome, DECLARATIVE_RECONCILE_TRANSIENT_FAILURE);
+    TEST_CHECK(strcmp(check.diagnostic, "topology settling: captured Space has no installed view"), 0);
+    if (missing) table_add(&g_space_manager.view, &missing_sid, missing);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_reconcile_second_topology_gate_and_recovery,
+{
+    static const char json[] =
+        "{\"version\":2,\"spaces\":[{\"match\":{\"index\":1},\"settings\":{\"window_gap\":7}}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/reconcile-second-gate.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    declarative_reload_test_set_message_ops(&ops);
+    struct declarative_reconcile_retry_capture capture = { .accept = true };
+    declarative_reload_test_set_reconcile_retry_hook(declarative_reconcile_retry_capture_hook, &capture);
+
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    struct window_node *root = view ? view->root : NULL;
+    struct bucket **managed_buckets = g_window_manager.managed_window.buckets;
+    int managed_count = g_window_manager.managed_window.count;
+    uint64_t installed_fingerprint = declarative_installed.topology.fingerprint;
+    struct rule_fold_context *fold_context = declarative_installed.fold_context;
+    size_t query_before = fixture.query_calls;
+    fixture.mutate_topology_at_call = fixture.topology_calls + 2;
+    fixture.mutate_uuid_sid = 11;
+    fixture.mutate_uuid = "between-captures";
+
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(fixture.query_calls, query_before);
+    TEST_CHECK(view ? view->root : NULL, root);
+    TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
+    TEST_CHECK(g_window_manager.managed_window.count, managed_count);
+    TEST_CHECK(declarative_installed.topology.fingerprint, installed_fingerprint);
+    TEST_CHECK(declarative_installed.fold_context, fold_context);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_waiting(), true);
+    TEST_CHECK(capture.count, 1U);
+    char diagnostic[160];
+    declarative_reload_test_reconcile_diagnostic(diagnostic, sizeof(diagnostic));
+    TEST_CHECK(strcmp(diagnostic, "topology changed during reconciliation"), 0);
+
+    fixture.mutate_topology_at_call = 0;
+    fixture.topology.replacement_uuid_sid = 0;
+    fixture.topology.replacement_uuid = NULL;
+    TEST_CHECK(declarative_reload_test_fire_reconcile_retry(), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(fixture.query_calls > query_before, true);
+
+    declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
+{
+    static const char json[] =
+        "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":9}}]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/mode-allocation.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    declarative_reload_test_set_message_ops(&ops);
+    uint64_t sid = 11;
+    struct view *view = table_find(&g_space_manager.view, &sid);
+    struct window_node *root = view ? view->root : NULL;
+    struct rule *rules = g_window_manager.rules;
+    uint64_t generation = rule_native_generation();
+
+    declarative_install_test_fail_allocation_at(0);
+    declarative_space_test_fail_allocation_at(0);
+    struct declarative_mode_worker_context baseline = { .name = "work", .activate = true };
+    TEST_CHECK(declarative_mode_run(&baseline), true);
+    TEST_CHECK(baseline.result, true);
+    size_t install_allocations = baseline.install_allocations;
+    size_t space_allocations = baseline.space_allocations;
+    struct declarative_mode_worker_context deactivate = { .activate = false };
+    TEST_CHECK(declarative_mode_run(&deactivate), true);
+    TEST_CHECK(deactivate.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    root = view ? view->root : NULL;
+
+    for (size_t ordinal = 1; ordinal <= install_allocations; ++ordinal) {
+        declarative_install_test_fail_allocation_at(ordinal);
+        declarative_space_test_fail_allocation_at(0);
+        struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
+        TEST_CHECK(declarative_mode_run(&attempt), true);
+        TEST_CHECK(attempt.result, false);
+        TEST_CHECK(declarative_installed_selected_mode(), NULL);
+        TEST_CHECK(view ? view->root : NULL, root);
+        TEST_CHECK(g_window_manager.rules, rules);
+        TEST_CHECK(rule_native_generation(), generation);
+    }
+    declarative_install_test_fail_allocation_at(0);
+    for (size_t ordinal = 1; ordinal <= space_allocations; ++ordinal) {
+        declarative_space_test_fail_allocation_at(ordinal);
+        struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
+        TEST_CHECK(declarative_mode_run(&attempt), true);
+        TEST_CHECK(attempt.result, false);
+        TEST_CHECK(declarative_installed_selected_mode(), NULL);
+        TEST_CHECK(view ? view->root : NULL, root);
+        TEST_CHECK(g_window_manager.rules, rules);
+        TEST_CHECK(rule_native_generation(), generation);
+    }
+    declarative_space_test_fail_allocation_at(0);
+    declarative_install_test_fail_allocation_at(0);
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_reconcile_retry_backoff_terminal_and_recovery,
+{
+    static const char json[] = "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/reconcile-retry.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    declarative_reload_test_set_message_ops(&ops);
+    struct declarative_reconcile_retry_capture capture = { .accept = true };
+    declarative_reload_test_set_reconcile_retry_hook(declarative_reconcile_retry_capture_hook, &capture);
+    struct declarative_reporter_test_sinks sinks = {
+        .unified_log = declarative_reconcile_retry_report, .context = &capture
+    };
+    declarative_reporter_test_set_sinks(&sinks);
+
+    fixture.query_fail = true;
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_waiting(), true);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_attempt(), 1U);
+    TEST_CHECK(capture.count, 1U);
+    TEST_CHECK(capture.delays[0], 50ULL);
+    char diagnostic[160];
+    declarative_reload_test_reconcile_diagnostic(diagnostic, sizeof(diagnostic));
+    TEST_CHECK(strcmp(diagnostic, "inventory capture or Space preparation failed"), 0);
+    /* Off-worker helpers reject without consuming the event-owned reservation. */
+    TEST_CHECK(declarative_configuration_reconcile(), false);
+    TEST_CHECK(declarative_configuration_reconcile_event(declarative_reload_test_reconcile_token()), false);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(capture.count, 1U);
+
+    fixture.query_fail = false;
+    TEST_CHECK(declarative_reload_test_fire_reconcile_retry(), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_attempt(), 0U);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_waiting(), false);
+
+    fixture.query_fail = true;
+    capture.count = 0;
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    for (int retry = 0; retry < 4; ++retry) {
+        TEST_CHECK(declarative_reload_test_fire_reconcile_retry(), true);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    }
+    TEST_CHECK(capture.count, 4U);
+    TEST_CHECK(capture.delays[0], 50ULL);
+    TEST_CHECK(capture.delays[1], 100ULL);
+    TEST_CHECK(capture.delays[2], 200ULL);
+    TEST_CHECK(capture.delays[3], 400ULL);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(capture.reports > 0, true);
+    TEST_CHECK(strstr(capture.payload,
+                      "reconciliation retry/backoff exhausted: inventory capture or Space preparation failed") != NULL, true);
+
+    /* Invalid installed selection is terminal and reported without retry. */
+    fixture.query_fail = false;
+    capture.count = capture.reports = 0;
+    capture.payload[0] = '\0';
+    char *selected = declarative_installed.selected_mode;
+    declarative_installed.selected_mode = "missing";
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(capture.count, 0U);
+    TEST_CHECK(capture.reports, 1U);
+    TEST_CHECK(strstr(capture.payload,
+                      "terminal reconciliation failure: explicitly selected mode is not declared") != NULL, true);
+    declarative_installed.selected_mode = selected;
+
+    /* Scheduler rejection models shutdown: ownership is released without a late post. */
+    fixture.query_fail = true;
+    capture.accept = false;
+    capture.payload[0] = '\0';
+    declarative_configuration_request_reconcile();
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(declarative_reload_test_reconcile_retry_waiting(), false);
+    TEST_CHECK(strstr(capture.payload,
+                      "reconciliation retry/backoff scheduling rejected: inventory capture or Space preparation failed") != NULL, true);
+
+    declarative_reporter_test_reset();
+    declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 })

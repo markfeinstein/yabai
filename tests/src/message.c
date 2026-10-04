@@ -241,7 +241,7 @@ TEST_FUNC(message_space_create_destroy_success_requests_one_reconcile,
 
     struct event event = {0};
     TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
-    __atomic_store_n(&declarative_reconcile_reserved, 0, __ATOMIC_RELEASE);
+    declarative_reload_test_clear_reconcile_reservation();
     event_loop_close_producer_admission(&g_event_loop);
     pthread_cond_destroy(&g_event_loop.producer_cond);
     pthread_mutex_destroy(&g_event_loop.producer_lock);

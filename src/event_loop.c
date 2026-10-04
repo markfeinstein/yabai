@@ -2036,9 +2036,8 @@ static EVENT_HANDLER(MENU_BAR_ACTION)
 
 static EVENT_HANDLER(CONFIGURATION_RECONCILE)
 {
-    (void) context;
     (void) param1;
-    (void) declarative_configuration_reconcile();
+    (void) declarative_configuration_reconcile_event((uint64_t) (uintptr_t) context);
 }
 
 struct event_loop_sync
@@ -2193,6 +2192,10 @@ static void event_loop_release_event_context(enum event_type type, void *context
         __atomic_store_n(&window_focus_fallback_reserved, 0, __ATOMIC_RELEASE);
         return;
     }
+    if (type == CONFIGURATION_RECONCILE) {
+        declarative_configuration_reconcile_cancel((uint64_t) (uintptr_t) context);
+        return;
+    }
     if (!context) return;
 
     switch (type) {
@@ -2344,6 +2347,23 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
     return true;
 }
 
+bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t generation,
+                                    enum event_type type, void *context, int param1)
+{
+    if (!event_loop_admit_producer(event_loop)) {
+        event_loop_discard_event(type, context, param1, true);
+        return false;
+    }
+    if (event_loop->generation != generation) {
+        event_loop_discard_event(type, context, param1, true);
+        event_loop_leave_producer(event_loop);
+        return false;
+    }
+    bool result = event_loop_enqueue(event_loop, type, context, param1);
+    event_loop_leave_producer(event_loop);
+    return result;
+}
+
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
     if (!event_loop_admit_producer(event_loop)) {
@@ -2389,9 +2409,13 @@ static void event_loop_cleanup(struct event_loop *event_loop)
     __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
 }
 
+static volatile uint64_t event_loop_generation_counter;
+
 bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootstrap_callback callback, void *context)
 {
     *event_loop = (struct event_loop) { 0 };
+    event_loop->generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
+    if (!event_loop->generation) event_loop->generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
     if (!event_queue_init(&event_loop->queue, EVENT_QUEUE_CAPACITY)) return false;
 
     event_loop->semaphore = sem_open("yabai_event_loop_semaphore", O_CREAT, 0600, 0);
@@ -2501,6 +2525,7 @@ void event_loop_end(struct event_loop *event_loop)
         return;
     }
 
+    if (event_loop == &g_event_loop) declarative_configuration_reconcile_shutdown();
     event_loop_close_producer_admission_after_admitted_self(event_loop);
     __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
     sem_post(event_loop->semaphore);

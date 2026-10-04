@@ -395,6 +395,34 @@ out:
     return result && declarative_space_test_outstanding_allocations() == 0;
 }
 
+TEST_FUNC(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash,
+{
+    struct window_node root = {0};
+    struct view view = { .sid = 9, .uuid = CFSTR("mode-space"), .layout = VIEW_BSP, .root = &root };
+    struct declarative_space_target target = {
+        .view = &view, .sid = 9, .index = 1, .uuid = "mode-space", .is_user_space = true
+    };
+    struct declarative_space_policy policies[3] = {0};
+    policies[0].by_index = true; policies[0].index = 1;
+    policies[0].settings[DECLARATIVE_CONFIG_WINDOW_GAP] = (struct declarative_value) { .present = true, .integer = 4 };
+    policies[0].scaffold_present = true; policies[0].scaffold_count = 1;
+    policies[0].scaffold[0].pattern = "^Base$";
+    policies[1].by_index = true; policies[1].index = 1;
+    policies[1].settings[DECLARATIVE_CONFIG_WINDOW_GAP] = (struct declarative_value) { .present = true, .integer = 8 };
+    policies[2].by_index = true; policies[2].index = 1; policies[2].scaffold_present = true;
+    struct declarative_config_model native = {0};
+    struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_space_effective effective = {0};
+    TEST_CHECK(declarative_space_resolve_effective_policy(&native, policies, 2, NULL, &defaults, &target,
+                                                          DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer, 8);
+    TEST_CHECK(declarative_space_scaffold_policy(policies, 2, &target), &policies[0]);
+    TEST_CHECK(declarative_space_scaffold_policy(policies, 3, &target), &policies[2]);
+    struct declarative_space_policy copy = policies[0];
+    TEST_CHECK(declarative_space_scaffold_hash(7, &policies[0]), declarative_space_scaffold_hash(7, &copy));
+    TEST_CHECK(declarative_space_scaffold_hash(7, &policies[0]) != declarative_space_scaffold_hash(8, &copy), true);
+})
+
 TEST_FUNC(declarative_scaffold_compacts_subsets_and_ignores_opening_order,
 {
     uint32_t all[] = { 10, 20, 30 };
@@ -437,7 +465,7 @@ TEST_FUNC(declarative_scaffold_primary_selection_and_overflow_stability,
     };
     struct declarative_space_preparation preparation = { .targets = &target, .target_count = 1,
         .inventory = { .entries = inventory_entries, .count = 3 }, .final_owners = owners, .final_owner_count = 3 };
-    TEST_CHECK(declarative_space_prepare_scaffolds(&preparation, &native), true);
+    TEST_CHECK(declarative_space_prepare_scaffolds(&preparation, native.spaces, native.space_count, 0), true);
     TEST_CHECK(target.final_scaffold_primary[0], 10U);
     TEST_CHECK(target.final_scaffold_primary[1], 40U);
 
@@ -446,7 +474,7 @@ TEST_FUNC(declarative_scaffold_primary_selection_and_overflow_stability,
     root.left = &left; root.right = &right; root.split = SPLIT_Y; root.ratio = 0.5f; root.area = (struct area) { .w = 1200, .h = 800 };
     left.parent = &root; right.parent = &root;
     struct view view = { .sid = 2, .uuid = CFSTR("s"), .layout = VIEW_BSP, .root = &root,
-        .scaffold_fingerprint = declarative_space_scaffold_hash(&native, &policy), .scaffold_primary = { 10, 40, 0 } };
+        .scaffold_fingerprint = declarative_space_scaffold_hash(0, &policy), .scaffold_primary = { 10, 40, 0 } };
     struct table views = { 0 }, managed = { 0 }; table_init(&views, 8, hash_wm, compare_wm); table_init(&managed, 8, hash_wm, compare_wm);
     uint64_t sid = 2; table_add(&views, &sid, &view); table_add(&managed, &windows[0].id, &view); table_add(&managed, &windows[2].id, &view);
     struct declarative_space_target public_target = { .view = &view, .sid = 2, .index = 2, .uuid = "s", .is_user_space = true };
