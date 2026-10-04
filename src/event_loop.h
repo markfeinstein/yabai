@@ -30,6 +30,7 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(APPLICATION_VISIBLE) \
     EVENT_TYPE_ENTRY(APPLICATION_HIDDEN) \
     EVENT_TYPE_ENTRY(WINDOW_CREATED) \
+    EVENT_TYPE_ENTRY(WINDOW_CREATED_RETRY) \
     EVENT_TYPE_ENTRY(WINDOW_DESTROYED) \
     EVENT_TYPE_ENTRY(WINDOW_FOCUSED) \
     EVENT_TYPE_ENTRY(WINDOW_MOVED) \
@@ -134,5 +135,6 @@ bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, vo
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);
+void event_loop_process_application_windows(struct window **window_list, int window_count);
 
 #endif

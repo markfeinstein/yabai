@@ -234,11 +234,11 @@ void rule_reapply_all(void)
             char *window_role = window_role_ts(window);
             char *window_subrole = window_subrole_ts(window);
 
-            window_manager_apply_manage_rules_to_window(&g_space_manager, &g_window_manager, window, window_title, window_role, window_subrole, false);
+            window_manager_apply_manage_rules_to_window(&g_space_manager, &g_window_manager, window, window_title, window_role, window_subrole, false, 0);
 
             if (window_manager_is_window_eligible(window)) {
                 window->is_eligible = true;
-                window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, window, window_title, window_role, window_subrole, false);
+                window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, window, window_title, window_role, window_subrole, false, 0);
             }
         }
     })
@@ -350,23 +350,80 @@ enum rule_remove_result rule_remove_by_label(char *label)
     return RULE_REMOVE_NOT_FOUND;
 }
 
-void rule_cleanup_one_shots(void)
+static void rule_remove_one_shot_at(int index)
 {
     int count = buf_len(g_window_manager.rules);
-    for (int i = 0; i < count;) {
-        if (!rule_check_flag(&g_window_manager.rules[i], RULE_ONE_SHOT_REMOVE)) {
+    bool native = g_window_manager.rules[index].owner == RULE_OWNER_NATIVE;
+    rule_destroy(&g_window_manager.rules[index]);
+    if (index + 1 < count) {
+        memmove(&g_window_manager.rules[index], &g_window_manager.rules[index + 1],
+                (size_t) (count - index - 1) * sizeof(*g_window_manager.rules));
+    }
+    buf__hdr(g_window_manager.rules)->len = count - 1;
+    if (native && rule_native_state.native_prefix_length) --rule_native_state.native_prefix_length;
+}
+
+void rule_reserve_one_shots(struct application *application)
+{
+    for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
+        struct rule *rule = &g_window_manager.rules[i];
+        if (!rule_check_flag(rule, RULE_ONE_SHOT) || rule->one_shot_owner_pid) continue;
+        int excluded = rule_check_flag(rule, RULE_APP_EXCLUDE) ? REGEX_MATCH_YES : REGEX_MATCH_NO;
+        if (regex_match(rule_check_flag(rule, RULE_APP_VALID), &rule->app_regex, application->name) != excluded) {
+            rule->one_shot_owner_pid = application->pid;
+        }
+    }
+}
+
+void rule_finalize_one_shots(struct application *application)
+{
+    for (int i = 0; i < buf_len(g_window_manager.rules);) {
+        struct rule *rule = &g_window_manager.rules[i];
+        if (rule->one_shot_owner_pid != application->pid) { ++i; continue; }
+        if (rule->one_shot_window_id || rule_check_flag(rule, RULE_ONE_SHOT_REMOVE)) {
+            rule_remove_one_shot_at(i);
+        } else {
+            rule->one_shot_owner_pid = 0;
             ++i;
-            continue;
         }
-        bool native = g_window_manager.rules[i].owner == RULE_OWNER_NATIVE;
-        rule_destroy(&g_window_manager.rules[i]);
-        if (i + 1 < count) {
-            memmove(&g_window_manager.rules[i], &g_window_manager.rules[i + 1],
-                    (size_t) (count - i - 1) * sizeof(*g_window_manager.rules));
+    }
+}
+
+void rule_cancel_one_shots(struct application *application)
+{
+    for (int i = 0; i < buf_len(g_window_manager.rules);) {
+        struct rule *rule = &g_window_manager.rules[i];
+        if (rule->one_shot_owner_pid != application->pid) { ++i; continue; }
+        if (rule->one_shot_window_id || rule_check_flag(rule, RULE_ONE_SHOT_REMOVE)) {
+            rule_remove_one_shot_at(i);
+        } else {
+            rule->one_shot_owner_pid = 0;
+            ++i;
         }
-        --count;
-        buf__hdr(g_window_manager.rules)->len = count;
-        if (native && rule_native_state.native_prefix_length) --rule_native_state.native_prefix_length;
+    }
+}
+
+void rule_cleanup_consumed_one_shots(struct application *application)
+{
+    for (int i = 0; i < buf_len(g_window_manager.rules);) {
+        struct rule *rule = &g_window_manager.rules[i];
+        if (rule->one_shot_owner_pid == application->pid && rule->one_shot_window_id) {
+            rule_remove_one_shot_at(i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+void rule_cleanup_one_shots(void)
+{
+    for (int i = 0; i < buf_len(g_window_manager.rules);) {
+        struct rule *rule = &g_window_manager.rules[i];
+        if (!rule_check_flag(rule, RULE_ONE_SHOT_REMOVE) || rule->one_shot_owner_pid) {
+            ++i;
+        } else {
+            rule_remove_one_shot_at(i);
+        }
     }
 }
 
