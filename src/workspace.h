@@ -48,6 +48,8 @@ bool workspace_application_is_finished_launching(struct process *process);
 void workspace_application_observe_finished_launching(void *context, struct process *process);
 void workspace_application_observe_activation_policy(void *context, struct process *process);
 int workspace_display_notch_height(uint32_t did);
+CGRect workspace_display_visible_frame_from_bounds(CGRect display_bounds, CGRect screen_frame, CGRect visible_frame);
+CGRect workspace_display_visible_frame(uint32_t did, CGRect display_bounds);
 pid_t workspace_get_dock_pid(void);
 bool workspace_event_handler_begin(void **context);
 bool workspace_use_macos_space_workaround(void);

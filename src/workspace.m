@@ -139,6 +139,33 @@ int workspace_display_notch_height(uint32_t did)
     return 0;
 }
 
+CGRect workspace_display_visible_frame_from_bounds(CGRect display_bounds, CGRect screen_frame, CGRect visible_frame)
+{
+    CGFloat left = CGRectGetMinX(visible_frame) - CGRectGetMinX(screen_frame);
+    CGFloat right = CGRectGetMaxX(screen_frame) - CGRectGetMaxX(visible_frame);
+    CGFloat bottom = CGRectGetMinY(visible_frame) - CGRectGetMinY(screen_frame);
+    CGFloat top = CGRectGetMaxY(screen_frame) - CGRectGetMaxY(visible_frame);
+
+    display_bounds.origin.x += left;
+    display_bounds.origin.y += top;
+    display_bounds.size.width -= left + right;
+    display_bounds.size.height -= top + bottom;
+    return display_bounds;
+}
+
+CGRect workspace_display_visible_frame(uint32_t did, CGRect display_bounds)
+{
+    for (NSScreen *screen in [NSScreen screens]) {
+        if ([[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue] == did) {
+            return workspace_display_visible_frame_from_bounds(display_bounds,
+                                                               NSRectToCGRect(screen.frame),
+                                                               NSRectToCGRect(screen.visibleFrame));
+        }
+    }
+
+    return display_bounds;
+}
+
 pid_t workspace_get_dock_pid(void)
 {
     NSArray *list = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
