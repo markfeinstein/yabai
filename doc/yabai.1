@@ -31,7 +31,7 @@
 yabai \- window manager
 .SH "SYNOPSIS"
 .sp
-\fByabai\fP [\fB\-\-load\-sa\fP|\fB\-\-uninstall\-sa\fP|\fB\-\-install\-service\fP|\fB\-\-uninstall\-service\fP|\fB\-\-start\-service\fP|\fB\-\-restart\-service\fP|\fB\-\-stop\-service\fP|\fB\-\-message\fP,\fB\-m\fP \fImsg\fP|\fB\-\-config\fP,\fB\-c\fP \fIconfig_file\fP|\fB\-\-config\-jsonc\fP \fIconfig_file\fP|\fB\-\-check\-config\fP \fIconfig_file\fP|\fB\-\-verbose\fP,\fB\-V\fP|\fB\-\-version\fP,\fB\-v\fP|\fB\-\-help\fP,\fB\-h\fP]
+\fByabai\fP [\fB\-\-load\-sa\fP|\fB\-\-uninstall\-sa\fP|\fB\-\-install\-service\fP|\fB\-\-uninstall\-service\fP|\fB\-\-start\-service\fP|\fB\-\-restart\-service\fP|\fB\-\-stop\-service\fP|\fB\-\-doctor\fP|\fB\-\-message\fP,\fB\-m\fP \fImsg\fP|\fB\-\-config\fP,\fB\-c\fP \fIconfig_file\fP|\fB\-\-config\-jsonc\fP \fIconfig_file\fP|\fB\-\-check\-config\fP \fIconfig_file\fP|\fB\-\-verbose\fP,\fB\-V\fP|\fB\-\-version\fP,\fB\-v\fP|\fB\-\-help\fP,\fB\-h\fP]
 .SH "DESCRIPTION"
 .sp
 \fByabai\fP is a tiling window manager for macOS based on binary space partitioning.
@@ -114,6 +114,11 @@ This option does not disable \fByabairc\fP discovery or an explicit \fB\-\-confi
 Validate one native JSONC file and exit. This exact three\-argument invocation cannot be combined with any other option or trailing argument.
 .br
 Success prints \f(CRconfiguration is valid; runtime preparation was not checked\fP. It checks file input, JSONC syntax, schema, limits and regular expressions, but not display or Space targets, permissions, event resources, runtime labels or other runtime preparation.
+.RE
+.sp
+\fB\-\-doctor\fP
+.RS 4
+Run bounded, read\-only diagnostics and exit with classified mechanisms and next actions. Checks include binary slices and translation, Accessibility, core and optional SIP requirements, the exact Apple Silicon arm64e boot argument token (including x86_64 under Rosetta and omitted only on native Intel), canonical launch agent fields read from one no\-follow descriptor snapshot, CFBoolean types, safe ownership/modes, and a program resolving to the running yabai executable. A matching path\-component symlink warns rather than passes after lexical and canonical parent checks, re\-resolution, and final identity, ownership, mode, and execute revalidation. Known legacy plist filenames, runtime\-ordered configuration candidates, descriptor\-snapshot running binary data, and scripting\-addition metadata are also checked. Absence comes from the top\-level yabai.osax bundle; missing nested metadata after bundle observation is \f(CRUNKNOWN\fP. Identity comes from the real uid or valid nonroot \f(CRSUDO_UID\fP through the passwd database, not \f(CRHOME\fP or \f(CRUSER\fP. Elevated permission checks use POSIX owner/group/other selection with target uid, primary and resolved supplementary groups, and mode bits; unavailable group membership remains \f(CRUNKNOWN\fP. Legacy config directories and symlinks to directories are skipped, while a selected non\-regular file fails. launchd runtime state and scripting\-addition responsiveness remain \f(CRUNKNOWN\fP because doctor does not contact them. Transient inspection errors are also \f(CRUNKNOWN\fP; only permission denial or a contractually absent or invalid state is definitive. It does not prompt, invoke \f(CRsudo\fP, mutate state, or inspect skhd. The exit status is zero without \f(CRFAIL\fP results and nonzero otherwise. Output does not dump paths, environment, plist, or configuration contents.
 .RE
 .sp
 \fB\-\-verbose\fP, \fB\-V\fP

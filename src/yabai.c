@@ -20,6 +20,7 @@
 #define VERSION_OPT_SHRT        "-v"
 #define HELP_OPT_LONG           "--help"
 #define HELP_OPT_SHRT           "-h"
+#define DOCTOR_OPT_LONG         "--doctor"
 
 #define CLIENT_RESPONSE_INACTIVITY_TIMEOUT_MS 30000
 
@@ -250,6 +251,7 @@ static void parse_arguments(int argc, char **argv)
                         "    --config, -c <config>  Use the specified configuration file.\n"
                         "    --config-jsonc <config> Use the specified native JSONC configuration file.\n"
                         "    --check-config <config> Validate JSONC schema only; exit 0 if valid, nonzero otherwise.\n"
+                        "    --doctor               Run read-only installation and compatibility diagnostics.\n"
                         "    --verbose, -V          Output debug information to stdout.\n"
                         "    --version, -v          Print version to stdout and exit.\n"
                         "    --help, -h             Print options to stdout and exit.\n"
@@ -262,6 +264,11 @@ static void parse_arguments(int argc, char **argv)
         (string_equals(argv[1], VERSION_OPT_SHRT))) {
         fprintf(stdout, "yabai-v%d.%d.%d\n", MAJOR, MINOR, PATCH);
         exit(EXIT_SUCCESS);
+    }
+
+    if (string_equals(argv[1], DOCTOR_OPT_LONG)) {
+        if (argc != 2) error("yabai: option '%s' does not accept arguments!\n", DOCTOR_OPT_LONG);
+        exit(doctor_run());
     }
 
     if ((string_equals(argv[1], CLIENT_OPT_LONG)) ||
