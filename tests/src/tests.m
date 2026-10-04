@@ -46,6 +46,7 @@ typedef TEST_SIG(function);
 #include "menu_bar_manager.c"
 #include "message.c"
 #include "declarative_config.c"
+#include "declarative_modes.c"
 #include "declarative_startup.c"
 #include "declarative_runtime.c"
 #include "declarative_rules.c"
@@ -1807,6 +1808,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
     TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
     TEST_ENTRY(declarative_scaffold_schema_is_strict_and_owned)            \
+    TEST_ENTRY(declarative_modes_v1_compatibility_and_v2_schema)            \
+    TEST_ENTRY(declarative_modes_schema_errors_and_limits)                  \
+    TEST_ENTRY(declarative_modes_composition_is_pure_stable_and_transactional) \
     TEST_ENTRY(declarative_file_loader_enforces_descriptor_contract)       \
     TEST_ENTRY(declarative_primary_action_classifier_is_exclusive)         \
     TEST_ENTRY(declarative_startup_paths_are_absolute_lexical_and_bounded)  \
