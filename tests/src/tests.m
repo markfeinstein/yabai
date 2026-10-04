@@ -1205,6 +1205,11 @@ TEST_FUNC(mouse_unclassified_action_does_not_begin_gesture,
 
 static int g_mouse_drag_move_call_count;
 static struct window *g_mouse_drag_move_window;
+static int g_mouse_drag_resize_call_count;
+static CGRect g_mouse_drag_resize_frames[16];
+static uint64_t g_mouse_drag_resize_time;
+static int g_mouse_drop_adjust_call_count;
+static struct mouse_window_info g_mouse_drop_adjust_info;
 
 static void test_mouse_drag_move_window(struct window *window, float x, float y)
 {
@@ -1213,6 +1218,199 @@ static void test_mouse_drag_move_window(struct window *window, float x, float y)
     ++g_mouse_drag_move_call_count;
     g_mouse_drag_move_window = window;
 }
+
+static void test_mouse_drag_resize_window(struct window *window, CGRect frame)
+{
+    (void) window;
+    g_mouse_drag_resize_frames[g_mouse_drag_resize_call_count++] = frame;
+}
+
+static uint64_t test_mouse_drag_time(void)
+{
+    return g_mouse_drag_resize_time;
+}
+
+static void test_mouse_drop_adjust(struct window_manager *wm, struct view *view, struct window *window, struct mouse_window_info *info)
+{
+    (void) wm;
+    (void) view;
+    (void) window;
+    ++g_mouse_drop_adjust_call_count;
+    g_mouse_drop_adjust_info = *info;
+}
+
+TEST_FUNC(mouse_resize_hybrid_policy_uses_latest_absolute_fractional_geometry,
+{
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    struct table saved_managed_window = g_window_manager.managed_window;
+    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    __auto_type saved_resize_callback = event_loop_test_mouse_drag_resize_window;
+    __auto_type saved_time_callback = event_loop_test_mouse_drag_time;
+    int saved_resize_call_count = g_mouse_drag_resize_call_count;
+    struct table unmanaged_window;
+    table_init(&unmanaged_window, 1, hash_wm, compare_wm);
+
+    AXUIElementRef window_ref = AXUIElementCreateApplication(getpid());
+    struct window grabbed_window = {
+        .ref = window_ref,
+        .id = 988,
+        .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } },
+        .flags = WINDOW_FLOAT
+    };
+    grabbed_window.id_ptr = &grabbed_window.id;
+
+    g_window_manager.managed_window = unmanaged_window;
+    memset(&g_mouse_state, 0, sizeof(g_mouse_state));
+    g_mouse_state.window = &grabbed_window;
+    g_mouse_state.window_frame = grabbed_window.frame;
+    g_mouse_state.resize_requested_frame = grabbed_window.frame;
+    g_mouse_state.down_location = CGPointMake(100.0f, 100.0f);
+    g_mouse_state.resize_requested_location = g_mouse_state.down_location;
+    g_mouse_state.direction = HANDLE_RIGHT | HANDLE_BOTTOM;
+    g_mouse_state.current_action = MOUSE_MODE_RESIZE;
+    g_mouse_state.active_button = kCGMouseButtonRight;
+    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+    g_mouse_drag_resize_call_count = 0;
+    g_mouse_drag_resize_time = read_os_freq();
+    g_mouse_state.resize_requested_time = g_mouse_drag_resize_time;
+    event_loop_test_mouse_drag_resize_window = test_mouse_drag_resize_window;
+    event_loop_test_mouse_drag_time = test_mouse_drag_time;
+
+    g_mouse_drag_resize_time += read_os_freq() / 50;
+    CGEventRef diagonal_dead_zone = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged,
+                                                            CGPointMake(101.0f, 101.0f), kCGMouseButtonRight);
+    TEST_CHECK(diagonal_dead_zone != NULL, true);
+    if (diagonal_dead_zone) EVENT_HANDLER_MOUSE_DRAGGED(diagonal_dead_zone, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 0);
+
+    CGEventRef fractional_diagonal = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged,
+                                                             CGPointMake(101.5f, 101.5f), kCGMouseButtonRight);
+    TEST_CHECK(fractional_diagonal != NULL, true);
+    if (fractional_diagonal) EVENT_HANDLER_MOUSE_DRAGGED(fractional_diagonal, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 1);
+    TEST_CHECK(g_mouse_drag_resize_frames[0].size.width, 401.5f);
+    TEST_CHECK(g_mouse_drag_resize_frames[0].size.height, 301.5f);
+
+    g_mouse_drag_resize_time += read_os_freq() / 1000;
+    CGEventRef rate_limited_jump = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged,
+                                                           CGPointMake(120.0f, 130.0f), kCGMouseButtonRight);
+    TEST_CHECK(rate_limited_jump != NULL, true);
+    if (rate_limited_jump) EVENT_HANDLER_MOUSE_DRAGGED(rate_limited_jump, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 1);
+
+    g_mouse_drag_resize_time += read_os_freq() / 50;
+    CGEventRef accepted_latest_jump = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged,
+                                                              CGPointMake(120.0f, 130.0f), kCGMouseButtonRight);
+    TEST_CHECK(accepted_latest_jump != NULL, true);
+    if (accepted_latest_jump) EVENT_HANDLER_MOUSE_DRAGGED(accepted_latest_jump, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 2);
+    TEST_CHECK(g_mouse_drag_resize_frames[1].size.width, 420.0f);
+    TEST_CHECK(g_mouse_drag_resize_frames[1].size.height, 330.0f);
+
+    g_mouse_drag_resize_time += read_os_freq() / 50;
+    CGEventRef second_accepted = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged,
+                                                         CGPointMake(122.0f, 132.0f), kCGMouseButtonRight);
+    TEST_CHECK(second_accepted != NULL, true);
+    if (second_accepted) EVENT_HANDLER_MOUSE_DRAGGED(second_accepted, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 3);
+    TEST_CHECK(g_mouse_drag_resize_frames[2].size.width, 422.0f);
+    TEST_CHECK(grabbed_window.frame.size.width, 400.0f);
+    TEST_CHECK(grabbed_window.frame.size.height, 300.0f);
+
+    CGEventRef mouse_up = CGEventCreateMouseEvent(NULL, kCGEventRightMouseUp,
+                                                  CGPointMake(122.5f, 132.25f), kCGMouseButtonRight);
+    TEST_CHECK(mouse_up != NULL, true);
+    if (mouse_up) EVENT_HANDLER_MOUSE_UP(mouse_up, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 4);
+    TEST_CHECK(g_mouse_drag_resize_frames[3].size.width, 422.5f);
+    TEST_CHECK(g_mouse_drag_resize_frames[3].size.height, 332.25f);
+    TEST_CHECK(grabbed_window.frame.size.width, 400.0f);
+    TEST_CHECK(g_mouse_state.window == NULL, true);
+    TEST_CHECK(g_mouse_state.active_button, MOUSE_BUTTON_NONE);
+
+    event_loop_test_mouse_drag_resize_window = saved_resize_callback;
+    event_loop_test_mouse_drag_time = saved_time_callback;
+    g_mouse_drag_resize_call_count = saved_resize_call_count;
+    g_mouse_state = saved_mouse_state;
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.managed_window = saved_managed_window;
+    g_mission_control_mode = saved_mission_control_mode;
+    if (window_ref) CFRelease(window_ref);
+});
+
+TEST_FUNC(mouse_resize_managed_release_uses_synchronous_intended_geometry,
+{
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    struct table saved_managed_window = g_window_manager.managed_window;
+    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    __auto_type saved_resize_callback = event_loop_test_mouse_drag_resize_window;
+    __auto_type saved_time_callback = event_loop_test_mouse_drag_time;
+    __auto_type saved_drop_callback = event_loop_test_mouse_drop_try_adjust_bsp_grid;
+    int saved_resize_call_count = g_mouse_drag_resize_call_count;
+    int saved_drop_call_count = g_mouse_drop_adjust_call_count;
+    struct mouse_window_info saved_drop_info = g_mouse_drop_adjust_info;
+    struct table managed_window;
+    struct view managed_view = { .layout = VIEW_BSP };
+    table_init(&managed_window, 1, hash_wm, compare_wm);
+
+    AXUIElementRef window_ref = AXUIElementCreateApplication(getpid());
+    struct window grabbed_window = {
+        .ref = window_ref,
+        .id = 989,
+        .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } }
+    };
+    grabbed_window.id_ptr = &grabbed_window.id;
+    table_add(&managed_window, &grabbed_window.id, &managed_view);
+
+    g_window_manager.managed_window = managed_window;
+    memset(&g_mouse_state, 0, sizeof(g_mouse_state));
+    g_mouse_state.window = &grabbed_window;
+    g_mouse_state.window_frame = grabbed_window.frame;
+    g_mouse_state.resize_requested_frame = grabbed_window.frame;
+    g_mouse_state.down_location = CGPointMake(100.0f, 100.0f);
+    g_mouse_state.resize_requested_location = g_mouse_state.down_location;
+    g_mouse_state.direction = HANDLE_RIGHT | HANDLE_TOP;
+    g_mouse_state.current_action = MOUSE_MODE_RESIZE;
+    g_mouse_state.active_button = kCGMouseButtonRight;
+    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+    g_mouse_drag_resize_call_count = 0;
+    g_mouse_drop_adjust_call_count = 0;
+    g_mouse_drag_resize_time = read_os_freq();
+    g_mouse_state.resize_requested_time = g_mouse_drag_resize_time;
+    event_loop_test_mouse_drag_resize_window = test_mouse_drag_resize_window;
+    event_loop_test_mouse_drag_time = test_mouse_drag_time;
+    event_loop_test_mouse_drop_try_adjust_bsp_grid = test_mouse_drop_adjust;
+
+    CGEventRef mouse_up = CGEventCreateMouseEvent(NULL, kCGEventRightMouseUp,
+                                                  CGPointMake(105.5f, 97.25f), kCGMouseButtonRight);
+    TEST_CHECK(mouse_up != NULL, true);
+    if (mouse_up) EVENT_HANDLER_MOUSE_UP(mouse_up, 0);
+    TEST_CHECK(g_mouse_drag_resize_call_count, 1);
+    TEST_CHECK(g_mouse_drag_resize_frames[0].origin.y, 27.25f);
+    TEST_CHECK(g_mouse_drag_resize_frames[0].size.width, 405.5f);
+    TEST_CHECK(g_mouse_drag_resize_frames[0].size.height, 302.75f);
+    TEST_CHECK(grabbed_window.frame.origin.y, 30.0f);
+    TEST_CHECK(grabbed_window.frame.size.width, 400.0f);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+    TEST_CHECK(g_mouse_drop_adjust_info.dx, 0.0f);
+    TEST_CHECK(g_mouse_drop_adjust_info.dy, -2.75f);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 5.5f);
+    TEST_CHECK(g_mouse_drop_adjust_info.dh, 2.75f);
+    TEST_CHECK(g_mouse_state.window == NULL, true);
+    TEST_CHECK(g_mouse_state.active_button, MOUSE_BUTTON_NONE);
+
+    event_loop_test_mouse_drag_resize_window = saved_resize_callback;
+    event_loop_test_mouse_drag_time = saved_time_callback;
+    event_loop_test_mouse_drop_try_adjust_bsp_grid = saved_drop_callback;
+    g_mouse_drag_resize_call_count = saved_resize_call_count;
+    g_mouse_drop_adjust_call_count = saved_drop_call_count;
+    g_mouse_drop_adjust_info = saved_drop_info;
+    g_mouse_state = saved_mouse_state;
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.managed_window = saved_managed_window;
+    g_mission_control_mode = saved_mission_control_mode;
+    if (window_ref) CFRelease(window_ref);
+});
 
 TEST_FUNC(mouse_dragged_unmanaged_window_preserves_owner_gesture,
 {
@@ -1736,6 +1934,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mouse_action_classifies_buttons_and_modifiers) \
     TEST_ENTRY(mouse_queued_action_is_immutable_across_configuration_changes) \
     TEST_ENTRY(mouse_unclassified_action_does_not_begin_gesture) \
+    TEST_ENTRY(mouse_resize_hybrid_policy_uses_latest_absolute_fractional_geometry) \
+    TEST_ENTRY(mouse_resize_managed_release_uses_synchronous_intended_geometry) \
     TEST_ENTRY(mouse_dragged_unmanaged_window_preserves_owner_gesture) \
     TEST_ENTRY(mouse_drag_owner_button_controls_events_and_reset) \
     TEST_ENTRY(mouse_drag_reset_clears_feedback_window_action_and_button_state) \
