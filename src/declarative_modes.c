@@ -26,12 +26,12 @@ static void *composition_alloc(struct declarative_space_composition *composition
 {
     if (!size) size = 1;
     if (composition->allocated_bytes > DECLARATIVE_CONFIG_MAX_MODEL_BYTES || size > DECLARATIVE_CONFIG_MAX_MODEL_BYTES - composition->allocated_bytes) {
-        modes_error(error, DECLARATIVE_MODES_ERROR_ALLOCATION, DECLARATIVE_ERROR_ALLOCATION, "$", "composed model exceeds limit");
+        modes_error(error, DECLARATIVE_MODES_ERROR_RESOURCE, DECLARATIVE_ERROR_ALLOCATION, "$", "composed model exceeds limit");
         return NULL;
     }
     void *result = modes_allocator->calloc_fn(1, size);
     if (!result) {
-        modes_error(error, DECLARATIVE_MODES_ERROR_ALLOCATION, DECLARATIVE_ERROR_ALLOCATION, "$", "allocation failed");
+        modes_error(error, DECLARATIVE_MODES_ERROR_RESOURCE, DECLARATIVE_ERROR_ALLOCATION, "$", "allocation failed");
         return NULL;
     }
     composition->allocated_bytes += size;

@@ -301,9 +301,74 @@ static bool declarative_mode_run(struct declarative_mode_worker_context *mode)
     return event_loop_perform_sync(&g_event_loop, declarative_mode_test_worker, mode);
 }
 
+static bool declarative_mode_layout_message_worker(void *context)
+{
+    enum view_type layout = (enum view_type) (intptr_t) context;
+    enum declarative_apply_result result = declarative_apply_runtime_setting(
+        DECLARATIVE_CONFIG_LAYOUT,
+        &(struct declarative_value) { .present = true, .enumeration = layout }, 0);
+    struct view *view = table_find(&g_space_manager.view, &(uint64_t) { 11 });
+    if (result == DECLARATIVE_APPLY_OK && view) {
+        view->layout = layout;
+        view->scaffold_fingerprint = 0;
+    }
+    handle_global_layout_result(NULL, result);
+    return true;
+}
+
 static bool declarative_reload_barrier(void *context)
 {
     (void) context;
+    return true;
+}
+
+static enum declarative_topology_result declarative_mode_fault_topology_result;
+static int declarative_mode_fault_capture_result(
+    const struct declarative_topology_bounds_config *bounds,
+    struct declarative_topology *topology, void *context)
+{
+    if (declarative_mode_fault_topology_result != DECLARATIVE_TOPOLOGY_OK) {
+        return declarative_mode_fault_topology_result;
+    }
+    struct declarative_reload_fixture *fixture = context;
+    return declarative_reload_test_capture_topology(bounds, topology, fixture)
+         ? DECLARATIVE_TOPOLOGY_OK : DECLARATIVE_TOPOLOGY_SETTLING;
+}
+
+static uint32_t *declarative_mode_inventory_unavailable(
+    uint64_t *sids, int sid_count, int flags, int *count, bool include_minimized, bool *success)
+{
+    (void) sids; (void) sid_count; (void) flags; (void) include_minimized;
+    *count = 0;
+    *success = false;
+    return NULL;
+}
+
+static int declarative_mode_production_query_result(
+    uint64_t sid, const uint32_t **wids, size_t *count, void *context)
+{
+    return declarative_reload_query_sid_result(sid, wids, count, context);
+}
+
+struct declarative_mode_message_fault_context {
+    bool activate;
+    char *output;
+    size_t output_length;
+    uint32_t reservation;
+};
+
+static bool declarative_mode_message_fault_worker(void *opaque)
+{
+    struct declarative_mode_message_fault_context *context = opaque;
+    char activate[] = "mode\0--activate\0work\0";
+    char deactivate[] = "mode\0--deactivate\0";
+    char *wire = context->activate ? activate : deactivate;
+    size_t length = context->activate ? sizeof(activate) : sizeof(deactivate);
+    FILE *response = open_memstream(&context->output, &context->output_length);
+    if (!response) return false;
+    handle_message(response, wire, length);
+    fclose(response);
+    context->reservation = declarative_reload_test_reconcile_reservation();
     return true;
 }
 
@@ -1091,6 +1156,22 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     TEST_CHECK(view != NULL, true);
     TEST_CHECK(view ? view->window_gap : 0, 3);
     TEST_CHECK(view && view->scaffold_fingerprint != 0, true);
+    declarative_reload_test_set_message_ops(&ops);
+
+    int inventory_count = g_window_manager.managed_window.count;
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_mode_layout_message_worker, (void *) (intptr_t) VIEW_STACK), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(view ? view->layout : VIEW_FLOAT, VIEW_STACK);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].present, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].value.integer, VIEW_STACK);
+    TEST_CHECK(g_window_manager.managed_window.count, inventory_count);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_mode_layout_message_worker, (void *) (intptr_t) VIEW_BSP), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(view ? view->layout : VIEW_FLOAT, VIEW_BSP);
+    TEST_CHECK(view ? view->scaffold_fingerprint != 0 : false, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].present, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].value.integer, VIEW_BSP);
+    TEST_CHECK(g_window_manager.managed_window.count, inventory_count);
 
     struct rule *rules = g_window_manager.rules;
     uint64_t generation = rule_native_generation();
@@ -1098,7 +1179,6 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     if (view) view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP] =
         (struct declarative_runtime_cell) { .present = true, .source = DECLARATIVE_SETTING_RUNTIME_SPACE,
                                             .value.integer = 77 };
-    declarative_reload_test_set_message_ops(&ops);
     size_t topology_before = fixture.topology_calls;
     char mutable_name[] = "work";
     struct declarative_mode_worker_context mode = { .name = mutable_name, .activate = true };
@@ -1116,6 +1196,11 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     TEST_CHECK(fixture.topology_calls, topology_before + 4);
 
     struct window_node *root_before = view ? view->root : NULL;
+    struct declarative_mode_worker_context invalid = { .name = "", .activate = true };
+    TEST_CHECK(declarative_mode_run(&invalid), true);
+    TEST_CHECK(invalid.result, false);
+    TEST_CHECK(invalid.error.code, DECLARATIVE_MODES_ERROR_TERMINAL);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
     struct declarative_mode_worker_context unknown = { .name = "missing", .activate = true };
     TEST_CHECK(declarative_mode_run(&unknown), true);
     TEST_CHECK(unknown.result, false);
@@ -1145,7 +1230,7 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
 
     struct declarative_modes_error worker_error = {0};
     TEST_CHECK(declarative_mode_activate("work", &worker_error), false);
-    TEST_CHECK(worker_error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(worker_error.code, DECLARATIVE_MODES_ERROR_UNAVAILABLE);
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
 
     fixture.topology.replacement_uuid_sid = 11;
@@ -1155,7 +1240,7 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context stale = { .name = "work", .activate = true };
     TEST_CHECK(declarative_mode_run(&stale), true);
     TEST_CHECK(stale.result, false);
-    TEST_CHECK(stale.error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(stale.error.code, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED);
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
     TEST_CHECK(view ? view->root : NULL, root_before);
     TEST_CHECK(g_window_manager.rules, rules);
@@ -1166,6 +1251,87 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
 
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+})
+
+TEST_FUNC(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile,
+{
+    static const char json[] =
+        "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":9}}]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/mode-faults.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    ops.capture_topology_result = declarative_mode_fault_capture_result;
+    declarative_reload_test_set_message_ops(&ops);
+
+    enum fault_kind { FAULT_TOPOLOGY_RESOURCE, FAULT_TOPOLOGY_TERMINAL,
+                      FAULT_TOPOLOGY_SETTLING, FAULT_INVENTORY_RESOURCE,
+                      FAULT_SPACE_RESOURCE, FAULT_SPACE_TERMINAL };
+    struct fault_case { enum fault_kind kind; const char *activate; const char *deactivate; bool reconcile; } cases[] = {
+        { FAULT_TOPOLOGY_RESOURCE,
+          FAILURE_MESSAGE "could not activate mode because a runtime resource is unavailable; retry later.\n",
+          FAILURE_MESSAGE "could not deactivate mode because a runtime resource is unavailable; retry later.\n", false },
+        { FAULT_TOPOLOGY_TERMINAL,
+          FAILURE_MESSAGE "could not activate mode because a terminal runtime invariant failed.\n",
+          FAILURE_MESSAGE "could not deactivate mode because a terminal runtime invariant failed.\n", false },
+        { FAULT_TOPOLOGY_SETTLING,
+          FAILURE_MESSAGE "could not activate mode; retry after asynchronous reconciliation settles.\n",
+          FAILURE_MESSAGE "could not deactivate mode; retry after asynchronous reconciliation settles.\n", true },
+        { FAULT_INVENTORY_RESOURCE,
+          FAILURE_MESSAGE "could not activate mode because a runtime resource is unavailable; retry later.\n",
+          FAILURE_MESSAGE "could not deactivate mode because a runtime resource is unavailable; retry later.\n", false },
+        { FAULT_SPACE_RESOURCE,
+          FAILURE_MESSAGE "could not activate mode because a runtime resource is unavailable; retry later.\n",
+          FAILURE_MESSAGE "could not deactivate mode because a runtime resource is unavailable; retry later.\n", false },
+        { FAULT_SPACE_TERMINAL,
+          FAILURE_MESSAGE "could not activate mode because a terminal runtime invariant failed.\n",
+          FAILURE_MESSAGE "could not deactivate mode because a terminal runtime invariant failed.\n", false }
+    };
+    __auto_type saved_window_list = declarative_mode_space_window_list;
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        for (int activate = 0; activate <= 1; ++activate) {
+            declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_OK;
+            declarative_topology_test_fail_allocation_at(0);
+            declarative_space_test_fail_allocation_at(0);
+            declarative_space_test_set_admission(0, true);
+            ops.query_sid_result = NULL;
+            declarative_mode_space_window_list = saved_window_list;
+            if (cases[i].kind == FAULT_TOPOLOGY_RESOURCE) {
+                declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_RESOURCE;
+            } else if (cases[i].kind == FAULT_TOPOLOGY_TERMINAL) {
+                declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_INVALID;
+            } else if (cases[i].kind == FAULT_TOPOLOGY_SETTLING) {
+                declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_SETTLING;
+            } else if (cases[i].kind == FAULT_INVENTORY_RESOURCE) {
+                ops.query_sid_result = declarative_mode_production_query_result;
+                declarative_mode_space_window_list = declarative_mode_inventory_unavailable;
+            } else if (cases[i].kind == FAULT_SPACE_RESOURCE) {
+                declarative_space_test_fail_allocation_at(1);
+            } else {
+                declarative_space_test_set_admission(1, false);
+            }
+            struct declarative_mode_message_fault_context message = { .activate = activate };
+            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_mode_message_fault_worker, &message), true);
+            TEST_CHECK(strcmp(message.output, activate ? cases[i].activate : cases[i].deactivate), 0);
+            TEST_CHECK(message.reservation != 0, cases[i].reconcile);
+            TEST_CHECK(declarative_installed_selected_mode(), NULL);
+            free(message.output);
+            declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_OK;
+            declarative_space_test_fail_allocation_at(0);
+            declarative_space_test_set_admission(0, true);
+            ops.query_sid_result = NULL;
+            declarative_mode_space_window_list = saved_window_list;
+            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+            TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+        }
+    }
+    declarative_mode_space_window_list = saved_window_list;
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
 })
 
 static bool declarative_mode_stale_topology_case(int scenario)
@@ -1207,7 +1373,7 @@ static bool declarative_mode_stale_topology_case(int scenario)
     };
     ok = ok && declarative_mode_run(&mode) && !mode.result &&
          mode.query_calls_after == query_before &&
-         mode.error.code == DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED &&
+         mode.error.code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED &&
          declarative_installed_selected_mode() == NULL &&
          (!view || view->root == root) && g_window_manager.rules == rules &&
          rule_native_generation() == generation;
@@ -1289,7 +1455,7 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, false);
-    TEST_CHECK(mode.error.code, DECLARATIVE_MODES_ERROR_ACTIVATION_FAILED);
+    TEST_CHECK(mode.error.code, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED);
     TEST_CHECK(strcmp(mode.error.detail.message,
                       "mode topology changed during activation; reconciliation is required before retry"), 0);
     TEST_CHECK(mode.query_calls_after, query_before);
@@ -1461,6 +1627,8 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
+        declarative_install_test_fail_allocation_at(0);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_install_test_fail_allocation_at(0);
     for (size_t ordinal = 1; ordinal <= space_allocations; ++ordinal) {
@@ -1472,6 +1640,8 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
+        declarative_space_test_fail_allocation_at(0);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_space_test_fail_allocation_at(0);
     declarative_install_test_fail_allocation_at(0);

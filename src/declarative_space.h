@@ -19,6 +19,13 @@ struct view;
 struct window;
 struct window_node;
 
+enum declarative_space_apply_result
+{
+    DECLARATIVE_SPACE_APPLY_OK,
+    DECLARATIVE_SPACE_APPLY_RESOURCE,
+    DECLARATIVE_SPACE_APPLY_TERMINAL
+};
+
 enum declarative_space_ownership_mode
 {
     DECLARATIVE_SPACE_PRESERVE_RUNTIME,
@@ -100,12 +107,22 @@ struct declarative_space_inventory
     struct declarative_space_inventory_index_entry *wid_index;
 };
 
+enum declarative_space_query_result
+{
+    DECLARATIVE_SPACE_QUERY_OK,
+    DECLARATIVE_SPACE_QUERY_RESOURCE,
+    DECLARATIVE_SPACE_QUERY_TERMINAL
+};
+
 struct declarative_space_capture_ops
 {
     bool (*query_sid)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     void *context;
+    /* Optional typed replacement; appended to preserve positional initializers. */
+    enum declarative_space_query_result (*query_sid_result)(uint64_t sid, const uint32_t **wids,
+                                                            size_t *count, void *context);
 };
 
 struct declarative_space_root_before_image
@@ -259,6 +276,11 @@ bool declarative_space_validate_targets(const struct declarative_space_target *t
                                         size_t topology_count,
                                         const struct table *current_views,
                                         const struct declarative_space_table_contract *contract);
+enum declarative_space_apply_result declarative_space_capture_inventory_result(
+                                         const struct declarative_space_target *targets,
+                                         size_t target_count,
+                                         const struct declarative_space_capture_ops *ops,
+                                         struct declarative_space_inventory *out);
 bool declarative_space_capture_inventory(const struct declarative_space_target *targets,
                                          size_t target_count,
                                          const struct declarative_space_capture_ops *ops,
@@ -347,6 +369,26 @@ struct declarative_space_transition
 };
 
 /* The sole production entry point performs capture through retirement synchronously. */
+enum declarative_space_apply_result declarative_space_apply_with_effective_publication_result(
+                                                         const struct declarative_space_target *targets,
+                                                         size_t target_count,
+                                                         const struct declarative_space_topology_entry *topology,
+                                                         size_t topology_count,
+                                                         const struct table *current_views,
+                                                         const struct declarative_space_table_contract *view_table_contract,
+                                                         const struct declarative_space_table_contract *managed_table_contract,
+                                                         const struct declarative_config_model *native,
+                                                         const struct declarative_space_policy *policies,
+                                                         size_t policy_count,
+                                                         uint64_t policy_generation,
+                                                         struct declarative_runtime_state *runtime,
+                                                         const struct declarative_space_defaults *defaults,
+                                                         enum declarative_space_ownership_mode mode,
+                                                         const struct declarative_space_capture_ops *capture_ops,
+                                                         const struct declarative_space_postcommit_ops *postcommit_ops,
+                                                         struct declarative_space_postcommit_diagnostics *diagnostics,
+                                                         declarative_space_publication_callback publish,
+                                                         void *publish_context);
 bool declarative_space_apply_with_effective_publication(const struct declarative_space_target *targets,
                                                         size_t target_count,
                                                         const struct declarative_space_topology_entry *topology,

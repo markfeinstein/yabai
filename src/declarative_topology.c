@@ -1,5 +1,7 @@
 extern int g_connection;
 
+static _Thread_local bool declarative_topology_allocation_failed;
+
 #ifdef TESTS
 static size_t declarative_topology_fail_ordinal;
 static size_t declarative_topology_allocation_ordinal;
@@ -28,9 +30,10 @@ static bool declarative_topology_should_fail(void) { return false; }
 
 static void *declarative_topology_calloc(size_t count, size_t size)
 {
-    if (count && size > SIZE_MAX / count) return NULL;
-    if (declarative_topology_should_fail()) return NULL;
+    if (count && size > SIZE_MAX / count) { declarative_topology_allocation_failed = true; return NULL; }
+    if (declarative_topology_should_fail()) { declarative_topology_allocation_failed = true; return NULL; }
     void *value = calloc(count, size);
+    if (!value) declarative_topology_allocation_failed = true;
 #ifdef TESTS
     if (value) ++declarative_topology_outstanding;
 #endif
@@ -364,23 +367,40 @@ bool declarative_topology_equal(const struct declarative_topology *a,
     return true;
 }
 
-bool declarative_topology_capture(const struct declarative_topology_capture_ops *ops,
-                                  struct declarative_topology *out)
+enum declarative_topology_result declarative_topology_capture_result(
+    const struct declarative_topology_capture_ops *ops, struct declarative_topology *out)
 {
-    if (!out) return false;
+    if (!out) return DECLARATIVE_TOPOLOGY_INVALID;
     memset(out, 0, sizeof(*out));
     if (!ops || !ops->copy_active_displays || !ops->free_active_displays || !ops->active_pair ||
         !ops->copy_managed_displays || !ops->copy_managed_display_spaces || !ops->display_id ||
-        !ops->display_bounds || !ops->copy_space_uuid || !ops->space_kind) return false;
+        !ops->display_bounds || !ops->copy_space_uuid || !ops->space_kind) return DECLARATIVE_TOPOLOGY_INVALID;
+    declarative_topology_allocation_failed = false;
     struct declarative_topology end = {0};
-    if (!declarative_topology_parse_observation(ops, out) ||
-        !declarative_topology_parse_observation(ops, &end) || !declarative_topology_equal(out, &end)) {
+    if (!declarative_topology_parse_observation(ops, out)) {
+        declarative_topology_destroy(out);
+        return declarative_topology_allocation_failed ? DECLARATIVE_TOPOLOGY_RESOURCE
+                                                      : DECLARATIVE_TOPOLOGY_INVALID;
+    }
+    if (!declarative_topology_parse_observation(ops, &end)) {
         declarative_topology_destroy(out);
         declarative_topology_destroy(&end);
-        return false;
+        return declarative_topology_allocation_failed ? DECLARATIVE_TOPOLOGY_RESOURCE
+                                                      : DECLARATIVE_TOPOLOGY_INVALID;
+    }
+    if (!declarative_topology_equal(out, &end)) {
+        declarative_topology_destroy(out);
+        declarative_topology_destroy(&end);
+        return DECLARATIVE_TOPOLOGY_SETTLING;
     }
     declarative_topology_destroy(&end);
-    return true;
+    return DECLARATIVE_TOPOLOGY_OK;
+}
+
+bool declarative_topology_capture(const struct declarative_topology_capture_ops *ops,
+                                  struct declarative_topology *out)
+{
+    return declarative_topology_capture_result(ops, out) == DECLARATIVE_TOPOLOGY_OK;
 }
 
 #ifdef TESTS
@@ -451,11 +471,11 @@ static bool declarative_topology_system_space_kind(uint64_t sid, int *kind, void
     return true;
 }
 
-bool declarative_topology_capture_system(const struct declarative_topology_bounds_config *bounds_config,
-                                         struct declarative_topology *out)
+enum declarative_topology_result declarative_topology_capture_system_result(
+    const struct declarative_topology_bounds_config *bounds_config, struct declarative_topology *out)
 {
     if (!bounds_config || bounds_config->external_bar_mode < EXTERNAL_BAR_OFF ||
-        bounds_config->external_bar_mode > EXTERNAL_BAR_ALL) return false;
+        bounds_config->external_bar_mode > EXTERNAL_BAR_ALL) return DECLARATIVE_TOPOLOGY_INVALID;
     struct declarative_topology_capture_ops ops = {
         .copy_active_displays = declarative_topology_system_active_displays,
         .free_active_displays = declarative_topology_system_free_active_displays,
@@ -468,7 +488,13 @@ bool declarative_topology_capture_system(const struct declarative_topology_bound
         .space_kind = declarative_topology_system_space_kind,
         .context = (void *) bounds_config
     };
-    return declarative_topology_capture(&ops, out);
+    return declarative_topology_capture_result(&ops, out);
+}
+
+bool declarative_topology_capture_system(const struct declarative_topology_bounds_config *bounds_config,
+                                         struct declarative_topology *out)
+{
+    return declarative_topology_capture_system_result(bounds_config, out) == DECLARATIVE_TOPOLOGY_OK;
 }
 
 bool declarative_topology_rule_snapshot(const struct declarative_topology *topology,
@@ -529,16 +555,17 @@ void declarative_topology_space_snapshot_destroy(struct declarative_space_topolo
     declarative_topology_free(entries);
 }
 
-bool declarative_topology_space_snapshot(const struct declarative_topology *topology,
-                                         struct declarative_space_topology_entry **entries,
-                                         size_t *count)
+enum declarative_topology_result declarative_topology_space_snapshot_result(
+    const struct declarative_topology *topology,
+    struct declarative_space_topology_entry **entries, size_t *count)
 {
-    if (!entries || !count) return false;
+    if (!entries || !count) return DECLARATIVE_TOPOLOGY_INVALID;
     *entries = NULL;
     *count = 0;
-    if (!declarative_topology_validate_owned(topology)) return false;
+    if (!declarative_topology_validate_owned(topology)) return DECLARATIVE_TOPOLOGY_INVALID;
+    declarative_topology_allocation_failed = false;
     *entries = declarative_topology_calloc(topology->space_count, sizeof(**entries));
-    if (!*entries) return false;
+    if (!*entries) return DECLARATIVE_TOPOLOGY_RESOURCE;
     for (size_t i = 0; i < topology->space_count; ++i) {
         (*entries)[i] = (struct declarative_space_topology_entry) {
             .sid = topology->spaces[i].sid, .index = topology->spaces[i].mission_control_ordinal + 1,
@@ -547,7 +574,14 @@ bool declarative_topology_space_snapshot(const struct declarative_topology *topo
         };
     }
     *count = topology->space_count;
-    return true;
+    return DECLARATIVE_TOPOLOGY_OK;
+}
+
+bool declarative_topology_space_snapshot(const struct declarative_topology *topology,
+                                         struct declarative_space_topology_entry **entries,
+                                         size_t *count)
+{
+    return declarative_topology_space_snapshot_result(topology, entries, count) == DECLARATIVE_TOPOLOGY_OK;
 }
 
 static TABLE_HASH_FUNC(declarative_detached_view_hash)

@@ -1,7 +1,7 @@
 {
   // Native JSONC loads before yabairc. Run:
   // yabai --check-config ~/.config/yabai/yabai.jsonc
-  "version": 1,
+  "version": 2,
 
   "config": {
     "layout": "bsp",
@@ -82,6 +82,31 @@
       }
     }
   ],
+
+  // Named modes overlay the base Space policies above. Omitted scaffold fields
+  // inherit the base scaffold; an explicit empty array clears it.
+  "modes": [
+    {
+      "name": "work",
+      "spaces": [
+        {
+          "match": { "index": 2 },
+          "settings": { "window_gap": 6 }
+        }
+      ]
+    },
+    {
+      "name": "focus",
+      "spaces": [
+        {
+          "match": { "index": 2 },
+          "settings": { "window_gap": 2 },
+          "scaffold": []
+        }
+      ]
+    }
+  ],
+  "active_mode": "work",
 
   "rules": [
     {
