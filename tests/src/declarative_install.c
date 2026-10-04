@@ -210,8 +210,9 @@ TEST_FUNC(declarative_startup_install_candidate_mapping_covers_all_settings,
 static struct declarative_config_model *declarative_install_test_model(void)
 {
     static const char json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"focus_follows_mouse\":\"autofocus\","
+        "{\"version\":2,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"focus_follows_mouse\":\"autofocus\","
         "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
+        "\"modes\":[{\"name\":\"startup\",\"spaces\":[]}],\"active_mode\":\"startup\","
         "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"accordion_vertical\","
         "\"top_padding\":1,\"bottom_padding\":2,\"left_padding\":3,\"right_padding\":4,"
         "\"window_gap\":5,\"accordion_padding\":27,\"split_type\":\"horizontal\",\"auto_balance\":\"x-axis\"}}],"
@@ -269,6 +270,7 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(declarative_installed_generation(), 1ULL);
     TEST_CHECK(declarative_installed_model() != NULL, true);
     TEST_CHECK(strcmp(declarative_installed_path(), "/tmp/install.jsonc"), 0);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "startup"), 0);
     TEST_CHECK(startup.model == NULL, true);
     TEST_CHECK(startup.detached_views.count, 0U);
     TEST_CHECK(g_space_manager.view.count, 3);

@@ -138,12 +138,14 @@ static void declarative_space_set_current_non_user(const struct view *view,
 #undef SET_CURRENT
 }
 
-bool declarative_space_resolve_policy(const struct declarative_config_model *native,
-                                      const struct declarative_runtime_state *runtime,
-                                      const struct declarative_space_defaults *defaults,
-                                      const struct declarative_space_target *target,
-                                      enum declarative_space_ownership_mode mode,
-                                      struct declarative_space_effective *out)
+bool declarative_space_resolve_effective_policy(const struct declarative_config_model *native,
+                                                const struct declarative_space_policy *policies,
+                                                size_t policy_count,
+                                                const struct declarative_runtime_state *runtime,
+                                                const struct declarative_space_defaults *defaults,
+                                                const struct declarative_space_target *target,
+                                                enum declarative_space_ownership_mode mode,
+                                                struct declarative_space_effective *out)
 {
     if (!defaults || !target || !target->view || !target->uuid || !out || target->sid == 0 || target->index <= 0) return false;
     if (mode != DECLARATIVE_SPACE_PRESERVE_RUNTIME && mode != DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD) return false;
@@ -172,8 +174,8 @@ bool declarative_space_resolve_policy(const struct declarative_config_model *nat
 
     if (native) {
         declarative_space_set_native(out, native->config, DECLARATIVE_SETTING_NATIVE_GLOBAL);
-        for (size_t i = 0; i < native->space_count; ++i) {
-            const struct declarative_space_policy *policy = &native->spaces[i];
+        for (size_t i = 0; i < policy_count; ++i) {
+            const struct declarative_space_policy *policy = &policies[i];
             bool matches = policy->by_index ? policy->index == target->index
                                             : policy->uuid && strcmp(policy->uuid, target->uuid) == 0;
             if (matches) declarative_space_set_native(out, policy->settings, DECLARATIVE_SETTING_NATIVE_SPACE);
@@ -191,6 +193,18 @@ bool declarative_space_resolve_policy(const struct declarative_config_model *nat
         }
     }
     return true;
+}
+
+bool declarative_space_resolve_policy(const struct declarative_config_model *native,
+                                      const struct declarative_runtime_state *runtime,
+                                      const struct declarative_space_defaults *defaults,
+                                      const struct declarative_space_target *target,
+                                      enum declarative_space_ownership_mode mode,
+                                      struct declarative_space_effective *out)
+{
+    return declarative_space_resolve_effective_policy(native, native ? native->spaces : NULL,
+                                                       native ? native->space_count : 0, runtime,
+                                                       defaults, target, mode, out);
 }
 
 static bool declarative_space_public_identity(const char *uuid, uint64_t sid, int index, bool is_user_space,
@@ -1497,24 +1511,24 @@ static int declarative_space_target_gap(const struct declarative_space_prepared_
 }
 
 static const struct declarative_space_policy *declarative_space_scaffold_policy(
-    const struct declarative_config_model *native, const struct declarative_space_target *target)
+    const struct declarative_space_policy *policies, size_t policy_count,
+    const struct declarative_space_target *target)
 {
-    if (!native || !target->is_user_space) return NULL;
+    if (!target->is_user_space) return NULL;
     const struct declarative_space_policy *result = NULL;
-    for (size_t i = 0; i < native->space_count; ++i) {
-        const struct declarative_space_policy *policy = &native->spaces[i];
+    for (size_t i = 0; i < policy_count; ++i) {
+        const struct declarative_space_policy *policy = &policies[i];
         bool matches = policy->by_index ? policy->index == target->index
                                         : policy->uuid && strcmp(policy->uuid, target->uuid) == 0;
-        if (matches && policy->scaffold_count) result = policy;
+        if (matches && (policy->scaffold_present || policy->scaffold_count)) result = policy;
     }
     return result;
 }
 
-static uint64_t declarative_space_scaffold_hash(const struct declarative_config_model *native,
-                                                  const struct declarative_space_policy *policy)
+static uint64_t declarative_space_scaffold_hash(uint64_t generation,
+                                                 const struct declarative_space_policy *policy)
 {
-    uint64_t hash = UINT64_C(1469598103934665603) ^ (uintptr_t) native;
-    hash *= UINT64_C(1099511628211);
+    uint64_t hash = declarative_space_hash_u64(UINT64_C(1469598103934665603), generation);
     for (size_t i = 0; i < policy->scaffold_count; ++i) {
         const unsigned char *at = (const unsigned char *) policy->scaffold[i].pattern;
         while (*at) { hash ^= *at++; hash *= UINT64_C(1099511628211); }
@@ -1527,13 +1541,15 @@ static uint64_t declarative_space_scaffold_hash(const struct declarative_config_
 }
 
 static bool declarative_space_prepare_scaffolds(struct declarative_space_preparation *preparation,
-                                                 const struct declarative_config_model *native)
+                                                 const struct declarative_space_policy *policies,
+                                                 size_t policy_count,
+                                                 uint64_t policy_generation)
 {
     for (size_t i = 0; i < preparation->target_count; ++i) {
         struct declarative_space_prepared_target *target = &preparation->targets[i];
         if (declarative_space_final_layout(target) != VIEW_BSP) continue;
-        const struct declarative_space_policy *policy = declarative_space_scaffold_policy(native, &target->target);
-        if (!policy) continue;
+        const struct declarative_space_policy *policy = declarative_space_scaffold_policy(policies, policy_count, &target->target);
+        if (!policy || !policy->scaffold_count) continue;
         regex_t regex[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS];
         size_t compiled = 0;
         bool valid = true;
@@ -1542,7 +1558,7 @@ static bool declarative_space_prepare_scaffolds(struct declarative_space_prepara
         }
         if (valid) {
             target->final_scaffold_count = policy->scaffold_count;
-            target->final_scaffold_fingerprint = declarative_space_scaffold_hash(native, policy);
+            target->final_scaffold_fingerprint = declarative_space_scaffold_hash(policy_generation, policy);
             for (size_t wid_index = 0; wid_index < target->final_count; ++wid_index) {
                 uint32_t wid = target->final_wids[wid_index];
                 const struct declarative_space_final_owner *owner =
@@ -2002,7 +2018,7 @@ DECLARATIVE_SPACE_INTERNAL void declarative_space_preparation_destroy(struct dec
     memset(preparation, 0, sizeof(*preparation));
 }
 
-DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarative_space_target *targets,
+static bool declarative_space_prepare_effective(const struct declarative_space_target *targets,
                                size_t target_count,
                                const struct declarative_space_topology_entry *topology,
                                size_t topology_count,
@@ -2011,6 +2027,9 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
                                const struct table *managed_window,
                                const struct declarative_space_table_contract *managed_table_contract,
                                const struct declarative_config_model *native,
+                               const struct declarative_space_policy *policies,
+                               size_t policy_count,
+                               uint64_t policy_generation,
                                const struct declarative_runtime_state *runtime,
                                const struct declarative_space_defaults *defaults,
                                enum declarative_space_ownership_mode mode,
@@ -2025,7 +2044,7 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
         !(defaults->split_ratio >= 0.1f && defaults->split_ratio <= 0.9f) ||
         (defaults->window_placement != CHILD_FIRST && defaults->window_placement != CHILD_SECOND) ||
         defaults->window_insertion_point < INSERT_FOCUSED || defaults->window_insertion_point > INSERT_LAST ||
-        (native && native->space_count && !native->spaces) || !capture_ops ||
+        (policy_count && !policies) || !capture_ops ||
         !capture_ops->query_sid || !capture_ops->find_window || !capture_ops->is_eligible ||
         !declarative_space_validate_targets(targets, target_count, topology, topology_count,
                                             current_views, view_table_contract)) return false;
@@ -2061,7 +2080,8 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
                                                      out->targets[i].target.is_user_space,
                                                      &out->targets[i].target.identity);
         }
-        if (!declarative_space_resolve_policy(native, runtime, defaults, &targets[i], mode, &out->targets[i].effective)) goto fail;
+        if (!declarative_space_resolve_effective_policy(native, policies, policy_count, runtime, defaults,
+                                                        &targets[i], mode, &out->targets[i].effective)) goto fail;
         memcpy(out->targets[i].ownership_before.view, targets[i].view->runtime_ownership, sizeof(out->targets[i].ownership_before.view));
         out->targets[i].ownership_before.legacy_flags = targets[i].view->flags;
         declarative_space_capture_view_before(targets[i].view, &out->targets[i].view_before);
@@ -2125,7 +2145,7 @@ DECLARATIVE_SPACE_INTERNAL bool declarative_space_prepare(const struct declarati
         }
     }
     if (!declarative_space_build_owner_map(out) ||
-        !declarative_space_prepare_scaffolds(out, native) ||
+        !declarative_space_prepare_scaffolds(out, policies, policy_count, policy_generation) ||
         !declarative_space_build_final_roots(out, defaults) ||
         !declarative_space_build_replacement_table(out, managed_table_contract) ||
         !declarative_space_build_node_indexes(out) ||
@@ -2581,6 +2601,73 @@ bool declarative_space_apply_prepared(struct declarative_space_preparation *prep
 }
 #endif
 
+#ifdef TESTS
+bool declarative_space_prepare(const struct declarative_space_target *targets, size_t target_count,
+                               const struct declarative_space_topology_entry *topology, size_t topology_count,
+                               const struct table *current_views,
+                               const struct declarative_space_table_contract *view_table_contract,
+                               const struct table *managed_window,
+                               const struct declarative_space_table_contract *managed_table_contract,
+                               const struct declarative_config_model *native,
+                               const struct declarative_runtime_state *runtime,
+                               const struct declarative_space_defaults *defaults,
+                               enum declarative_space_ownership_mode mode,
+                               const struct declarative_space_capture_ops *capture_ops,
+                               struct declarative_space_preparation *out)
+{
+    return declarative_space_prepare_effective(targets, target_count, topology, topology_count,
+                                               current_views, view_table_contract, managed_window,
+                                               managed_table_contract, native,
+                                               native ? native->spaces : NULL,
+                                               native ? native->space_count : 0, 0,
+                                               runtime, defaults, mode, capture_ops, out);
+}
+#endif
+
+bool declarative_space_apply_with_effective_publication(const struct declarative_space_target *targets,
+                                              size_t target_count,
+                                              const struct declarative_space_topology_entry *topology,
+                                              size_t topology_count,
+                                              const struct table *current_views,
+                                              const struct declarative_space_table_contract *view_table_contract,
+                                              const struct declarative_space_table_contract *managed_table_contract,
+                                              const struct declarative_config_model *native,
+                                              const struct declarative_space_policy *policies,
+                                              size_t policy_count,
+                                              uint64_t policy_generation,
+                                              struct declarative_runtime_state *runtime,
+                                              const struct declarative_space_defaults *defaults,
+                                              enum declarative_space_ownership_mode mode,
+                                              const struct declarative_space_capture_ops *capture_ops,
+                                              const struct declarative_space_postcommit_ops *postcommit_ops,
+                                              struct declarative_space_postcommit_diagnostics *diagnostics,
+                                              declarative_space_publication_callback publish,
+                                              void *publish_context)
+{
+    struct declarative_space_preparation preparation;
+    struct declarative_space_transition transition;
+    if (!declarative_space_prepare_effective(targets, target_count, topology, topology_count,
+                                             current_views, view_table_contract,
+                                             &g_window_manager.managed_window, managed_table_contract,
+                                             native, policies, policy_count, policy_generation,
+                                             runtime, defaults, mode, capture_ops, &preparation)) return false;
+    if (!declarative_space_transition_begin(&transition, &preparation)) {
+        declarative_space_preparation_destroy(&preparation);
+        return false;
+    }
+    if (!declarative_space_transition_commit_impl(&transition)) {
+        declarative_space_transition_destroy(&transition);
+        return false;
+    }
+    if (publish) publish(publish_context);
+    (void) declarative_space_transition_postcommit_impl(&transition, postcommit_ops);
+    (void) declarative_space_dispose_retired_table_impl(&transition);
+    (void) declarative_space_retire_old_roots_impl(&transition, postcommit_ops);
+    if (diagnostics) *diagnostics = transition.diagnostics;
+    declarative_space_transition_destroy(&transition);
+    return true;
+}
+
 bool declarative_space_apply_with_publication(const struct declarative_space_target *targets,
                                               size_t target_count,
                                               const struct declarative_space_topology_entry *topology,
@@ -2598,27 +2685,12 @@ bool declarative_space_apply_with_publication(const struct declarative_space_tar
                                               declarative_space_publication_callback publish,
                                               void *publish_context)
 {
-    struct declarative_space_preparation preparation;
-    struct declarative_space_transition transition;
-    if (!declarative_space_prepare(targets, target_count, topology, topology_count,
-                                   current_views, view_table_contract,
-                                   &g_window_manager.managed_window, managed_table_contract,
-                                   native, runtime, defaults, mode, capture_ops, &preparation)) return false;
-    if (!declarative_space_transition_begin(&transition, &preparation)) {
-        declarative_space_preparation_destroy(&preparation);
-        return false;
-    }
-    if (!declarative_space_transition_commit_impl(&transition)) {
-        declarative_space_transition_destroy(&transition);
-        return false;
-    }
-    if (publish) publish(publish_context);
-    (void) declarative_space_transition_postcommit_impl(&transition, postcommit_ops);
-    (void) declarative_space_dispose_retired_table_impl(&transition);
-    (void) declarative_space_retire_old_roots_impl(&transition, postcommit_ops);
-    if (diagnostics) *diagnostics = transition.diagnostics;
-    declarative_space_transition_destroy(&transition);
-    return true;
+    return declarative_space_apply_with_effective_publication(targets, target_count, topology, topology_count,
+                                                               current_views, view_table_contract, managed_table_contract,
+                                                               native, native ? native->spaces : NULL,
+                                                               native ? native->space_count : 0, 0, runtime, defaults,
+                                                               mode, capture_ops, postcommit_ops, diagnostics,
+                                                               publish, publish_context);
 }
 
 bool declarative_space_apply(const struct declarative_space_target *targets,

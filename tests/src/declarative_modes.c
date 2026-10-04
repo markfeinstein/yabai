@@ -100,6 +100,9 @@ TEST_FUNC(declarative_modes_composition_is_pure_stable_and_transactional,
         TEST_CHECK(strcmp(model->spaces[0].uuid, "u"), 0); TEST_CHECK(strcmp(model->spaces[0].scaffold[0].pattern, "base"), 0);
     }
     declarative_modes_composition_destroy(&composition);
+    TEST_CHECK(composition.spaces, NULL);
+    TEST_CHECK(composition.space_count, 0UL);
+    TEST_CHECK(composition.allocated_bytes, 0UL);
     TEST_CHECK(declarative_modes_compose(model, NULL, &composition, &error), true);
     TEST_CHECK(composition.space_count, 3UL);
     if (composition.space_count == 3) TEST_CHECK(composition.spaces[2].settings[DECLARATIVE_CONFIG_WINDOW_GAP].integer, 5);
@@ -114,6 +117,10 @@ TEST_FUNC(declarative_modes_composition_is_pure_stable_and_transactional,
     struct declarative_config_model no_active = {.spaces=model->spaces, .space_count=model->space_count, .modes=model->modes, .mode_count=model->mode_count};
     TEST_CHECK(declarative_modes_compose(&no_active, NULL, &composition, &error), true);
     TEST_CHECK(composition.space_count, model->space_count);
+    declarative_modes_composition_destroy(&composition);
+    TEST_CHECK(declarative_modes_compose_selection(model, NULL, false, &composition, &error), true);
+    TEST_CHECK(composition.space_count, model->space_count);
+    if (composition.space_count) TEST_CHECK(composition.spaces[0].scaffold_present, true);
     declarative_modes_composition_destroy(&composition);
 
     struct declarative_allocator_ops model_ops={declarative_test_calloc,declarative_test_free};declarative_config_set_allocator_ops(&model_ops);declarative_alloc_call=declarative_alloc_fail=declarative_alloc_live=0;struct declarative_config_model*allocated=NULL;TEST_CHECK(declarative_config_parse_bytes((const uint8_t*)json,strlen(json),"mode-alloc",&allocated,&parse_error),true);size_t model_calls=declarative_alloc_call;declarative_config_destroy(allocated);TEST_CHECK(declarative_alloc_live,0UL);for(size_t fail=1;fail<=model_calls;++fail){declarative_alloc_call=declarative_alloc_live=0;declarative_alloc_fail=fail;allocated=(void*)1;TEST_CHECK(declarative_config_parse_bytes((const uint8_t*)json,strlen(json),"mode-alloc",&allocated,&parse_error),false);TEST_CHECK(allocated==NULL,true);TEST_CHECK(parse_error.stage,DECLARATIVE_ERROR_ALLOCATION);TEST_CHECK(declarative_alloc_live,0UL);}declarative_config_set_allocator_ops(NULL);

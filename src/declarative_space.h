@@ -244,6 +244,14 @@ bool declarative_space_resolve_policy(const struct declarative_config_model *nat
                                       const struct declarative_space_target *target,
                                       enum declarative_space_ownership_mode mode,
                                       struct declarative_space_effective *out);
+bool declarative_space_resolve_effective_policy(const struct declarative_config_model *native,
+                                                const struct declarative_space_policy *policies,
+                                                size_t policy_count,
+                                                const struct declarative_runtime_state *runtime,
+                                                const struct declarative_space_defaults *defaults,
+                                                const struct declarative_space_target *target,
+                                                enum declarative_space_ownership_mode mode,
+                                                struct declarative_space_effective *out);
 
 bool declarative_space_validate_targets(const struct declarative_space_target *targets,
                                         size_t target_count,
@@ -339,6 +347,25 @@ struct declarative_space_transition
 };
 
 /* The sole production entry point performs capture through retirement synchronously. */
+bool declarative_space_apply_with_effective_publication(const struct declarative_space_target *targets,
+                                                        size_t target_count,
+                                                        const struct declarative_space_topology_entry *topology,
+                                                        size_t topology_count,
+                                                        const struct table *current_views,
+                                                        const struct declarative_space_table_contract *view_table_contract,
+                                                        const struct declarative_space_table_contract *managed_table_contract,
+                                                        const struct declarative_config_model *native,
+                                                        const struct declarative_space_policy *policies,
+                                                        size_t policy_count,
+                                                        uint64_t policy_generation,
+                                                        struct declarative_runtime_state *runtime,
+                                                        const struct declarative_space_defaults *defaults,
+                                                        enum declarative_space_ownership_mode mode,
+                                                        const struct declarative_space_capture_ops *capture_ops,
+                                                        const struct declarative_space_postcommit_ops *postcommit_ops,
+                                                        struct declarative_space_postcommit_diagnostics *diagnostics,
+                                                        declarative_space_publication_callback publish,
+                                                        void *publish_context);
 bool declarative_space_apply_with_publication(const struct declarative_space_target *targets,
                                               size_t target_count,
                                               const struct declarative_space_topology_entry *topology,

@@ -73,14 +73,14 @@ static bool copy_policy(struct declarative_space_composition *composition, struc
     return true;
 }
 
-bool declarative_modes_compose(const struct declarative_config_model *model, const char *selected_mode, struct declarative_space_composition *composition, struct declarative_modes_error *error)
+bool declarative_modes_compose_selection(const struct declarative_config_model *model, const char *selected_mode, bool use_file_active, struct declarative_space_composition *composition, struct declarative_modes_error *error)
 {
     if (error) memset(error, 0, sizeof(*error));
     if (!composition) return false;
     memset(composition, 0, sizeof(*composition));
     if (!model) { modes_error(error, DECLARATIVE_MODES_ERROR_INVALID_MODEL, DECLARATIVE_ERROR_RUNTIME, "$", "model is required"); return false; }
     composition->allocator_free = modes_allocator->free_fn;
-    const char *name = selected_mode ? selected_mode : model->active_mode;
+    const char *name = selected_mode ? selected_mode : use_file_active ? model->active_mode : NULL;
     const struct declarative_mode_model *mode = NULL;
     if (name) {
         for (size_t i = 0; i < model->mode_count; ++i) if (!strcmp(name, model->modes[i].name)) { mode = &model->modes[i]; break; }
@@ -99,4 +99,11 @@ bool declarative_modes_compose(const struct declarative_config_model *model, con
 fail:
     declarative_modes_composition_destroy(composition);
     return false;
+}
+
+bool declarative_modes_compose(const struct declarative_config_model *model, const char *selected_mode,
+                               struct declarative_space_composition *composition,
+                               struct declarative_modes_error *error)
+{
+    return declarative_modes_compose_selection(model, selected_mode, true, composition, error);
 }

@@ -115,6 +115,7 @@ struct event_loop
 {
     bool is_running;
     bool producer_sync_initialized;
+    uint64_t generation;
     volatile uint32_t producer_admission;
     pthread_mutex_t producer_lock;
     pthread_cond_t producer_cond;
@@ -132,6 +133,8 @@ void event_loop_end(struct event_loop *event_loop);
 bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_callback callback, void *context);
 bool event_loop_is_worker_thread(struct event_loop *event_loop);
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
+bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t generation,
+                                    enum event_type type, void *context, int param1);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);
