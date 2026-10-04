@@ -93,6 +93,8 @@ Stops a running instance of the service and unloads it.
 Send message to a running instance of yabai.
 .RE
 .sp
+Yabai stores its daemon socket, scripting\-addition socket, and their lifecycle locks in \f(CR~/Library/Caches/yabai/runtime\fP. The directory is private mode 0700 and socket and lock entries are mode 0600. Startup and client operations fail closed if the home/cache path has unsafe ownership, permissions, ACLs, symlinks, or conflicting entries; legacy shared \f(CR/tmp\fP entries are not used. These checks and locks protect against other UIDs and coordinate cooperating instances of the same UID. A malicious process running as the same UID can still mutate pathname entries between non\-atomic Unix\-domain socket unlink and bind operations and is outside this isolation boundary.
+.sp
 \fB\-\-config\fP, \fB\-c\fP \fI<config_file>\fP
 .RS 4
 Use the specified legacy \fByabairc\fP file.
@@ -874,7 +876,15 @@ LAYER\&       := below | normal | above | auto
 
 BOOL_SEL\&    := on | off
 
-FLOAT_SEL\&   := 0 < <value> <= 1.0
+UNIT_SEL\&             := 0.0 <= <value> <= 1.0
+
+POSITIVE_UNIT_SEL\&    := 0.0 < <value> <= 1.0
+
+SPLIT_RATIO_SEL\&      := 0.1 <= <value> <= 0.9
+
+DURATION_SEL\&         := finite <value> >= 0.0
+
+OPACITY_DURATION_SEL\& := finite 0.0 <= <value> <= INT_MAX / 1000 seconds
 
 RULE_SEL\&    := <index> | LABEL
 
@@ -984,7 +994,7 @@ Select which spaces are shown by the menu bar item and its menu. Default is \fIo
 The compact and expanded layouts share the same display\-grouped informational menu. A checkmark marks each display\(cqs visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in \fByabairc\fP to persist them.
 .RE
 .sp
-\fBmenubar_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBmenubar_opacity\fP [\fI<UNIT_SEL>\fP]
 .RS 4
 Changes the transparency of the macOS menubar.
 .br
@@ -1072,28 +1082,28 @@ Enable opacity for windows.
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBwindow_opacity_duration\fP [\fI<FLOAT_SEL>\fP]
+\fBwindow_opacity_duration\fP [\fI<OPACITY_DURATION_SEL>\fP]
 .RS 4
 Duration of transition between active / normal opacity.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBactive_window_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBactive_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]
 .RS 4
 Opacity of the focused window.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBnormal_window_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBnormal_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]
 .RS 4
 Opacity of an unfocused window.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBwindow_animation_duration\fP [\fI<FLOAT_SEL>\fP]
+\fBwindow_animation_duration\fP [\fI<DURATION_SEL>\fP]
 .RS 4
 Duration of window frame animation.
 .br
@@ -1132,7 +1142,7 @@ Stroke width in display points for insert feedback. Must be finite and greater t
 Rendering clamps the width to half the shorter feedback\-frame dimension. (default: 2)
 .RE
 .sp
-\fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]
+\fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]
 .RS 4
 Set the default size distribution for new BSP splits on Spaces without a higher\-precedence scoped value. The valid range is \f(CR0.1...0.9\fP.
 .RE
@@ -1204,7 +1214,7 @@ Size of the gap that separates windows for the selected space.
 Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on \f(CRbsp\fP, \f(CRstack\fP or \f(CRfloat\fP geometry.
 .RE
 .sp
-\fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]
+\fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]
 .RS 4
 Set the default ratio for new BSP splits on the selected Space. The valid range is \f(CR0.1...0.9\fP. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right\-side subdivision remains \f(CR0.5\fP. Native and imperative values follow \f(CRbuilt\-in < native global < native Space < runtime global < runtime Space\fP, and runtime ownership clears on the next successful native reload like other Space settings.
 .RE
@@ -1476,7 +1486,7 @@ Specify the value \fIauto\fP to reset back to normal and make it become automati
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fB\-\-opacity\fP \fI<FLOAT_SEL>\fP
+\fB\-\-opacity\fP \fI<UNIT_SEL>\fP
 .RS 4
 Set the opacity of the selected window.
 .br
@@ -1540,6 +1550,15 @@ Retrieve information about spaces.
 \fB\-\-windows\fP
 .RS 4
 Retrieve information about windows.
+.RE
+.sp
+\fB\-\-daemon\-identity\fP
+.RS 4
+Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments.
+.br
+The JSON object contains \f(CWpid\fP (the daemon process identifier), \f(CWarchitecture\fP (\f(CWarm64\fP or \f(CWx86_64\fP), and \f(CWuuid\fP (the Mach\-O UUID of the running architecture slice).
+.br
+Field names and JSON types are stable for diagnostics and integration checks; values identify only the current daemon process and binary, and are not persistent identifiers.
 .RE
 .SS "ARGUMENT"
 .sp
@@ -1811,7 +1830,7 @@ Specify the value \fIauto\fP to reset back to normal and make it become automati
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBopacity=\fI<FLOAT_SEL>\fP\fP
+\fBopacity=\fI<UNIT_SEL>\fP\fP
 .RS 4
 Set window opacity.
 .br

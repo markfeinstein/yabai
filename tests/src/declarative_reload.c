@@ -1061,7 +1061,7 @@ TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting
     struct view *removed = table_find(&g_space_manager.view, &removed_sid);
     TEST_CHECK(removed != NULL, true);
     table_remove(&g_space_manager.view, &removed_sid);
-    if (removed) { view_destroy(removed); free(removed); }
+    if (removed) { view_destroy(removed); legacy_allocation_free(removed); }
     g_space_manager.current_space_id = 12;
     context = declarative_installed.fold_context;
     TEST_CHECK(declarative_reconcile_run(&ops), true);
@@ -1313,6 +1313,17 @@ TEST_FUNC(declarative_preserve_runtime_topology_uses_effective_external_bar,
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
 
+static bool declarative_mode_layout_user_space(uint64_t sid) { return sid != 21; }
+static bool declarative_mode_test_set_global_layout(void *manager, int layout)
+{
+    struct space_manager *sm = manager;
+    sm->layout = layout;
+    table_for (struct view *view, sm->view, {
+        if (!view_check_flag(view, VIEW_LAYOUT) && declarative_mode_layout_user_space(view->sid)) view->layout = layout;
+    })
+    return true;
+}
+
 TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
 {
     static const char candidate_json[] =
@@ -1341,6 +1352,9 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     declarative_reload_test_set_message_ops(&ops);
 
     int inventory_count = g_window_manager.managed_window.count;
+    struct declarative_runtime_operation_ops layout_ops = declarative_test_operation_ops;
+    layout_ops.set_layout_for_all_spaces = declarative_mode_test_set_global_layout;
+    declarative_runtime_set_operation_ops(&layout_ops);
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_mode_layout_message_worker, (void *) (intptr_t) VIEW_STACK), true);
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(view ? view->layout : VIEW_FLOAT, VIEW_STACK);
@@ -1431,6 +1445,7 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
     TEST_CHECK(view ? view->root : NULL, root_before);
 
+    declarative_runtime_reset_operation_ops();
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 })

@@ -48,6 +48,18 @@ static CGError test_ordered_query_out(int connection, uint32_t wid, uint8_t *ord
     return kCGErrorSuccess;
 }
 
+static uint32_t test_ordered_layout_inventory[2];
+static bool test_ordered_layout_inventory_fails;
+static bool test_ordered_layout_user_space(uint64_t sid) { (void) sid; return true; }
+static uint32_t *test_ordered_layout_window_list(uint64_t *sids, int sid_count, int cid,
+                                                 int *count, bool mode, bool *succeeded)
+{
+    (void) sids; (void) sid_count; (void) cid; (void) mode;
+    *count = test_ordered_layout_inventory_fails ? 0 : 2;
+    *succeeded = !test_ordered_layout_inventory_fails;
+    return test_ordered_layout_inventory;
+}
+
 struct test_ordered
 {
     struct application application;
@@ -96,17 +108,25 @@ static bool test_ordered_init(struct test_ordered *t)
     }
     t->view->sid = sid;
     t->view->layout = VIEW_BSP;
+    t->view->split_type = SPLIT_AUTO;
+    t->view->root->area = (struct area) { .w = 1000.0f, .h = 700.0f };
     t->view->split_ratio = 0.5f;
     table_remove(&g_space_manager.view, &sid);
     table_add(&g_space_manager.view, &sid, t->view);
 
     struct window *windows[] = { &t->a, &t->b };
     uint32_t wids[] = { TEST_ORDERED_WID_A, TEST_ORDERED_WID_B };
+    memcpy(test_ordered_layout_inventory, wids, sizeof(wids));
+    space_manager_test_layout_window_list = test_ordered_layout_window_list;
+    space_manager_test_layout_space_is_user = test_ordered_layout_user_space;
+    test_ordered_layout_inventory_fails = false;
     for (int i = 0; i < 2; ++i) {
         test_ordered_window_init(windows[i], &t->application, wids[i]);
         window_manager_add_window(&g_window_manager, windows[i]);
-        struct view *view = space_manager_tile_window_on_space(&g_space_manager, windows[i], sid);
-        if (!view) {
+        enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager,
+                                                                                         &g_window_manager,
+                                                                                         windows[i], sid, 0, true);
+        if (managed_result == MANAGED_WINDOW_FAILED) {
             for (int j = 0; j <= i; ++j) {
                 window_manager_remove_managed_window(&g_window_manager, windows[j]->id);
                 window_manager_remove_window(&g_window_manager, windows[j]->id);
@@ -117,7 +137,6 @@ static bool test_ordered_init(struct test_ordered *t)
             t->view = NULL;
             return false;
         }
-        window_manager_add_managed_window(&g_window_manager, windows[i], view);
     }
 
     return true;
@@ -135,7 +154,151 @@ static void test_ordered_free(struct test_ordered *t)
     view_destroy(t->view);
     free(t->view);
     t->view = NULL;
+    space_manager_test_layout_window_list = NULL;
+    space_manager_test_layout_space_is_user = NULL;
 }
+
+TEST_FUNC(imperative_layout_transaction_exhausts_preparation_faults_without_publication,
+{
+    struct test_ordered success;
+    TEST_CHECK(test_ordered_init(&success), true);
+    uint64_t unrelated_sid = TEST_ORDERED_SID - 1;
+    struct view *unrelated = calloc(1, sizeof(*unrelated));
+    unrelated->sid = unrelated_sid;
+    unrelated->layout = VIEW_BSP;
+    unrelated->split_ratio = 0.7f;
+    unrelated->window_gap = 17;
+    unrelated->flags = VIEW_IS_DIRTY | VIEW_WINDOW_GAP;
+    unrelated->scaffold_fingerprint = 777;
+    unrelated->scaffold_primary[0] = 999;
+    unrelated->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].present = true;
+    unrelated->root = calloc(1, sizeof(*unrelated->root));
+    struct view unrelated_before = *unrelated;
+    table_add(&g_space_manager.view, &unrelated_sid, unrelated);
+    declarative_space_test_fail_allocation_at(0);
+    TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, success.view, VIEW_STACK), true);
+    TEST_CHECK(declarative_space_test_allocation_count() > 0, true);
+    TEST_CHECK(success.view->layout, VIEW_STACK);
+    TEST_CHECK(success.view->root->window_count, 2);
+    TEST_CHECK(unrelated->root, unrelated_before.root);
+    TEST_CHECK(unrelated->layout, unrelated_before.layout);
+    TEST_CHECK(unrelated->flags, unrelated_before.flags);
+    TEST_CHECK(unrelated->window_gap, unrelated_before.window_gap);
+    TEST_CHECK(unrelated->split_ratio, unrelated_before.split_ratio);
+    TEST_CHECK(unrelated->scaffold_fingerprint, unrelated_before.scaffold_fingerprint);
+    TEST_CHECK(memcmp(unrelated->runtime_ownership, unrelated_before.runtime_ownership,
+                      sizeof(unrelated->runtime_ownership)), 0);
+    table_remove(&g_space_manager.view, &unrelated_sid);
+    view_destroy(unrelated);
+    free(unrelated);
+    test_ordered_free(&success);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+    TEST_CHECK(space_manager_layout_outstanding, 0U);
+
+    for (size_t ordinal = 1; ordinal <= 3; ++ordinal) {
+        struct test_ordered t;
+        TEST_CHECK(test_ordered_init(&t), true);
+        struct window_node *root_before = t.view->root;
+        struct bucket **buckets_before = g_window_manager.managed_window.buckets;
+        space_manager_layout_fail_ordinal = ordinal;
+        TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, t.view, VIEW_STACK), false);
+        TEST_CHECK(t.view->root, root_before);
+        TEST_CHECK(t.view->layout, VIEW_BSP);
+        TEST_CHECK(g_window_manager.managed_window.buckets, buckets_before);
+        TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a), t.view);
+        TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b), t.view);
+        space_manager_layout_fail_ordinal = 0;
+        test_ordered_free(&t);
+        TEST_CHECK(space_manager_layout_outstanding, 0U);
+    }
+
+    struct test_ordered allocation_probe;
+    TEST_CHECK(test_ordered_init(&allocation_probe), true);
+    declarative_space_test_fail_allocation_at(0);
+    TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, allocation_probe.view, VIEW_STACK), true);
+    size_t allocation_count = declarative_space_test_allocation_count();
+    test_ordered_free(&allocation_probe);
+    TEST_CHECK(allocation_count > 0, true);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+
+    for (size_t ordinal = 1; ordinal <= allocation_count; ++ordinal) {
+        struct test_ordered t;
+        TEST_CHECK(test_ordered_init(&t), true);
+        struct window_node *root_before = t.view->root;
+        struct declarative_space_root_before_image image_before;
+        TEST_CHECK(declarative_space_validate_root(t.view, &image_before), true);
+        struct bucket **buckets_before = g_window_manager.managed_window.buckets;
+        int count_before = g_window_manager.managed_window.count;
+        uint64_t flags_before = t.view->flags;
+        struct declarative_runtime_cell ownership_before[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT];
+        memcpy(ownership_before, t.view->runtime_ownership, sizeof(ownership_before));
+        declarative_space_test_fail_allocation_at(ordinal);
+        TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, t.view, VIEW_STACK), false);
+        struct declarative_space_root_before_image image_after;
+        TEST_CHECK(declarative_space_validate_root(t.view, &image_after), true);
+        TEST_CHECK(t.view->root, root_before);
+        TEST_CHECK(image_after.fingerprint, image_before.fingerprint);
+        TEST_CHECK(t.view->layout, VIEW_BSP);
+        TEST_CHECK(t.view->flags, flags_before);
+        TEST_CHECK(memcmp(t.view->runtime_ownership, ownership_before, sizeof(ownership_before)), 0);
+        TEST_CHECK(g_window_manager.managed_window.buckets, buckets_before);
+        TEST_CHECK(g_window_manager.managed_window.count, count_before);
+        TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a), t.view);
+        TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b), t.view);
+        declarative_space_test_fail_allocation_at(0);
+        test_ordered_free(&t);
+        TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+    }
+    declarative_space_test_fail_allocation_at(0);
+    space_manager_layout_fail_ordinal = 0;
+})
+
+TEST_FUNC(imperative_float_layout_uses_no_external_inventory_and_removes_mappings,
+{
+    struct test_ordered t;
+    TEST_CHECK(test_ordered_init(&t), true);
+    test_ordered_layout_inventory_fails = true;
+    TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, t.view, VIEW_FLOAT), true);
+    TEST_CHECK(t.view->layout, VIEW_FLOAT);
+    TEST_CHECK(t.view->root != NULL, true);
+    TEST_CHECK(t.view->root->window_count, 0);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a), NULL);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b), NULL);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+    TEST_CHECK(space_manager_layout_outstanding, 0U);
+    test_ordered_layout_inventory_fails = false;
+    test_ordered_free(&t);
+})
+
+TEST_FUNC(imperative_global_layout_commits_detached_roots_and_runtime_ownership,
+{
+    struct test_ordered t;
+    TEST_CHECK(test_ordered_init(&t), true);
+    declarative_runtime_reset_operation_ops();
+    t.view->scaffold_fingerprint = 91;
+    t.view->scaffold_primary[0] = t.a.id;
+    struct declarative_value stack = { .present = true, .enumeration = VIEW_STACK };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &stack, 0), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_space_manager.layout, VIEW_STACK);
+    TEST_CHECK(t.view->layout, VIEW_STACK);
+    TEST_CHECK(t.view->root->window_count, 2);
+    TEST_CHECK(t.view->scaffold_fingerprint, 0ULL);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].present, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].value.integer, VIEW_STACK);
+
+    test_ordered_layout_inventory_fails = true;
+    struct declarative_value floating = { .present = true, .enumeration = VIEW_FLOAT };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &floating, 0), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_space_manager.layout, VIEW_FLOAT);
+    TEST_CHECK(t.view->layout, VIEW_FLOAT);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a), NULL);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b), NULL);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].value.integer, VIEW_FLOAT);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+    TEST_CHECK(space_manager_layout_outstanding, 0U);
+    test_ordered_layout_inventory_fails = false;
+    test_ordered_free(&t);
+})
 
 TEST_FUNC(window_inventory_failure_preserves_and_empty_success_clears_membership,
 {

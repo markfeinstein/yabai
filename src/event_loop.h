@@ -92,6 +92,8 @@ struct event_queue
     pthread_mutex_t lock;
     struct event *events;
     uint32_t capacity;
+    uint32_t normal_capacity;
+    uint32_t hard_capacity;
     uint32_t head;
     uint32_t count;
     bool wake_pending;
@@ -122,6 +124,8 @@ struct event_loop
     pthread_t thread;
     sem_t *semaphore;
     struct event_queue queue;
+    volatile uint32_t topology_resync_pending;
+    volatile uint64_t topology_resync_retry_scheduled;
 };
 
 typedef bool (*event_loop_bootstrap_callback)(void *context);
@@ -132,10 +136,14 @@ bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootst
 void event_loop_end(struct event_loop *event_loop);
 bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_callback callback, void *context);
 bool event_loop_is_worker_thread(struct event_loop *event_loop);
+uint64_t event_loop_generation_snapshot(struct event_loop *event_loop);
 bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t generation,
                                     enum event_type type, void *context, int param1);
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
+struct process;
+bool event_loop_post_application_launched(struct process *process);
+void event_loop_schedule_application_launch_retry(struct process *process);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);
 void event_loop_process_application_windows(struct window **window_list, int window_count);

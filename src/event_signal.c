@@ -107,8 +107,15 @@ static bool event_signal_application_is_processed_front(struct application *appl
            psn_equals(&g_process_manager.front_psn, &application->psn);
 }
 
+#ifdef TESTS
+static void (*event_signal_test_push_observer)(enum signal_type, void *);
+#endif
+
 void event_signal_push(enum signal_type type, void *context)
 {
+#ifdef TESTS
+    if (event_signal_test_push_observer) event_signal_test_push_observer(type, context);
+#endif
     int signal_count = buf_len(g_signal_event[type]);
     if (!signal_count) return;
 

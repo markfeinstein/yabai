@@ -35,6 +35,7 @@ enum declarative_test_effect {
 };
 static int declarative_test_effects[DECLARATIVE_TEST_EFFECT_COUNT];
 static int declarative_test_space_geometry_calls;
+static struct view *declarative_test_last_space_pointer;
 static bool declarative_test_user_space = true;
 static bool declarative_test_space_is_user(uint64_t sid)
 {
@@ -59,14 +60,14 @@ static bool declarative_test_set_global_layout(void *manager, int layout)
     sm->layout = layout;
     return true;
 }
-static bool declarative_test_set_space_layout(void *manager, uint64_t sid, int layout)
+static bool declarative_test_set_space_layout(void *manager, void *space, int layout)
 {
     struct space_manager *sm = manager;
+    struct view *view = space;
     ++declarative_test_space_layout_calls;
     ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_LAYOUT];
-    if (!declarative_test_operation_success) return false;
-    struct view *view = space_manager_find_view(sm, sid);
-    if (!view) return false;
+    if (!declarative_test_operation_success || !view ||
+        space_manager_lookup_view(sm, view->sid) != view) return false;
     view->layout = layout;
     return true;
 }
@@ -87,7 +88,7 @@ static void declarative_test_set_auto_balance(void *manager, uint32_t value)
 }
 static void declarative_test_update_and_flush_space(void *space)
 {
-    (void) space;
+    declarative_test_last_space_pointer = space;
     ++declarative_test_space_geometry_calls;
     ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SPACE_GEOMETRY];
 }
@@ -125,7 +126,7 @@ static const struct declarative_runtime_operation_ops declarative_test_operation
     .space_is_user = declarative_test_space_is_user,
     .set_focus_follows_mouse = declarative_test_set_ffm,
     .set_layout_for_all_spaces = declarative_test_set_global_layout,
-    .set_layout_for_space = declarative_test_set_space_layout,
+    .set_layout_for_view = declarative_test_set_space_layout,
     .set_split_ratio_for_all_spaces = declarative_test_set_split_ratio,
     .set_split_type_for_all_spaces = declarative_test_set_split_type,
     .set_auto_balance_for_all_spaces = declarative_test_set_auto_balance,
@@ -249,6 +250,12 @@ static char *declarative_test_run_space_layout_surface(bool config_surface)
     }
     fclose(rsp);
     return output;
+}
+
+static uint64_t declarative_test_missing_index_sid;
+static uint64_t declarative_test_space_for_index(int index)
+{
+    return index == 7 ? declarative_test_missing_index_sid : 0;
 }
 
 static char *declarative_test_run_scoped_config(const char *command, const char *value)
@@ -478,7 +485,15 @@ TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_be
     uint64_t saved_last_space_id = g_space_manager.last_space_id;
     int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
     memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
-    g_space_manager.last_space_id = UINT64_MAX - 60;
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 60;
+    struct view view = { .sid = sid };
+    table_add(&g_space_manager.view, &sid, &view);
+    g_space_manager.last_space_id = sid;
 
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_GLOBAL) continue;
@@ -505,6 +520,11 @@ TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_be
         }
     }
 
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
     memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
     g_space_manager.last_space_id = saved_last_space_id;
 )
@@ -536,6 +556,46 @@ TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selecte
                DECLARATIVE_SETTING_RUNTIME_SPACE);
     TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.6f);
     TEST_CHECK(view.scaffold_fingerprint, 0ULL);
+
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = saved_last_space_id;
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+})
+
+TEST_FUNC(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup,
+{
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 65;
+    struct view view = { .sid = sid, .top_padding = 10, .bottom_padding = 20 };
+    table_add(&g_space_manager.view, &sid, &view);
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_test_last_space_pointer = NULL;
+    space_manager_test_lookup_count = 0;
+
+    char message[] = "--space\0recent\0top_padding\0" "41\0bottom_padding\0";
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, "20\n"), 0);
+        free(output);
+    }
+    TEST_CHECK(space_manager_test_lookup_count, 1U);
+    TEST_CHECK(declarative_test_last_space_pointer, &view);
+    TEST_CHECK(view.top_padding, 41);
 
     declarative_runtime_reset_operation_ops();
     g_space_manager.last_space_id = saved_last_space_id;
@@ -605,6 +665,154 @@ TEST_FUNC(declarative_scoped_mixed_batch_preflights_before_space_mutation,
         g_verbose = saved_verbose;
         table_remove(&g_space_manager.view, &sid);
     }
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+)
+
+TEST_FUNC(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 63;
+    int count_before = g_space_manager.view.count;
+    size_t allocations_before = legacy_allocation_test_outstanding();
+    struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+    struct menu_bar_manager_state menu_before = g_menu_bar_manager;
+    uint64_t generation_before = declarative_installed_generation();
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+    declarative_test_space_geometry_calls = 0;
+    declarative_test_space_layout_calls = 0;
+    declarative_test_space_is_user_calls = 0;
+    declarative_test_user_space = false;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    legacy_allocation_test_fail_at(1);
+
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(space_manager_query_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(space_manager_set_layout_for_space(&g_space_manager, sid, VIEW_BSP), false);
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_SPACE) continue;
+        struct declarative_value value = declarative_test_value(i);
+        TEST_CHECK(declarative_apply_runtime_setting(i, &value, sid), DECLARATIVE_APPLY_MISSING_SPACE);
+    }
+
+    TEST_CHECK(g_space_manager.view.count, count_before);
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+    TEST_CHECK(memcmp(&g_menu_bar_manager, &menu_before, sizeof(menu_before)), 0);
+    TEST_CHECK(declarative_installed_generation(), generation_before);
+    TEST_CHECK(declarative_test_space_geometry_calls, 0);
+    TEST_CHECK(declarative_test_space_is_user_calls, 0);
+    TEST_CHECK(declarative_test_space_layout_calls, 0);
+    for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) {
+        TEST_CHECK(declarative_test_effects[effect], 0);
+    }
+    TEST_CHECK(legacy_allocation_test_outstanding(), allocations_before);
+
+    legacy_allocation_test_reset();
+    declarative_test_user_space = true;
+    declarative_runtime_reset_operation_ops();
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+)
+
+TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    uint64_t sid = UINT64_MAX - 64;
+    g_space_manager.last_space_id = sid;
+    int count_before = g_space_manager.view.count;
+    size_t allocations_before = legacy_allocation_test_outstanding();
+    struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+    struct menu_bar_manager_state menu_before = g_menu_bar_manager;
+    uint64_t generation_before = declarative_installed_generation();
+    int top_before = g_space_manager.top_padding;
+    int bottom_before = g_space_manager.bottom_padding;
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    legacy_allocation_test_fail_at(1);
+
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_SPACE) continue;
+        char *output = declarative_test_run_scoped_config(declarative_config_descriptors[i].name, NULL);
+        TEST_CHECK(output != NULL, true);
+        if (output) {
+            TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+            free(output);
+        }
+    }
+
+    space_manager_set_label_for_space(&g_space_manager, sid, strdup("missing-view"));
+    char label_message[] = "--space\0missing-view\0top_padding\0";
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, label_message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+    space_manager_remove_label_for_space(&g_space_manager, sid);
+
+    __auto_type saved_index_resolver = message_space_for_mission_control_index;
+    declarative_test_missing_index_sid = sid;
+    message_space_for_mission_control_index = declarative_test_space_for_index;
+    char index_message[] = "--space\0" "7\0top_padding\0";
+    output = NULL; output_length = 0;
+    rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, index_message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+    message_space_for_mission_control_index = saved_index_resolver;
+
+    char mixed[] = "--space\0recent\0top_padding\0" "41\0bottom_padding\0" "42\0";
+    output = NULL; output_length = 0;
+    rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, mixed);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+
+    TEST_CHECK(g_space_manager.view.count, count_before);
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(g_space_manager.top_padding, top_before);
+    TEST_CHECK(g_space_manager.bottom_padding, bottom_before);
+    TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+    TEST_CHECK(memcmp(&g_menu_bar_manager, &menu_before, sizeof(menu_before)), 0);
+    TEST_CHECK(declarative_installed_generation(), generation_before);
+    for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) {
+        TEST_CHECK(declarative_test_effects[effect], 0);
+    }
+    TEST_CHECK(legacy_allocation_test_outstanding(), allocations_before);
+
+    legacy_allocation_test_reset();
+    declarative_runtime_reset_operation_ops();
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    g_space_manager.last_space_id = saved_last_space_id;
     if (initialized_view_table) {
         table_free(&g_space_manager.view);
         memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
@@ -683,6 +891,91 @@ TEST_FUNC(declarative_runtime_live_matrix_covers_all_39_typed_setters,
     declarative_runtime_reset_operation_ops();
     declarative_runtime_reset_animation_permission_ops();
 )
+
+TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
+{
+    struct numeric_case { const char *command; const char *value; bool valid; } cases[] = {
+        { "menubar_opacity", "0", true }, { "menubar_opacity", "1", true },
+        { "menubar_opacity", "1.01", false }, { "menubar_opacity", "nan", false },
+        { "active_window_opacity", "0", false }, { "active_window_opacity", "1", true },
+        { "active_window_opacity", "1.01", false },
+        { "normal_window_opacity", "0", false }, { "normal_window_opacity", "1", true },
+        { "normal_window_opacity", "inf", false },
+        { "split_ratio", "0.1", true }, { "split_ratio", "0.9", true },
+        { "split_ratio", "0", false }, { "split_ratio", "1", false },
+        { "window_animation_duration", "0", true }, { "window_animation_duration", "2", true },
+        { "window_animation_duration", "-0.1", false }, { "window_animation_duration", "inf", false },
+        { "window_opacity_duration", "0", true }, { "window_opacity_duration", "2", true },
+        { "window_opacity_duration", "2147483.5", true },
+        { "window_opacity_duration", "2147483.75", false },
+        { "window_opacity_duration", "nan", false }
+    };
+    struct declarative_runtime_state saved_state = g_declarative_runtime_state;
+    float saved_menubar = g_window_manager.menubar_opacity;
+    float saved_active = g_window_manager.active_window_opacity;
+    float saved_normal = g_window_manager.normal_window_opacity;
+    float saved_animation = g_window_manager.window_animation_duration;
+    float saved_opacity_duration = g_window_manager.window_opacity_duration;
+    float saved_split_ratio = g_space_manager.split_ratio;
+    struct declarative_animation_permission_ops permissions = {
+        declarative_test_permission_yes, declarative_test_permission_yes,
+        declarative_test_permission_request
+    };
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        char *output = declarative_test_run_config(cases[i].command, cases[i].value);
+        TEST_CHECK(output != NULL, true);
+        if (output) {
+            TEST_CHECK((output[0] != FAILURE_MESSAGE[0]), cases[i].valid);
+            free(output);
+        }
+    }
+    g_declarative_runtime_state = saved_state;
+    g_window_manager.menubar_opacity = saved_menubar;
+    g_window_manager.active_window_opacity = saved_active;
+    g_window_manager.normal_window_opacity = saved_normal;
+    g_window_manager.window_animation_duration = saved_animation;
+    g_window_manager.window_opacity_duration = saved_opacity_duration;
+    g_space_manager.split_ratio = saved_split_ratio;
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+});
+
+TEST_FUNC(documented_numeric_domains_match_runtime_boundaries,
+{
+    struct declarative_value value = { .present = true };
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), false);
+    value.real = 1.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), true);
+    value.real = 1.01f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), false);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), false);
+
+    value.real = 0.1f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), true);
+    value.real = 0.9f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), true);
+    value.real = 0.099f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
+    value.real = 0.901f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), true);
+    value.real = 2.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), true);
+    value.real = 2147484.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), false);
+    value.real = -0.01f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), false);
+});
 
 TEST_FUNC(declarative_animation_preparation_never_prompts_and_preserves_candidate,
     struct declarative_prepared_settings prepared = {0};

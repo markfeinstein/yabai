@@ -89,8 +89,15 @@ static uint64_t window_display_space(uint32_t wid)
     return sid;
 }
 
+#ifdef TESTS
+static uint64_t (*window_test_space_for_id)(uint32_t wid);
+#endif
+
 uint64_t window_space(uint32_t wid)
 {
+#ifdef TESTS
+    if (window_test_space_for_id) return window_test_space_for_id(wid);
+#endif
     uint64_t sid = 0;
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
@@ -1132,8 +1139,16 @@ bool window_is_unknown(struct window *window)
 
 struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
 {
-    struct window *window = malloc(sizeof(struct window));
-    memset(window, 0, sizeof(struct window));
+    if (!window_ref) return NULL;
+    if (!application || !window_id) {
+        CFRelease(window_ref);
+        return NULL;
+    }
+    struct window *window = legacy_allocation_calloc(1, sizeof(struct window));
+    if (!window) {
+        CFRelease(window_ref);
+        return NULL;
+    }
 
     window->application = application;
     window->ref = window_ref;
@@ -1173,12 +1188,23 @@ struct window *window_create(struct application *application, AXUIElementRef win
     return window;
 }
 
+#ifdef TESTS
+static void (*window_test_ref_release)(CFTypeRef);
+#endif
+
 void window_destroy(struct window *window)
 {
     window->id = 0;
     if (window->role) CFRelease(window->role);
     if (window->subrole) CFRelease(window->subrole);
     if (window->title) CFRelease(window->title);
-    CFRelease(window->ref);
-    free(window);
+    if (window->ref) {
+#ifdef TESTS
+        if (window_test_ref_release) window_test_ref_release(window->ref);
+        else CFRelease(window->ref);
+#else
+        CFRelease(window->ref);
+#endif
+    }
+    legacy_allocation_free(window);
 }

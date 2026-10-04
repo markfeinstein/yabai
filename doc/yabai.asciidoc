@@ -64,6 +64,16 @@ Options
 *--message*, *-m* '<msg>'::
     Send message to a running instance of yabai.
 
+Yabai stores its daemon socket, scripting-addition socket, and their lifecycle
+locks in `~/Library/Caches/yabai/runtime`. The directory is private mode 0700 and
+socket and lock entries are mode 0600. Startup and client operations fail closed
+if the home/cache path has unsafe ownership, permissions, ACLs, symlinks, or
+conflicting entries; legacy shared `/tmp` entries are not used. These checks and
+locks protect against other UIDs and coordinate cooperating instances of the
+same UID. A malicious process running as the same UID can still mutate pathname
+entries between non-atomic Unix-domain socket unlink and bind operations and is
+outside this isolation boundary.
+
 *--config*, *-c* '<config_file>'::
     Use the specified legacy *yabairc* file. +
     Executes the file directly if it is a regular file executable by the current user. +
@@ -360,7 +370,15 @@ LAYER       := below | normal | above | auto
 
 BOOL_SEL    := on | off
 
-FLOAT_SEL   := 0 < <value> <= 1.0
+UNIT_SEL             := 0.0 <= <value> <= 1.0
+
+POSITIVE_UNIT_SEL    := 0.0 < <value> <= 1.0
+
+SPLIT_RATIO_SEL      := 0.1 <= <value> <= 0.9
+
+DURATION_SEL         := finite <value> >= 0.0
+
+OPACITY_DURATION_SEL := finite 0.0 <= <value> <= INT_MAX / 1000 seconds
 
 RULE_SEL    := <index> | LABEL
 
@@ -445,7 +463,7 @@ Global Settings
     'all': Show all user-navigation spaces reported by macOS, including native-fullscreen spaces. Virtual spaces are not created or shown. +
     The compact and expanded layouts share the same display-grouped informational menu. A checkmark marks each display's visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in *yabairc* to persist them.
 
-*menubar_opacity* ['<FLOAT_SEL>']::
+*menubar_opacity* ['<UNIT_SEL>']::
     Changes the transparency of the macOS menubar. +
     If the value is 0.0, the menubar will no longer respond to mouse-events, effectively hiding the menubar permanently. +
     The menubar will automatically become fully opaque upon entering a native-fullscreen space, and adjusted down afterwards.
@@ -495,19 +513,19 @@ Global Settings
     Enable opacity for windows. +
     System Integrity Protection must be partially disabled.
 
-*window_opacity_duration* ['<FLOAT_SEL>']::
+*window_opacity_duration* ['<OPACITY_DURATION_SEL>']::
     Duration of transition between active / normal opacity. +
     System Integrity Protection must be partially disabled.
 
-*active_window_opacity* ['<FLOAT_SEL>']::
+*active_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of the focused window. +
     System Integrity Protection must be partially disabled.
 
-*normal_window_opacity* ['<FLOAT_SEL>']::
+*normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of an unfocused window. +
     System Integrity Protection must be partially disabled.
 
-*window_animation_duration* ['<FLOAT_SEL>']::
+*window_animation_duration* ['<DURATION_SEL>']::
     Duration of window frame animation. +
     If 0.0, the change in dimension is not animated. +
     Requires Screen Recording permissions. +
@@ -528,8 +546,8 @@ Global Settings
     Stroke width in display points for insert feedback. Must be finite and greater than zero. +
     Rendering clamps the width to half the shorter feedback-frame dimension. (default: 2)
 
-*split_ratio* ['<FLOAT_SEL>']::
-    Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value. The valid range is `0.1...0.9`.
+*split_ratio* ['<SPLIT_RATIO_SEL>']::
+    Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value.
 
 *mouse_modifier* ['cmd|alt|shift|ctrl|fn']::
     Keyboard modifier used for moving and resizing windows.
@@ -573,8 +591,8 @@ Space Settings
 *accordion_padding* ['<nonnegative integer number>']::
     Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on `bsp`, `stack` or `float` geometry.
 
-*split_ratio* ['<FLOAT_SEL>']::
-    Set the default ratio for new BSP splits on the selected Space. The valid range is `0.1...0.9`. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.
+*split_ratio* ['<SPLIT_RATIO_SEL>']::
+    Set the default ratio for new BSP splits on the selected Space. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.
 
 *auto_balance* ['<BOOL_SEL>|x-axis|y-axis']::
     Balance the window tree upon change, so that all windows occupy an equally sized area.
@@ -753,7 +771,7 @@ COMMAND
     Specify the value 'auto' to reset back to normal and make it become automatically managed. +
     System Integrity Protection must be partially disabled.
 
-*--opacity* '<FLOAT_SEL>'::
+*--opacity* '<UNIT_SEL>'::
     Set the opacity of the selected window. +
     The window will no longer be eligible for automatic change in opacity upon focus change. +
     Specify the value '0.0' to reset back to full opacity and make it become automatically managed. +
@@ -797,6 +815,11 @@ COMMAND
 
 *--windows*::
     Retrieve information about windows.
+
+*--daemon-identity*::
+    Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments. +
+    The JSON object contains `pid` (the daemon process identifier), `architecture` (`arm64` or `x86_64`), and `uuid` (the Mach-O UUID of the running architecture slice). +
+    Field names and JSON types are stable for diagnostics and integration checks; values identify only the current daemon process and binary, and are not persistent identifiers.
 
 ARGUMENT
 ^^^^^^^^
@@ -1004,7 +1027,7 @@ ARGUMENT
     Specify the value 'auto' to reset back to normal and make it become automatically managed. +
     System Integrity Protection must be partially disabled.
 
-*opacity='<FLOAT_SEL>'*::
+*opacity='<UNIT_SEL>'*::
     Set window opacity. +
     The window will no longer be eligible for automatic change in opacity upon focus change. +
     Specify the value '0.0' to reset back to full opacity and make it become automatically managed. +

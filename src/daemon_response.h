@@ -12,6 +12,13 @@
 
 #define DAEMON_RESPONSE_WRITE_TIMEOUT_MS 30000
 
+#ifndef DAEMON_RESPONSE_ALLOCATE
+#define DAEMON_RESPONSE_ALLOCATE(size) malloc(size)
+#endif
+#ifndef DAEMON_RESPONSE_FMEMOPEN
+#define DAEMON_RESPONSE_FMEMOPEN(bytes, size, mode) fmemopen(bytes, size, mode)
+#endif
+
 // Bound daemon response generation so a request cannot consume unbounded memory.
 // This is a protocol protection limit, independent of how clients display responses.
 #define DAEMON_RESPONSE_MAX_BYTES (8U * 1024U * 1024U)
@@ -26,11 +33,11 @@ struct daemon_response_buffer
 static inline bool daemon_response_buffer_open(struct daemon_response_buffer *response)
 {
     response->stream = NULL;
-    response->bytes = malloc(DAEMON_RESPONSE_MAX_BYTES);
+    response->bytes = DAEMON_RESPONSE_ALLOCATE(DAEMON_RESPONSE_MAX_BYTES);
     response->length = 0;
     if (!response->bytes) return false;
 
-    response->stream = fmemopen(response->bytes, DAEMON_RESPONSE_MAX_BYTES, "w");
+    response->stream = DAEMON_RESPONSE_FMEMOPEN(response->bytes, DAEMON_RESPONSE_MAX_BYTES, "w");
     if (!response->stream) {
         free(response->bytes);
         response->bytes = NULL;

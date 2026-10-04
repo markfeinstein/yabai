@@ -50,7 +50,6 @@
 #include "misc/macros.h"
 #include "misc/memory_pool.h"
 #include "misc/ts.h"
-//#include "misc/autorelease.h"
 #include "misc/notify.h"
 #include "misc/log.h"
 #include "misc/helpers.h"
@@ -58,13 +57,19 @@
 #include "misc/macho_dlsym.h"
 #include "misc/sbuffer.h"
 #include "misc/socket_io.h"
+#include "runtime_paths.h"
 #include "daemon_message_admission.h"
 #include "message_frame.h"
 #include "daemon_response.h"
+#include "daemon_io.h"
+#include "daemon_identity.h"
 #define HASHTABLE_IMPLEMENTATION
 #include "misc/hashtable.h"
 #undef HASHTABLE_IMPLEMENTATION
 #include "misc/service.h"
+#define LEGACY_ALLOCATOR_IMPLEMENTATION
+#include "legacy_allocator.h"
+#undef LEGACY_ALLOCATOR_IMPLEMENTATION
 
 #include "osax/common.h"
 
@@ -104,7 +109,6 @@
 #include "sa.m"
 #include "mission_control.c"
 #include "event_queue.c"
-#include "menu_bar_model.c"
 #include "menu_bar.m"
 #include "menu_bar_manager.c"
 #include "event_loop.c"
@@ -118,6 +122,7 @@
 #include "declarative_rules.c"
 #include "declarative_topology.c"
 #include "message.c"
+#include "daemon_io.c"
 #include "display.c"
 #include "space.c"
 #include "space_gesture.c"

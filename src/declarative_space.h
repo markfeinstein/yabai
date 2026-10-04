@@ -66,6 +66,7 @@ struct declarative_space_target
     const char *uuid;
     bool is_user_space;
     struct declarative_space_identity identity;
+    bool imperative_layout_target;
 };
 
 /* Immutable Mission Control topology captured for the same event turn. */
@@ -202,6 +203,7 @@ struct declarative_space_prepared_target
     bool membership_changed;
     bool scaffold_changed;
     bool root_owned;
+    bool imperative_affected;
     /* Preparation-owned edit index and stable flatten sequences. */
     struct declarative_space_tree_index_entry *tree_index;
     size_t tree_index_count;
@@ -254,6 +256,7 @@ struct declarative_space_preparation
     struct table replacement_managed_window;
     struct declarative_space_table_before_image table_before;
     bool prepared;
+    bool imperative_layout;
 };
 
 bool declarative_space_resolve_policy(const struct declarative_config_model *native,
@@ -359,6 +362,19 @@ struct declarative_space_postcommit_ops
 };
 
 typedef void (*declarative_space_publication_callback)(void *context);
+
+enum declarative_space_apply_result declarative_space_apply_imperative_layout(
+                                                         const struct declarative_space_target *targets,
+                                                         size_t target_count,
+                                                         const struct declarative_space_topology_entry *topology,
+                                                         const struct table *current_views,
+                                                         const struct declarative_space_table_contract *view_table_contract,
+                                                         const struct declarative_space_table_contract *managed_table_contract,
+                                                         const struct declarative_space_defaults *defaults,
+                                                         enum view_type layout,
+                                                         const struct declarative_space_capture_ops *capture_ops,
+                                                         declarative_space_publication_callback publish,
+                                                         void *publish_context);
 
 struct declarative_space_transition
 {

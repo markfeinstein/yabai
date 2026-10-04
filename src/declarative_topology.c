@@ -703,10 +703,46 @@ static struct view *declarative_detached_view_create(const struct declarative_to
     return view;
 }
 
-void declarative_detached_view_table_adopt(struct declarative_detached_view_table *table,
+static bool declarative_adopt_live_node_forest(struct window_node *node)
+{
+    if (!node) return true;
+    if (!declarative_adopt_live_node_forest(node->left) ||
+        !declarative_adopt_live_node_forest(node->right)) return false;
+    return legacy_allocation_adopt(node);
+}
+
+static void declarative_unadopt_live_node_forest(struct window_node *node)
+{
+    if (!node) return;
+    declarative_unadopt_live_node_forest(node->left);
+    declarative_unadopt_live_node_forest(node->right);
+    legacy_allocation_unadopt(node);
+}
+
+static void declarative_disown_live_node_forest(struct window_node *node)
+{
+    if (!node) return;
+    declarative_disown_live_node_forest(node->left);
+    declarative_disown_live_node_forest(node->right);
+    declarative_topology_disown(node);
+}
+
+bool declarative_detached_view_table_adopt(struct declarative_detached_view_table *table,
                                            struct table *live_table)
 {
-    if (!table || !live_table) return;
+    if (!table || !live_table) return false;
+    for (size_t i = 0; i < table->count; ++i) {
+        struct view *view = table->views[i];
+        if (!declarative_adopt_live_node_forest(view ? view->root : NULL) ||
+            !legacy_allocation_adopt(view)) {
+            for (size_t j = 0; j < table->count; ++j) {
+                declarative_unadopt_live_node_forest(table->views[j] ? table->views[j]->root : NULL);
+                legacy_allocation_unadopt(table->views[j]);
+            }
+            return false;
+        }
+    }
+
     *live_table = table->view_table;
     for (int i = 0; i < live_table->capacity; ++i) {
         for (struct bucket *bucket = live_table->buckets[i]; bucket; bucket = bucket->next) {
@@ -716,12 +752,14 @@ void declarative_detached_view_table_adopt(struct declarative_detached_view_tabl
     }
     declarative_topology_disown(live_table->buckets);
     for (size_t i = 0; i < table->count; ++i) {
-        declarative_topology_disown(table->views[i] ? table->views[i]->root : NULL);
-        declarative_topology_disown(table->views[i]);
+        struct view *view = table->views[i];
+        declarative_disown_live_node_forest(view ? view->root : NULL);
+        declarative_topology_disown(view);
     }
     declarative_topology_free(table->views);
     declarative_topology_free(table->sids);
     memset(table, 0, sizeof(*table));
+    return true;
 }
 
 void declarative_detached_view_table_destroy(struct declarative_detached_view_table *table)

@@ -81,6 +81,644 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     application_observer_add_run_loop_source = saved_add_source;
 });
 
+static int launch_path_create_count;
+static int launch_path_destroy_count;
+static int launch_path_observe_count;
+static int launch_path_unobserve_count;
+static int launch_path_remove_count;
+static int launch_path_invalidate_count;
+static int launch_path_observer_release_count;
+static int launch_path_retry_count;
+static int launch_path_signal_count;
+
+static AXUIElementRef launch_path_create_element(pid_t pid)
+{
+    (void) pid;
+    ++launch_path_create_count;
+    return (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("launch-path-ref"));
+}
+
+static bool launch_path_not_hidden(struct application *application)
+{
+    (void) application;
+    return false;
+}
+
+static void launch_path_connection(struct application *application)
+{
+    application->connection = 1;
+}
+
+static void launch_path_destroy(struct application *application)
+{
+    (void) application;
+    ++launch_path_destroy_count;
+}
+
+static AXError launch_path_observer_create(pid_t pid, AXObserverCallback callback, AXObserverRef *observer)
+{
+    (void) pid; (void) callback;
+    ++launch_path_observe_count;
+    *observer = (AXObserverRef) CFRetain(CFSTR("launch-path-observer"));
+    return kAXErrorSuccess;
+}
+
+static AXError launch_path_remove(AXObserverRef observer, AXUIElementRef element, CFStringRef notification)
+{
+    (void) observer; (void) element; (void) notification;
+    ++launch_path_remove_count;
+    return kAXErrorSuccess;
+}
+
+static void launch_path_invalidate(AXObserverRef observer)
+{
+    (void) observer;
+    ++launch_path_invalidate_count;
+}
+
+static void launch_path_observer_release(AXObserverRef observer)
+{
+    ++launch_path_observer_release_count;
+    CFRelease(observer);
+}
+
+static void launch_path_unobserve_source(AXObserverRef observer)
+{
+    (void) observer;
+}
+
+static bool launch_path_true(struct process *process)
+{
+    (void) process;
+    return true;
+}
+
+static void launch_path_retry(struct process *process)
+{
+    (void) process;
+    ++launch_path_retry_count;
+}
+
+static void launch_path_signal(enum signal_type type, void *context)
+{
+    (void) context;
+    if (type == SIGNAL_APPLICATION_LAUNCHED) ++launch_path_signal_count;
+}
+
+static CFArrayRef launch_path_empty_window_list(struct application *application)
+{
+    (void) application;
+    return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
+}
+
+static bool launch_path_empty_inventory(struct application *application, uint32_t **list, int *count)
+{
+    (void) application;
+    *list = NULL;
+    *count = 0;
+    return true;
+}
+
+static void launch_path_reset_counts(void)
+{
+    launch_path_create_count = launch_path_destroy_count = 0;
+    launch_path_observe_count = launch_path_unobserve_count = 0;
+    launch_path_remove_count = launch_path_invalidate_count = 0;
+    launch_path_observer_release_count = launch_path_retry_count = 0;
+    launch_path_signal_count = 0;
+}
+
+static void launch_path_cleanup_application(struct window_manager *wm, pid_t pid)
+{
+    struct application *application = window_manager_find_application(wm, pid);
+    if (!application) return;
+    window_manager_remove_application(wm, pid);
+    application_unobserve(application);
+    ++launch_path_unobserve_count;
+    application_destroy(application);
+}
+
+TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_through_callers,
+{
+    struct table saved_applications = g_window_manager.application;
+    struct table saved_processes = g_process_manager.process;
+    struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    __auto_type saved_ax_create = application_create_ax_element;
+    __auto_type saved_hidden = application_create_is_hidden;
+    __auto_type saved_connection = application_create_connection;
+    __auto_type saved_destroy = application_destroy_observer;
+    __auto_type saved_observer_create = application_observer_create;
+    __auto_type saved_observer_add = application_observer_add_notification;
+    __auto_type saved_observer_remove = application_observer_remove_notification;
+    __auto_type saved_add_source = application_observer_add_run_loop_source;
+    __auto_type saved_invalidate = application_observer_invalidate;
+    __auto_type saved_observer_release = application_observer_release;
+    __auto_type saved_finished = event_loop_test_application_finished;
+    __auto_type saved_observable = event_loop_test_application_observable;
+    __auto_type saved_retry = event_loop_test_application_retry_scheduler;
+    __auto_type saved_signal = event_signal_test_push_observer;
+    __auto_type saved_list = window_manager_test_application_window_list;
+    __auto_type saved_inventory = window_manager_test_existing_application_window_list;
+    __auto_type saved_startup_observable = window_manager_test_application_is_observable;
+
+    g_window_manager.application = (struct table) {0};
+    g_process_manager.process = (struct table) {0};
+    g_window_manager.applications_to_refresh = NULL;
+    application_create_ax_element = launch_path_create_element;
+    application_create_is_hidden = launch_path_not_hidden;
+    application_create_connection = launch_path_connection;
+    application_destroy_observer = launch_path_destroy;
+    application_observer_create = launch_path_observer_create;
+    application_observer_add_notification = application_test_observer_add_notification;
+    application_observer_remove_notification = launch_path_remove;
+    application_observer_add_run_loop_source = launch_path_unobserve_source;
+    application_observer_invalidate = launch_path_invalidate;
+    application_observer_release = launch_path_observer_release;
+    event_loop_test_application_finished = launch_path_true;
+    event_loop_test_application_observable = launch_path_true;
+    event_loop_test_application_retry_scheduler = launch_path_retry;
+    event_signal_test_push_observer = launch_path_signal;
+    window_manager_test_application_window_list = launch_path_empty_window_list;
+    window_manager_test_existing_application_window_list = launch_path_empty_inventory;
+    window_manager_test_application_is_observable = launch_path_true;
+    application_test_reset(kAXErrorSuccess);
+
+    struct process process = { .pid = 5151, .psn = { .highLongOfPSN = 51, .lowLongOfPSN = 52 },
+                               .name = "launch-path", .ns_application = (void *) 1 };
+
+    for (int rehash = 0; rehash <= 1; ++rehash) {
+        table_init(&g_window_manager.application, rehash ? 2 : 4, hash_wm, compare_wm);
+        struct application sentinel = { .pid = 6161 };
+        if (rehash) table_add(&g_window_manager.application, &sentinel.pid, &sentinel);
+        launch_path_reset_counts();
+        application_test_reset(kAXErrorSuccess);
+        process.launch_retries = 0;
+        table_test_fail_allocation_after(rehash ? 2 : 0);
+        event_loop_dispatch_event((struct event) { .type = APPLICATION_LAUNCHED, .context = &process });
+        table_test_fail_allocation_after(-1);
+        TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) == NULL, true);
+        TEST_CHECK(g_window_manager.application.count, rehash ? 1 : 0);
+        TEST_CHECK(launch_path_create_count, 1);
+        TEST_CHECK(launch_path_destroy_count, 1);
+        TEST_CHECK(launch_path_observe_count, 1);
+        TEST_CHECK(launch_path_remove_count, 7);
+        TEST_CHECK(launch_path_invalidate_count, 1);
+        TEST_CHECK(launch_path_observer_release_count, 1);
+        TEST_CHECK(launch_path_retry_count, 1);
+        TEST_CHECK(launch_path_signal_count, 0);
+
+        application_test_reset(kAXErrorSuccess);
+        event_loop_dispatch_event((struct event) { .type = APPLICATION_LAUNCHED, .context = &process });
+        TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) != NULL, true);
+        TEST_CHECK(process.launch_retries, 0U);
+        TEST_CHECK(launch_path_signal_count, 1);
+        launch_path_cleanup_application(&g_window_manager, process.pid);
+        TEST_CHECK(launch_path_create_count, 2);
+        TEST_CHECK(launch_path_destroy_count, 2);
+        TEST_CHECK(launch_path_observe_count, 2);
+        TEST_CHECK(launch_path_remove_count, 14);
+        TEST_CHECK(process.name, "launch-path");
+        TEST_CHECK(process.ns_application, (void *) 1);
+        table_free(&g_window_manager.application);
+    }
+
+    table_init(&g_process_manager.process, 4, hash_psn, compare_psn);
+    table_add(&g_process_manager.process, &process.psn, &process);
+    for (int rehash = 0; rehash <= 1; ++rehash) {
+        table_init(&g_window_manager.application, rehash ? 2 : 4, hash_wm, compare_wm);
+        struct application sentinel = { .pid = 6161 };
+        if (rehash) table_add(&g_window_manager.application, &sentinel.pid, &sentinel);
+        launch_path_reset_counts();
+        application_test_reset(kAXErrorSuccess);
+        process.launch_retries = 0;
+        table_test_fail_allocation_after(rehash ? 2 : 0);
+        window_manager_begin(&g_space_manager, &g_window_manager);
+        table_test_fail_allocation_after(-1);
+        TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) == NULL, true);
+        TEST_CHECK(launch_path_destroy_count, 1);
+        TEST_CHECK(launch_path_remove_count, 7);
+        TEST_CHECK(launch_path_retry_count, 1);
+        application_test_reset(kAXErrorSuccess);
+        window_manager_begin(&g_space_manager, &g_window_manager);
+        TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) != NULL, true);
+        TEST_CHECK(process.launch_retries, 0U);
+        launch_path_cleanup_application(&g_window_manager, process.pid);
+        TEST_CHECK(launch_path_create_count, 2);
+        TEST_CHECK(launch_path_destroy_count, 2);
+        TEST_CHECK(launch_path_observe_count, 2);
+        TEST_CHECK(launch_path_remove_count, 14);
+        TEST_CHECK(launch_path_signal_count, 0);
+        TEST_CHECK(process.name, "launch-path");
+        TEST_CHECK(process.ns_application, (void *) 1);
+        table_free(&g_window_manager.application);
+    }
+
+    struct event_loop saved_event_loop = g_event_loop;
+    g_event_loop = (struct event_loop) {0};
+    TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
+    char launch_semaphore_name[64];
+    snprintf(launch_semaphore_name, sizeof(launch_semaphore_name), "/yabai_launch_retry_%d", getpid());
+    g_event_loop.semaphore = sem_open(launch_semaphore_name, O_CREAT, 0600, 0);
+    sem_unlink(launch_semaphore_name);
+    TEST_CHECK(g_event_loop.semaphore != SEM_FAILED, true);
+    pthread_mutex_init(&g_event_loop.producer_lock, NULL);
+    pthread_cond_init(&g_event_loop.producer_cond, NULL);
+    g_event_loop.producer_sync_initialized = true;
+    __atomic_store_n(&g_event_loop.producer_admission, EVENT_LOOP_ADMISSION_OPEN, __ATOMIC_RELEASE);
+    struct event replaced = {0};
+    uint32_t capacity = 0;
+    bool post_wake = false;
+    TEST_CHECK(event_queue_push(&g_event_loop.queue, (struct event) { .type = WINDOW_MOVED },
+                                false, &replaced, &capacity, &post_wake), EVENT_QUEUE_ADDED);
+    process.launch_retries = 0;
+    launch_path_retry_count = 0;
+    g_event_queue_test_fail_allocation = true;
+    TEST_CHECK(event_loop_post_application_launched(&process), false);
+    g_event_queue_test_fail_allocation = false;
+    TEST_CHECK(process.launch_retries, 1U);
+    TEST_CHECK(launch_path_retry_count, 1);
+    struct event queued;
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &queued), true);
+    TEST_CHECK(event_loop_post_application_launched(&process), true);
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &queued), true);
+    TEST_CHECK(queued.type, APPLICATION_LAUNCHED);
+    table_init(&g_window_manager.application, 4, hash_wm, compare_wm);
+    application_test_reset(kAXErrorSuccess);
+    event_loop_dispatch_event(queued);
+    TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) != NULL, true);
+    launch_path_cleanup_application(&g_window_manager, process.pid);
+    table_free(&g_window_manager.application);
+    event_loop_close_producer_admission(&g_event_loop);
+    pthread_cond_destroy(&g_event_loop.producer_cond);
+    pthread_mutex_destroy(&g_event_loop.producer_lock);
+    event_queue_destroy(&g_event_loop.queue);
+    if (g_event_loop.semaphore != SEM_FAILED) sem_close(g_event_loop.semaphore);
+    g_event_loop = saved_event_loop;
+
+    process.launch_retries = APPLICATION_LAUNCH_RETRY_LIMIT - 1;
+    launch_path_retry_count = 0;
+    event_loop_schedule_application_launch_retry(&process);
+    event_loop_schedule_application_launch_retry(&process);
+    TEST_CHECK(process.launch_retries, APPLICATION_LAUNCH_RETRY_LIMIT);
+    TEST_CHECK(launch_path_retry_count, 1);
+
+    table_free(&g_process_manager.process);
+    buf_free(g_window_manager.applications_to_refresh);
+    g_window_manager.application = saved_applications;
+    g_process_manager.process = saved_processes;
+    g_window_manager.applications_to_refresh = saved_refresh;
+    application_create_ax_element = saved_ax_create;
+    application_create_is_hidden = saved_hidden;
+    application_create_connection = saved_connection;
+    application_destroy_observer = saved_destroy;
+    application_observer_create = saved_observer_create;
+    application_observer_add_notification = saved_observer_add;
+    application_observer_remove_notification = saved_observer_remove;
+    application_observer_add_run_loop_source = saved_add_source;
+    application_observer_invalidate = saved_invalidate;
+    application_observer_release = saved_observer_release;
+    event_loop_test_application_finished = saved_finished;
+    event_loop_test_application_observable = saved_observable;
+    event_loop_test_application_retry_scheduler = saved_retry;
+    event_signal_test_push_observer = saved_signal;
+    window_manager_test_application_window_list = saved_list;
+    window_manager_test_existing_application_window_list = saved_inventory;
+    window_manager_test_application_is_observable = saved_startup_observable;
+})
+
+static int ax_owner_observe_count;
+static int ax_owner_unobserve_count;
+static int ax_owner_retain_count;
+static int ax_owner_retry_release_count;
+static int ax_owner_ref_release_count;
+static int ax_owner_signal_count;
+static int ax_owner_post_count;
+static int ax_owner_array_release_count;
+static int ax_owner_list_count;
+static CFIndex ax_owner_constructor_retain_count;
+static bool ax_owner_observe_success;
+static bool ax_owner_observe_retry;
+static bool ax_owner_post_accept;
+static struct window_created_retry *ax_owner_posted_retry;
+static AXUIElementRef ax_owner_list_ref;
+
+enum ax_owner_kind {
+    AX_SUCCESS,
+    AX_PERMANENT,
+    AX_TRANSIENT,
+    AX_PENDING,
+    AX_ALLOC_FAIL,
+    AX_POST_REJECT
+};
+static enum ax_owner_kind ax_owner_kind;
+static bool ax_owner_constructor_path;
+
+static uint32_t ax_owner_window_id(AXUIElementRef ref)
+{
+    (void) ref;
+    if (ax_owner_constructor_path && ax_owner_kind == AX_PENDING) {
+        struct rule pending = { .flags = RULE_ONE_SHOT };
+        buf_push(g_window_manager.rules, pending);
+        rule_one_shot_reassignment_pending = true;
+        rule_test_fail_reservation_allocation_at(1);
+    }
+    return 7171;
+}
+
+static pid_t ax_owner_window_pid(AXUIElementRef ref)
+{
+    (void) ref;
+    return 8181;
+}
+
+static bool ax_owner_observe(struct window *window, bool *retry)
+{
+    ++ax_owner_observe_count;
+    ax_owner_constructor_retain_count = CFGetRetainCount(window->ref);
+    if (retry) *retry = ax_owner_observe_retry;
+    return ax_owner_observe_success;
+}
+
+static void ax_owner_unobserve(struct window *window)
+{
+    (void) window;
+    ++ax_owner_unobserve_count;
+}
+
+static CFTypeRef ax_owner_retain(CFTypeRef ref)
+{
+    ++ax_owner_retain_count;
+    return CFRetain(ref);
+}
+
+static void ax_owner_retry_release(CFTypeRef ref)
+{
+    ++ax_owner_retry_release_count;
+    CFRelease(ref);
+}
+
+static void ax_owner_ref_release(CFTypeRef ref)
+{
+    ++ax_owner_ref_release_count;
+    CFRelease(ref);
+}
+
+static bool ax_owner_post(struct window_created_retry *retry)
+{
+    ++ax_owner_post_count;
+    if (ax_owner_post_accept) ax_owner_posted_retry = retry;
+    return ax_owner_post_accept;
+}
+
+static void *ax_owner_no_allocate(size_t size)
+{
+    (void) size;
+    return NULL;
+}
+
+static void ax_owner_signal(enum signal_type type, void *context)
+{
+    (void) context;
+    if (type == SIGNAL_WINDOW_CREATED) ++ax_owner_signal_count;
+}
+
+static void ax_owner_array_release(CFAllocatorRef allocator, const void *value)
+{
+    (void) allocator;
+    ++ax_owner_array_release_count;
+    CFRelease(value);
+}
+
+static CFArrayRef ax_owner_window_list(struct application *application)
+{
+    (void) application;
+    if (ax_owner_list_count++) return NULL;
+    const void *values[] = { ax_owner_list_ref };
+    CFArrayCallBacks callbacks = kCFTypeArrayCallBacks;
+    callbacks.release = ax_owner_array_release;
+    return CFArrayCreate(NULL, values, 1, &callbacks);
+}
+
+static void ax_owner_reset(void)
+{
+    ax_owner_observe_count = ax_owner_unobserve_count = 0;
+    ax_owner_retain_count = ax_owner_retry_release_count = 0;
+    ax_owner_ref_release_count = ax_owner_signal_count = 0;
+    ax_owner_post_count = ax_owner_array_release_count = ax_owner_list_count = 0;
+    ax_owner_constructor_retain_count = 0;
+    ax_owner_observe_success = false;
+    ax_owner_observe_retry = false;
+    ax_owner_post_accept = true;
+    ax_owner_posted_retry = NULL;
+}
+
+TEST_FUNC(window_created_event_ax_ownership_matrix_is_exact,
+{
+    struct table saved_applications = g_window_manager.application;
+    struct table saved_windows = g_window_manager.window;
+    struct table saved_managed = g_window_manager.managed_window;
+    struct table saved_lost = g_window_manager.window_lost_focused_event;
+    struct rule *saved_rules = g_window_manager.rules;
+    struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    __auto_type saved_rule_window = window_manager_test_rule_window;
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_pid = event_loop_test_ax_window_pid;
+    __auto_type saved_observe = window_manager_test_window_observe;
+    __auto_type saved_unobserve = window_manager_test_window_unobserve;
+    __auto_type saved_retain = window_manager_test_retry_retain;
+    __auto_type saved_retry_release = window_manager_test_retry_release;
+    __auto_type saved_allocate = window_manager_test_retry_allocate;
+    __auto_type saved_post = window_manager_test_retry_post;
+    __auto_type saved_ref_release = window_test_ref_release;
+    __auto_type saved_signal = event_signal_test_push_observer;
+    __auto_type saved_list = window_manager_test_application_window_list;
+    __auto_type saved_inventory = window_manager_test_existing_application_window_list;
+
+    g_window_manager.application = (struct table) {0};
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.managed_window = (struct table) {0};
+    g_window_manager.window_lost_focused_event = (struct table) {0};
+    g_window_manager.rules = NULL;
+    g_window_manager.applications_to_refresh = NULL;
+    table_init(&g_window_manager.application, 8, hash_wm, compare_wm);
+    table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+    table_init(&g_window_manager.managed_window, 8, hash_wm, compare_wm);
+    table_init(&g_window_manager.window_lost_focused_event, 8, hash_wm, compare_wm);
+    struct application application = { .pid = 8181, .psn = { .highLongOfPSN = 81, .lowLongOfPSN = 82 },
+                                       .name = "ax-owner" };
+    table_add(&g_window_manager.application, &application.pid, &application);
+    window_manager_test_ax_window_id = ax_owner_window_id;
+    event_loop_test_ax_window_pid = ax_owner_window_pid;
+    window_manager_test_window_observe = ax_owner_observe;
+    window_manager_test_window_unobserve = ax_owner_unobserve;
+    window_manager_test_retry_retain = ax_owner_retain;
+    window_manager_test_retry_release = ax_owner_retry_release;
+    window_manager_test_retry_allocate = malloc;
+    window_manager_test_retry_post = ax_owner_post;
+    window_test_ref_release = ax_owner_ref_release;
+    event_signal_test_push_observer = ax_owner_signal;
+
+    ax_owner_constructor_path = false;
+    for (int kind = AX_SUCCESS; kind <= AX_POST_REJECT; ++kind) {
+        ax_owner_reset();
+        struct window *window = legacy_allocation_calloc(1, sizeof(*window));
+        window->flags = WINDOW_FLOAT;
+        window_set_rule_flag(window, WINDOW_RULE_MANAGED);
+        window_manager_test_rule_window = window;
+        AXUIElementRef ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("window-created-owner"));
+        if (kind == AX_SUCCESS) ax_owner_observe_success = true;
+        if (kind == AX_TRANSIENT || kind == AX_ALLOC_FAIL || kind == AX_POST_REJECT) ax_owner_observe_retry = true;
+        if (kind == AX_POST_REJECT) ax_owner_post_accept = false;
+        if (kind == AX_ALLOC_FAIL) window_manager_test_retry_allocate = ax_owner_no_allocate;
+        if (kind == AX_PENDING) {
+            struct rule pending = { .flags = RULE_ONE_SHOT };
+            buf_push(g_window_manager.rules, pending);
+            rule_one_shot_reassignment_pending = true;
+            rule_test_fail_reservation_allocation_at(1);
+        }
+
+        event_loop_dispatch_event((struct event) { .type = WINDOW_CREATED, .context = ref });
+
+        TEST_CHECK(ax_owner_observe_count, kind == AX_PENDING ? 0 : 1);
+        TEST_CHECK(ax_owner_unobserve_count,
+                   kind == AX_PERMANENT || kind == AX_TRANSIENT || kind == AX_ALLOC_FAIL || kind == AX_POST_REJECT ? 1 : 0);
+        TEST_CHECK(g_window_manager.window.count, kind == AX_SUCCESS ? 1 : 0);
+        TEST_CHECK(ax_owner_signal_count, kind == AX_SUCCESS ? 1 : 0);
+        TEST_CHECK(ax_owner_retain_count,
+                   kind == AX_TRANSIENT || kind == AX_POST_REJECT ? 2 : kind == AX_PENDING ? 1 : kind == AX_ALLOC_FAIL ? 1 : 0);
+        TEST_CHECK(ax_owner_ref_release_count,
+                   kind == AX_PERMANENT || kind == AX_TRANSIENT || kind == AX_ALLOC_FAIL || kind == AX_POST_REJECT ? 1 : 0);
+        TEST_CHECK(ax_owner_retry_release_count,
+                   kind == AX_TRANSIENT || kind == AX_PENDING ? 1 : kind == AX_ALLOC_FAIL ? 1 : kind == AX_POST_REJECT ? 2 : 0);
+        TEST_CHECK(ax_owner_posted_retry != NULL, kind == AX_TRANSIENT || kind == AX_PENDING);
+
+        if (kind == AX_SUCCESS) {
+            TEST_CHECK(window_manager_find_window(&g_window_manager, 7171), window);
+            window_manager_remove_window(&g_window_manager, 7171);
+            window_destroy(window);
+        } else if (ax_owner_posted_retry) {
+            window_manager_destroy_window_created_retry(ax_owner_posted_retry);
+            TEST_CHECK(ax_owner_retry_release_count, 2);
+        }
+        if (kind == AX_PENDING) {
+            buf_free(g_window_manager.rules);
+            g_window_manager.rules = NULL;
+            rule_one_shot_reassignment_pending = false;
+            rule_test_fail_reservation_allocation_at(0);
+            legacy_allocation_free(window);
+        }
+        window_manager_test_retry_allocate = malloc;
+        window_manager_test_rule_window = NULL;
+    }
+
+    ax_owner_constructor_path = true;
+    window_manager_test_application_window_list = ax_owner_window_list;
+    window_manager_test_existing_application_window_list = launch_path_empty_inventory;
+    for (int kind = AX_SUCCESS; kind <= AX_POST_REJECT; ++kind) {
+        ax_owner_reset();
+        ax_owner_kind = kind;
+        application.launch_refresh = false;
+        size_t allocation_baseline = legacy_allocation_test_outstanding();
+        struct window *window = legacy_allocation_calloc(1, sizeof(*window));
+        window->flags = WINDOW_FLOAT;
+        window_set_rule_flag(window, WINDOW_RULE_MANAGED);
+        window_manager_test_rule_window = window;
+        const UInt8 ref_bytes[] = { 0x41, 0x58 };
+        ax_owner_list_ref = (AXUIElementRef) CFDataCreate(NULL, ref_bytes, sizeof(ref_bytes));
+        TEST_CHECK((int) CFGetRetainCount(ax_owner_list_ref), 1);
+        if (kind == AX_SUCCESS) ax_owner_observe_success = true;
+        if (kind == AX_TRANSIENT || kind == AX_ALLOC_FAIL || kind == AX_POST_REJECT) ax_owner_observe_retry = true;
+        if (kind == AX_POST_REJECT) ax_owner_post_accept = false;
+        if (kind == AX_ALLOC_FAIL) window_manager_test_retry_allocate = ax_owner_no_allocate;
+
+        int created_count = -1;
+        struct window **created = window_manager_add_application_windows(&g_space_manager, &g_window_manager,
+                                                                          &application, &created_count);
+
+        bool accepted_retry = kind == AX_TRANSIENT || kind == AX_PENDING;
+        bool destroyed_window = kind == AX_PERMANENT || kind == AX_TRANSIENT ||
+                                kind == AX_ALLOC_FAIL || kind == AX_POST_REJECT;
+        TEST_CHECK(ax_owner_array_release_count, 1);
+        TEST_CHECK(ax_owner_list_count, 2);
+        TEST_CHECK(ax_owner_observe_count, kind == AX_PENDING ? 0 : 1);
+        TEST_CHECK(ax_owner_constructor_retain_count, kind == AX_PENDING ? 0 : 3);
+        TEST_CHECK(ax_owner_unobserve_count, destroyed_window ? 1 : 0);
+        TEST_CHECK(ax_owner_signal_count, 0);
+        TEST_CHECK(ax_owner_retain_count,
+                   kind == AX_TRANSIENT || kind == AX_POST_REJECT ? 2 :
+                   kind == AX_PENDING || kind == AX_ALLOC_FAIL ? 1 : 0);
+        TEST_CHECK(ax_owner_ref_release_count, destroyed_window ? 1 : 0);
+        TEST_CHECK(ax_owner_retry_release_count,
+                   kind == AX_TRANSIENT || kind == AX_PENDING || kind == AX_ALLOC_FAIL ? 1 :
+                   kind == AX_POST_REJECT ? 2 : 0);
+        TEST_CHECK(ax_owner_post_count,
+                   kind == AX_TRANSIENT || kind == AX_PENDING || kind == AX_POST_REJECT ? 1 : 0);
+        TEST_CHECK(ax_owner_posted_retry != NULL, accepted_retry);
+        TEST_CHECK(g_window_manager.window.count, kind == AX_SUCCESS ? 1 : 0);
+        TEST_CHECK(window_manager_find_window(&g_window_manager, 7171), kind == AX_SUCCESS ? window : NULL);
+        TEST_CHECK(created_count, kind == AX_SUCCESS ? 1 : 0);
+        TEST_CHECK(buf_len(created), kind == AX_SUCCESS ? 1 : 0);
+        if (kind == AX_SUCCESS) TEST_CHECK(created[0], window);
+        TEST_CHECK(legacy_allocation_test_outstanding(),
+                   allocation_baseline + (kind == AX_SUCCESS || kind == AX_PENDING ? 1 : 0));
+        TEST_CHECK((int) CFGetRetainCount(ax_owner_list_ref),
+                   kind == AX_SUCCESS || accepted_retry ? 2 : 1);
+
+        if (kind == AX_SUCCESS) {
+            window_manager_remove_window(&g_window_manager, 7171);
+            window_destroy(window);
+            TEST_CHECK(ax_owner_ref_release_count, 1);
+        } else if (accepted_retry) {
+            struct window_created_retry *retry = ax_owner_posted_retry;
+            TEST_CHECK(retry->window_ref, ax_owner_list_ref);
+            ax_owner_posted_retry = NULL;
+            window_manager_destroy_window_created_retry(retry);
+            TEST_CHECK(ax_owner_retry_release_count, 2);
+        }
+        if (kind == AX_PENDING) {
+            buf_free(g_window_manager.rules);
+            g_window_manager.rules = NULL;
+            rule_one_shot_reassignment_pending = false;
+            rule_test_fail_reservation_allocation_at(0);
+            legacy_allocation_free(window);
+        }
+        TEST_CHECK(ax_owner_posted_retry, NULL);
+        TEST_CHECK(legacy_allocation_test_outstanding(), allocation_baseline);
+        TEST_CHECK((int) CFGetRetainCount(ax_owner_list_ref), 1);
+        CFRelease(ax_owner_list_ref);
+        buf_free(created);
+        window_manager_test_retry_allocate = malloc;
+        window_manager_test_rule_window = NULL;
+        buf_free(g_window_manager.applications_to_refresh);
+        g_window_manager.applications_to_refresh = NULL;
+    }
+    ax_owner_constructor_path = false;
+
+    table_free(&g_window_manager.application);
+    table_free(&g_window_manager.window);
+    table_free(&g_window_manager.managed_window);
+    table_free(&g_window_manager.window_lost_focused_event);
+    g_window_manager.application = saved_applications;
+    g_window_manager.window = saved_windows;
+    g_window_manager.managed_window = saved_managed;
+    g_window_manager.window_lost_focused_event = saved_lost;
+    g_window_manager.rules = saved_rules;
+    g_window_manager.applications_to_refresh = saved_refresh;
+    window_manager_test_rule_window = saved_rule_window;
+    window_manager_test_ax_window_id = saved_id;
+    event_loop_test_ax_window_pid = saved_pid;
+    window_manager_test_window_observe = saved_observe;
+    window_manager_test_window_unobserve = saved_unobserve;
+    window_manager_test_retry_retain = saved_retain;
+    window_manager_test_retry_release = saved_retry_release;
+    window_manager_test_retry_allocate = saved_allocate;
+    window_manager_test_retry_post = saved_post;
+    window_test_ref_release = saved_ref_release;
+    event_signal_test_push_observer = saved_signal;
+    window_manager_test_application_window_list = saved_list;
+    window_manager_test_existing_application_window_list = saved_inventory;
+})
+
 TEST_FUNC(application_termination_rejects_stale_pid_reuse_identity,
 {
     struct table saved_applications = g_window_manager.application;
@@ -231,7 +869,7 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     g_process_manager.front_psn = psn_b;
     g_process_manager.last_front_pid = 100;
     g_process_manager.last_front_psn = psn_b;
-    struct process *terminated_process = calloc(1, sizeof(struct process));
+    struct process *terminated_process = legacy_allocation_calloc(1, sizeof(struct process));
     terminated_process->psn = psn_b;
     terminated_process->pid = 100;
     terminated_process->name = strdup("terminated");
@@ -1797,8 +2435,16 @@ TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
     struct application application = { .name = "Mail" };
     struct window window = { .id = 4242, .application = &application };
     struct window_node root = { .window_list = { 4242 }, .window_order = { 4242 }, .window_count = 1 };
+    struct window_node other_root = { .window_list = { 4242 }, .window_order = { 4242 }, .window_count = 1 };
     struct view view = { .layout = VIEW_BSP, .root = &root };
-    window_manager_add_managed_window(&g_window_manager, &window, &view);
+    struct view other_view = { .layout = VIEW_BSP, .root = &other_root };
+    table_add(&g_window_manager.managed_window, &window.id, &view);
+    TEST_CHECK(window_manager_add_managed_window(&g_window_manager, &window, &view), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 0U);
+    TEST_CHECK(window_manager_add_managed_window(&g_window_manager, &window, &other_view), true);
+    TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
+    TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);
     window_manager_remove_managed_window(&g_window_manager, window.id);
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
     TEST_CHECK(event_loop_test_queue_count(&g_event_loop), 1U);

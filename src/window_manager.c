@@ -353,17 +353,76 @@ void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wi
     }
 }
 
-void window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view)
+bool window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view)
 {
-    if (!view || view->layout == VIEW_FLOAT) return;
-    if (!view_find_window_node(view, window->id)) return;
+    if (!window || !view || view->layout == VIEW_FLOAT) return false;
+    if (!view_find_window_node(view, window->id)) return false;
 
-    bool present = table_find(&wm->managed_window, &window->id) != NULL;
-    table_add(&wm->managed_window, &window->id, view);
+    struct view *old_view = table_find(&wm->managed_window, &window->id);
+    if (!old_view || !table_replace(&wm->managed_window, &window->id, view)) return false;
     window_manager_purify_window(wm, window);
-    if (!present && wm == &g_window_manager && declarative_installed_has_scaffold()) {
+    if (old_view != view && wm == &g_window_manager && declarative_installed_has_scaffold()) {
         declarative_configuration_request_reconcile();
     }
+    return true;
+}
+
+bool window_manager_transfer_managed_window(struct window_manager *wm, struct window *window,
+                                            struct view *src_view, struct view *dst_view,
+                                            uint32_t insertion_point)
+{
+    if (!wm || !window || !src_view || !dst_view || src_view == dst_view) return false;
+    if (src_view->layout == VIEW_FLOAT || dst_view->layout == VIEW_FLOAT) return false;
+    if (window_manager_find_managed_window(wm, window) != src_view) return false;
+    if (!view_find_window_node(src_view, window->id) || view_find_window_node(dst_view, window->id)) return false;
+
+    /* Reserve every destination resource before changing the source tree. */
+    struct view_insertion_plan plan;
+    if (!view_prepare_window_node_insertion(dst_view, window, insertion_point, &plan)) return false;
+
+    view_remove_window_node(src_view, window);
+    struct window_node *dst_node = view_commit_window_node_insertion(dst_view, window, insertion_point, &plan);
+    view_abort_window_node_insertion(&plan);
+    if (!dst_node) {
+        /* Preparation and the checks above make this an invariant, not a recoverable allocation path. */
+        abort();
+    }
+
+    if (!window_manager_add_managed_window(wm, window, dst_view)) {
+        abort();
+    }
+    window_manager_adjust_layer(window, LAYER_BELOW);
+
+    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+    if (view_space_is_visible(src_view->sid)) view_flush(src_view);
+    else view_set_flag(src_view, VIEW_IS_DIRTY);
+    space_manager_flush_tiled_window(dst_view, window);
+    return true;
+}
+
+enum managed_window_result window_manager_tile_window_on_space(struct space_manager *sm, struct window_manager *wm,
+                                                                struct window *window, uint64_t sid, uint32_t insertion_point,
+                                                                bool flush)
+{
+    struct view *view = space_manager_find_view(sm, sid);
+    if (!view) return MANAGED_WINDOW_FAILED;
+    if (view->layout == VIEW_FLOAT) return MANAGED_WINDOW_UNMANAGED;
+    if (table_find(&wm->managed_window, &window->id)) return MANAGED_WINDOW_FAILED;
+    if (!table_try_add(&wm->managed_window, &window->id, view)) return MANAGED_WINDOW_FAILED;
+
+    struct view *tiled = space_manager_tile_window_on_space_with_insertion_point(sm, window, sid, insertion_point);
+    if (!tiled || !view_find_window_node(view, window->id) ||
+        !table_replace(&wm->managed_window, &window->id, view)) {
+        table_remove(&wm->managed_window, &window->id);
+        return MANAGED_WINDOW_FAILED;
+    }
+
+    window_manager_purify_window(wm, window);
+    if (wm == &g_window_manager && declarative_installed_has_scaffold()) {
+        declarative_configuration_request_reconcile();
+    }
+    if (flush) space_manager_flush_tiled_window(view, window);
+    return MANAGED_WINDOW_SUCCESS;
 }
 
 void window_manager_window_did_order_out(struct window_manager *wm, struct window *window)
@@ -390,8 +449,8 @@ void window_manager_window_did_order_in(struct window_manager *wm, struct window
 
     struct window *last_window = window_manager_find_window(wm, wm->last_window_id);
     uint32_t insertion_point = last_window && last_window->application->pid != window->application->pid ? last_window->id : 0;
-    struct view *view = space_manager_tile_window_on_space_with_insertion_point(&g_space_manager, window, sid, insertion_point);
-    window_manager_add_managed_window(wm, window, view);
+    enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, wm, window, sid, insertion_point, true);
+    if (managed_result == MANAGED_WINDOW_FAILED) return;
 }
 
 enum window_op_error window_manager_adjust_window_ratio(struct window_manager *wm, struct window *window, int type, float ratio)
@@ -1306,9 +1365,19 @@ set_final_frames:
                                            window_list[i].w, window_list[i].h);
     }
 }
+#ifdef TESTS
+static void (*window_manager_test_animate_observer)(struct window_capture *, int);
+#endif
+
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count)
 {
     TIME_FUNCTION;
+#ifdef TESTS
+    if (window_manager_test_animate_observer) {
+        window_manager_test_animate_observer(window_list, window_count);
+        return;
+    }
+#endif
 
     if (g_window_manager.window_animation_duration) {
         window_manager_animate_window_list_async(window_list, window_count);
@@ -1322,6 +1391,12 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
 void window_manager_animate_window(struct window_capture capture)
 {
     TIME_FUNCTION;
+#ifdef TESTS
+    if (window_manager_test_animate_observer) {
+        window_manager_test_animate_observer(&capture, 1);
+        return;
+    }
+#endif
 
     if (g_window_manager.window_animation_duration) {
         window_manager_animate_window_list_async(&capture, 1);
@@ -1421,10 +1496,17 @@ void window_manager_set_normal_window_opacity(struct window_manager *wm, float o
     })
 }
 
+#ifdef TESTS
+static void (*window_manager_test_layer_observer)(uint32_t wid, int layer);
+#endif
+
 void window_manager_adjust_layer(struct window *window, int layer)
 {
     if (window->layer != LAYER_AUTO) return;
 
+#ifdef TESTS
+    if (window_manager_test_layer_observer) window_manager_test_layer_observer(window->id, layer);
+#endif
     scripting_addition_set_layer(window->id, layer);
 }
 
@@ -2026,9 +2108,9 @@ void window_manager_remove_window(struct window_manager *wm, uint32_t window_id)
     table_remove(&wm->window, &window_id);
 }
 
-void window_manager_add_window(struct window_manager *wm, struct window *window)
+bool window_manager_add_window(struct window_manager *wm, struct window *window)
 {
-    table_add(&wm->window, &window->id, window);
+    return window && table_try_add(&wm->window, &window->id, window);
 }
 
 struct application *window_manager_find_application(struct window_manager *wm, pid_t pid)
@@ -2041,9 +2123,9 @@ void window_manager_remove_application(struct window_manager *wm, pid_t pid)
     table_remove(&wm->application, &pid);
 }
 
-void window_manager_add_application(struct window_manager *wm, struct application *application)
+bool window_manager_add_application(struct window_manager *wm, struct application *application)
 {
-    table_add(&wm->application, &application->pid, application);
+    return application && table_try_add(&wm->application, &application->pid, application);
 }
 
 struct window **window_manager_find_application_windows(struct window_manager *wm, struct application *application, int *window_count)
@@ -2063,11 +2145,30 @@ struct window **window_manager_find_application_windows(struct window_manager *w
 #ifdef TESTS
 static CFTypeRef (*window_manager_test_retry_retain)(CFTypeRef);
 static void (*window_manager_test_retry_release)(CFTypeRef);
+static void *(*window_manager_test_retry_allocate)(size_t) = malloc;
+static bool (*window_manager_test_retry_post)(struct window_created_retry *);
+static unsigned window_manager_test_retry_destroy_count;
+static CFArrayRef (*window_manager_test_application_window_list)(struct application *);
+static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
+static bool (*window_manager_test_window_observe)(struct window *, bool *);
+static void (*window_manager_test_window_unobserve)(struct window *);
 #endif
+
+uint32_t window_manager_ax_window_id(AXUIElementRef window_ref)
+{
+#ifdef TESTS
+    if (window_manager_test_ax_window_id) return window_manager_test_ax_window_id(window_ref);
+#endif
+    return ax_window_id(window_ref);
+}
 
 struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
+#ifdef TESTS
+    struct window_created_retry *retry = window_manager_test_retry_allocate(sizeof(*retry));
+#else
     struct window_created_retry *retry = malloc(sizeof(*retry));
+#endif
     if (!retry) return NULL;
 #ifdef TESTS
     AXUIElementRef retained_ref = window_manager_test_retry_retain ? (AXUIElementRef) window_manager_test_retry_retain(window_ref) : CFRetain(window_ref);
@@ -2087,6 +2188,9 @@ struct window_created_retry *window_manager_create_window_created_retry(AXUIElem
 void window_manager_destroy_window_created_retry(struct window_created_retry *retry)
 {
     if (!retry) return;
+#ifdef TESTS
+    ++window_manager_test_retry_destroy_count;
+#endif
     if (retry->window_ref) {
 #ifdef TESTS
         if (window_manager_test_retry_release) window_manager_test_retry_release(retry->window_ref); else CFRelease(retry->window_ref);
@@ -2106,8 +2210,15 @@ void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, str
     CFRelease(window_ref);
 #endif
     if (!retry) return;
+#ifdef TESTS
+    if (window_manager_test_retry_post) {
+        if (!window_manager_test_retry_post(retry)) window_manager_destroy_window_created_retry(retry);
+        return;
+    }
+#endif
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        event_loop_post(&g_event_loop, WINDOW_CREATED_RETRY, retry, 0);
+        /* event_loop_try_post consumes the event context on every outcome. */
+        (void) event_loop_try_post(&g_event_loop, WINDOW_CREATED_RETRY, retry, 0);
     });
 }
 
@@ -2149,6 +2260,7 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     bool test_rule_window = window_manager_test_rule_window != NULL;
     struct window *window = test_rule_window ? window_manager_test_rule_window
                                              : window_create(application, window_ref, window_id);
+    if (!window) return NULL;
     if (test_rule_window) {
         window->application = application;
         window->ref = window_ref;
@@ -2161,6 +2273,7 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     char *window_subrole = test_rule_window ? "AXStandardWindow" : window_subrole_ts(window);
 #else
     struct window *window = window_create(application, window_ref, window_id);
+    if (!window) return NULL;
     char *window_title = window_title_ts(window);
     char *window_role = window_role_ts(window);
     char *window_subrole = window_subrole_ts(window);
@@ -2183,13 +2296,22 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     //
 
 #ifdef TESTS
-    if (!test_rule_window && !window_observe(window, retry)) {
+    bool observed = test_rule_window
+                  ? (window_manager_test_window_observe
+                     ? window_manager_test_window_observe(window, retry) : true)
+                  : window_observe(window, retry);
+    if (!observed) {
 #else
     if (!window_observe(window, retry)) {
 #endif
         debug("%s: could not observe %s %d\n", __FUNCTION__, window->application->name, window->id);
         window_manager_remove_lost_focused_event(wm, window->id);
+#ifdef TESTS
+        if (window_manager_test_window_unobserve) window_manager_test_window_unobserve(window);
+        else window_unobserve(window);
+#else
         window_unobserve(window);
+#endif
         if (retry && *retry) {
 #ifdef TESTS
             if (window_manager_test_retry_retain) window_manager_test_retry_retain(window_ref); else CFRetain(window_ref);
@@ -2197,6 +2319,18 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
             CFRetain(window_ref);
 #endif
         }
+        window_destroy(window);
+        return NULL;
+    }
+
+    if (!window_manager_add_window(wm, window)) {
+        window_manager_remove_lost_focused_event(wm, window->id);
+#ifdef TESTS
+        if (window_manager_test_window_unobserve) window_manager_test_window_unobserve(window);
+        else window_unobserve(window);
+#else
+        window_unobserve(window);
+#endif
         window_destroy(window);
         return NULL;
     }
@@ -2209,8 +2343,6 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
         event_loop_post(&g_event_loop, WINDOW_FOCUSED, (void *)(intptr_t) window->id, 0);
         window_manager_remove_lost_focused_event(wm, window->id);
     }
-
-    window_manager_add_window(wm, window);
 
     //
     // NOTE(asmvik): However, only **root windows** are eligible for management.
@@ -2306,13 +2438,19 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
         window_manager_enqueue_application_refresh(wm, application);
         return NULL;
     }
+#ifdef TESTS
+    CFArrayRef window_list = window_manager_test_application_window_list
+                           ? window_manager_test_application_window_list(application)
+                           : application_window_list(application);
+#else
     CFArrayRef window_list = application_window_list(application);
+#endif
 
     if (window_list) {
         int window_count = CFArrayGetCount(window_list);
         for (int i = 0; i < window_count; ++i) {
             AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list, i);
-            uint32_t window_id = ax_window_id(window_ref);
+            uint32_t window_id = window_manager_ax_window_id(window_ref);
             if (!window_id || window_manager_find_window(wm, window_id)) continue;
 
             bool retry = false;
@@ -2333,7 +2471,6 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
 
 #ifdef TESTS
 static bool (*window_manager_test_existing_application_window_list)(struct application *, uint32_t **, int *);
-static CFArrayRef (*window_manager_test_application_window_list)(struct application *);
 static AXUIElementRef (*window_manager_test_remote_token)(CFDataRef);
 static AXError (*window_manager_test_copy_role)(AXUIElementRef, CFTypeRef *);
 static bool (*window_manager_test_role_is_window)(CFTypeRef);
@@ -2465,7 +2602,7 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 
     for (int i = 0; i < window_count; ++i) {
         AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list_ref, i);
-        uint32_t window_id = ax_window_id(window_ref);
+        uint32_t window_id = window_manager_ax_window_id(window_ref);
 
         //
         // @cleanup
@@ -2650,7 +2787,7 @@ enum window_op_error window_manager_set_window_insertion(struct space_manager *s
 
     uint64_t sid = window_space(window->id);
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
+    if (!view || view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
 
     struct window_node *node = view_find_window_node(view, window->id);
     if (!node) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
@@ -2695,6 +2832,10 @@ enum window_op_error window_manager_set_window_insertion(struct space_manager *s
     return WINDOW_OP_ERROR_SUCCESS;
 }
 
+#ifdef TESTS
+static bool (*window_manager_test_order_window)(uint32_t, int, uint32_t);
+#endif
+
 enum window_op_error window_manager_stack_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b)
 {
     TIME_FUNCTION;
@@ -2709,12 +2850,15 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
     if (a_node->window_count >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
 
     struct view *b_view = window_manager_find_managed_window(wm, b);
+    if (!b_view && window_check_flag(b, WINDOW_FLOAT) && !window_manager_is_window_eligible(b)) {
+        return WINDOW_OP_ERROR_INVALID_SRC_NODE;
+    }
+    bool reserved_mapping = !b_view;
+    if (reserved_mapping && !table_try_add(&wm->managed_window, &b->id, a_view)) return WINDOW_OP_ERROR_INVALID_OPERATION;
     if (b_view) {
         space_manager_untile_window(b_view, b);
-        window_manager_remove_managed_window(wm, b->id);
         window_manager_purify_window(wm, b);
     } else if (window_check_flag(b, WINDOW_FLOAT)) {
-        if (!window_manager_is_window_eligible(b)) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
         window_clear_flag(b, WINDOW_FLOAT);
         if (window_check_flag(b, WINDOW_STICKY)) window_manager_make_window_sticky(sm, wm, b, false);
     }
@@ -2724,8 +2868,19 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
     if (a_node->window_count >= NODE_MAX_WINDOW_COUNT) return WINDOW_OP_ERROR_MAX_STACK;
     if (!view_stack_window_node(a_node, b)) return WINDOW_OP_ERROR_MAX_STACK;
 
-    window_manager_add_managed_window(wm, b, a_view);
+    if (!window_manager_add_managed_window(wm, b, a_view)) {
+        if (reserved_mapping) table_remove(&wm->managed_window, &b->id);
+        return WINDOW_OP_ERROR_INVALID_OPERATION;
+    }
+    if (reserved_mapping && wm == &g_window_manager && declarative_installed_has_scaffold()) {
+        declarative_configuration_request_reconcile();
+    }
     window_manager_adjust_layer(b, LAYER_BELOW);
+#ifdef TESTS
+    if (window_manager_test_order_window) {
+        window_manager_test_order_window(b->id, 1, a_node->window_order[1]);
+    } else
+#endif
     scripting_addition_order_window(b->id, 1, a_node->window_order[1]);
 
     if (view_layout_is_accordion(a_view->layout)) {
@@ -2746,14 +2901,15 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
 
     uint64_t a_sid = window_space(a->id);
     struct view *a_view = space_manager_find_view(sm, a_sid);
-    if (a_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
+    if (!a_view || a_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
 
     uint64_t b_sid = window_space(b->id);
     struct view *b_view = space_manager_find_view(sm, b_sid);
-    if (b_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_DST_VIEW;
+    if (!b_view || b_view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_DST_VIEW;
 
     struct window_node *a_node = view_find_window_node(a_view, a->id);
     if (!a_node) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
+    if (window_manager_find_managed_window(wm, a) != a_view) return WINDOW_OP_ERROR_INVALID_OPERATION;
 
     struct window_node *b_node = view_find_window_node(b_view, b->id);
     if (!b_node) return WINDOW_OP_ERROR_INVALID_DST_NODE;
@@ -2765,13 +2921,15 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
         a_node->parent == b_node->parent &&
         a_node->window_count == 1) {
         if (window_node_contains_window(b_node, b_view->insertion_point)) {
+            struct view_insertion_plan plan;
+            if (!view_prepare_window_node_insertion(b_view, a, b->id, &plan)) return WINDOW_OP_ERROR_INVALID_OPERATION;
             b_node->parent->split = b_node->split;
             b_node->parent->child = b_node->child;
 
             view_remove_window_node(a_view, a);
-            window_manager_remove_managed_window(wm, a->id);
-            struct window_node *a_node_add = view_add_window_node_with_insertion_point(b_view, a, b->id);
-            window_manager_add_managed_window(wm, a, b_view);
+            struct window_node *a_node_add = view_commit_window_node_insertion(b_view, a, b->id, &plan);
+            view_abort_window_node_insertion(&plan);
+            if (!a_node_add || !window_manager_add_managed_window(wm, a, b_view)) return WINDOW_OP_ERROR_INVALID_OPERATION;
 
             struct window_capture *window_list = NULL;
             window_node_capture_windows(a_node_add, &window_list);
@@ -2789,6 +2947,8 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
             window_manager_animate_window_list(window_list, ts_buf_len(window_list));
         }
     } else {
+        struct view_insertion_plan plan;
+        if (!view_prepare_window_node_insertion(b_view, a, b->id, &plan)) return WINDOW_OP_ERROR_INVALID_OPERATION;
         if (a_view->sid == b_view->sid) {
 
             //
@@ -2816,7 +2976,9 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
             }
 
             struct window_node *a_node_rm = view_remove_window_node(a_view, a);
-            struct window_node *a_node_add = view_add_window_node_with_insertion_point(b_view, a, b->id);
+            struct window_node *a_node_add = view_commit_window_node_insertion(b_view, a, b->id, &plan);
+            view_abort_window_node_insertion(&plan);
+            if (!a_node_add) return WINDOW_OP_ERROR_INVALID_OPERATION;
 
             struct window_capture *window_list = NULL;
             if (a_node_rm) {
@@ -2846,11 +3008,18 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
             // warping between spaces that belong to the same monitor as well??
             //
 
-            space_manager_untile_window(a_view, a);
-            window_manager_remove_managed_window(wm, a->id);
+            struct window_node *changed = view_remove_window_node(a_view, a);
+            struct window_node *added = view_commit_window_node_insertion(b_view, a, b->id, &plan);
+            view_abort_window_node_insertion(&plan);
+            if (!added || !window_manager_add_managed_window(wm, a, b_view)) return WINDOW_OP_ERROR_INVALID_OPERATION;
+            window_manager_adjust_layer(a, LAYER_BELOW);
             space_manager_move_window_to_space(b_view->sid, a);
-            space_manager_tile_window_on_space_with_insertion_point(sm, a, b_view->sid, b->id);
-            window_manager_add_managed_window(wm, a, b_view);
+            if (changed) {
+                if (view_space_is_visible(a_view->sid)) window_node_flush(changed);
+                else view_set_flag(a_view, VIEW_IS_DIRTY);
+            }
+            if (view_space_is_visible(b_view->sid)) window_node_flush(added);
+            else view_set_flag(b_view, VIEW_IS_DIRTY);
         }
     }
 
@@ -2861,7 +3030,7 @@ static void window_manager_remap_node_windows(struct window_manager *wm, struct 
 {
     for (int i = 0; i < node->window_count; ++i) {
         struct window *window = window_manager_find_window(wm, node->window_list[i]);
-        window_manager_add_managed_window(wm, window, view);
+        (void) window_manager_add_managed_window(wm, window, view);
     }
 }
 
@@ -2907,6 +3076,7 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
 
     uint64_t b_sid = window_space(b->id);
     struct view *b_view = space_manager_find_view(sm, b_sid);
+    if (!a_view || !b_view) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
 
     struct window_node *a_node = view_find_window_node(a_view, a->id);
     if (!a_node) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
@@ -2967,13 +3137,11 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
     if (a_view->sid != b_view->sid) {
         for (int i = 0; i < a_node->window_count; ++i) {
             struct window *window = window_manager_find_window(wm, a_node->window_list[i]);
-            window_manager_remove_managed_window(wm, a_node->window_list[i]);
             space_manager_move_window_to_space(b_view->sid, window);
         }
 
         for (int i = 0; i < b_node->window_count; ++i) {
             struct window *window = window_manager_find_window(wm, b_node->window_list[i]);
-            window_manager_remove_managed_window(wm, b_node->window_list[i]);
             space_manager_move_window_to_space(a_view->sid, window);
         }
 
@@ -3066,8 +3234,7 @@ void window_manager_send_window_to_space(struct space_manager *sm, struct window
     SLSSpaceSetFrontPSN(g_connection, dst_sid, window->application->psn);
 
     if (window_manager_should_manage_window(window)) {
-        struct view *view = space_manager_tile_window_on_space(sm, window, dst_sid);
-        window_manager_add_managed_window(wm, window, view);
+        if (window_manager_tile_window_on_space(sm, wm, window, dst_sid, 0, true) == MANAGED_WINDOW_FAILED) return;
     }
 }
 
@@ -3155,8 +3322,7 @@ void window_manager_make_window_floating(struct space_manager *sm, struct window
 
         if (!window_check_flag(window, WINDOW_STICKY)) {
             if ((window_manager_should_manage_window(window)) && (!window_manager_find_managed_window(wm, window))) {
-                struct view *view = space_manager_tile_window_on_space(sm, window, space_manager_active_space());
-                window_manager_add_managed_window(wm, window, view);
+                if (window_manager_tile_window_on_space(sm, wm, window, space_manager_active_space(), 0, true) == MANAGED_WINDOW_FAILED) return;
             }
         }
     }
@@ -3184,8 +3350,7 @@ void window_manager_make_window_sticky(struct space_manager *sm, struct window_m
 
             if (!window_check_flag(window, WINDOW_FLOAT)) {
                 if ((window_manager_should_manage_window(window)) && (!window_manager_find_managed_window(wm, window))) {
-                    struct view *view = space_manager_tile_window_on_space(sm, window, space_manager_active_space());
-                    window_manager_add_managed_window(wm, window, view);
+                    if (window_manager_tile_window_on_space(sm, wm, window, space_manager_active_space(), 0, true) == MANAGED_WINDOW_FAILED) return;
                 }
             }
         }
@@ -3603,11 +3768,9 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
             // This is necessary to make sure that we do not call the AX API for each modification to the tree.
             //
 
-            struct window_node *node = view_add_window_node(view, window);
-            if (!node) continue;
-
-            window_manager_adjust_layer(window, LAYER_BELOW);
-            window_manager_add_managed_window(wm, window, view);
+            enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, wm,
+                                                                                             window, view->sid, 0, false);
+            if (managed_result == MANAGED_WINDOW_FAILED) return;
             view_set_flag(view, VIEW_IS_DIRTY);
             window_manager_record_mutated_view(mutated_views, mutated_count, mutated_capacity, view);
         }
@@ -3654,7 +3817,7 @@ bool window_manager_reconcile_windows_on_space(struct window_manager *wm, struct
 void window_manager_validate_and_check_for_windows_on_space(struct space_manager *sm, struct window_manager *wm, uint64_t sid)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return;
+    if (!view || view->layout == VIEW_FLOAT) return;
 
     int window_count = 0;
     bool inventory_succeeded = false;
@@ -3691,30 +3854,30 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
     wm->window_animation_duration = animation_duration;
 }
 
-void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did)
+bool window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did)
 {
     int space_count;
     uint64_t *space_list = display_space_list(did, &space_count);
-    if (!space_list) return;
+    if (!space_list || space_count < 0) return false;
 
     for (int i = 0; i < space_count; ++i) {
         if (space_is_user(space_list[i])) {
             int window_count;
-            uint32_t *window_list = space_window_list(space_list[i], &window_count, false);
-            if (window_list) {
-                struct view *view = space_manager_find_view(sm, space_list[i]);
-                if (view->layout != VIEW_FLOAT) {
-                    if (window_count >= 0 && window_count < INT_MAX) {
-                        int mutated_count = 0;
-                        int capacity = window_count + 1;
-                        struct view **mutated_views = calloc((size_t) capacity, sizeof(struct view *));
-                        if (mutated_views) {
-                            window_manager_check_for_windows_on_space(wm, view, window_list, window_count, mutated_views, &mutated_count, capacity);
-                            window_manager_finalize_mutated_views(mutated_views, mutated_count);
-                            free(mutated_views);
-                        }
-                    }
-                }
+            bool inventory_succeeded = false;
+            uint32_t *window_list = space_window_list_for_connection_with_status(&space_list[i], 1, 0,
+                                                                                  &window_count, false,
+                                                                                  &inventory_succeeded);
+            if (!inventory_succeeded || window_count < 0 || window_count >= INT_MAX) return false;
+            struct view *view = space_manager_find_view(sm, space_list[i]);
+            if (!view) return false;
+            if (view->layout != VIEW_FLOAT) {
+                int mutated_count = 0;
+                int capacity = window_count + 1;
+                struct view **mutated_views = calloc((size_t) capacity, sizeof(struct view *));
+                if (!mutated_views) return false;
+                window_manager_check_for_windows_on_space(wm, view, window_list, window_count, mutated_views, &mutated_count, capacity);
+                window_manager_finalize_mutated_views(mutated_views, mutated_count);
+                free(mutated_views);
             }
             break;
         }
@@ -3722,12 +3885,18 @@ void window_manager_handle_display_add_and_remove(struct space_manager *sm, stru
 
     uint64_t sid = display_space_id(did);
     for (int i = 0; i < space_count; ++i) {
+        struct view *view = space_manager_find_view(sm, space_list[i]);
+        if (!view) return false;
         if (space_list[i] == sid) {
-            space_manager_refresh_view(sm, sid);
-        } else {
-            space_manager_mark_view_invalid(sm, space_list[i]);
+            if (view->layout != VIEW_FLOAT) {
+                view_update(view);
+                view_flush(view);
+            }
+        } else if (view->layout != VIEW_FLOAT) {
+            view_clear_flag(view, VIEW_IS_VALID);
         }
     }
+    return sid != 0;
 }
 
 void window_manager_init(struct window_manager *wm)
@@ -3763,16 +3932,34 @@ void window_manager_init(struct window_manager *wm)
     pthread_mutex_init(&wm->window_animations_lock, NULL);
 }
 
+#ifdef TESTS
+static bool (*window_manager_test_application_is_observable)(struct process *) = workspace_application_is_observable;
+#endif
+
 void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     table_for (struct process *process, g_process_manager.process, {
+#ifdef TESTS
+        if (window_manager_test_application_is_observable(process)) {
+#else
         if (workspace_application_is_observable(process)) {
+#endif
             struct application *application = application_create(process);
+            if (!application) {
+                event_loop_schedule_application_launch_retry(process);
+                continue;
+            }
 
             if (application_observe(application)) {
-                window_manager_add_application(wm, application);
-                window_manager_add_existing_application_windows(sm, wm, application, -1, NULL, NULL);
+                if (window_manager_add_application(wm, application)) {
+                    process->launch_retries = 0;
+                    window_manager_add_existing_application_windows(sm, wm, application, -1, NULL, NULL);
+                } else {
+                    application_unobserve(application);
+                    application_destroy(application);
+                    event_loop_schedule_application_launch_retry(process);
+                }
             } else {
                 bool ax_retry = application->ax_retry;
 
@@ -3788,13 +3975,7 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
                 // EVENT_HANDLER(APPLICATION_LAUNCHED).
                 //
 
-                if (ax_retry) {
-                    __block ProcessSerialNumber psn = process->psn;
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                        struct process *_process = process_manager_find_process(&g_process_manager, &psn);
-                        if (_process) event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, _process, 0);
-                    });
-                }
+                if (ax_retry) event_loop_schedule_application_launch_retry(process);
             }
         } else {
             debug("%s: %s (%d) is not observable, subscribing to activationPolicy changes\n", __FUNCTION__, process->name, process->pid);

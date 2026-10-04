@@ -15,6 +15,157 @@ volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
 static pthread_mutex_t g_process_manager_front_switch_lock = PTHREAD_MUTEX_INITIALIZER;
 
+struct mission_control_session_state {
+    uint64_t generation;
+    uint64_t observer_epoch;
+    uint64_t ax_token;
+    uint64_t poll_token;
+    unsigned inconclusive_samples;
+    bool active;
+    bool poll_pending;
+};
+
+struct mission_control_poll_context {
+    uint64_t generation;
+    uint64_t poll_token;
+};
+
+enum mission_control_sample_state {
+    MISSION_CONTROL_SAMPLE_ACTIVE,
+    MISSION_CONTROL_SAMPLE_INACTIVE,
+    MISSION_CONTROL_SAMPLE_INCONCLUSIVE
+};
+
+static struct mission_control_session_state g_mission_control_session;
+static uint64_t g_mission_control_generation;
+static volatile uint64_t g_mission_control_poll_generation;
+static volatile uint64_t g_mission_control_poll_token;
+
+static uint64_t mission_control_next_generation(void)
+{
+    if (++g_mission_control_generation == 0) ++g_mission_control_generation;
+    return g_mission_control_generation;
+}
+
+#ifdef TESTS
+static CFArrayRef (*event_loop_test_window_list_copy)(CGWindowListOption, CGWindowID) = CGWindowListCopyWindowInfo;
+static void (*event_loop_test_mission_control_schedule)(uint64_t, uint64_t, double);
+static void (*event_loop_test_mission_control_signal)(enum signal_type, void *);
+static void (*event_loop_test_mission_control_correct)(struct space_manager *, struct window_manager *);
+static void (*event_loop_test_mission_control_menu_alpha)(int, int, float);
+static void (*event_loop_test_mission_control_menu_dirty)(uint32_t);
+static void (*event_loop_test_mission_control_reconcile)(void);
+static int event_loop_test_mission_control_poll_allocated;
+static int event_loop_test_mission_control_poll_freed;
+#endif
+
+static CFArrayRef mission_control_copy_window_list(void)
+{
+#ifdef TESTS
+    return event_loop_test_window_list_copy(kCGWindowListOptionOnScreenOnly, 0);
+#else
+    return CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
+#endif
+}
+
+static void mission_control_emit_signal(enum signal_type type, void *context)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_signal) { event_loop_test_mission_control_signal(type, context); return; }
+#endif
+    event_signal_push(type, context);
+}
+
+static void mission_control_correct(void)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_correct) { event_loop_test_mission_control_correct(&g_space_manager, &g_window_manager); return; }
+#endif
+    window_manager_correct_for_mission_control_changes(&g_space_manager, &g_window_manager);
+}
+
+static void mission_control_set_menu_alpha(float alpha)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_menu_alpha) { event_loop_test_mission_control_menu_alpha(0, 1, alpha); return; }
+#endif
+    SLSSetMenuBarInsetAndAlpha(g_connection, 0, 1, alpha);
+}
+
+static void mission_control_mark_menu_dirty(void)
+{
+    uint32_t flags = MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW;
+#ifdef TESTS
+    if (event_loop_test_mission_control_menu_dirty) { event_loop_test_mission_control_menu_dirty(flags); return; }
+#endif
+    menu_bar_manager_mark_dirty(flags);
+}
+
+static void mission_control_request_reconcile(void)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_reconcile) { event_loop_test_mission_control_reconcile(); return; }
+#endif
+    declarative_configuration_request_reconcile();
+}
+
+static struct mission_control_poll_context *mission_control_poll_context_create(void)
+{
+    struct mission_control_poll_context *context = malloc(sizeof(*context));
+#ifdef TESTS
+    if (context) ++event_loop_test_mission_control_poll_allocated;
+#endif
+    return context;
+}
+
+static void mission_control_poll_context_destroy(struct mission_control_poll_context *context)
+{
+    if (!context) return;
+#ifdef TESTS
+    ++event_loop_test_mission_control_poll_freed;
+#endif
+    free(context);
+}
+
+static void mission_control_poll_post(uint64_t generation, uint64_t poll_token,
+                                      uint64_t loop_generation, unsigned retry)
+{
+    if (generation != __atomic_load_n(&g_mission_control_poll_generation, __ATOMIC_ACQUIRE) ||
+        poll_token != __atomic_load_n(&g_mission_control_poll_token, __ATOMIC_ACQUIRE) ||
+        loop_generation != event_loop_generation_snapshot(&g_event_loop) ||
+        !__atomic_load_n(&g_event_loop.is_running, __ATOMIC_ACQUIRE)) return;
+
+    struct mission_control_poll_context *context = mission_control_poll_context_create();
+    if (context) *context = (struct mission_control_poll_context) { generation, poll_token };
+    if (context && event_loop_try_post_generation(&g_event_loop, loop_generation,
+                                                   MISSION_CONTROL_CHECK_FOR_EXIT, context, 0)) return;
+    double delay = retry < 9 ? 0.1 : 1.0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        mission_control_poll_post(generation, poll_token, loop_generation, retry + 1);
+    });
+}
+
+static void mission_control_schedule_poll(double delay)
+{
+    if (!g_mission_control_session.active || g_mission_control_session.poll_pending) return;
+    g_mission_control_session.poll_pending = true;
+    if (++g_mission_control_session.poll_token == 0) ++g_mission_control_session.poll_token;
+    uint64_t generation = g_mission_control_session.generation;
+    uint64_t poll_token = g_mission_control_session.poll_token;
+    __atomic_store_n(&g_mission_control_poll_generation, generation, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mission_control_poll_token, poll_token, __ATOMIC_RELEASE);
+#ifdef TESTS
+    if (event_loop_test_mission_control_schedule) {
+        event_loop_test_mission_control_schedule(generation, poll_token, delay);
+        return;
+    }
+#endif
+    uint64_t loop_generation = event_loop_generation_snapshot(&g_event_loop);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        mission_control_poll_post(generation, poll_token, loop_generation, 0);
+    });
+}
+
 static bool update_window_notifications_append(uint32_t **window_list, size_t *window_count, size_t *window_capacity, uint32_t wid)
 {
     if (*window_count == *window_capacity) {
@@ -312,29 +463,16 @@ void event_loop_process_application_windows(struct window **window_list, int win
             if (default_origin) sid = window_space(window->id);
 
             struct view *view = space_manager_find_view(&g_space_manager, sid);
-            if (view->layout != VIEW_FLOAT) {
-                //
-                // @cleanup
-                //
-                // :AXBatching
-                //
-                // NOTE(asmvik): Batch all operations and mark the view as dirty so that we can perform a single flush,
-                // making sure that each window is only moved and resized a single time, when the final layout has been computed.
-                // This is necessary to make sure that we do not call the AX API for each modification to the tree.
-                //
-
-                window_manager_adjust_layer(window, LAYER_BELOW);
-                struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
-                if (!node) {
-                    window_manager_adjust_layer(window, LAYER_NORMAL);
-                } else {
-                    window_manager_add_managed_window(&g_window_manager, window, view);
-
-                    view_set_flag(view, VIEW_IS_DIRTY);
-                    view_list[view_count++] = view;
-
-                    prev_window_id = window->id;
-                }
+            if (view && view->layout != VIEW_FLOAT) {
+                // Batch tree changes, but reserve managed publication before mutation.
+                enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager,
+                                                                                                  &g_window_manager,
+                                                                                                  window, sid,
+                                                                                                  prev_window_id, false);
+                if (managed_result == MANAGED_WINDOW_FAILED) continue;
+                view_set_flag(view, VIEW_IS_DIRTY);
+                view_list[view_count++] = view;
+                prev_window_id = window->id;
             }
         }
 
@@ -355,6 +493,13 @@ void event_loop_process_application_windows(struct window **window_list, int win
     event_loop_flush_batched_views(view_list, view_count);
 }
 
+#ifdef TESTS
+static void *(*event_loop_test_create_running_application)(struct process *) = workspace_application_create_running_ns_application;
+static bool (*event_loop_test_application_finished)(struct process *) = workspace_application_is_finished_launching;
+static bool (*event_loop_test_application_observable)(struct process *) = workspace_application_is_observable;
+static pid_t (*event_loop_test_ax_window_pid)(AXUIElementRef);
+#endif
+
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
 {
     struct process *process = context;
@@ -367,22 +512,25 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
     if (!__atomic_load_n(&process->ns_application, __ATOMIC_RELAXED)) {
         debug("%s: %s (%d) missing ns_application. fetching..\n", __FUNCTION__, process->name, process->pid);
+#ifdef TESTS
+        __atomic_store_n(&process->ns_application, event_loop_test_create_running_application(process), __ATOMIC_RELEASE);
+#else
         __atomic_store_n(&process->ns_application, workspace_application_create_running_ns_application(process), __ATOMIC_RELEASE);
+#endif
 
         if (!__atomic_load_n(&process->ns_application, __ATOMIC_RELAXED)) {
             debug("%s: %s (%d) unable to fetch ns_application..\n", __FUNCTION__, process->name, process->pid);
 
-            __block ProcessSerialNumber psn = process->psn;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                struct process *_process = process_manager_find_process(&g_process_manager, &psn);
-                if (_process) event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, _process, 0);
-            });
-
+            event_loop_schedule_application_launch_retry(process);
             return;
         }
     }
 
+#ifdef TESTS
+    if (!event_loop_test_application_finished(process)) {
+#else
     if (!workspace_application_is_finished_launching(process)) {
+#endif
         debug("%s: %s (%d) is not finished launching, subscribing to finishedLaunching changes\n", __FUNCTION__, process->name, process->pid);
         workspace_application_observe_finished_launching(g_workspace_context, process);
 
@@ -391,7 +539,11 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         // Not actually sure if this can happen in practice..
         //
 
+#ifdef TESTS
+        if (event_loop_test_application_finished(process)) {
+#else
         if (workspace_application_is_finished_launching(process)) {
+#endif
             @try {
                 NSRunningApplication *application = __atomic_load_n(&process->ns_application, __ATOMIC_RELAXED);
                 if (application && [application observationInfo]) {
@@ -401,7 +553,11 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         } else { return; }
     }
 
+#ifdef TESTS
+    if (!event_loop_test_application_observable(process)) {
+#else
     if (!workspace_application_is_observable(process)) {
+#endif
         debug("%s: %s (%d) is not observable, subscribing to activationPolicy changes\n", __FUNCTION__, process->name, process->pid);
         workspace_application_observe_activation_policy(g_workspace_context, process);
 
@@ -410,7 +566,11 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         // Not actually sure if this can happen in practice..
         //
 
+#ifdef TESTS
+        if (event_loop_test_application_observable(process)) {
+#else
         if (workspace_application_is_observable(process)) {
+#endif
             @try {
                 NSRunningApplication *application = __atomic_load_n(&process->ns_application, __ATOMIC_RELAXED);
                 if (application && [application observationInfo]) {
@@ -427,6 +587,10 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 
     struct application *application = window_manager_find_application(&g_window_manager, process->pid);
     if (application) { return; } else { application = application_create(process); }
+    if (!application) {
+        event_loop_schedule_application_launch_retry(process);
+        return;
+    }
 
     if (!application_observe(application)) {
         bool ax_retry = application->ax_retry;
@@ -435,13 +599,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         application_destroy(application);
         debug("%s: could not observe notifications for %s (%d) (%d)\n", __FUNCTION__, process->name, process->pid, ax_retry);
 
-        if (ax_retry) {
-            __block ProcessSerialNumber psn = process->psn;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                struct process *_process = process_manager_find_process(&g_process_manager, &psn);
-                if (_process) event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, _process, 0);
-            });
-        }
+        if (ax_retry) event_loop_schedule_application_launch_retry(process);
 
         return;
     }
@@ -449,7 +607,13 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     event_loop_replay_lost_front_switched(process);
 
     debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
-    window_manager_add_application(&g_window_manager, application);
+    if (!window_manager_add_application(&g_window_manager, application)) {
+        application_unobserve(application);
+        application_destroy(application);
+        event_loop_schedule_application_launch_retry(process);
+        return;
+    }
+    process->launch_retries = 0;
     event_signal_push(SIGNAL_APPLICATION_LAUNCHED, application);
 
     int previous_window_count = g_window_manager.window.count;
@@ -658,8 +822,7 @@ static void event_loop_handle_application_front_space(struct application *applic
     if (!g_space_manager.skip_window_focus_animation) return;
 
     uint64_t last_cmd_tab_time = __atomic_load_n(&__last_cmd_tab_time, __ATOMIC_RELAXED);
-    float dt = ((float) read_os_timer() - last_cmd_tab_time) * (1000.0f / (float)read_os_freq());
-    if (dt > 1500.0f) {
+    if (os_timer_cmd_tab_should_fence(last_cmd_tab_time, read_os_timer())) {
         CFTypeRef dummy = NULL;
         AXUIElementCopyAttributeValue(application->ref, CFSTR("__fence"), &dummy);
     }
@@ -790,7 +953,7 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
 
         if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
             struct view *view = space_manager_find_view(&g_space_manager, window_space(window->id));
-            if (view->layout == VIEW_FLOAT) continue;
+            if (!view || view->layout == VIEW_FLOAT) continue;
 
             //
             // @cleanup
@@ -802,14 +965,11 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
             // This is necessary to make sure that we do not call the AX API for each modification to the tree.
             //
 
-            window_manager_adjust_layer(window, LAYER_BELOW);
-            struct window_node *node = view_add_window_node_with_insertion_point(view, window, prev_window_id);
-            if (!node) {
-                window_manager_adjust_layer(window, LAYER_NORMAL);
-                continue;
-            }
-
-            window_manager_add_managed_window(&g_window_manager, window, view);
+            enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager,
+                                                                                              &g_window_manager,
+                                                                                              window, view->sid,
+                                                                                              prev_window_id, false);
+            if (managed_result == MANAGED_WINDOW_FAILED) continue;
 
             view_set_flag(view, VIEW_IS_DIRTY);
             view_list[view_count++] = view;
@@ -894,20 +1054,23 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
 
 static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
-    uint32_t window_id = ax_window_id(window_ref);
+    uint32_t window_id = window_manager_ax_window_id(window_ref);
     if (!window_id || window_manager_find_window(&g_window_manager, window_id)) { CFRelease(window_ref); return; }
 
     if (!application) {
+#ifdef TESTS
+        pid_t window_pid = event_loop_test_ax_window_pid
+                         ? event_loop_test_ax_window_pid(window_ref) : ax_window_pid(window_ref);
+#else
         pid_t window_pid = ax_window_pid(window_ref);
+#endif
         if (window_pid) application = window_manager_find_application(&g_window_manager, window_pid);
     }
     if (!application) { CFRelease(window_ref); return; }
 
-    CFRetain(window_ref);
     bool retry = false;
     struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id, one_shot_rules, one_shot_owner_pid, &retry);
     if (!window && retry) window_manager_schedule_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
-    CFRelease(window_ref);
     if (!window) return;
 
     rule_cleanup_one_shots();
@@ -923,8 +1086,8 @@ static void event_loop_handle_window_created(AXUIElementRef window_ref, struct a
             sid = space_manager_cursor_space();
         }
 
-        struct view *view = space_manager_tile_window_on_space(&g_space_manager, window, sid);
-        window_manager_add_managed_window(&g_window_manager, window, view);
+        enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, &g_window_manager, window, sid, 0, true);
+        if (managed_result == MANAGED_WINDOW_FAILED) return;
     }
 
     if (window_manager_is_window_eligible(window)) {
@@ -1154,8 +1317,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
         window_manager_wait_for_native_fullscreen_transition(window);
 
         if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
-            struct view *view = space_manager_tile_window_on_space(&g_space_manager, window, window_space(window->id));
-            window_manager_add_managed_window(&g_window_manager, window, view);
+            enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, &g_window_manager,
+                                                                                             window, window_space(window->id), 0, true);
+            if (managed_result == MANAGED_WINDOW_FAILED) return;
         }
     } else if (!was_fullscreen == !is_fullscreen) {
         if (g_mouse_state.current_action == MOUSE_MODE_MOVE && g_mouse_state.window == window) {
@@ -1283,8 +1447,9 @@ static EVENT_HANDLER(WINDOW_DEMINIMIZED)
         if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
             struct window *last_window = window_manager_find_window(&g_window_manager, g_window_manager.last_window_id);
             uint32_t insertion_point = last_window && last_window->application->pid != window->application->pid ? last_window->id : 0;
-            struct view *view = space_manager_tile_window_on_space_with_insertion_point(&g_space_manager, window, sid, insertion_point);
-            window_manager_add_managed_window(&g_window_manager, window, view);
+            enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, &g_window_manager,
+                                                                                             window, sid, insertion_point, true);
+            if (managed_result == MANAGED_WINDOW_FAILED) return;
         }
     } else {
         debug("%s: window %s %d is deminimized on inactive space\n", __FUNCTION__, window->application->name, window->id);
@@ -1399,14 +1564,33 @@ static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
+static void event_loop_reserve_topology_resync(struct event_loop *event_loop);
+#ifdef TESTS
+static int (*event_loop_test_space_type)(uint64_t);
+#endif
+
+static void event_loop_topology_lifecycle_failed(void)
+{
+    event_loop_reserve_topology_resync(&g_event_loop);
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_SPACE);
+    declarative_configuration_request_reconcile();
+}
+
 static EVENT_HANDLER(SLS_SPACE_CREATED)
 {
     uint64_t sid = (uint64_t)(intptr_t) context;
+#ifdef TESTS
+    int type = event_loop_test_space_type ? event_loop_test_space_type(sid) : SLSSpaceGetType(g_connection, sid);
+#else
     int type = SLSSpaceGetType(g_connection, sid);
+#endif
 
     if (type == 0 || type == 4) {
         debug("%s: %lld, %d\n", __FUNCTION__, sid, type);
-        space_manager_find_view(&g_space_manager, sid);
+        if (!space_manager_find_view(&g_space_manager, sid)) {
+            event_loop_topology_lifecycle_failed();
+            return;
+        }
         event_signal_push(SIGNAL_SPACE_CREATED, context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
         declarative_configuration_request_reconcile();
@@ -1422,7 +1606,7 @@ static EVENT_HANDLER(SLS_SPACE_DESTROYED)
         space_manager_remove_label_for_space(&g_space_manager, sid);
         table_remove(&g_space_manager.view, &sid);
         view_destroy(view);
-        free(view);
+        legacy_allocation_free(view);
         event_signal_push(SIGNAL_SPACE_DESTROYED, context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
     }
@@ -1452,7 +1636,7 @@ static EVENT_HANDLER(SPACE_CHANGED)
         }
     }
 
-    if (!mission_control_is_active() && space_is_user(g_space_manager.current_space_id)) {
+    if (view && !mission_control_is_active() && space_is_user(g_space_manager.current_space_id)) {
         window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, g_space_manager.current_space_id);
 
         if (view_is_invalid(view)) {
@@ -1486,7 +1670,9 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
 {
     uint32_t new_did = display_manager_active_display_id();
     if (g_display_manager.current_display_id == new_did) {
-        debug("%s: newly activated display %d was already active (%d)! ignoring event..\n", __FUNCTION__, g_display_manager.current_display_id, new_did);
+        debug("%s: newly activated display %d was already active (%d); reserving topology verification..\n",
+              __FUNCTION__, g_display_manager.current_display_id, new_did);
+        event_loop_topology_lifecycle_failed();
         return;
     }
 
@@ -1494,7 +1680,8 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
     uint32_t expected_display_id = space_display_id(new_sid);
     if (!event_loop_commit_display_change(&g_display_manager, &g_space_manager,
                                           new_did, new_sid, expected_display_id)) {
-        debug("%s: %d %lld did not match %d! ignoring event..\n", __FUNCTION__, new_did, new_sid, expected_display_id);
+        debug("%s: %d %lld did not match %d! reserving topology recovery..\n", __FUNCTION__, new_did, new_sid, expected_display_id);
+        event_loop_topology_lifecycle_failed();
         return;
     }
 
@@ -1516,7 +1703,7 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
         }
     }
 
-    if (!mission_control_is_active() && space_is_user(g_space_manager.current_space_id)) {
+    if (view && !mission_control_is_active() && space_is_user(g_space_manager.current_space_id)) {
         window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, g_space_manager.current_space_id);
 
         if (view_is_invalid(view)) {
@@ -1537,8 +1724,11 @@ static EVENT_HANDLER(DISPLAY_ADDED)
 {
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
-    space_manager_handle_display_add(&g_space_manager, did);
-    window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, did);
+    if (!space_manager_handle_display_add(&g_space_manager, did) ||
+        !window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, did)) {
+        event_loop_topology_lifecycle_failed();
+        return;
+    }
     event_signal_push(SIGNAL_DISPLAY_ADDED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();
@@ -1549,7 +1739,11 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     display_manager_remove_label_for_display(&g_display_manager, did);
-    window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager, display_manager_main_display_id());
+    if (!window_manager_handle_display_add_and_remove(&g_space_manager, &g_window_manager,
+                                                       display_manager_main_display_id())) {
+        event_loop_topology_lifecycle_failed();
+        return;
+    }
     event_signal_push(SIGNAL_DISPLAY_REMOVED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();
@@ -1640,8 +1834,7 @@ static bool mouse_drag_resize_window(struct mouse_state *mouse_state, CGPoint po
     CGFloat dy = point.y - mouse_state->resize_requested_location.y;
     if (!force) {
         if (dx * dx + dy * dy < MOUSE_RESIZE_MINIMUM_DISTANCE * MOUSE_RESIZE_MINIMUM_DISTANCE) return false;
-        double dt = (double) (event_time - mouse_state->resize_requested_time) * (1000.0 / (double) read_os_freq());
-        if (dt < MOUSE_RESIZE_MINIMUM_DURATION_MS) return false;
+        if (!os_timer_mouse_resize_ready(mouse_state->resize_requested_time, event_time)) return false;
     }
 
 #ifdef TESTS
@@ -1740,6 +1933,7 @@ static EVENT_HANDLER(MOUSE_UP)
     if (info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
+        if (!dst_view) goto reset;
 
         struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, g_mouse_state.window->id);
         if (!window) window = window_manager_find_window_at_point(&g_window_manager, point);
@@ -1854,6 +2048,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
     if (info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
+        if (!dst_view) return;
 
         struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, g_mouse_state.window->id);
         if (!window) window = window_manager_find_window_at_point(&g_window_manager, point);
@@ -1930,8 +2125,7 @@ static EVENT_HANDLER(MOUSE_MOVED)
 
     if (__atomic_load_n(&__pending_gesture, __ATOMIC_RELAXED)) goto out;
     uint64_t last_gesture_time = __atomic_load_n(&__last_gesture_time, __ATOMIC_RELAXED);
-    float dt = ((float) read_os_timer() - last_gesture_time) * (1000.0f / (float)read_os_freq());
-    if (dt < 1250.0f) goto out;
+    if (os_timer_gesture_suppression_active(last_gesture_time, read_os_timer())) goto out;
 
     CGPoint point = CGEventGetLocation(context);
     struct window *window = window_manager_find_window_at_point(&g_window_manager, point);
@@ -2028,99 +2222,144 @@ out:
     CFRelease(context);
 }
 
+static void mission_control_begin_session(enum mission_control_mode mode, uint64_t observer_epoch,
+                                          uint64_t ax_token, bool poll)
+{
+    g_mission_control_session = (struct mission_control_session_state) {
+        .generation = mission_control_next_generation(), .observer_epoch = observer_epoch,
+        .ax_token = ax_token, .active = true
+    };
+    g_mission_control_mode = mode;
+    __atomic_store_n(&g_mission_control_poll_generation, g_mission_control_session.generation, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);
+    if (poll) mission_control_schedule_poll(0.1);
+    mission_control_emit_signal(SIGNAL_MISSION_CONTROL_ENTER, (void *) (uintptr_t) mode);
+}
+
+static bool mission_control_accept_ax_context(struct mission_control_event_context *event,
+                                              enum mission_control_notification_kind kind)
+{
+    return event && event->kind == kind && event->epoch && event->token &&
+           event->epoch == __atomic_load_n(&g_mission_control_observer.epoch, __ATOMIC_ACQUIRE) &&
+           event->token == __atomic_load_n(&g_mission_control_observer.notification_token, __ATOMIC_ACQUIRE);
+}
+
+static void mission_control_handle_show(void *context, enum mission_control_notification_kind kind,
+                                        enum mission_control_mode mode)
+{
+    struct mission_control_event_context event = context ? *(struct mission_control_event_context *) context
+                                                         : (struct mission_control_event_context) {0};
+    mission_control_event_context_destroy(context);
+    if (!mission_control_accept_ax_context(&event, kind)) return;
+    mission_control_begin_session(mode, event.epoch, event.token, false);
+}
+
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_ALL_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
-    g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS;
-    event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
+    mission_control_handle_show(context, MISSION_CONTROL_NOTIFICATION_SHOW_ALL, MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS);
 }
 
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_FRONT_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
-    g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_FRONT_WINDOWS;
-    event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
+    mission_control_handle_show(context, MISSION_CONTROL_NOTIFICATION_SHOW_FRONT, MISSION_CONTROL_MODE_SHOW_FRONT_WINDOWS);
 }
 
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_DESKTOP)
 {
     debug("%s:\n", __FUNCTION__);
-    g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_DESKTOP;
-    event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
+    mission_control_handle_show(context, MISSION_CONTROL_NOTIFICATION_SHOW_DESKTOP, MISSION_CONTROL_MODE_SHOW_DESKTOP);
 }
 
 static EVENT_HANDLER(MISSION_CONTROL_ENTER)
 {
     debug("%s:\n", __FUNCTION__);
-    g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
+    mission_control_begin_session(MISSION_CONTROL_MODE_SHOW, 0, 0, true);
+}
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        event_loop_post(&g_event_loop, MISSION_CONTROL_CHECK_FOR_EXIT, NULL, 0);
-    });
+static enum mission_control_sample_state mission_control_classify_sample(CFTypeRef sample)
+{
+    if (!sample || CFGetTypeID(sample) != CFArrayGetTypeID()) return MISSION_CONTROL_SAMPLE_INCONCLUSIVE;
+    CFArrayRef window_list = sample;
+    bool inconclusive = false;
+    for (CFIndex i = 0; i < CFArrayGetCount(window_list); ++i) {
+        CFTypeRef item = CFArrayGetValueAtIndex(window_list, i);
+        if (!item || CFGetTypeID(item) != CFDictionaryGetTypeID()) { inconclusive = true; continue; }
+        CFDictionaryRef dictionary = item;
+        CFTypeRef name = CFDictionaryGetValue(dictionary, kCGWindowName);
+        if (name) {
+            if (CFGetTypeID(name) != CFStringGetTypeID()) inconclusive = true;
+            continue;
+        }
+        CFTypeRef owner = CFDictionaryGetValue(dictionary, kCGWindowOwnerName);
+        CFTypeRef layer_ref = CFDictionaryGetValue(dictionary, kCGWindowLayer);
+        if (!owner || !layer_ref || CFGetTypeID(owner) != CFStringGetTypeID() ||
+            CFGetTypeID(layer_ref) != CFNumberGetTypeID()) { inconclusive = true; continue; }
+        int64_t layer = 0;
+        if (!CFNumberGetValue(layer_ref, kCFNumberSInt64Type, &layer)) { inconclusive = true; continue; }
+        if (layer == 18 && CFEqual(CFSTR("Dock"), owner)) return MISSION_CONTROL_SAMPLE_ACTIVE;
+    }
+    return inconclusive ? MISSION_CONTROL_SAMPLE_INCONCLUSIVE : MISSION_CONTROL_SAMPLE_INACTIVE;
+}
 
-    event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
+static void mission_control_finish_exit(uint64_t generation)
+{
+    if (!g_mission_control_session.active || generation != g_mission_control_session.generation) return;
+    enum mission_control_mode mode = g_mission_control_mode;
+    g_mission_control_session.active = false;
+    g_mission_control_session.poll_pending = false;
+    __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);
+    g_mission_control_session.ax_token = 0;
+    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+    if (g_window_manager.menubar_opacity != 1.0f) {
+#ifdef TESTS
+        float alpha = g_window_manager.menubar_opacity;
+#else
+        float alpha = space_is_fullscreen(g_space_manager.current_space_id) ? 1.0f : g_window_manager.menubar_opacity;
+#endif
+        mission_control_set_menu_alpha(alpha);
+    }
+    if (mode == MISSION_CONTROL_MODE_SHOW || mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS) mission_control_correct();
+    mission_control_emit_signal(SIGNAL_MISSION_CONTROL_EXIT, (void *) (uintptr_t) mode);
+    mission_control_mark_menu_dirty();
+    mission_control_request_reconcile();
 }
 
 static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
 {
-    if (!mission_control_is_active()) return;
-
-    CFArrayRef window_list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
-    int window_count = CFArrayGetCount(window_list);
-    bool found = false;
-
-    for (int i = 0; i < window_count; ++i) {
-        CFDictionaryRef dictionary = CFArrayGetValueAtIndex(window_list, i);
-
-        CFStringRef name = CFDictionaryGetValue(dictionary, kCGWindowName);
-        if (name) continue;
-
-        CFStringRef owner = CFDictionaryGetValue(dictionary, kCGWindowOwnerName);
-        if (!owner) continue;
-
-        CFNumberRef layer_ref = CFDictionaryGetValue(dictionary, kCGWindowLayer);
-        if (!layer_ref) continue;
-
-        uint64_t layer = 0;
-        CFNumberGetValue(layer_ref, CFNumberGetType(layer_ref), &layer);
-        if (layer != 18) continue;
-
-        if (CFEqual(CFSTR("Dock"), owner)) {
-            found = true;
-            break;
-        }
-    }
-
-    if (found) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            event_loop_post(&g_event_loop, MISSION_CONTROL_CHECK_FOR_EXIT, NULL, 0);
-        });
+    struct mission_control_poll_context event = context ? *(struct mission_control_poll_context *) context
+                                                        : (struct mission_control_poll_context) {0};
+    mission_control_poll_context_destroy(context);
+    if (!g_mission_control_session.active || !g_mission_control_session.poll_pending ||
+        event.generation != g_mission_control_session.generation ||
+        event.poll_token != g_mission_control_session.poll_token) return;
+    g_mission_control_session.poll_pending = false;
+    __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);
+    CFArrayRef window_list = mission_control_copy_window_list();
+    enum mission_control_sample_state sample = mission_control_classify_sample(window_list);
+    if (window_list) CFRelease(window_list);
+    if (sample == MISSION_CONTROL_SAMPLE_INACTIVE) {
+        g_mission_control_session.inconclusive_samples = 0;
+        mission_control_finish_exit(event.generation);
+    } else if (sample == MISSION_CONTROL_SAMPLE_ACTIVE) {
+        g_mission_control_session.inconclusive_samples = 0;
+        mission_control_schedule_poll(0.1);
     } else {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.0f), dispatch_get_main_queue(), ^{
-            event_loop_post(&g_event_loop, MISSION_CONTROL_EXIT, NULL, 0);
-        });
+        if (g_mission_control_session.inconclusive_samples != UINT_MAX) ++g_mission_control_session.inconclusive_samples;
+        mission_control_schedule_poll(g_mission_control_session.inconclusive_samples < 10 ? 0.1 : 1.0);
     }
-
-    CFRelease(window_list);
 }
 
 static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 {
-    debug("%s:\n", __FUNCTION__);
-
-    if (g_window_manager.menubar_opacity != 1.0f) {
-        float alpha = space_is_fullscreen(g_space_manager.current_space_id) ? 1.0f : g_window_manager.menubar_opacity;
-        SLSSetMenuBarInsetAndAlpha(g_connection, 0, 1, alpha);
-    }
-
-    if (g_mission_control_mode == MISSION_CONTROL_MODE_SHOW || g_mission_control_mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS) {
-        window_manager_correct_for_mission_control_changes(&g_space_manager, &g_window_manager);
-    }
-
-    event_signal_push(SIGNAL_MISSION_CONTROL_EXIT, (void*)(uintptr_t)g_mission_control_mode);
-    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
-    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
-    declarative_configuration_request_reconcile();
+    struct mission_control_event_context event = context ? *(struct mission_control_event_context *) context
+                                                         : (struct mission_control_event_context) {0};
+    mission_control_event_context_destroy(context);
+    if (!mission_control_accept_ax_context(&event, MISSION_CONTROL_NOTIFICATION_EXIT)) return;
+    if (!g_mission_control_session.active || event.epoch != g_mission_control_session.observer_epoch ||
+        event.token != g_mission_control_session.ax_token) return;
+    mission_control_schedule_poll(0.0);
 }
 
 static EVENT_HANDLER(DOCK_DID_RESTART)
@@ -2133,8 +2372,9 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
         workspace_is_macos_sequoia() ||
         workspace_is_macos_tahoe()) {
         mission_control_unobserve();
-        mission_control_observe();
+        mission_control_ensure_observed();
     }
+    mission_control_schedule_poll(0.1);
 
     event_signal_push(SIGNAL_DOCK_DID_RESTART, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
@@ -2177,6 +2417,11 @@ static EVENT_HANDLER(SYSTEM_WOKE)
         window_manager_center_mouse(&g_window_manager, focused_window);
     }
 
+    if (workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
+        workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+        mission_control_ensure_observed();
+    }
+    mission_control_schedule_poll(0.1);
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);
     declarative_configuration_request_reconcile();
@@ -2251,46 +2496,9 @@ static EVENT_HANDLER(WINDOW_FOCUS_FALLBACK)
 
 static EVENT_HANDLER(DAEMON_MESSAGE)
 {
-    daemon_message_admission_release(&g_daemon_message_admission);
+    (void) param1;
     TIME_FUNCTION;
-
-    struct daemon_response_buffer response = {};
-    int bytes_to_read = 0;
-    uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
-
-    if (!socket_io_read_exact_until(param1, &bytes_to_read, sizeof(bytes_to_read), deadline)) {
-        daemon_message_send_incomplete_until(param1, socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS));
-        goto cleanup;
-    }
-    if (!daemon_message_length_is_valid(bytes_to_read)) {
-        daemon_message_send_invalid_length(param1);
-        goto cleanup;
-    }
-
-    char *message = ts_alloc_unaligned((size_t) bytes_to_read);
-    if (!message) goto cleanup;
-    if (!socket_io_read_exact_until(param1, message, (size_t) bytes_to_read, deadline)) {
-        daemon_message_send_incomplete_until(param1, socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS));
-        goto cleanup;
-    }
-    if (!daemon_message_body_is_valid(message, (size_t) bytes_to_read)) {
-        daemon_message_send_invalid_body(param1);
-        goto cleanup;
-    }
-    if (!daemon_response_buffer_open(&response)) {
-        daemon_response_send_buffer_failure_until(param1, socket_io_deadline_after_ms(DAEMON_RESPONSE_WRITE_TIMEOUT_MS));
-        goto cleanup;
-    }
-
-    debug_message(__FUNCTION__, message);
-    handle_message(response.stream, message, (size_t) bytes_to_read);
-
-    (void) daemon_response_buffer_send_until(param1, &response,
-                                              socket_io_deadline_after_ms(DAEMON_RESPONSE_WRITE_TIMEOUT_MS));
-
-cleanup:
-    daemon_response_buffer_destroy(&response);
-    socket_close(param1);
+    daemon_io_execute(context);
 }
 #pragma clang diagnostic pop
 
@@ -2306,6 +2514,554 @@ struct event_loop_bootstrap
 };
 
 static __thread struct event_loop *event_loop_worker;
+
+#ifdef TESTS
+static void (*event_loop_topology_resync_test_hook)(struct event_loop *);
+static bool event_loop_topology_resync_test_result = true;
+static void (*event_loop_topology_retry_test_scheduler)(struct event_loop *, uint64_t);
+static enum declarative_topology_result (*event_loop_topology_capture_test)(
+    const struct declarative_topology_bounds_config *, struct declarative_topology *);
+static void (*event_loop_topology_postcommit_hook)(void);
+static int event_loop_topology_fail_allocation_at;
+static int event_loop_topology_allocation_count;
+static size_t event_loop_topology_outstanding_allocations;
+#endif
+
+struct event_loop_topology_space {
+    uint32_t did;
+    uint64_t sid;
+    const char *uuid;
+    CFStringRef published_uuid;
+    struct declarative_space_identity identity;
+    struct view *view;
+    uint32_t old_did;
+    uint64_t old_sid;
+    bool created;
+};
+
+struct event_loop_topology_space_label {
+    int index;
+    uint64_t old_sid;
+    uint64_t new_sid;
+    bool survives;
+};
+
+struct event_loop_topology_display_label {
+    int index;
+    uint32_t old_did;
+    uint32_t new_did;
+    bool survives;
+};
+
+struct event_loop_topology_plan {
+    struct declarative_topology topology;
+    uint32_t *displays;
+    int display_count;
+    struct event_loop_topology_space *spaces;
+    int space_count;
+    uint32_t active_did;
+    uint64_t active_sid;
+    struct table views;
+    struct table managed;
+    struct view **stale_views;
+    int stale_count;
+    struct event_loop_topology_space_label *space_labels;
+    int space_label_count;
+    struct event_loop_topology_display_label *display_labels;
+    int display_label_count;
+    uint32_t mapped_last_did;
+    uint64_t mapped_last_sid;
+    uint32_t *removed_windows;
+    int removed_count;
+};
+
+static void *event_loop_topology_allocate(size_t count, size_t size)
+{
+    if (!count || !size || size > SIZE_MAX / count) return NULL;
+#ifdef TESTS
+    ++event_loop_topology_allocation_count;
+    if (event_loop_topology_fail_allocation_at == event_loop_topology_allocation_count) return NULL;
+#endif
+    void *value = calloc(count, size);
+#ifdef TESTS
+    if (value) ++event_loop_topology_outstanding_allocations;
+#endif
+    return value;
+}
+
+static void event_loop_topology_free(void *value)
+{
+    if (!value) return;
+#ifdef TESTS
+    assert(event_loop_topology_outstanding_allocations > 0);
+    --event_loop_topology_outstanding_allocations;
+#endif
+    free(value);
+}
+
+static enum declarative_topology_result event_loop_topology_capture(
+    const struct declarative_topology_bounds_config *bounds, struct declarative_topology *topology)
+{
+#ifdef TESTS
+    if (event_loop_topology_capture_test) return event_loop_topology_capture_test(bounds, topology);
+#endif
+    return declarative_topology_capture_system_result(bounds, topology);
+}
+
+static CFStringRef event_loop_topology_cf_uuid(const char *uuid)
+{
+    if (!uuid) return NULL;
+    return CFStringCreateWithCString(NULL, uuid, kCFStringEncodingUTF8);
+}
+
+static struct view *event_loop_topology_create_view(const struct declarative_topology_space *space,
+                                                    const struct declarative_topology_display *display,
+                                                    CFStringRef uuid)
+{
+    struct view *view = legacy_allocation_calloc(1, sizeof(*view));
+    struct window_node *root = legacy_allocation_calloc(1, sizeof(*root));
+    if (!view || !root) {
+        legacy_allocation_free(root);
+        legacy_allocation_free(view);
+        return NULL;
+    }
+    view->sid = space->sid;
+    view->uuid = CFRetain(uuid);
+    view->declarative_identity = space->identity;
+    view->root = root;
+    view_set_flag(view, VIEW_ENABLE_PADDING);
+    view_set_flag(view, VIEW_ENABLE_GAP);
+    if (space->kind != 0) {
+        view->layout = VIEW_FLOAT;
+        return view;
+    }
+    view->layout = g_space_manager.layout;
+    view->top_padding = g_space_manager.top_padding;
+    view->bottom_padding = g_space_manager.bottom_padding;
+    view->left_padding = g_space_manager.left_padding;
+    view->right_padding = g_space_manager.right_padding;
+    view->window_gap = g_space_manager.window_gap;
+    view->accordion_padding = g_space_manager.accordion_padding;
+    view->split_ratio = g_space_manager.split_ratio;
+    view->auto_balance = g_space_manager.auto_balance;
+    view->split_type = g_space_manager.split_type;
+    CGRect bounds = display->bounds;
+    root->area = (struct area) {
+        .x = (float) bounds.origin.x + view->left_padding,
+        .y = (float) bounds.origin.y + view->top_padding,
+        .w = (float) bounds.size.width - view_padding_sum(view->left_padding, view->right_padding),
+        .h = (float) bounds.size.height - view_padding_sum(view->top_padding, view->bottom_padding)
+    };
+    if (view_layout_is_accordion(view->layout)) {
+        float min_x = (float) bounds.origin.x, max_x = (float) CGRectGetMaxX(bounds);
+        float min_y = (float) bounds.origin.y, max_y = (float) CGRectGetMaxY(bounds);
+        float x = fminf(max_x, fmaxf(min_x, root->area.x));
+        float y = fminf(max_y, fmaxf(min_y, root->area.y));
+        float right = fminf(max_x, fmaxf(min_x, root->area.x + root->area.w));
+        float bottom = fminf(max_y, fmaxf(min_y, root->area.y + root->area.h));
+        root->area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
+    }
+    if (!isfinite(root->area.x) || !isfinite(root->area.y) ||
+        !isfinite(root->area.w) || !isfinite(root->area.h)) {
+        view_destroy(view);
+        legacy_allocation_free(view);
+        return NULL;
+    }
+    view_set_flag(view, VIEW_IS_VALID);
+    view_set_flag(view, VIEW_IS_DIRTY);
+    return view;
+}
+
+static void event_loop_topology_plan_destroy(struct event_loop_topology_plan *plan, bool committed)
+{
+    if (!plan) return;
+    if (plan->spaces && !committed) {
+        for (int i = 0; i < plan->space_count; ++i) {
+            if (plan->spaces[i].created && plan->spaces[i].view) {
+                view_destroy(plan->spaces[i].view);
+                legacy_allocation_free(plan->spaces[i].view);
+            }
+        }
+    }
+    if (plan->spaces) {
+        for (int i = 0; i < plan->space_count; ++i) {
+            if (plan->spaces[i].published_uuid) CFRelease(plan->spaces[i].published_uuid);
+        }
+    }
+    table_free(&plan->views);
+    table_free(&plan->managed);
+    declarative_topology_destroy(&plan->topology);
+    event_loop_topology_free(plan->displays);
+    event_loop_topology_free(plan->spaces);
+    event_loop_topology_free(plan->stale_views);
+    event_loop_topology_free(plan->space_labels);
+    event_loop_topology_free(plan->display_labels);
+    event_loop_topology_free(plan->removed_windows);
+    memset(plan, 0, sizeof(*plan));
+}
+
+static bool event_loop_event_requires_topology_resync(enum event_type type)
+{
+    switch (type) {
+    case SLS_SPACE_CREATED:
+    case SPACE_CHANGED:
+    case DISPLAY_ADDED:
+    case DISPLAY_MOVED:
+    case DISPLAY_RESIZED:
+    case DISPLAY_CHANGED:
+    case DOCK_DID_RESTART:
+    case MENU_BAR_HIDDEN_CHANGED:
+    case DOCK_DID_CHANGE_PREF:
+    case SYSTEM_WOKE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void event_loop_reserve_topology_resync(struct event_loop *event_loop)
+{
+    uint32_t expected = 0;
+    if (!event_loop || !__atomic_compare_exchange_n(&event_loop->topology_resync_pending, &expected, 1, false,
+                                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    if (event_loop->semaphore) sem_post(event_loop->semaphore);
+}
+
+static enum declarative_topology_result event_loop_prepare_topology_plan(struct event_loop_topology_plan *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+#ifdef TESTS
+    event_loop_topology_allocation_count = 0;
+#endif
+    struct declarative_topology confirmation = {0};
+    struct declarative_topology_bounds_config bounds = {
+        .external_bar_mode = g_display_manager.mode,
+        .external_bar_top_padding = g_display_manager.top_padding,
+        .external_bar_bottom_padding = g_display_manager.bottom_padding
+    };
+    enum declarative_topology_result first = event_loop_topology_capture(&bounds, &plan->topology);
+    if (first != DECLARATIVE_TOPOLOGY_OK) return first;
+    enum declarative_topology_result second = event_loop_topology_capture(&bounds, &confirmation);
+    if (second != DECLARATIVE_TOPOLOGY_OK) {
+        declarative_topology_destroy(&confirmation);
+        return second;
+    }
+    if (!declarative_topology_equal(&plan->topology, &confirmation)) {
+        declarative_topology_destroy(&confirmation);
+        return DECLARATIVE_TOPOLOGY_SETTLING;
+    }
+    declarative_topology_destroy(&confirmation);
+
+    if (plan->topology.display_count > INT_MAX || plan->topology.space_count > INT_MAX)
+        return DECLARATIVE_TOPOLOGY_INVALID;
+    plan->display_count = (int) plan->topology.display_count;
+    plan->space_count = (int) plan->topology.space_count;
+    plan->active_did = plan->topology.active_did;
+    plan->active_sid = plan->topology.active_sid;
+    plan->displays = event_loop_topology_allocate(plan->topology.display_count, sizeof(*plan->displays));
+    plan->spaces = event_loop_topology_allocate(plan->topology.space_count, sizeof(*plan->spaces));
+    if (!plan->displays || !plan->spaces) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    for (int i = 0; i < plan->display_count; ++i) plan->displays[i] = plan->topology.displays[i].did;
+    for (int i = 0; i < plan->space_count; ++i) {
+        const struct declarative_topology_space *canonical = &plan->topology.spaces[i];
+        const struct declarative_topology_display *display =
+            &plan->topology.displays[canonical->parent_display_index];
+        plan->spaces[i] = (struct event_loop_topology_space) {
+            .did = display->did, .sid = canonical->sid, .uuid = canonical->uuid,
+            .published_uuid = event_loop_topology_cf_uuid(canonical->uuid),
+            .identity = canonical->identity
+        };
+        if (!plan->spaces[i].published_uuid) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    }
+
+    int table_capacity = plan->space_count > 11 ? plan->space_count * 2 + 1 : 23;
+    if (!table_try_init(&plan->views, table_capacity, g_space_manager.view.hash, g_space_manager.view.cmp))
+        return DECLARATIVE_TOPOLOGY_RESOURCE;
+    plan->stale_views = event_loop_topology_allocate((size_t) g_space_manager.view.count, sizeof(*plan->stale_views));
+    if (g_space_manager.view.count && !plan->stale_views) return DECLARATIVE_TOPOLOGY_RESOURCE;
+
+    for (int i = 0; i < plan->space_count; ++i) {
+        struct event_loop_topology_space *space = &plan->spaces[i];
+        table_for (struct view *candidate, g_space_manager.view, {
+            bool identified = declarative_space_identity_valid(&candidate->declarative_identity);
+            bool matches = identified
+                         ? declarative_space_identity_equal(&candidate->declarative_identity, &space->identity)
+                         : candidate->sid == space->sid;
+            if (matches) {
+                if (space->view) return DECLARATIVE_TOPOLOGY_INVALID;
+                space->view = candidate;
+                space->old_sid = candidate->sid;
+                if (identified) {
+                    space->old_did = candidate->declarative_identity.parent_did;
+                } else if (candidate->sid == g_space_manager.current_space_id) {
+                    space->old_did = g_display_manager.current_display_id;
+                } else if (candidate->sid == g_space_manager.last_space_id) {
+                    space->old_did = g_display_manager.last_display_id;
+                } else {
+                    space->old_did = space->did;
+                }
+            }
+        })
+        if (!space->view) {
+            const struct declarative_topology_space *canonical = &plan->topology.spaces[i];
+            const struct declarative_topology_display *display =
+                &plan->topology.displays[canonical->parent_display_index];
+            space->view = event_loop_topology_create_view(canonical, display, space->published_uuid);
+            if (!space->view) return DECLARATIVE_TOPOLOGY_RESOURCE;
+            space->created = true;
+        }
+        if (!table_try_add(&plan->views, &space->sid, space->view)) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    }
+
+    table_for (struct view *old_view, g_space_manager.view, {
+        bool survives = false;
+        for (int i = 0; i < plan->space_count; ++i) if (plan->spaces[i].view == old_view) survives = true;
+        if (!survives) plan->stale_views[plan->stale_count++] = old_view;
+    })
+    plan->space_label_count = buf_len(g_space_manager.labels);
+    plan->space_labels = event_loop_topology_allocate((size_t) plan->space_label_count, sizeof(*plan->space_labels));
+    if (plan->space_label_count && !plan->space_labels) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    for (int i = 0; i < plan->space_label_count; ++i) {
+        struct event_loop_topology_space_label *label = &plan->space_labels[i];
+        label->index = i;
+        label->old_sid = g_space_manager.labels[i].sid;
+        for (int j = 0; j < plan->space_count; ++j) {
+            if (plan->spaces[j].old_sid == label->old_sid && !plan->spaces[j].created) {
+                label->survives = true;
+                label->new_sid = plan->spaces[j].sid;
+                break;
+            }
+        }
+    }
+
+    plan->display_label_count = buf_len(g_display_manager.labels);
+    plan->display_labels = event_loop_topology_allocate((size_t) plan->display_label_count, sizeof(*plan->display_labels));
+    if (plan->display_label_count && !plan->display_labels) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    for (int i = 0; i < plan->display_label_count; ++i) {
+        struct event_loop_topology_display_label *label = &plan->display_labels[i];
+        label->index = i;
+        label->old_did = g_display_manager.labels[i].did;
+        for (int j = 0; j < plan->space_count; ++j) {
+            if (!plan->spaces[j].created && plan->spaces[j].old_did == label->old_did) {
+                if (label->survives && label->new_did != plan->spaces[j].did) return DECLARATIVE_TOPOLOGY_INVALID;
+                label->survives = true;
+                label->new_did = plan->spaces[j].did;
+            }
+        }
+        if (!label->survives) {
+            for (int j = 0; j < plan->display_count; ++j) if (plan->displays[j] == label->old_did) {
+                label->survives = true;
+                label->new_did = label->old_did;
+            }
+        }
+    }
+
+    plan->mapped_last_sid = plan->active_sid;
+    plan->mapped_last_did = plan->active_did;
+    for (int i = 0; i < plan->space_count; ++i) {
+        if (plan->spaces[i].created) continue;
+        for (int j = 0; j < i; ++j) {
+            if (!plan->spaces[j].created && plan->spaces[i].old_did &&
+                plan->spaces[i].old_did == plan->spaces[j].old_did &&
+                plan->spaces[i].did != plan->spaces[j].did) return DECLARATIVE_TOPOLOGY_INVALID;
+        }
+        if (plan->spaces[i].old_sid == g_space_manager.last_space_id) {
+            plan->mapped_last_sid = plan->spaces[i].sid;
+            plan->mapped_last_did = plan->spaces[i].did;
+        } else if (plan->spaces[i].old_did == g_display_manager.last_display_id &&
+                   plan->mapped_last_did == plan->active_did) {
+            plan->mapped_last_did = plan->spaces[i].did;
+        }
+    }
+
+    int managed_capacity = g_window_manager.managed_window.count > 11 ? g_window_manager.managed_window.count * 2 + 1 : 23;
+    if (!table_try_init(&plan->managed, managed_capacity,
+                        g_window_manager.managed_window.hash, g_window_manager.managed_window.cmp))
+        return DECLARATIVE_TOPOLOGY_RESOURCE;
+    plan->removed_windows = event_loop_topology_allocate((size_t) g_window_manager.managed_window.count,
+                                                          sizeof(*plan->removed_windows));
+    if (g_window_manager.managed_window.count && !plan->removed_windows) return DECLARATIVE_TOPOLOGY_RESOURCE;
+    for (int bucket_index = 0; bucket_index < g_window_manager.managed_window.capacity; ++bucket_index) {
+        for (struct bucket *bucket = g_window_manager.managed_window.buckets[bucket_index]; bucket; bucket = bucket->next) {
+            if (!bucket->value) continue;
+            struct view *replacement = NULL;
+            for (int i = 0; i < plan->space_count; ++i) if (plan->spaces[i].view == bucket->value) replacement = plan->spaces[i].view;
+            uint32_t wid = *(uint32_t *) bucket->key;
+            if (replacement) {
+                if (!table_try_add(&plan->managed, &wid, replacement)) return DECLARATIVE_TOPOLOGY_RESOURCE;
+            } else {
+                plan->removed_windows[plan->removed_count++] = wid;
+            }
+        }
+    }
+    return DECLARATIVE_TOPOLOGY_OK;
+}
+
+static bool event_loop_recover_topology(struct event_loop *event_loop)
+{
+#ifdef TESTS
+    if (event_loop_topology_resync_test_hook) {
+        event_loop_topology_resync_test_hook(event_loop);
+        return event_loop_topology_resync_test_result;
+    }
+#endif
+    if (event_loop != &g_event_loop) return false;
+
+    struct event_loop_topology_plan plan;
+    if (event_loop_prepare_topology_plan(&plan) != DECLARATIVE_TOPOLOGY_OK) {
+        event_loop_topology_plan_destroy(&plan, false);
+        return false;
+    }
+
+    struct table old_views = g_space_manager.view;
+    struct table old_managed = g_window_manager.managed_window;
+    g_space_manager.view = plan.views;
+    g_window_manager.managed_window = plan.managed;
+    plan.views = (struct table) {0};
+    plan.managed = (struct table) {0};
+    /* Publish every SID/table mapping before touching labels. The immutable
+     * label plan below is therefore safe for swaps and longer SID cycles. */
+    for (int i = 0; i < plan.space_count; ++i) {
+        struct event_loop_topology_space *space = &plan.spaces[i];
+        if (!space->created) {
+            if (space->view->uuid) CFRelease(space->view->uuid);
+            space->view->uuid = space->published_uuid;
+            space->published_uuid = NULL;
+            space->view->sid = space->sid;
+        }
+        space->view->declarative_identity = space->identity;
+    }
+    for (int i = plan.space_label_count - 1; i >= 0; --i) {
+        struct event_loop_topology_space_label *label = &plan.space_labels[i];
+        if (label->survives) {
+            g_space_manager.labels[label->index].sid = label->new_sid;
+        } else {
+            free(g_space_manager.labels[label->index].label);
+            buf_del(g_space_manager.labels, label->index);
+        }
+    }
+    for (int i = plan.display_label_count - 1; i >= 0; --i) {
+        struct event_loop_topology_display_label *label = &plan.display_labels[i];
+        if (label->survives) {
+            g_display_manager.labels[label->index].did = label->new_did;
+        } else {
+            free(g_display_manager.labels[label->index].label);
+            buf_del(g_display_manager.labels, label->index);
+        }
+    }
+    g_display_manager.last_display_id = plan.mapped_last_did;
+    g_display_manager.current_display_id = plan.active_did;
+    g_space_manager.last_space_id = plan.mapped_last_sid;
+    g_space_manager.current_space_id = plan.active_sid;
+    table_free(&old_views);
+    table_free(&old_managed);
+
+    for (int i = 0; i < plan.stale_count; ++i) {
+        view_destroy(plan.stale_views[i]);
+        legacy_allocation_free(plan.stale_views[i]);
+    }
+    for (int i = 0; i < plan.removed_count; ++i) {
+        struct window *window = window_manager_find_window(&g_window_manager, plan.removed_windows[i]);
+        if (window) {
+            window_manager_adjust_layer(window, LAYER_NORMAL);
+            window_manager_purify_window(&g_window_manager, window);
+        }
+    }
+
+#ifdef TESTS
+    if (event_loop_topology_postcommit_hook) {
+        event_loop_topology_postcommit_hook();
+    } else
+#endif
+    {
+        float animation_duration = g_window_manager.window_animation_duration;
+        g_window_manager.window_animation_duration = 0.0f;
+        for (int i = 0; i < plan.space_count; ++i) {
+            struct view *view = plan.spaces[i].view;
+            if (plan.spaces[i].sid == plan.active_sid) {
+                window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager,
+                                                                        plan.spaces[i].sid);
+            } else if (view && view->layout != VIEW_FLOAT) {
+                view_clear_flag(view, VIEW_IS_VALID);
+            }
+        }
+        g_window_manager.window_animation_duration = animation_duration;
+        if (space_manager_refresh_application_windows(&g_space_manager)) event_loop_window_inventory_did_change();
+        if (workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
+            workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) mission_control_ensure_observed();
+        mission_control_schedule_poll(0.1);
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY |
+                                    MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);
+        declarative_configuration_request_reconcile();
+    }
+    event_loop_topology_plan_destroy(&plan, true);
+    return true;
+}
+
+static void event_loop_cancel_topology_retry(struct event_loop *event_loop)
+{
+    if (event_loop) __atomic_store_n(&event_loop->topology_resync_retry_scheduled, 0, __ATOMIC_RELEASE);
+}
+
+static void event_loop_fire_topology_retry(struct event_loop *event_loop, uint64_t generation)
+{
+    uint64_t token = generation;
+    if (!__atomic_compare_exchange_n(&event_loop->topology_resync_retry_scheduled, &token, 0, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    uint64_t live_generation = __atomic_load_n(&event_loop->generation, __ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE) &&
+        (live_generation == generation || (!live_generation && generation == 1)) &&
+        __atomic_load_n(&event_loop->topology_resync_pending, __ATOMIC_ACQUIRE)) {
+        sem_post(event_loop->semaphore);
+    }
+}
+
+static void event_loop_schedule_topology_retry(struct event_loop *event_loop)
+{
+    if (!event_loop || !event_loop->semaphore ||
+        !__atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE)) return;
+    uint64_t generation = __atomic_load_n(&event_loop->generation, __ATOMIC_ACQUIRE);
+    if (!generation) generation = 1;
+    uint64_t expected = 0;
+    if (!__atomic_compare_exchange_n(&event_loop->topology_resync_retry_scheduled, &expected, generation, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+#ifdef TESTS
+    if (event_loop_topology_retry_test_scheduler) {
+        event_loop_topology_retry_test_scheduler(event_loop, generation);
+        return;
+    }
+#endif
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        event_loop_fire_topology_retry(event_loop, generation);
+    });
+}
+
+static bool event_loop_consume_topology_resync(struct event_loop *event_loop)
+{
+    if (!event_loop || !__atomic_exchange_n(&event_loop->topology_resync_pending, 0, __ATOMIC_ACQ_REL)) return false;
+    bool recovered = event_loop_recover_topology(event_loop);
+    bool follow_up = __atomic_load_n(&event_loop->topology_resync_pending, __ATOMIC_ACQUIRE) != 0;
+    if (!recovered) {
+        if (!follow_up) {
+            __atomic_store_n(&event_loop->topology_resync_pending, 1, __ATOMIC_RELEASE);
+            event_loop_schedule_topology_retry(event_loop);
+        }
+        return false;
+    }
+    event_loop_cancel_topology_retry(event_loop);
+    /* A trigger observed during recovery is deliberately handled by the next
+     * semaphore pass, never by a busy-spin in this pass. */
+    return !follow_up;
+}
+
+static void event_loop_dispatch_event(struct event event)
+{
+    switch (event.type) {
+#define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(event.context, event.param1); break;
+        EVENT_TYPE_LIST
+#undef EVENT_TYPE_ENTRY
+    }
+}
 
 static void *event_loop_run(void *context)
 {
@@ -2330,19 +3086,20 @@ static void *event_loop_run(void *context)
         if (!__atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE)) break;
 
         NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-        while (event_queue_pop(&event_loop->queue, &event)) {
-            profile_begin();
+        for (;;) {
+            while (event_queue_pop(&event_loop->queue, &event)) {
+                profile_begin();
 
-            switch (event.type) {
-#define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(event.context, event.param1); break;
-                EVENT_TYPE_LIST
-#undef EVENT_TYPE_ENTRY
+                event_loop_dispatch_event(event);
+
+                event_signal_flush();
+                ts_reset();
+
+                profile_end_and_print();
             }
-
+            if (!event_loop_consume_topology_resync(event_loop)) break;
             event_signal_flush();
             ts_reset();
-
-            profile_end_and_print();
         }
 
         [pool drain];
@@ -2367,6 +3124,15 @@ static void event_loop_release_event_context(enum event_type type, void *context
     switch (type) {
     case APPLICATION_FRONT_SWITCHED: {
         free(context);
+    } break;
+    case MISSION_CONTROL_SHOW_ALL_WINDOWS:
+    case MISSION_CONTROL_SHOW_FRONT_WINDOWS:
+    case MISSION_CONTROL_SHOW_DESKTOP:
+    case MISSION_CONTROL_EXIT: {
+        mission_control_event_context_destroy(context);
+    } break;
+    case MISSION_CONTROL_CHECK_FOR_EXIT: {
+        mission_control_poll_context_destroy(context);
     } break;
     case WINDOW_CREATED:
     case MOUSE_DOWN:
@@ -2393,7 +3159,10 @@ static bool event_loop_rejected_event_is_fatal(enum event_type type)
 {
     switch (type) {
     case APPLICATION_TERMINATED:
-    case WINDOW_DESTROYED: {
+    case WINDOW_DESTROYED:
+    case SLS_WINDOW_DESTROYED:
+    case SLS_SPACE_DESTROYED:
+    case DISPLAY_REMOVED: {
         return true;
     } break;
     default: {
@@ -2410,8 +3179,13 @@ static void event_loop_discard_event(enum event_type type, void *context, int pa
 
     switch (type) {
     case DAEMON_MESSAGE: {
-        daemon_message_admission_release(&g_daemon_message_admission);
-        if (param1 >= 0) socket_close(param1);
+        if (context) {
+            daemon_io_job_destroy(context);
+        } else {
+            /* Compatibility for events queued before the transport handoff. */
+            daemon_message_admission_release(&g_daemon_message_admission);
+            if (param1 >= 0) socket_close(param1);
+        }
     } break;
     default: {
         event_loop_release_event_context(type, context);
@@ -2508,6 +3282,7 @@ static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type ty
         warn("%s: the event loop is falling behind, its queue now holds %u events\n", __FUNCTION__, capacity);
     } else if (result == EVENT_QUEUE_FULL) {
         warn("%s: could not grow the event queue, event %d dropped\n", __FUNCTION__, type);
+        if (event_loop_event_requires_topology_resync(type)) event_loop_reserve_topology_resync(event_loop);
         event_loop_discard_event(type, context, param1, true);
         return false;
     }
@@ -2523,7 +3298,7 @@ bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t gene
         event_loop_discard_event(type, context, param1, true);
         return false;
     }
-    if (event_loop->generation != generation) {
+    if (__atomic_load_n(&event_loop->generation, __ATOMIC_ACQUIRE) != generation) {
         event_loop_discard_event(type, context, param1, true);
         event_loop_leave_producer(event_loop);
         return false;
@@ -2548,6 +3323,42 @@ bool event_loop_try_post(struct event_loop *event_loop, enum event_type type, vo
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1)
 {
     (void) event_loop_try_post(event_loop, type, context, param1);
+}
+
+#define APPLICATION_LAUNCH_RETRY_LIMIT 5
+
+#ifdef TESTS
+static void (*event_loop_test_application_retry_scheduler)(struct process *);
+#endif
+
+void event_loop_schedule_application_launch_retry(struct process *process)
+{
+    if (!process) return;
+    if (process->launch_retries >= APPLICATION_LAUNCH_RETRY_LIMIT) {
+        debug("%s: exhausted application launch retry for pid %d; a later front/process event may restart recovery\n",
+              __FUNCTION__, process->pid);
+        return;
+    }
+    ++process->launch_retries;
+#ifdef TESTS
+    if (event_loop_test_application_retry_scheduler) {
+        event_loop_test_application_retry_scheduler(process);
+        return;
+    }
+#endif
+    __block ProcessSerialNumber psn = process->psn;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        struct process *current = process_manager_find_process(&g_process_manager, &psn);
+        if (current && psn_equals(&current->psn, &psn)) event_loop_post_application_launched(current);
+    });
+}
+
+bool event_loop_post_application_launched(struct process *process)
+{
+    if (!process) return false;
+    if (event_loop_try_post(&g_event_loop, APPLICATION_LAUNCHED, process, 0)) return true;
+    event_loop_schedule_application_launch_retry(process);
+    return false;
 }
 
 #ifdef TESTS
@@ -2576,15 +3387,26 @@ static void event_loop_cleanup(struct event_loop *event_loop)
     memset(&event_loop->thread, 0, sizeof(event_loop->thread));
     event_loop->producer_sync_initialized = false;
     __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&event_loop->topology_resync_pending, 0, __ATOMIC_RELEASE);
+    event_loop_cancel_topology_retry(event_loop);
 }
 
 static volatile uint64_t event_loop_generation_counter;
 
 bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootstrap_callback callback, void *context)
 {
-    *event_loop = (struct event_loop) { 0 };
-    event_loop->generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
-    if (!event_loop->generation) event_loop->generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
+    /* Cleanup leaves producer admission closed; publish the new generation
+     * atomically so generation-bound transports can safely reject stale work
+     * while this lifetime is being initialized. */
+    __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
+    event_loop->producer_sync_initialized = false;
+    event_loop->semaphore = NULL;
+    event_loop->queue = (struct event_queue) {0};
+    memset(&event_loop->thread, 0, sizeof(event_loop->thread));
+    uint64_t generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
+    if (!generation) generation = __atomic_add_fetch(&event_loop_generation_counter, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&event_loop->generation, generation, __ATOMIC_RELEASE);
     if (!event_queue_init(&event_loop->queue, EVENT_QUEUE_CAPACITY)) return false;
 
     event_loop->semaphore = sem_open("yabai_event_loop_semaphore", O_CREAT, 0600, 0);
@@ -2636,6 +3458,8 @@ bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootst
         event_loop_close_producer_admission(event_loop);
         pthread_join(event_loop->thread, NULL);
         event_loop_cleanup(event_loop);
+    } else if (event_loop == &g_event_loop) {
+        mission_control_admission_open(generation);
     }
     return result;
 }
@@ -2648,6 +3472,11 @@ bool event_loop_begin(struct event_loop *event_loop)
 bool event_loop_is_worker_thread(struct event_loop *event_loop)
 {
     return event_loop && event_loop_worker == event_loop;
+}
+
+uint64_t event_loop_generation_snapshot(struct event_loop *event_loop)
+{
+    return event_loop ? __atomic_load_n(&event_loop->generation, __ATOMIC_ACQUIRE) : 0;
 }
 
 bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_callback callback, void *context)
@@ -2694,10 +3523,19 @@ void event_loop_end(struct event_loop *event_loop)
         return;
     }
 
-    if (event_loop == &g_event_loop) declarative_configuration_reconcile_shutdown();
+    if (event_loop == &g_event_loop) {
+        declarative_configuration_reconcile_shutdown();
+        mission_control_shutdown();
+    }
     event_loop_close_producer_admission_after_admitted_self(event_loop);
     __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
     sem_post(event_loop->semaphore);
     pthread_join(event_loop->thread, NULL);
+    if (event_loop == &g_event_loop) {
+        g_mission_control_session = (struct mission_control_session_state) {0};
+        g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+        __atomic_store_n(&g_mission_control_poll_generation, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);
+    }
     event_loop_cleanup(event_loop);
 }

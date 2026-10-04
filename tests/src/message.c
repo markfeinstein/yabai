@@ -167,7 +167,8 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
         char output[256] = {0};
         fread(output, 1, sizeof(output) - 1, response);
         fclose(response);
-        TEST_CHECK(strstr(output, "must be unscoped") != NULL, true);
+        TEST_CHECK(output[0], FAILURE_MESSAGE[0]);
+        if (i != 0) TEST_CHECK(strstr(output, "must be unscoped") != NULL, true);
         TEST_CHECK(g_verbose, false);
         TEST_CHECK(g_space_manager.window_gap, saved_window_gap);
         TEST_CHECK(g_window_manager.configured_ffm_mode, saved_ffm);
@@ -183,6 +184,27 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
         TEST_CHECK(g_mouse_state.modifier, saved_mouse_modifier);
         TEST_CHECK(declarative_installed_generation(), saved_generation);
     }
+
+    uint64_t reload_label_sid = UINT64_MAX - 109;
+    struct view reload_label_view = { .sid = reload_label_sid, .split_type = SPLIT_AUTO };
+    table_add(&g_space_manager.view, &reload_label_sid, &reload_label_view);
+    space_manager_set_label_for_space(&g_space_manager, reload_label_sid, strdup("reload"));
+    char label_query[] = "--space\0reload\0split_type\0";
+    FILE *label_response = tmpfile();
+    TEST_CHECK(label_response != NULL, true);
+    if (label_response) {
+        handle_domain_config(label_response, message_test_token("config"), label_query);
+        rewind(label_response);
+        char output[64] = {0};
+        fread(output, 1, sizeof(output) - 1, label_response);
+        TEST_CHECK(strcmp(output, "auto\n"), 0);
+        fclose(label_response);
+    }
+    char label_mutation[] = "--space\0reload\0split_type\0horizontal\0";
+    handle_domain_config(NULL, message_test_token("config"), label_mutation);
+    TEST_CHECK(reload_label_view.split_type, SPLIT_X);
+    space_manager_remove_label_for_space(&g_space_manager, reload_label_sid);
+    table_remove(&g_space_manager.view, &reload_label_sid);
 
     struct event_loop saved_event_loop = g_event_loop;
     g_event_loop = (struct event_loop) {0};
@@ -407,6 +429,19 @@ TEST_FUNC(message_rule_grid_numeric_validation,
     TEST_CHECK(message_test_parse_rule_grid("1:2:3:4:5:6:7"), false);
     TEST_CHECK(message_test_parse_rule_grid("1:2::4:5:6"), false);
     TEST_CHECK(message_test_parse_rule_grid("4294967296:2:3:4:5:6"), false);
+});
+
+TEST_FUNC(message_direct_opacity_numeric_validation,
+{
+    struct opacity_case { const char *value; bool valid; } cases[] = {
+        { "0", true }, { "1", true }, { "0.5", true },
+        { "-0.01", false }, { "1.01", false },
+        { "nan", false }, { "inf", false }, { "1e999", false }
+    };
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        float opacity = -1.0f;
+        TEST_CHECK(parse_window_opacity_token(message_test_token((char *) cases[i].value), &opacity), cases[i].valid);
+    }
 });
 
 TEST_FUNC(message_rule_opacity_numeric_validation,

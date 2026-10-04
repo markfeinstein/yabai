@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch_target: test-arm64
+            native_arch: arm64
+          - runner: macos-13
+            arch_target: test-x86_64
+            native_arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify architecture-pinned runner
+        run: test "$(uname -m)" = "${{ matrix.native_arch }}"
+      - name: Install pinned documentation generator
+        run: |
+          gem install --no-document asciidoctor --version 2.0.23
+          test "$(asciidoctor --version | awk 'NR == 1 { print $2 }')" = 2.0.23
+      - name: Syntax, generated documentation contract, and diff hygiene
+        run: |
+          make syntax
+          make man-contract
+          make man-check
+          git diff --check
+      - name: Ordinary behavior and repository fixtures
+        run: make test
+      - name: Sanitized behavior
+        run: |
+          make test-asan
+          make test-tsan
+      - name: Thin architecture behavior
+        run: make "${{ matrix.arch_target }}"
+      - name: Universal daemon builds
+        run: |
+          make debug release asan tsan
+          for binary in bin/debug/yabai bin/release/yabai; do
+            lipo -verify_arch arm64 "$binary"
+            lipo -verify_arch x86_64 "$binary"
+          done
+      - name: Offline config and bounded doctor paths
+        run: |
+          bin/debug/yabai --check-config examples/yabai.jsonc
+          doctor_log="$RUNNER_TEMP/yabai-doctor.txt"
+          set +e
+          bin/debug/yabai --doctor >"$doctor_log" 2>&1
+          doctor_status=$?
+          set -e
+          grep -Eq '^SUMMARY [0-9]+ failure(s)?; doctor made no changes$' "$doctor_log"
+          case "$doctor_status" in
+            0)
+              ! grep -q '^FAIL ' "$doctor_log"
+              grep -q '^SUMMARY 0 failures; doctor made no changes$' "$doctor_log"
+              ;;
+            1)
+              test "$(grep -c '^FAIL ' "$doctor_log")" -eq 1
+              grep -q '^FAIL accessibility ' "$doctor_log"
+              grep -q '^SUMMARY 1 failure; doctor made no changes$' "$doctor_log"
+              ;;
+            *)
+              cat "$doctor_log" >&2
+              exit 1
+              ;;
+          esac
+      - name: Working tree remains clean
+        run: test -z "$(git status --porcelain --untracked-files=all)"

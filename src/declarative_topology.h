@@ -109,7 +109,7 @@ bool declarative_detached_view_table_prepare(const struct declarative_topology *
                                              struct declarative_detached_view_table *out);
 void declarative_detached_view_table_destroy(struct declarative_detached_view_table *table);
 /* Transfers all view/table storage to the ordinary live Space-manager owner. */
-void declarative_detached_view_table_adopt(struct declarative_detached_view_table *table,
+bool declarative_detached_view_table_adopt(struct declarative_detached_view_table *table,
                                            struct table *live_table);
 
 #ifdef TESTS

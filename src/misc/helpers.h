@@ -161,6 +161,35 @@ static inline uint64_t read_os_freq(void)
     return 1000000000;
 }
 
+// A regressed timestamp is treated as no elapsed time. This also avoids
+// interpreting an unsigned underflow (including timer wrap) as a long delay.
+static inline double os_timer_elapsed_seconds(uint64_t start, uint64_t end)
+{
+    if (end < start) return 0.0;
+    uint64_t elapsed = end - start;
+    return (double) elapsed / (double) read_os_freq();
+}
+
+static inline double os_timer_elapsed_milliseconds(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_seconds(start, end) * 1000.0;
+}
+
+static inline bool os_timer_cmd_tab_should_fence(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) > 1500.0;
+}
+
+static inline bool os_timer_gesture_suppression_active(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) < 1250.0;
+}
+
+static inline bool os_timer_mouse_resize_ready(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) >= (1000.0 / 60.0);
+}
+
 struct rgba_color
 {
     uint32_t p;

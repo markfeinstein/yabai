@@ -478,9 +478,12 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     memset(source, 0, sizeof(*source));
 }
 
-static void declarative_startup_bundle_publish(struct declarative_startup_state *startup,
+static bool declarative_startup_bundle_publish(struct declarative_startup_state *startup,
                                                struct declarative_startup_bundle *bundle)
 {
+    struct table adopted_views = {0};
+    if (!declarative_detached_view_table_adopt(&startup->detached_views, &adopted_views)) return false;
+    bundle->space_manager.view = adopted_views;
     /* No allocation, topology query, table insertion, event post or setter side effect below. */
     g_verbose = bundle->verbose;
     declarative_install_move_window_manager(&g_window_manager, &bundle->window_manager);
@@ -489,7 +492,6 @@ static void declarative_startup_bundle_publish(struct declarative_startup_state 
     bundle->rule_buffer = NULL;
     bundle->rule_buffer_owned_count = 0;
     g_space_manager = bundle->space_manager;
-    declarative_detached_view_table_adopt(&startup->detached_views, &g_space_manager.view);
     g_display_manager = bundle->display_manager;
     __atomic_store_n(&g_mouse_state.modifier, bundle->mouse_state.modifier, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mouse_state.action1, bundle->mouse_state.action1, __ATOMIC_RELEASE);
@@ -520,6 +522,7 @@ static void declarative_startup_bundle_publish(struct declarative_startup_state 
                                    (const char *const *) declarative_installed.labels,
                                    declarative_installed.label_count,
                                    declarative_installed.fold_context);
+    return true;
 }
 
 bool declarative_startup_install(struct declarative_startup_state *startup,
@@ -539,7 +542,11 @@ bool declarative_startup_install(struct declarative_startup_state *startup,
         declarative_startup_bundle_destroy(&bundle);
         return false;
     }
-    declarative_startup_bundle_publish(startup, &bundle);
+    if (!declarative_startup_bundle_publish(startup, &bundle)) {
+        declarative_install_mutex_destroy(&g_window_manager.window_animations_lock);
+        declarative_startup_bundle_destroy(&bundle);
+        return false;
+    }
     declarative_startup_bundle_destroy(&bundle);
     return true;
 }
@@ -1014,6 +1021,7 @@ static char declarative_reconcile_last_diagnostic[160];
 #define DECLARATIVE_RECONCILE_MAX_RETRIES 4U
 
 #ifdef TESTS
+static uint64_t declarative_reconcile_test_reservation_count;
 static bool (*declarative_reconcile_retry_test_hook)(uint64_t delay_ms, void *context);
 static void *declarative_reconcile_retry_test_context;
 #endif
@@ -1387,6 +1395,9 @@ void declarative_configuration_request_reconcile(void)
     uint64_t reservation_token = ++declarative_reconcile_token_counter;
     if (!reservation_token) reservation_token = ++declarative_reconcile_token_counter;
     declarative_reconcile_active_token = reservation_token;
+#ifdef TESTS
+    ++declarative_reconcile_test_reservation_count;
+#endif
     declarative_reconcile_retry_attempt = 0;
     declarative_reconcile_retry_waiting = false;
     declarative_reconcile_last_diagnostic[0] = '\0';
@@ -1881,7 +1892,7 @@ void declarative_install_test_reset(void)
         g_window_manager.rules = NULL;
         table_for (struct view *view, g_space_manager.view, {
             view_destroy(view);
-            free(view);
+            legacy_allocation_free(view);
         });
         table_free(&g_space_manager.view);
         memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));

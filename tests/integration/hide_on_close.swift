@@ -1,9 +1,6 @@
-// A window that hides itself on close instead of closing, as Electron apps do
-// (win.on('close', e => { e.preventDefault(); win.hide() })): it is ordered out,
-// but not minimized, not destroyed, and its app is not hidden.
-// It comes back after --reshow-after seconds (0: never), then the app quits after --quit-after.
-//
-//   swiftc tests/integration/hide_on_close.swift -o tests/integration/bin/hide-on-close
+// Two persistent test windows. The target orders itself out on close and later
+// returns; the anchor remains visible so BSP membership is never inferred from
+// singleton split metadata.
 import AppKit
 
 func argument(_ name: String, _ fallback: Double) -> Double {
@@ -15,18 +12,26 @@ func argument(_ name: String, _ fallback: Double) -> Double {
 final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let reshowAfter = argument("--reshow-after", 5)
     let quitAfter = argument("--quit-after", 60)
-    var window: NSWindow!
+    var anchor: NSWindow!
+    var target: NSWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 600, height: 400),
+        anchor = NSWindow(contentRect: NSRect(x: 100, y: 150, width: 500, height: 350),
+                          styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        anchor.title = "hide-on-close-anchor"
+        anchor.isReleasedWhenClosed = false
+        anchor.makeKeyAndOrderFront(nil)
+
+        target = NSWindow(contentRect: NSRect(x: 650, y: 150, width: 500, height: 350),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable],
                           backing: .buffered, defer: false)
-        window.title = "hide-on-close"
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.makeKeyAndOrderFront(nil)
+        target.title = "hide-on-close-target"
+        target.isReleasedWhenClosed = false
+        target.delegate = self
+        target.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        print("window \(window.windowNumber)")
+        print("anchor \(anchor.windowNumber)")
+        print("target \(target.windowNumber)")
         fflush(stdout)
         DispatchQueue.main.asyncAfter(deadline: .now() + quitAfter) { NSApp.terminate(nil) }
     }

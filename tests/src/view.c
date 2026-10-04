@@ -170,6 +170,181 @@ TEST_FUNC(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles,
     TEST_CHECK(negative.fill_rect.size.height, 0.0);
 });
 
+static bool lifecycle_test_space_is_user(uint64_t sid, void *context)
+{
+    (void) sid; (void) context;
+    return false;
+}
+
+static CFStringRef lifecycle_test_copy_space_uuid(uint64_t sid, void *context)
+{
+    (void) sid; (void) context;
+    return CFRetain(CFSTR("lifecycle-test"));
+}
+
+TEST_FUNC(legacy_view_and_split_allocations_are_transactional,
+{
+    struct view_test_platform_ops ops = {
+        .space_is_user = lifecycle_test_space_is_user,
+        .copy_space_uuid = lifecycle_test_copy_space_uuid
+    };
+    view_test_set_platform_ops(&ops);
+
+    for (size_t ordinal = 1; ordinal <= 2; ++ordinal) {
+        legacy_allocation_test_fail_at(ordinal);
+        TEST_CHECK(view_create(91) == NULL, true);
+        TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+    }
+    legacy_allocation_test_reset();
+    struct view *created = view_create(91);
+    TEST_CHECK(created != NULL && created->root != NULL, true);
+    view_destroy(created);
+    legacy_allocation_free(created);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+
+    struct window_node leaf = {
+        .area = { 1, 2, 300, 200 }, .window_list = { 17, 18 },
+        .window_order = { 18, 17 }, .window_count = 2, .ratio = 0.63f,
+        .split = SPLIT_Y, .child = CHILD_SECOND, .insert_dir = DIR_EAST
+    };
+    struct view view = { .root = &leaf, .window_gap = 9, .split_type = SPLIT_X, .insertion_point = 17 };
+    struct window window = { .id = 44 };
+    struct window_node before = leaf;
+    for (size_t ordinal = 1; ordinal <= 2; ++ordinal) {
+        legacy_allocation_test_fail_at(ordinal);
+        TEST_CHECK(window_node_split(&view, &leaf, &window), false);
+        TEST_CHECK(memcmp(&leaf, &before, sizeof(leaf)), 0);
+        TEST_CHECK(view.insertion_point, 17U);
+        TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+    }
+    legacy_allocation_test_reset();
+    TEST_CHECK(window_node_split(&view, &leaf, &window), true);
+    TEST_CHECK(leaf.left != NULL && leaf.right != NULL, true);
+    TEST_CHECK(leaf.left->parent == &leaf && leaf.right->parent == &leaf, true);
+    legacy_allocation_free(leaf.left);
+    legacy_allocation_free(leaf.right);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+
+    void *tracked = legacy_allocation_calloc(1, 8);
+    void *raw = calloc(1, 8);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 1UL);
+    legacy_allocation_free(raw);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 1UL);
+    legacy_allocation_free(tracked);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+    view_test_set_platform_ops(NULL);
+});
+
+TEST_FUNC(view_insertion_preparation_enforces_single_root_capacity_and_layout,
+{
+    const enum view_type single_root_layouts[] = {
+        VIEW_STACK, VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_VERTICAL
+    };
+    struct window window = { .id = 99 };
+
+    for (size_t i = 0; i < array_count(single_root_layouts); ++i) {
+        struct window_node root = {0};
+        struct view view = { .layout = single_root_layouts[i], .root = &root };
+        struct view_insertion_plan plan = {0};
+
+        root.window_count = NODE_MAX_WINDOW_COUNT - 1;
+        TEST_CHECK(view_prepare_window_node_insertion(&view, &window, 0, &plan), true);
+        TEST_CHECK(plan.left == NULL && plan.right == NULL, true);
+        TEST_CHECK(view_commit_window_node_insertion(&view, &window, 0, &plan), &root);
+        TEST_CHECK(root.window_count, NODE_MAX_WINDOW_COUNT);
+
+        struct window_node full_before = root;
+        TEST_CHECK(view_prepare_window_node_insertion(&view, &window, 0, &plan), false);
+        TEST_CHECK(memcmp(&root, &full_before, sizeof(root)), 0);
+        TEST_CHECK(plan.left == NULL && plan.right == NULL, true);
+    }
+
+    const enum view_type unsupported_layouts[] = { VIEW_FLOAT, VIEW_DEFAULT };
+    for (size_t i = 0; i < array_count(unsupported_layouts); ++i) {
+        struct window_node root = {0};
+        struct view view = { .layout = unsupported_layouts[i], .root = &root };
+        struct view_insertion_plan plan = {0};
+        TEST_CHECK(view_prepare_window_node_insertion(&view, &window, 0, &plan), false);
+        TEST_CHECK(plan.left == NULL && plan.right == NULL, true);
+    }
+});
+
+static uint32_t *lifecycle_test_no_active_displays(int *count)
+{
+    *count = 0;
+    return NULL;
+}
+
+static uint32_t *lifecycle_test_one_active_display(int *count)
+{
+    static uint32_t display = 1;
+    *count = 1;
+    return &display;
+}
+
+static uint64_t *lifecycle_test_one_space(uint32_t did, int *count)
+{
+    static uint64_t sid = 91;
+    (void) did;
+    *count = 1;
+    return &sid;
+}
+
+static uint32_t *lifecycle_test_two_active_displays(int *count)
+{
+    static uint32_t displays[] = { 1, 2 };
+    *count = 2;
+    return displays;
+}
+
+static uint64_t *lifecycle_test_second_space_failure(uint32_t did, int *count)
+{
+    static uint64_t sid = 91;
+    if (did == 2) return NULL;
+    *count = 1;
+    return &sid;
+}
+
+TEST_FUNC(space_manager_begin_reports_and_cleans_initialization_failures,
+{
+    struct view_test_platform_ops view_ops = {
+        .space_is_user = lifecycle_test_space_is_user,
+        .copy_space_uuid = lifecycle_test_copy_space_uuid
+    };
+    view_test_set_platform_ops(&view_ops);
+    struct space_manager manager = {0};
+    table_test_fail_allocation_after(0);
+    TEST_CHECK(space_manager_begin(&manager), false);
+    TEST_CHECK(manager.did_begin, false);
+    TEST_CHECK(manager.view.buckets == NULL, true);
+    table_test_fail_allocation_after(-1);
+
+    space_manager_test_active_display_list = lifecycle_test_no_active_displays;
+    TEST_CHECK(space_manager_begin(&manager), false);
+    TEST_CHECK(manager.did_begin, false);
+    TEST_CHECK(manager.view.buckets == NULL, true);
+
+    space_manager_test_active_display_list = lifecycle_test_one_active_display;
+    space_manager_test_display_space_list = lifecycle_test_one_space;
+    legacy_allocation_test_fail_at(1);
+    TEST_CHECK(space_manager_begin(&manager), false);
+    TEST_CHECK(manager.did_begin, false);
+    TEST_CHECK(manager.view.buckets == NULL, true);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+    legacy_allocation_test_reset();
+
+    space_manager_test_active_display_list = lifecycle_test_two_active_displays;
+    space_manager_test_display_space_list = lifecycle_test_second_space_failure;
+    TEST_CHECK(space_manager_begin(&manager), false);
+    TEST_CHECK(manager.did_begin, false);
+    TEST_CHECK(manager.view.buckets == NULL, true);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+
+    space_manager_test_active_display_list = NULL;
+    space_manager_test_display_space_list = NULL;
+    view_test_set_platform_ops(NULL);
+});
+
 TEST_FUNC(view_find_min_depth_leaf_node_handles_complete_tree_boundary,
 {
     struct window_node nodes[257] = {0};

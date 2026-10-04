@@ -51,13 +51,6 @@ static inline bool socket_set_cloexec(int fd)
     return result != -1;
 }
 
-static inline void socket_listener_cleanup(int *fd, const char *socket_path, bool bound)
-{
-    if (*fd != -1) close(*fd);
-    *fd = -1;
-    if (bound && socket_path) unlink(socket_path);
-}
-
 static inline uint64_t socket_io_monotonic_ns(void)
 {
     struct timespec now;

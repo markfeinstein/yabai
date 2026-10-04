@@ -4,6 +4,10 @@ extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
 
+#ifdef TESTS
+static struct view_test_platform_ops view_test_platform_ops;
+#endif
+
 struct insert_feedback_geometry insert_feedback_geometry_make(CGRect frame, float configured_width, float configured_radius)
 {
     frame.size.width = fmax(0.0, frame.size.width);
@@ -54,6 +58,10 @@ void insert_feedback_refresh_all(void)
 
 void insert_feedback_show(struct window_node *node)
 {
+#ifdef TESTS
+    if (view_test_platform_ops.feedback_show_observer &&
+        view_test_platform_ops.feedback_show_observer(node, view_test_platform_ops.context)) return;
+#endif
     if (node->insert_dir != DIR_NORTH &&
         node->insert_dir != DIR_EAST &&
         node->insert_dir != DIR_SOUTH &&
@@ -170,6 +178,10 @@ void insert_feedback_destroy(struct window_node *node)
     if (g_mouse_state.feedback_node == node) {
         g_mouse_state.feedback_node = NULL;
     }
+#ifdef TESTS
+    if (view_test_platform_ops.feedback_destroy_observer &&
+        view_test_platform_ops.feedback_destroy_observer(node, view_test_platform_ops.context)) return;
+#endif
 
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
@@ -351,13 +363,10 @@ static struct balance_node window_node_balance(struct window_node *node, uint32_
     return total_leafs;
 }
 
-static void window_node_split(struct view *view, struct window_node *node, struct window *window)
+static bool window_node_split_prepared(struct view *view, struct window_node *node, struct window *window,
+                                       struct window_node *left, struct window_node *right)
 {
-    struct window_node *left = malloc(sizeof(struct window_node));
-    memset(left, 0, sizeof(struct window_node));
-
-    struct window_node *right = malloc(sizeof(struct window_node));
-    memset(right, 0, sizeof(struct window_node));
+    if (!view || !node || !window || !left || !right) return false;
 
     struct window_node *zoom = !g_space_manager.window_zoom_persist
                              ? NULL
@@ -396,6 +405,20 @@ static void window_node_split(struct view *view, struct window_node *node, struc
     node->zoom  = NULL;
 
     area_make_pair_for_node(view, node);
+    return true;
+}
+
+bool window_node_split(struct view *view, struct window_node *node, struct window *window)
+{
+    if (!view || !node || !window) return false;
+    struct window_node *left = legacy_allocation_calloc(1, sizeof(struct window_node));
+    if (!left) return false;
+    struct window_node *right = legacy_allocation_calloc(1, sizeof(struct window_node));
+    if (!right) {
+        legacy_allocation_free(left);
+        return false;
+    }
+    return window_node_split_prepared(view, node, window, left, right);
 }
 
 void window_node_update(struct view *view, struct window_node *node)
@@ -419,7 +442,7 @@ static void window_node_destroy(struct window_node *node)
     }
 
     insert_feedback_destroy(node);
-    free(node);
+    legacy_allocation_free(node);
 }
 
 static void window_node_clear_zoom(struct window_node *node)
@@ -451,6 +474,11 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
 
 void window_node_flush(struct window_node *node)
 {
+#ifdef TESTS
+    if (view_test_platform_ops.node_flush_observer) {
+        view_test_platform_ops.node_flush_observer(node, view_test_platform_ops.context);
+    }
+#endif
     struct window_capture *window_list = NULL;
     window_node_capture_windows(node, &window_list);
     if (window_list) window_manager_animate_window_list(window_list, ts_buf_len(window_list));
@@ -831,8 +859,8 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     }
 
     insert_feedback_destroy(node);
-    free(child);
-    free(node);
+    legacy_allocation_free(child);
+    legacy_allocation_free(node);
 
     if (view->auto_balance != SPLIT_NONE) {
         window_node_balance(view->root, view->auto_balance);
@@ -870,8 +898,43 @@ bool view_stack_window_node(struct window_node *node, struct window *window)
     return true;
 }
 
-struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point)
+void view_abort_window_node_insertion(struct view_insertion_plan *plan)
 {
+    if (!plan) return;
+    legacy_allocation_free(plan->left);
+    legacy_allocation_free(plan->right);
+    *plan = (struct view_insertion_plan) {0};
+}
+
+bool view_prepare_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan)
+{
+    if (!view || !view->root || !window || !plan) return false;
+    *plan = (struct view_insertion_plan) {0};
+
+    bool empty_root = !window_node_is_occupied(view->root) && window_node_is_leaf(view->root);
+    if (view_layout_is_single_root(view->layout)) {
+        return empty_root || view->root->window_count < NODE_MAX_WINDOW_COUNT;
+    }
+    if (view->layout != VIEW_BSP) return false;
+    if (empty_root) return true;
+
+    uint32_t target = insertion_point ? insertion_point : view->insertion_point;
+    struct window_node *leaf = target ? view_find_window_node(view, target) : NULL;
+    if (leaf && leaf->insert_dir == STACK) return leaf->window_count < NODE_MAX_WINDOW_COUNT;
+
+    plan->left = legacy_allocation_calloc(1, sizeof(struct window_node));
+    if (!plan->left) return false;
+    plan->right = legacy_allocation_calloc(1, sizeof(struct window_node));
+    if (!plan->right) {
+        view_abort_window_node_insertion(plan);
+        return false;
+    }
+    return true;
+}
+
+struct window_node *view_commit_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan)
+{
+    if (!view || !window || !plan) return NULL;
     if (!window_node_is_occupied(view->root) &&
         window_node_is_leaf(view->root)) {
         view->root->window_list[0] = window->id;
@@ -902,8 +965,6 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
                     return leaf;
                 }
 
-                leaf->insert_dir = 0;
-                insert_feedback_destroy(leaf);
             }
         }
 
@@ -919,7 +980,19 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
             if (!leaf) leaf = view_find_min_depth_leaf_node(view->root);
         }
 
-        window_node_split(view, leaf, window);
+        if (!plan->left || !plan->right) return NULL;
+        struct window_node *left = plan->left;
+        struct window_node *right = plan->right;
+        plan->left = plan->right = NULL;
+        if (!window_node_split_prepared(view, leaf, window, left, right)) {
+            legacy_allocation_free(left);
+            legacy_allocation_free(right);
+            return NULL;
+        }
+        if (leaf->insert_dir) {
+            leaf->insert_dir = 0;
+            insert_feedback_destroy(leaf);
+        }
 
         if (view->auto_balance != SPLIT_NONE) {
             window_node_balance(view->root, view->auto_balance);
@@ -933,6 +1006,15 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
     }
 
     return NULL;
+}
+
+struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point)
+{
+    struct view_insertion_plan plan;
+    if (!view_prepare_window_node_insertion(view, window, insertion_point, &plan)) return NULL;
+    struct window_node *node = view_commit_window_node_insertion(view, window, insertion_point, &plan);
+    view_abort_window_node_insertion(&plan);
+    return node;
 }
 
 struct window_node *view_add_window_node(struct view *view, struct window *window)
@@ -972,24 +1054,25 @@ bool view_is_dirty(struct view *view)
 }
 
 #ifdef TESTS
-static struct view_test_platform_ops view_test_platform_ops;
-
 void view_test_set_platform_ops(const struct view_test_platform_ops *ops)
 {
     view_test_platform_ops = ops ? *ops : (struct view_test_platform_ops) { 0 };
 }
 #endif
 
-void view_flush(struct view *view)
+bool view_space_is_visible(uint64_t sid)
 {
 #ifdef TESTS
-    bool visible = view_test_platform_ops.space_is_visible
-        ? view_test_platform_ops.space_is_visible(view->sid, view_test_platform_ops.context)
-        : space_is_visible(view->sid);
-#else
-    bool visible = space_is_visible(view->sid);
+    if (view_test_platform_ops.space_is_visible) {
+        return view_test_platform_ops.space_is_visible(sid, view_test_platform_ops.context);
+    }
 #endif
-    if (visible) {
+    return space_is_visible(sid);
+}
+
+void view_flush(struct view *view)
+{
+    if (view_space_is_visible(view->sid)) {
 #ifdef TESTS
         if (view_test_platform_ops.flush_windows) {
             view_test_platform_ops.flush_windows(view->root, view_test_platform_ops.context);
@@ -1212,11 +1295,14 @@ void view_update(struct view *view)
 
 struct view *view_create(uint64_t sid)
 {
-    struct view *view = malloc(sizeof(struct view));
-    memset(view, 0, sizeof(struct view));
+    struct view *view = legacy_allocation_calloc(1, sizeof(struct view));
+    if (!view) return NULL;
 
-    view->root = malloc(sizeof(struct window_node));
-    memset(view->root, 0, sizeof(struct window_node));
+    view->root = legacy_allocation_calloc(1, sizeof(struct window_node));
+    if (!view->root) {
+        legacy_allocation_free(view);
+        return NULL;
+    }
 
     view->sid = sid;
 #ifdef TESTS

@@ -1205,3 +1205,58 @@ TEST_FUNC(declarative_topology_allocation_failures_leave_no_owned_state,
     }
     declarative_topology_test_reset_allocator();
 });
+
+TEST_FUNC(declarative_view_adoption_is_atomic_at_every_registry_allocation,
+{
+    size_t legacy_baseline = legacy_allocation_test_outstanding();
+    for (size_t fail = 1; fail <= 2; ++fail) {
+        declarative_topology_test_reset_allocator();
+        struct declarative_detached_view_table detached = {0};
+        detached.count = 1;
+        detached.views = declarative_topology_calloc(1, sizeof(*detached.views));
+        detached.sids = declarative_topology_calloc(1, sizeof(*detached.sids));
+        detached.views[0] = declarative_topology_calloc(1, sizeof(struct view));
+        detached.views[0]->root = declarative_topology_calloc(1, sizeof(struct window_node));
+        detached.views[0]->sid = detached.sids[0] = 91;
+        detached.view_table.capacity = 4;
+        detached.view_table.max_load = 0.75f;
+        detached.view_table.hash = declarative_detached_view_hash;
+        detached.view_table.cmp = declarative_detached_view_compare;
+        detached.view_table.buckets = declarative_topology_calloc(4, sizeof(struct bucket *));
+        TEST_CHECK(declarative_detached_view_table_insert(&detached.view_table, 91, detached.views[0]), true);
+        size_t owned = declarative_topology_test_outstanding_allocations();
+        struct table live = {0};
+        legacy_allocation_test_fail_adoption_at(fail);
+        TEST_CHECK(declarative_detached_view_table_adopt(&detached, &live), false);
+        TEST_CHECK(live.buckets == NULL, true);
+        TEST_CHECK(detached.views != NULL, true);
+        TEST_CHECK(declarative_topology_test_outstanding_allocations(), owned);
+        TEST_CHECK(legacy_allocation_test_outstanding(), legacy_baseline);
+        legacy_allocation_test_reset();
+        declarative_detached_view_table_destroy(&detached);
+        TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0UL);
+    }
+
+    struct declarative_detached_view_table detached = {0};
+    detached.count = 1;
+    detached.views = declarative_topology_calloc(1, sizeof(*detached.views));
+    detached.sids = declarative_topology_calloc(1, sizeof(*detached.sids));
+    detached.views[0] = declarative_topology_calloc(1, sizeof(struct view));
+    detached.views[0]->root = declarative_topology_calloc(1, sizeof(struct window_node));
+    detached.views[0]->sid = detached.sids[0] = 92;
+    detached.view_table.capacity = 4;
+    detached.view_table.max_load = 0.75f;
+    detached.view_table.hash = declarative_detached_view_hash;
+    detached.view_table.cmp = declarative_detached_view_compare;
+    detached.view_table.buckets = declarative_topology_calloc(4, sizeof(struct bucket *));
+    TEST_CHECK(declarative_detached_view_table_insert(&detached.view_table, 92, detached.views[0]), true);
+    struct table live = {0};
+    TEST_CHECK(declarative_detached_view_table_adopt(&detached, &live), true);
+    TEST_CHECK(legacy_allocation_test_outstanding(), legacy_baseline + 2);
+    struct view *adopted = table_find(&live, &(uint64_t) {92});
+    view_destroy(adopted);
+    legacy_allocation_free(adopted);
+    table_free(&live);
+    TEST_CHECK(legacy_allocation_test_outstanding(), legacy_baseline);
+    TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0UL);
+})

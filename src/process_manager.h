@@ -11,6 +11,7 @@ struct process
     char *name;
     void *ns_application;
     int policy;
+    uint8_t launch_retries;
     bool volatile terminated;
 };
 
@@ -31,6 +32,7 @@ struct process_manager
     ProcessSerialNumber finder_psn;
 };
 
+/* process_destroy accepts NULL and releases all resources owned by a process. */
 void process_destroy(struct process *process);
 struct process *process_manager_find_process(struct process_manager *pm, ProcessSerialNumber *psn);
 bool process_manager_begin(struct process_manager *pm);

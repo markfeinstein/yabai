@@ -1,7 +1,3 @@
-#define SA_SOCKET_PATH_FMT      "/tmp/yabai-sa_%s.socket"
-#define SOCKET_PATH_FMT         "/tmp/yabai_%s.socket"
-#define LCFILE_PATH_FMT         "/tmp/yabai_%s.lock"
-
 #define SCRPT_ADD_LOAD_OPT      "--load-sa"
 #define SCRPT_ADD_UNINSTALL_OPT "--uninstall-sa"
 #define SERVICE_INSTALL_OPT     "--install-service"
@@ -52,6 +48,7 @@ char g_native_config_file[PATH_MAX];
 char g_lock_file[MAXLEN];
 struct declarative_startup_state g_declarative_startup;
 static bool g_native_config_explicit;
+static int g_lock_fd = -1;
 
 mach_port_t g_bs_port;
 int g_connection;
@@ -100,9 +97,9 @@ static int client_send_message(int argc, char **argv)
         error("yabai-msg: no arguments given! abort..\n");
     }
 
-    char *user = getenv("USER");
-    if (!user) {
-        error("yabai-msg: 'env USER' not set! abort..\n");
+    struct yabai_runtime_paths runtime_paths;
+    if (!yabai_runtime_prepare_for_real_uid(NULL, true, &runtime_paths)) {
+        error("yabai-msg: could not prepare secure runtime directory! abort..\n");
     }
 
     int message_length = argc;
@@ -125,14 +122,12 @@ static int client_send_message(int argc, char **argv)
     *temp++ = '\0';
 
     int sockfd;
-    char socket_file[MAXLEN];
-    snprintf(socket_file, sizeof(socket_file), SOCKET_PATH_FMT, user);
 
     if (!socket_open(&sockfd)) {
         error("yabai-msg: failed to open socket..\n");
     }
 
-    if (!socket_connect(sockfd, socket_file)) {
+    if (!socket_connect(sockfd, runtime_paths.daemon_socket)) {
         error("yabai-msg: failed to connect to socket..\n");
     }
 
@@ -154,14 +149,13 @@ static int client_send_message(int argc, char **argv)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 static inline bool configure_settings_and_acquire_lock(void)
 {
-    char *user = getenv("USER");
-    if (!user) {
-        error("yabai: 'env USER' not set! abort..\n");
+    struct yabai_runtime_paths runtime_paths;
+    if (!yabai_runtime_prepare_for_real_uid(NULL, true, &runtime_paths) ||
+        snprintf(g_sa_socket_file, sizeof(g_sa_socket_file), "%s", runtime_paths.sa_socket) >= (int) sizeof(g_sa_socket_file) ||
+        snprintf(g_socket_file, sizeof(g_socket_file), "%s", runtime_paths.daemon_socket) >= (int) sizeof(g_socket_file) ||
+        snprintf(g_lock_file, sizeof(g_lock_file), "%s", runtime_paths.daemon_lock) >= (int) sizeof(g_lock_file)) {
+        error("yabai: could not prepare secure runtime directory! abort..\n");
     }
-
-    snprintf(g_sa_socket_file, sizeof(g_sa_socket_file), SA_SOCKET_PATH_FMT, user);
-    snprintf(g_socket_file, sizeof(g_socket_file), SOCKET_PATH_FMT, user);
-    snprintf(g_lock_file, sizeof(g_lock_file), LCFILE_PATH_FMT, user);
 
     NSApplicationLoad();
     g_pid = getpid();
@@ -182,26 +176,11 @@ static inline bool configure_settings_and_acquire_lock(void)
     mouse_state_init(&g_mouse_state);
     task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &g_bs_port);
 
-#if 0
-    hook_nsobject_autorelease();
-    hook_autoreleasepool_drain();
-    hook_autoreleasepool_release();
-#endif
-
-    int handle = open(g_lock_file, O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
-    if (handle == -1) {
-        error("yabai: could not create lock-file! abort..\n");
+    g_lock_fd = yabai_runtime_acquire_lock(g_lock_file, getuid());
+    if (g_lock_fd == -1) {
+        error("yabai: could not securely acquire lock-file! abort..\n");
     }
-
-    struct flock lockfd = {
-        .l_start  = 0,
-        .l_len    = 0,
-        .l_pid    = g_pid,
-        .l_type   = F_WRLCK,
-        .l_whence = SEEK_SET
-    };
-
-    return fcntl(handle, F_SETLK, &lockfd) != -1;
+    return true;
 }
 #pragma clang diagnostic pop
 
@@ -511,7 +490,7 @@ int main(int argc, char **argv)
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
         workspace_is_macos_tahoe()) {
-        mission_control_observe();
+        mission_control_ensure_observed();
 
         if (workspace_is_macos_ventura() ||
             workspace_is_macos_sonoma() ||
@@ -537,7 +516,9 @@ int main(int argc, char **argv)
 
     if (!native_installed) {
         window_manager_init(&g_window_manager);
-        space_manager_begin(&g_space_manager);
+        if (!space_manager_begin(&g_space_manager)) {
+            error("yabai: could not start space manager! abort..\n");
+        }
     }
 
     struct declarative_startup_completion_ops completion = declarative_startup_production_completion_ops();

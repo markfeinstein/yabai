@@ -46,9 +46,9 @@ static bool declarative_operation_set_global_layout(void *manager, int layout)
 {
     return space_manager_set_layout_for_all_spaces(manager, layout);
 }
-static bool declarative_operation_set_space_layout(void *manager, uint64_t sid, int layout)
+static bool declarative_operation_set_space_layout(void *manager, void *space, int layout)
 {
-    return space_manager_set_layout_for_space(manager, sid, layout);
+    return space_manager_set_layout_for_view(manager, space, layout);
 }
 static void declarative_operation_set_split_ratio(void *manager, float split_ratio)
 {
@@ -98,7 +98,7 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .space_is_user = space_is_user, \
     .set_focus_follows_mouse = declarative_operation_set_ffm, \
     .set_layout_for_all_spaces = declarative_operation_set_global_layout, \
-    .set_layout_for_space = declarative_operation_set_space_layout, \
+    .set_layout_for_view = declarative_operation_set_space_layout, \
     .set_split_ratio_for_all_spaces = declarative_operation_set_split_ratio, \
     .set_split_type_for_all_spaces = declarative_operation_set_split_type, \
     .set_auto_balance_for_all_spaces = declarative_operation_set_auto_balance, \
@@ -234,27 +234,42 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     }
 }
 
-enum declarative_apply_result declarative_apply_runtime_layout_for_space(uint64_t sid, enum view_type layout)
+static enum declarative_apply_result declarative_apply_runtime_layout_to_admitted_view(uint64_t sid, struct view *view, enum view_type layout)
 {
+    if (!view) return DECLARATIVE_APPLY_MISSING_SPACE;
     if (!declarative_runtime_operation_ops.space_is_user(sid)) return DECLARATIVE_APPLY_NON_USER_SPACE;
-    if (!declarative_runtime_operation_ops.set_layout_for_space(&g_space_manager, sid, layout)) return DECLARATIVE_APPLY_LAYOUT_FAILED;
-    struct view *view = space_manager_query_view(&g_space_manager, sid);
-    if (!view) return DECLARATIVE_APPLY_LAYOUT_FAILED;
+    if (!declarative_runtime_operation_ops.set_layout_for_view(&g_space_manager, view, layout)) return DECLARATIVE_APPLY_LAYOUT_FAILED;
     struct declarative_value value = { .present = true, .enumeration = layout };
     view_set_flag(view, VIEW_LAYOUT);
     declarative_record_space(view, DECLARATIVE_CONFIG_LAYOUT, &value);
     return DECLARATIVE_APPLY_OK;
 }
 
-enum declarative_apply_result declarative_apply_runtime_setting(enum declarative_config_id id, const struct declarative_value *value, uint64_t sid)
+enum declarative_apply_result declarative_apply_runtime_layout_for_space(uint64_t sid, enum view_type layout)
+{
+    if (!sid) return DECLARATIVE_APPLY_INVALID_SCOPE;
+    if (layout < VIEW_BSP || layout > VIEW_ACCORDION_VERTICAL) return DECLARATIVE_APPLY_INVALID_VALUE;
+    struct view *view = space_manager_lookup_view(&g_space_manager, sid);
+    return declarative_apply_runtime_layout_to_admitted_view(sid, view, layout);
+}
+
+enum declarative_apply_result declarative_apply_runtime_layout_for_view(struct space_manager *manager, struct view *view, uint64_t expected_sid, enum view_type layout)
+{
+    if (!expected_sid || manager != &g_space_manager) return DECLARATIVE_APPLY_INVALID_SCOPE;
+    if (layout < VIEW_BSP || layout > VIEW_ACCORDION_VERTICAL) return DECLARATIVE_APPLY_INVALID_VALUE;
+    if (!view || view->sid != expected_sid || table_find(&manager->view, &expected_sid) != view) return DECLARATIVE_APPLY_MISSING_SPACE;
+    return declarative_apply_runtime_layout_to_admitted_view(expected_sid, view, layout);
+}
+
+static enum declarative_apply_result declarative_apply_runtime_setting_to_view(enum declarative_config_id id, const struct declarative_value *value, struct view *view)
 {
     if ((unsigned) id >= DECLARATIVE_CONFIG_COUNT || !declarative_value_valid(id, value)) return DECLARATIVE_APPLY_INVALID_VALUE;
     int space_field = declarative_space_field_for_id(id);
-    if (sid && space_field < 0) return DECLARATIVE_APPLY_INVALID_SCOPE;
-    if (sid && id == DECLARATIVE_CONFIG_LAYOUT) return declarative_apply_runtime_layout_for_space(sid, value->enumeration);
+    if (view && space_field < 0) return DECLARATIVE_APPLY_INVALID_SCOPE;
 
-    struct view *view = NULL;
-    if (sid) view = space_manager_find_view(&g_space_manager, sid);
+    if (view && id == DECLARATIVE_CONFIG_LAYOUT) {
+        return declarative_apply_runtime_layout_to_admitted_view(view->sid, view, value->enumeration);
+    }
 
     switch (id) {
     case DECLARATIVE_CONFIG_DEBUG_OUTPUT: g_verbose = value->boolean; break;
@@ -367,6 +382,23 @@ enum declarative_apply_result declarative_apply_runtime_setting(enum declarative
 
     if (view) declarative_record_space(view, id, value); else declarative_record_global(id, value);
     return DECLARATIVE_APPLY_OK;
+}
+
+enum declarative_apply_result declarative_apply_runtime_setting_for_view(struct space_manager *manager, struct view *view, uint64_t expected_sid, enum declarative_config_id id, const struct declarative_value *value)
+{
+    if (!expected_sid || manager != &g_space_manager) return DECLARATIVE_APPLY_INVALID_SCOPE;
+    if (!view || view->sid != expected_sid || table_find(&manager->view, &expected_sid) != view) return DECLARATIVE_APPLY_MISSING_SPACE;
+    return declarative_apply_runtime_setting_to_view(id, value, view);
+}
+
+enum declarative_apply_result declarative_apply_runtime_setting(enum declarative_config_id id, const struct declarative_value *value, uint64_t sid)
+{
+    if (!sid) return declarative_apply_runtime_setting_to_view(id, value, NULL);
+    int space_field = declarative_space_field_for_id(id);
+    if (space_field < 0) return DECLARATIVE_APPLY_INVALID_SCOPE;
+    struct view *view = space_manager_lookup_view(&g_space_manager, sid);
+    if (!view) return DECLARATIVE_APPLY_MISSING_SPACE;
+    return declarative_apply_runtime_setting_to_view(id, value, view);
 }
 
 bool declarative_prepare_setting(struct declarative_prepared_settings *prepared, enum declarative_config_id id, const struct declarative_value *value, enum declarative_apply_result *result)

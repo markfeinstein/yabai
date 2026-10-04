@@ -84,6 +84,10 @@ bool display_manager_active_display_is_animating(void);
 bool display_manager_display_is_animating(uint32_t did);
 int display_manager_active_display_count(void);
 uint32_t *display_manager_active_display_list(int *count);
+#ifdef TESTS
+typedef CGError (*display_manager_active_display_list_fn)(uint32_t capacity, CGDirectDisplayID *displays, uint32_t *count);
+void display_manager_test_set_active_display_list_fn(display_manager_active_display_list_fn fn);
+#endif
 uint32_t display_manager_focus_display_with_window_at_point(CGPoint point);
 void display_manager_set_active_display_id(uint32_t did);
 void display_manager_focus_display(uint32_t did, uint64_t sid);

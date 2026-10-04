@@ -71,7 +71,10 @@ static void application_observer_add_run_loop_source_direct(AXObserverRef observ
 #ifdef TESTS
 static AXError (*application_observer_create)(pid_t, AXObserverCallback, AXObserverRef *) = AXObserverCreate;
 static AXError (*application_observer_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+static AXError (*application_observer_remove_notification)(AXObserverRef, AXUIElementRef, CFStringRef) = AXObserverRemoveNotification;
 static void (*application_observer_add_run_loop_source)(AXObserverRef) = application_observer_add_run_loop_source_direct;
+static void (*application_observer_invalidate)(AXObserverRef);
+static void (*application_observer_release)(AXObserverRef);
 #else
 #define application_observer_create AXObserverCreate
 #define application_observer_add_notification AXObserverAddNotification
@@ -113,13 +116,25 @@ void application_unobserve(struct application *application)
         for (int i = 0; i < array_count(ax_application_notification); ++i) {
             if (!(application->notification & (1 << i))) continue;
 
+#ifdef TESTS
+            if (application_observer_remove_notification) {
+                application_observer_remove_notification(application->observer_ref, application->ref, ax_application_notification[i]);
+            } else
+#endif
             AXObserverRemoveNotification(application->observer_ref, application->ref, ax_application_notification[i]);
             application->notification &= ~(1 << i);
         }
 
         application->is_observing = false;
+#ifdef TESTS
+        if (application_observer_invalidate) application_observer_invalidate(application->observer_ref);
+        else CFRunLoopSourceInvalidate(AXObserverGetRunLoopSource(application->observer_ref));
+        if (application_observer_release) application_observer_release(application->observer_ref);
+        else CFRelease(application->observer_ref);
+#else
         CFRunLoopSourceInvalidate(AXObserverGetRunLoopSource(application->observer_ref));
         CFRelease(application->observer_ref);
+#endif
     }
 }
 
@@ -169,23 +184,48 @@ CFArrayRef application_window_list(struct application *application)
     return window_list_ref;
 }
 
+#ifdef TESTS
+static AXUIElementRef (*application_create_ax_element)(pid_t) = AXUIElementCreateApplication;
+static bool (*application_create_is_hidden)(struct application *) = application_is_hidden;
+static void (*application_create_connection)(struct application *);
+static void (*application_destroy_observer)(struct application *);
+#define APPLICATION_CREATE_AX_ELEMENT(pid) application_create_ax_element(pid)
+#else
+#define APPLICATION_CREATE_AX_ELEMENT(pid) AXUIElementCreateApplication(pid)
+#endif
+
 struct application *application_create(struct process *process)
 {
-    struct application *application = malloc(sizeof(struct application));
-    memset(application, 0, sizeof(struct application));
+    if (!process || process->pid <= 0) return NULL;
+    struct application *application = legacy_allocation_calloc(1, sizeof(struct application));
+    if (!application) return NULL;
 
-    application->ref = AXUIElementCreateApplication(process->pid);
+    application->ref = APPLICATION_CREATE_AX_ELEMENT(process->pid);
+    if (!application->ref) {
+        legacy_allocation_free(application);
+        return NULL;
+    }
     application->psn = process->psn;
     application->pid = process->pid;
     application->name = process->name;
+#ifdef TESTS
+    application->is_hidden = application_create_is_hidden(application);
+    if (application_create_connection) application_create_connection(application);
+    else SLSGetConnectionIDForPSN(g_connection, &application->psn, &application->connection);
+#else
     application->is_hidden = application_is_hidden(application);
     SLSGetConnectionIDForPSN(g_connection, &application->psn, &application->connection);
+#endif
 
     return application;
 }
 
 void application_destroy(struct application *application)
 {
-    CFRelease(application->ref);
-    free(application);
+    if (!application) return;
+#ifdef TESTS
+    if (application_destroy_observer) application_destroy_observer(application);
+#endif
+    if (application->ref) CFRelease(application->ref);
+    legacy_allocation_free(application);
 }

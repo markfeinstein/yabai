@@ -172,6 +172,26 @@ static void *socket_io_test_fragment_writer(void *context)
     return NULL;
 }
 
+static void socket_io_test_signal_handler(int signal)
+{
+    (void) signal;
+}
+
+struct socket_io_test_interrupt {
+    pthread_t target;
+    int fd;
+};
+
+static void *socket_io_test_interrupt_then_write(void *data)
+{
+    struct socket_io_test_interrupt *context = data;
+    usleep(10000);
+    pthread_kill(context->target, SIGUSR1);
+    usleep(10000);
+    (void) write(context->fd, "x", 1);
+    return NULL;
+}
+
 TEST_FUNC(socket_io_fragmented_exact_read,
 {
     int fd[2] = { -1, -1 };
@@ -194,6 +214,30 @@ TEST_FUNC(socket_io_fragmented_exact_read,
             close(fd[0]);
         }
     }
+});
+
+TEST_FUNC(socket_io_read_retries_interrupted_poll,
+{
+    int fd[2] = { -1, -1 };
+    struct sigaction action = { .sa_handler = socket_io_test_signal_handler }, previous;
+    sigemptyset(&action.sa_mask);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0 || sigaction(SIGUSR1, &action, &previous) != 0) {
+        result = false;
+    } else {
+        struct socket_io_test_interrupt context = { pthread_self(), fd[1] };
+        pthread_t interrupter;
+        if (pthread_create(&interrupter, NULL, socket_io_test_interrupt_then_write, &context) != 0) {
+            result = false;
+        } else {
+            char value = 0;
+            TEST_CHECK(socket_io_read_exact_until(fd[0], &value, 1, socket_io_deadline_after_ms(500)), true);
+            TEST_CHECK(value, 'x');
+            pthread_join(interrupter, NULL);
+        }
+        sigaction(SIGUSR1, &previous, NULL);
+    }
+    if (fd[0] != -1) close(fd[0]);
+    if (fd[1] != -1) close(fd[1]);
 });
 
 struct socket_io_test_read {
@@ -672,6 +716,27 @@ TEST_FUNC(sa_handshake_observes_total_timeout,
     }
 });
 
+struct sa_delayed_status_context {
+    int fd;
+    size_t request_length;
+    useconds_t delay_us;
+    uint8_t status;
+    bool request_read;
+    bool status_written;
+};
+
+static void *sa_delayed_status_writer(void *data)
+{
+    struct sa_delayed_status_context *context = data;
+    char request[32];
+    context->request_read = context->request_length <= sizeof(request) &&
+                            socket_io_read_exact_until(context->fd, request, context->request_length,
+                                                       socket_io_deadline_after_ms(500));
+    usleep(context->delay_us);
+    context->status_written = sa_message_send_status(context->fd, context->status != 0);
+    return NULL;
+}
+
 TEST_FUNC(sa_request_without_status_observes_total_timeout,
 {
     int fd[2] = { -1, -1 };
@@ -682,11 +747,39 @@ TEST_FUNC(sa_request_without_status_observes_total_timeout,
         char received[sizeof(request)] = {};
         uint64_t begin = socket_io_monotonic_ns();
         TEST_CHECK(scripting_addition_send_bytes_fd(fd[0], request, sizeof(request),
-                                                     socket_io_deadline_after_ms(10)), false);
+                                                     socket_io_deadline_after_ms(10), 10), false);
         uint64_t elapsed_ms = (socket_io_monotonic_ns() - begin) / 1000000ULL;
         TEST_CHECK(elapsed_ms < 5000, true);
         TEST_CHECK(read(fd[1], received, sizeof(received)), (ssize_t) sizeof(received));
         TEST_CHECK(memcmp(received, request, sizeof(request)), 0);
+        close(fd[0]);
+        close(fd[1]);
+    }
+});
+
+TEST_FUNC(sa_operation_response_has_separate_bounded_budget,
+{
+    for (uint8_t status = 0; status <= 1; ++status) {
+        int fd[2] = { -1, -1 };
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
+            result = false;
+            break;
+        }
+        char request[] = { 0x01, 0x00, SA_OPCODE_SPACE_FOCUS };
+        struct sa_delayed_status_context context = {
+            .fd = fd[1], .request_length = sizeof(request), .delay_us = 1200000,
+            .status = status, .request_read = false, .status_written = false
+        };
+        pthread_t writer;
+        if (pthread_create(&writer, NULL, sa_delayed_status_writer, &context) != 0) {
+            result = false;
+        } else {
+            TEST_CHECK(scripting_addition_send_bytes_fd(fd[0], request, sizeof(request),
+                                                         socket_io_deadline_after_ms(100), 2000), status != 0);
+            pthread_join(writer, NULL);
+            TEST_CHECK(context.request_read, true);
+            TEST_CHECK(context.status_written, true);
+        }
         close(fd[0]);
         close(fd[1]);
     }

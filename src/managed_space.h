@@ -15,10 +15,15 @@ static inline CFArrayRef managed_space_display_spaces(CFTypeRef display)
 
 static inline bool managed_space_id(CFTypeRef space, uint64_t *sid)
 {
+    if (sid) *sid = 0;
     if (!sid || !cf_is_type(space, CFDictionaryGetTypeID())) return false;
     CFTypeRef number = CFDictionaryGetValue((CFDictionaryRef) space, CFSTR("id64"));
     if (!cf_is_type(number, CFNumberGetTypeID())) return false;
-    return CFNumberGetValue((CFNumberRef) number, kCFNumberSInt64Type, sid);
+
+    int64_t value = 0;
+    if (!CFNumberGetValue((CFNumberRef) number, kCFNumberSInt64Type, &value) || value <= 0) return false;
+    *sid = (uint64_t) value;
+    return true;
 }
 
 static inline bool cfindex_to_int(CFIndex value, int *result)
@@ -99,7 +104,7 @@ static inline uint64_t managed_space_select(CFTypeRef topology, int requested_in
 
 static inline int managed_space_index(CFTypeRef topology, uint64_t requested_sid)
 {
-    if (!cf_is_type(topology, CFArrayGetTypeID())) return 0;
+    if (!requested_sid || !cf_is_type(topology, CFArrayGetTypeID())) return 0;
     int index = 1;
     CFArrayRef displays = (CFArrayRef) topology;
     for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
@@ -124,10 +129,15 @@ static inline uint64_t managed_space_previous(CFTypeRef topology, uint64_t reque
     return previous;
 }
 
+static inline int managed_space_next_index(int index)
+{
+    return index > 0 && index < INT_MAX ? index + 1 : 0;
+}
+
 static inline uint64_t managed_space_next(CFTypeRef topology, uint64_t requested_sid)
 {
-    int index = managed_space_index(topology, requested_sid);
-    return index ? managed_space_select(topology, index + 1) : 0;
+    int next_index = managed_space_next_index(managed_space_index(topology, requested_sid));
+    return next_index ? managed_space_select(topology, next_index) : 0;
 }
 
 static inline uint64_t managed_space_first(CFTypeRef topology)

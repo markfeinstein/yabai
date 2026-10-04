@@ -4,6 +4,9 @@
 #include "declarative_runtime_types.h"
 #include "declarative_config.h"
 
+struct space_manager;
+struct view;
+
 struct declarative_runtime_state
 {
     struct declarative_runtime_cell global[DECLARATIVE_CONFIG_COUNT];
@@ -19,6 +22,7 @@ enum declarative_apply_result
     DECLARATIVE_APPLY_OK,
     DECLARATIVE_APPLY_INVALID_VALUE,
     DECLARATIVE_APPLY_INVALID_SCOPE,
+    DECLARATIVE_APPLY_MISSING_SPACE,
     DECLARATIVE_APPLY_NON_USER_SPACE,
     DECLARATIVE_APPLY_LAYOUT_FAILED,
     DECLARATIVE_APPLY_SIP_DENIED,
@@ -37,7 +41,7 @@ struct declarative_runtime_operation_ops
     bool (*space_is_user)(uint64_t);
     bool (*set_focus_follows_mouse)(void *, int);
     bool (*set_layout_for_all_spaces)(void *, int);
-    bool (*set_layout_for_space)(void *, uint64_t, int);
+    bool (*set_layout_for_view)(void *, void *, int);
     void (*set_split_ratio_for_all_spaces)(void *, float);
     void (*set_split_type_for_all_spaces)(void *, int);
     void (*set_auto_balance_for_all_spaces)(void *, uint32_t);
@@ -65,7 +69,9 @@ extern struct declarative_runtime_state g_declarative_runtime_state;
 int declarative_space_field_for_id(enum declarative_config_id id);
 void declarative_runtime_reset_ownership(void);
 enum declarative_apply_result declarative_apply_runtime_setting(enum declarative_config_id id, const struct declarative_value *value, uint64_t sid);
+enum declarative_apply_result declarative_apply_runtime_setting_for_view(struct space_manager *manager, struct view *view, uint64_t expected_sid, enum declarative_config_id id, const struct declarative_value *value);
 enum declarative_apply_result declarative_apply_runtime_layout_for_space(uint64_t sid, enum view_type layout);
+enum declarative_apply_result declarative_apply_runtime_layout_for_view(struct space_manager *manager, struct view *view, uint64_t expected_sid, enum view_type layout);
 bool declarative_prepare_setting(struct declarative_prepared_settings *prepared, enum declarative_config_id id, const struct declarative_value *value, enum declarative_apply_result *result);
 void declarative_runtime_request_animation_permission(void);
 #ifdef TESTS

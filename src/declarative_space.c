@@ -359,6 +359,32 @@ fail:
     return false;
 }
 
+static bool declarative_space_validate_imperative_targets(
+    const struct declarative_space_target *targets, size_t target_count,
+    const struct declarative_space_topology_entry *topology, size_t topology_count,
+    const struct table *current_views, const struct declarative_space_table_contract *contract)
+{
+    if ((!targets && target_count) || (!topology && topology_count) || target_count != topology_count ||
+        !declarative_space_table_shape_valid(current_views, contract, sizeof(uint64_t)) ||
+        (size_t) current_views->count != target_count) return false;
+    for (size_t i = 0; i < target_count; ++i) {
+        const struct declarative_space_target *target = &targets[i];
+        const struct declarative_space_topology_entry *entry = &topology[i];
+        if (!target->view || !target->sid || target->view->sid != target->sid || target->index <= 0 ||
+            !target->uuid || !target->uuid[0] || !declarative_space_identity_valid(&target->identity) ||
+            table_find((struct table *) current_views, (void *) &target->sid) != target->view ||
+            entry->sid != target->sid || entry->index != target->index ||
+            entry->is_user_space != target->is_user_space || strcmp(entry->uuid, target->uuid) != 0 ||
+            !declarative_space_identity_equal(&entry->identity, &target->identity)) return false;
+        for (size_t j = 0; j < i; ++j) {
+            if (targets[j].sid == target->sid || targets[j].index == target->index ||
+                strcmp(targets[j].uuid, target->uuid) == 0 ||
+                targets[j].identity.fingerprint == target->identity.fingerprint) return false;
+        }
+    }
+    return true;
+}
+
 static bool declarative_space_grow(void **items, size_t *capacity, size_t count, size_t item_size);
 
 static int declarative_space_compare_identity_sid(const void *left, const void *right)
@@ -2083,6 +2109,7 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
                                const struct declarative_space_defaults *defaults,
                                enum declarative_space_ownership_mode mode,
                                const struct declarative_space_capture_ops *capture_ops,
+                               bool imperative_layout, enum view_type imperative_layout_value,
                                struct declarative_space_preparation *out)
 {
     if (!out) return false;
@@ -2096,9 +2123,13 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
         (policy_count && !policies) || !capture_ops ||
         (!capture_ops->query_sid && !capture_ops->query_sid_result) ||
         !capture_ops->find_window || !capture_ops->is_eligible ||
-        !declarative_space_validate_targets(targets, target_count, topology, topology_count,
-                                            current_views, view_table_contract)) return false;
+        !(imperative_layout
+          ? declarative_space_validate_imperative_targets(targets, target_count, topology, topology_count,
+                                                          current_views, view_table_contract)
+          : declarative_space_validate_targets(targets, target_count, topology, topology_count,
+                                               current_views, view_table_contract))) return false;
     out->ownership_mode = mode;
+    out->imperative_layout = imperative_layout;
     out->runtime = (struct declarative_runtime_state *) runtime;
     out->preparing_thread = pthread_self();
 #ifdef TESTS
@@ -2132,6 +2163,35 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
         }
         if (!declarative_space_resolve_effective_policy(native, policies, policy_count, runtime, defaults,
                                                         &targets[i], mode, &out->targets[i].effective)) goto fail;
+        if (imperative_layout) {
+            struct declarative_space_effective *effective = &out->targets[i].effective;
+            union declarative_runtime_scalar scalar = { 0 };
+#define PRESERVE_CURRENT(field, member, scalar_member) do { \
+    scalar.scalar_member = targets[i].view->member; \
+    declarative_space_set_value(effective, field, DECLARATIVE_SETTING_BUILTIN, scalar); \
+} while (0)
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_LAYOUT, layout, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_TOP_PADDING, top_padding, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_BOTTOM_PADDING, bottom_padding, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_LEFT_PADDING, left_padding, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_RIGHT_PADDING, right_padding, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE, auto_balance, u32);
+#undef PRESERVE_CURRENT
+            out->targets[i].imperative_affected = targets[i].imperative_layout_target;
+            if (targets[i].imperative_layout_target) {
+                scalar.integer = imperative_layout_value;
+                declarative_space_set_value(effective, DECLARATIVE_RUNTIME_SPACE_LAYOUT,
+                                            DECLARATIVE_SETTING_RUNTIME_SPACE, scalar);
+            } else {
+                out->targets[i].final_scaffold_fingerprint = targets[i].view->scaffold_fingerprint;
+                memcpy(out->targets[i].final_scaffold_primary, targets[i].view->scaffold_primary,
+                       sizeof(out->targets[i].final_scaffold_primary));
+            }
+        }
         memcpy(out->targets[i].ownership_before.view, targets[i].view->runtime_ownership, sizeof(out->targets[i].ownership_before.view));
         out->targets[i].ownership_before.legacy_flags = targets[i].view->flags;
         declarative_space_capture_view_before(targets[i].view, &out->targets[i].view_before);
@@ -2410,7 +2470,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             (target->final_scaffold_fingerprint &&
              view->split_ratio != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real);
         if (target->changed) view->root = target->final_root;
-        view->declarative_identity = target->target.identity;
+        if (!p->imperative_layout) view->declarative_identity = target->target.identity;
         view->layout = declarative_space_final_layout(target);
         view->top_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_TOP_PADDING].value.integer;
         view->bottom_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_BOTTOM_PADDING].value.integer;
@@ -2496,12 +2556,18 @@ static bool declarative_space_transition_postcommit_impl(struct declarative_spac
         DECLARATIVE_SPACE_ATTEMPT(transition, purify_failed, ops.purify(window, ops.context));
     }
     for (size_t i = 0; i < p->final_owner_count; ++i) {
+        if (p->imperative_layout) {
+            const struct declarative_space_prepared_target *target =
+                declarative_space_prepared_target_find(p, p->final_owners[i].view->sid);
+            if (!target || !target->imperative_affected) continue;
+        }
         struct window *window = p->final_owners[i].window;
         DECLARATIVE_SPACE_ATTEMPT(transition, layer_below_failed, ops.layer_below(window, ops.context));
         DECLARATIVE_SPACE_ATTEMPT(transition, purify_failed, ops.purify(window, ops.context));
     }
     for (size_t i = 0; i < p->target_count; ++i) {
         struct declarative_space_prepared_target *target = &p->targets[i];
+        if (p->imperative_layout && !target->imperative_affected && !target->membership_changed) continue;
         struct view *view = target->target.view;
         if (!view_is_invalid(view) && !view_is_dirty(view)) continue;
         bool updated = ops.update(view, ops.context);
@@ -2678,9 +2744,52 @@ bool declarative_space_prepare(const struct declarative_space_target *targets, s
                                                managed_table_contract, native,
                                                native ? native->spaces : NULL,
                                                native ? native->space_count : 0, 0,
-                                               runtime, defaults, mode, capture_ops, out);
+                                               runtime, defaults, mode, capture_ops,
+                                               false, VIEW_DEFAULT, out);
 }
 #endif
+
+enum declarative_space_apply_result declarative_space_apply_imperative_layout(
+                                              const struct declarative_space_target *targets,
+                                              size_t target_count,
+                                              const struct declarative_space_topology_entry *topology,
+                                              const struct table *current_views,
+                                              const struct declarative_space_table_contract *view_table_contract,
+                                              const struct declarative_space_table_contract *managed_table_contract,
+                                              const struct declarative_space_defaults *defaults,
+                                              enum view_type layout,
+                                              const struct declarative_space_capture_ops *capture_ops,
+                                              declarative_space_publication_callback publish,
+                                              void *publish_context)
+{
+    struct declarative_space_preparation preparation;
+    struct declarative_space_transition transition;
+    declarative_space_allocation_failed = false;
+    declarative_space_prepare_failure = DECLARATIVE_SPACE_APPLY_TERMINAL;
+    if (!declarative_space_prepare_effective(targets, target_count, topology, target_count,
+                                             current_views, view_table_contract,
+                                             &g_window_manager.managed_window, managed_table_contract,
+                                             NULL, NULL, 0, 0, &g_declarative_runtime_state, defaults,
+                                             DECLARATIVE_SPACE_PRESERVE_RUNTIME, capture_ops,
+                                             true, layout, &preparation)) {
+        return declarative_space_allocation_failed ? DECLARATIVE_SPACE_APPLY_RESOURCE
+                                                   : declarative_space_prepare_failure;
+    }
+    if (!declarative_space_transition_begin(&transition, &preparation)) {
+        declarative_space_preparation_destroy(&preparation);
+        return DECLARATIVE_SPACE_APPLY_TERMINAL;
+    }
+    if (!declarative_space_transition_commit_impl(&transition)) {
+        declarative_space_transition_destroy(&transition);
+        return DECLARATIVE_SPACE_APPLY_TERMINAL;
+    }
+    if (publish) publish(publish_context);
+    (void) declarative_space_transition_postcommit_impl(&transition, NULL);
+    (void) declarative_space_dispose_retired_table_impl(&transition);
+    (void) declarative_space_retire_old_roots_impl(&transition, NULL);
+    declarative_space_transition_destroy(&transition);
+    return DECLARATIVE_SPACE_APPLY_OK;
+}
 
 enum declarative_space_apply_result declarative_space_apply_with_effective_publication_result(
                                               const struct declarative_space_target *targets,
@@ -2711,7 +2820,8 @@ enum declarative_space_apply_result declarative_space_apply_with_effective_publi
                                              current_views, view_table_contract,
                                              &g_window_manager.managed_window, managed_table_contract,
                                              native, policies, policy_count, policy_generation,
-                                             runtime, defaults, mode, capture_ops, &preparation)) {
+                                             runtime, defaults, mode, capture_ops,
+                                             false, VIEW_DEFAULT, &preparation)) {
         return declarative_space_allocation_failed ? DECLARATIVE_SPACE_APPLY_RESOURCE
                                                    : declarative_space_prepare_failure;
     }

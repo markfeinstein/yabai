@@ -314,6 +314,14 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
 struct window_node *view_find_window_node_in_direction(struct view *view, struct window_node *source, int direction);
 struct window_node *view_find_window_node(struct view *view, uint32_t window_id);
 bool view_stack_window_node(struct window_node *node, struct window *window);
+struct view_insertion_plan
+{
+    struct window_node *left;
+    struct window_node *right;
+};
+bool view_prepare_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan);
+struct window_node *view_commit_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan);
+void view_abort_window_node_insertion(struct view_insertion_plan *plan);
 struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point);
 struct window_node *view_add_window_node(struct view *view, struct window *window);
 struct window_node *view_remove_window_node(struct view *view, struct window *window);
@@ -322,6 +330,7 @@ uint32_t *view_find_window_list(struct view *view, int *window_count);
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags);
 bool view_is_invalid(struct view *view);
 bool view_is_dirty(struct view *view);
+bool view_space_is_visible(uint64_t sid);
 void view_flush(struct view *view);
 void view_update(struct view *view);
 #ifdef TESTS
@@ -333,11 +342,18 @@ struct view_test_platform_ops
     void *context;
     CFStringRef (*copy_space_uuid)(uint64_t sid, void *context);
     bool (*space_is_user)(uint64_t sid, void *context);
+    void (*node_flush_observer)(struct window_node *node, void *context);
+    bool (*feedback_show_observer)(struct window_node *node, void *context);
+    bool (*feedback_destroy_observer)(struct window_node *node, void *context);
 };
 void view_test_set_platform_ops(const struct view_test_platform_ops *ops);
 #endif
+/* Returns a fully initialized owned view, or NULL. view_destroy releases owned
+ * members; the caller then frees the view storage, matching legacy callers. */
 struct view *view_create(uint64_t sid);
 void view_destroy(struct view *view);
+/* On failure, leaves node and all view/feedback state unchanged. */
+bool window_node_split(struct view *view, struct window_node *node, struct window *window);
 void view_clear(struct view *view);
 
 #endif

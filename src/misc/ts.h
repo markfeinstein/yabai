@@ -49,6 +49,40 @@ static inline uint64_t ts_align(uint64_t used, uint64_t align)
 #define ts_alloc_list(elem_type, elem_count) \
     ts_alloc_aligned(__alignof__(elem_type), sizeof(elem_type) * elem_count)
 
+static inline void *ts_alloc_aligned_checked(uint64_t alignment, uint64_t size)
+{
+    if (!alignment || (alignment & (alignment - 1)) != 0) return NULL;
+
+    for (;;) {
+        uint64_t used = __atomic_load_n(&g_temp_storage.used, __ATOMIC_RELAXED);
+        if (used > g_temp_storage.size) return NULL;
+
+        uintptr_t base = (uintptr_t) g_temp_storage.memory;
+        if (used > UINTPTR_MAX - base) return NULL;
+        uintptr_t ptr = base + used;
+        uint64_t remainder = ptr & (alignment - 1);
+        uint64_t padding = remainder ? alignment - remainder : 0;
+        if (padding > UINT64_MAX - used) return NULL;
+
+        uint64_t aligned = used + padding;
+        if (aligned > g_temp_storage.size || size > g_temp_storage.size - aligned) return NULL;
+        uint64_t new_used = aligned + size;
+
+        if (__sync_bool_compare_and_swap(&g_temp_storage.used, used, new_used)) {
+            return g_temp_storage.memory + aligned;
+        }
+    }
+}
+
+static inline void *ts_alloc_list_checked_impl(uint64_t alignment, uint64_t element_size, uint64_t element_count)
+{
+    if (!element_size || element_count > UINT64_MAX / element_size) return NULL;
+    return ts_alloc_aligned_checked(alignment, element_size * element_count);
+}
+
+#define ts_alloc_list_checked(elem_type, elem_count) \
+    ts_alloc_list_checked_impl(__alignof__(elem_type), sizeof(elem_type), elem_count)
+
 static inline void *ts_alloc_aligned(uint64_t alignment, uint64_t size)
 {
     for (;;) {

@@ -23,6 +23,13 @@ enum window_op_error
     WINDOW_OP_ERROR_SAME_STACK,
 };
 
+enum managed_window_result
+{
+    MANAGED_WINDOW_FAILED,
+    MANAGED_WINDOW_UNMANAGED,
+    MANAGED_WINDOW_SUCCESS
+};
+
 enum purify_mode
 {
     PURIFY_DISABLED,
@@ -177,7 +184,13 @@ struct window *window_manager_focused_window(struct window_manager *wm);
 struct application *window_manager_focused_application(struct window_manager *wm);
 struct view *window_manager_find_managed_window(struct window_manager *wm, struct window *window);
 void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wid);
-void window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view);
+bool window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view);
+bool window_manager_transfer_managed_window(struct window_manager *wm, struct window *window,
+                                            struct view *src_view, struct view *dst_view,
+                                            uint32_t insertion_point);
+enum managed_window_result window_manager_tile_window_on_space(struct space_manager *sm, struct window_manager *wm,
+                                                                struct window *window, uint64_t sid, uint32_t insertion_point,
+                                                                bool flush);
 void window_manager_window_did_order_out(struct window_manager *wm, struct window *window);
 void window_manager_window_did_order_in(struct window_manager *wm, struct window *window, uint64_t sid);
 uint64_t window_manager_find_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn);
@@ -186,12 +199,13 @@ void window_manager_add_lost_front_switched_event(struct window_manager *wm, Pro
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);
+uint32_t window_manager_ax_window_id(AXUIElementRef window_ref);
 struct window *window_manager_find_window(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_window(struct window_manager *wm, uint32_t window_id);
-void window_manager_add_window(struct window_manager *wm, struct window *window);
+bool window_manager_add_window(struct window_manager *wm, struct window *window);
 struct application *window_manager_find_application(struct window_manager *wm, pid_t pid);
 void window_manager_remove_application(struct window_manager *wm, pid_t pid);
-void window_manager_add_application(struct window_manager *wm, struct application *application);
+bool window_manager_add_application(struct window_manager *wm, struct application *application);
 struct window **window_manager_find_application_windows(struct window_manager *wm, struct application *application, int *window_count);
 enum window_op_error window_manager_move_window_relative(struct window_manager *wm, struct window *window, int type, float dx, float dy);
 void window_manager_resize_window_relative_internal(struct window *window, CGRect frame, int direction, float dx, float dy, bool animate);
@@ -260,7 +274,7 @@ bool window_manager_reconcile_windows_on_space_with_storage(struct window_manage
 bool window_manager_reconcile_windows_on_space(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, bool inventory_succeeded);
 void window_manager_validate_and_check_for_windows_on_space(struct space_manager *sm, struct window_manager *wm, uint64_t sid);
 void window_manager_correct_for_mission_control_changes(struct space_manager *sm, struct window_manager *wm);
-void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did);
+bool window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did);
 void window_manager_begin(struct space_manager *sm, struct window_manager *wm);
 void window_manager_init(struct window_manager *wm);
 

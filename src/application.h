@@ -88,6 +88,7 @@ uint32_t application_focused_window(struct application *application);
 CFArrayRef application_window_list(struct application *application);
 bool application_observe(struct application *application);
 void application_unobserve(struct application *application);
+/* Process remains caller-owned. Returns an owned application or NULL. */
 struct application *application_create(struct process *process);
 void application_destroy(struct application *application);
 

@@ -43,6 +43,51 @@ TEST_FUNC(declarative_jsonc_rejects_encoding_duplicates_and_surrogates,
     TEST_CHECK(error.stage, DECLARATIVE_ERROR_ENCODING);
 )
 
+TEST_FUNC(declarative_json_numeric_domain_table_matches_documented_contract,
+    struct numeric_case { const char *key; const char *value; bool valid; } config_cases[] = {
+        { "menubar_opacity", "0", true }, { "menubar_opacity", "1", true },
+        { "menubar_opacity", "1.01", false }, { "menubar_opacity", "1e999", false },
+        { "active_window_opacity", "0", false }, { "active_window_opacity", "1", true },
+        { "active_window_opacity", "1.01", false },
+        { "normal_window_opacity", "0", false }, { "normal_window_opacity", "1", true },
+        { "normal_window_opacity", "1e999", false },
+        { "split_ratio", "0.1", true }, { "split_ratio", "0.9", true },
+        { "split_ratio", "0", false }, { "split_ratio", "1", false },
+        { "window_animation_duration", "0", true }, { "window_animation_duration", "2", true },
+        { "window_animation_duration", "-0.1", false }, { "window_animation_duration", "1e999", false },
+        { "window_opacity_duration", "0", true }, { "window_opacity_duration", "2", true },
+        { "window_opacity_duration", "2147483.5", true },
+        { "window_opacity_duration", "2147483.75", false },
+        { "window_opacity_duration", "1e999", false }
+    };
+    for (size_t i = 0; i < array_count(config_cases); ++i) {
+        char json[256];
+        snprintf(json, sizeof(json), "{\"version\":1,\"config\":{\"%s\":%s}}",
+                 config_cases[i].key, config_cases[i].value);
+        struct declarative_config_model *model = NULL;
+        struct declarative_error error = {0};
+        bool parsed = declarative_config_parse_bytes((uint8_t *) json, strlen(json), "numeric.jsonc", &model, &error);
+        TEST_CHECK(parsed, config_cases[i].valid);
+        declarative_config_destroy(model);
+    }
+
+    struct numeric_case rule_cases[] = {
+        { "opacity", "0", true }, { "opacity", "1", true },
+        { "opacity", "1.01", false }, { "opacity", "-0.01", false },
+        { "opacity", "1e999", false }
+    };
+    for (size_t i = 0; i < array_count(rule_cases); ++i) {
+        char json[320];
+        snprintf(json, sizeof(json), "{\"version\":1,\"rules\":[{\"match\":{\"app\":{\"pattern\":\"x\"}},\"effects\":{\"opacity\":%s}}]}",
+                 rule_cases[i].value);
+        struct declarative_config_model *model = NULL;
+        struct declarative_error error = {0};
+        bool parsed = declarative_config_parse_bytes((uint8_t *) json, strlen(json), "rule-numeric.jsonc", &model, &error);
+        TEST_CHECK(parsed, rule_cases[i].valid);
+        declarative_config_destroy(model);
+    }
+)
+
 TEST_FUNC(declarative_numeric_conversions_are_checked,
     int integer = 0; uint32_t u = 0; float f = 0;
     TEST_CHECK(declarative_number_to_int(@1.0, INT_MIN, INT_MAX, &integer), true);

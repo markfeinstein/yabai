@@ -300,8 +300,7 @@ void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, s
         return;
     }
 
-    window_manager_remove_managed_window(wm, src_window->id);
-    window_manager_add_managed_window(wm, src_window, dst_view);
+    if (!window_manager_add_managed_window(wm, src_window, dst_view)) return;
     window_manager_adjust_layer(src_window, LAYER_BELOW);
     scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
 
@@ -329,13 +328,11 @@ void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, st
 
     if (src_view->sid != dst_view->sid) {
         for (int i = 0; i < src_node->window_count; ++i) {
-            window_manager_remove_managed_window(wm, src_node->window_list[i]);
-            window_manager_add_managed_window(wm, window_manager_find_window(wm, src_node->window_list[i]), src_view);
+            (void) window_manager_add_managed_window(wm, window_manager_find_window(wm, src_node->window_list[i]), src_view);
         }
 
         for (int i = 0; i < dst_node->window_count; ++i) {
-            window_manager_remove_managed_window(wm, dst_node->window_list[i]);
-            window_manager_add_managed_window(wm, window_manager_find_window(wm, dst_node->window_list[i]), dst_view);
+            (void) window_manager_add_managed_window(wm, window_manager_find_window(wm, dst_node->window_list[i]), dst_view);
         }
     }
 
@@ -354,6 +351,7 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
     src_node = view_find_window_node(src_view, src_window->id);
     dst_node = view_find_window_node(dst_view, dst_window->id);
     if (!src_node || !dst_node) return;
+    if (window_manager_find_managed_window(wm, src_window) != src_view) return;
 
     bool sibling_collapse = (src_node->parent && dst_node->parent) &&
                             (src_node->parent == dst_node->parent) &&
@@ -364,10 +362,11 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
         return;
     }
 
+    struct view_insertion_plan plan;
+    if (!view_prepare_window_node_insertion(dst_view, src_window, dst_window->id, &plan)) return;
     uint32_t src_restore_insertion_point = mouse_drop_action_restore_insertion_point(src_node, src_window);
 
     struct window_node *src_node_rm = view_remove_window_node(src_view, src_window);
-    window_manager_remove_managed_window(wm, src_window->id);
     window_manager_purify_window(wm, src_window);
 
     dst_node = view_find_window_node(dst_view, dst_window->id);
@@ -376,7 +375,8 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
             mouse_drop_action_fail_rollback("warp destination re-resolve");
         }
 
-        window_manager_add_managed_window(wm, src_window, src_view);
+        view_abort_window_node_insertion(&plan);
+        (void) window_manager_add_managed_window(wm, src_window, src_view);
         return;
     }
 
@@ -386,7 +386,8 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
     dst_node->split = split;
     dst_node->child = child;
 
-    struct window_node *src_node_add = view_add_window_node_with_insertion_point(dst_view, src_window, dst_window->id);
+    struct window_node *src_node_add = view_commit_window_node_insertion(dst_view, src_window, dst_window->id, &plan);
+    view_abort_window_node_insertion(&plan);
     if (!src_node_add) {
         dst_node->split = dst_prev_split;
         dst_node->child = dst_prev_child;
@@ -395,11 +396,11 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
             mouse_drop_action_fail_rollback("warp insertion");
         }
 
-        window_manager_add_managed_window(wm, src_window, src_view);
+        (void) window_manager_add_managed_window(wm, src_window, src_view);
         return;
     }
 
-    window_manager_add_managed_window(wm, src_window, dst_view);
+    if (!window_manager_add_managed_window(wm, src_window, dst_view)) return;
     if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
     if (dst_view != src_view && view_layout_is_accordion(dst_view->layout)) view_update(dst_view);
 
@@ -422,12 +423,8 @@ void mouse_drop_no_target(struct space_manager *sm, struct window_manager *wm, s
         if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
         window_node_flush(node);
     } else {
-        space_manager_untile_window(src_view, window);
-        window_manager_remove_managed_window(wm, window->id);
-        window_manager_purify_window(wm, window);
-
-        struct view *view = space_manager_tile_window_on_space(sm, window, dst_view->sid);
-        window_manager_add_managed_window(wm, window, view);
+        (void) sm;
+        if (!window_manager_transfer_managed_window(wm, window, src_view, dst_view, 0)) return;
     }
 }
 

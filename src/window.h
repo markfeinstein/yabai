@@ -171,6 +171,8 @@ bool window_level_is_standard(struct window *window);
 bool window_is_unknown(struct window *window);
 bool window_observe(struct window *window, bool *retry);
 void window_unobserve(struct window *window);
+/* Consumes the caller's retained window_ref on both success and failure.
+ * Application remains caller-owned. Returns an owned window or NULL. */
 struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id);
 void window_destroy(struct window *window);
 

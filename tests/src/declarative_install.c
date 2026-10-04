@@ -327,7 +327,7 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(removed != NULL, true);
     table_remove(&g_space_manager.view, &removed_sid);
     view_destroy(removed);
-    free(removed);
+    legacy_allocation_free(removed);
     TEST_CHECK(table_find(&g_space_manager.view, &removed_sid) == NULL, true);
     struct view_test_platform_ops view_ops = {
         .update_windows = declarative_install_test_update_created_view,
@@ -336,7 +336,7 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     };
     view_test_set_platform_ops(&view_ops);
     uint64_t created_sid = 99;
-    struct view *created = space_manager_query_view(&g_space_manager, created_sid);
+    struct view *created = space_manager_find_view(&g_space_manager, created_sid);
     view_test_set_platform_ops(NULL);
     TEST_CHECK(created != NULL, true);
     TEST_CHECK(created->sid, created_sid);

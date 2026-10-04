@@ -1,8 +1,34 @@
+enum message_loop_state
+{
+    MESSAGE_LOOP_STOPPED,
+    MESSAGE_LOOP_RUNNING,
+    MESSAGE_LOOP_FAILED
+};
+
 static struct {
+    pthread_mutex_t mutex;
     int sockfd;
     bool is_running;
+    bool thread_started;
+    bool daemon_io_acquired;
+    enum message_loop_state state;
     pthread_t thread;
-} g_message_loop;
+    char socket_path[sizeof(((struct sockaddr_un *) 0)->sun_path)];
+    struct yabai_bound_entry bound_entry;
+} g_message_loop = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .sockfd = -1
+};
+
+#ifdef TESTS
+static int (*message_loop_thread_create)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *) = pthread_create;
+static int (*message_loop_accept_call)(int, struct sockaddr *, socklen_t *) = accept;
+static int (*message_loop_backoff_call)(const struct timespec *, struct timespec *) = nanosleep;
+#else
+#define message_loop_thread_create pthread_create
+#define message_loop_accept_call accept
+#define message_loop_backoff_call nanosleep
+#endif
 
 struct daemon_message_admission g_daemon_message_admission;
 
@@ -159,6 +185,7 @@ extern bool g_verbose;
 #define COMMAND_QUERY_DISPLAYS "--displays"
 #define COMMAND_QUERY_SPACES   "--spaces"
 #define COMMAND_QUERY_WINDOWS  "--windows"
+#define COMMAND_QUERY_DAEMON_IDENTITY "--daemon-identity"
 
 #define ARGUMENT_QUERY_DISPLAY "--display"
 #define ARGUMENT_QUERY_SPACE   "--space"
@@ -707,6 +734,12 @@ static bool token_value_to_float(struct token_value value, float *result)
     return false;
 }
 
+static bool parse_window_opacity_token(struct token token, float *opacity)
+{
+    struct token_value value = token_to_value(token);
+    return token_value_to_float(value, opacity) && in_range_ii(*opacity, 0.0f, 1.0f);
+}
+
 enum label_type
 {
     LABEL_DISPLAY,
@@ -994,6 +1027,12 @@ static struct selector parse_display_selector(FILE *rsp, char **message, uint32_
     return result;
 }
 
+#ifdef TESTS
+static uint64_t (*message_space_for_mission_control_index)(int) = space_manager_mission_control_space;
+#else
+#define message_space_for_mission_control_index space_manager_mission_control_space
+#endif
+
 static struct selector parse_space_selector(FILE *rsp, char **message, uint64_t acting_sid, bool optional)
 {
     TIME_FUNCTION;
@@ -1002,7 +1041,7 @@ static struct selector parse_space_selector(FILE *rsp, char **message, uint64_t 
 
     struct token_value value = token_to_value(result.token);
     if (value.type == TOKEN_TYPE_INT && value.int_value > 0) {
-        uint64_t sid = space_manager_mission_control_space(value.int_value);
+        uint64_t sid = message_space_for_mission_control_index(value.int_value);
         if (sid) {
             result.sid = sid;
         } else {
@@ -1356,15 +1395,32 @@ static struct selector parse_insert_selector(FILE *rsp, char **message)
     return result;
 }
 
-static void handle_space_layout_result(FILE *rsp, enum declarative_apply_result result)
+static void handle_scoped_apply_result(FILE *rsp, enum declarative_apply_result result, bool reconcile)
 {
     if (result == DECLARATIVE_APPLY_NON_USER_SPACE) {
         daemon_fail(rsp, "cannot set layout for a macOS fullscreen space!\n");
+    } else if (result == DECLARATIVE_APPLY_MISSING_SPACE) {
+        daemon_fail(rsp, "could not locate managed view for selected space.\n");
     } else if (result == DECLARATIVE_APPLY_LAYOUT_FAILED) {
         daemon_fail(rsp, "could not set layout.\n");
-    } else if (result == DECLARATIVE_APPLY_OK && declarative_installed_has_scaffold()) {
+    } else if (result != DECLARATIVE_APPLY_OK) {
+        daemon_fail(rsp, "could not apply setting for selected space.\n");
+    } else if (reconcile && declarative_installed_has_scaffold()) {
         declarative_configuration_request_reconcile();
     }
+}
+
+static void handle_space_layout_result(FILE *rsp, enum declarative_apply_result result)
+{
+    handle_scoped_apply_result(rsp, result, true);
+}
+
+static void apply_scoped_setting(FILE *rsp, struct view *view, uint64_t sid,
+                                 enum declarative_config_id id, const struct declarative_value *value,
+                                 bool reconcile)
+{
+    handle_scoped_apply_result(rsp,
+        declarative_apply_runtime_setting_for_view(&g_space_manager, view, sid, id, value), reconcile);
 }
 
 static void handle_global_layout_result(FILE *rsp, enum declarative_apply_result result)
@@ -1380,26 +1436,8 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
 
-    char *lifecycle_message = message;
-    struct token first_lifecycle_token = get_token(&lifecycle_message);
-    bool has_reload = false;
-    for (struct token token = first_lifecycle_token; token_is_valid(token); token = get_token(&lifecycle_message)) {
-        if (token_equals(token, COMMAND_CONFIG_RELOAD)) has_reload = true;
-    }
-    if (has_reload) {
-        lifecycle_message = message;
-        struct token command = get_token(&lifecycle_message);
-        struct token trailing = get_token(&lifecycle_message);
-        if (!token_equals(command, COMMAND_CONFIG_RELOAD) || token_is_valid(trailing)) {
-            daemon_fail(rsp, "config reload must be unscoped and contain no trailing commands.\n");
-            return;
-        }
-        if (!declarative_config_reload(rsp)) return;
-        fprintf(rsp, "configuration reloaded\n");
-        return;
-    }
-
     uint64_t sel_sid = 0;
+    struct view *selected_view = NULL;
     struct token selector = get_token(&message);
     struct token command  = selector;
 
@@ -1409,20 +1447,41 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         if (!space_selector.did_parse || !space_selector.sid) return;
 
         sel_sid = space_selector.sid;
+        selected_view = space_manager_lookup_view(&g_space_manager, sel_sid);
+        if (!selected_view) {
+            daemon_fail(rsp, "could not locate managed view for selected space.\n");
+            return;
+        }
         command = get_token(&message);
     }
 
-    if (sel_sid) {
-        char *preflight_message = message;
-        for (struct token preflight_command = command; token_is_valid(preflight_command); preflight_command = get_token(&preflight_message)) {
-            int config_id = declarative_config_id_for_name(preflight_command.text, (size_t) preflight_command.length);
-            if (config_id >= 0) {
-                if (declarative_config_descriptors[config_id].scope == DECLARATIVE_SCOPE_GLOBAL) {
-                    daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", preflight_command.length, preflight_command.text, domain.length, domain.text);
-                    return;
-                }
-                get_token(&preflight_message);
+    if (token_equals(command, COMMAND_CONFIG_RELOAD)) {
+        struct token trailing = get_token(&message);
+        if (sel_sid || token_is_valid(trailing)) {
+            daemon_fail(rsp, "config reload must be unscoped and contain no trailing commands.\n");
+            return;
+        }
+        if (!declarative_config_reload(rsp)) return;
+        fprintf(rsp, "configuration reloaded\n");
+        return;
+    }
+
+    /* Validate command boundaries before applying anything. This preserves a
+     * selector value literally named "reload", while rejecting reload in any
+     * later command position without allowing an earlier mutation. */
+    char *preflight_message = message;
+    for (struct token preflight_command = command; token_is_valid(preflight_command); preflight_command = get_token(&preflight_message)) {
+        if (token_equals(preflight_command, COMMAND_CONFIG_RELOAD)) {
+            daemon_fail(rsp, "config reload must be unscoped and contain no trailing commands.\n");
+            return;
+        }
+        int config_id = declarative_config_id_for_name(preflight_command.text, (size_t) preflight_command.length);
+        if (config_id >= 0) {
+            if (sel_sid && declarative_config_descriptors[config_id].scope == DECLARATIVE_SCOPE_GLOBAL) {
+                daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", preflight_command.length, preflight_command.text, domain.length, domain.text);
+                return;
             }
+            get_token(&preflight_message);
         }
     }
 
@@ -1721,11 +1780,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_TOP_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->top_padding);
                 } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_TOP_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_TOP_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1741,11 +1800,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_BOTTOM_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->bottom_padding);
                 } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_BOTTOM_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_BOTTOM_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1761,11 +1820,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_LEFT_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->left_padding);
                 } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LEFT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_LEFT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1781,11 +1840,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_RIGHT_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->right_padding);
                 } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_RIGHT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_RIGHT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1801,11 +1860,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_WINDOW_GAP)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->window_gap);
                 } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_GAP, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_WINDOW_GAP, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1821,11 +1880,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_ACCORDION_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (value.type == TOKEN_TYPE_INVALID) {
                     fprintf(rsp, "%d\n", view->accordion_padding);
                 } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1841,19 +1900,19 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_LAYOUT)) {
             struct token value = get_token(&message);
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (!token_is_valid(value)) {
                     fprintf(rsp, "%s\n", view_type_str[view->layout]);
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_BSP)) {
-                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_BSP));
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_view(&g_space_manager, selected_view, sel_sid, VIEW_BSP));
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_STACK)) {
-                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_STACK));
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_view(&g_space_manager, selected_view, sel_sid, VIEW_STACK));
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_FLOAT)) {
-                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_FLOAT));
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_view(&g_space_manager, selected_view, sel_sid, VIEW_FLOAT));
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_HORIZONTAL)) {
-                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_ACCORDION_HORIZONTAL));
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_view(&g_space_manager, selected_view, sel_sid, VIEW_ACCORDION_HORIZONTAL));
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_ACCORDION_VERTICAL)) {
-                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_space(sel_sid, VIEW_ACCORDION_VERTICAL));
+                    handle_space_layout_result(rsp, declarative_apply_runtime_layout_for_view(&g_space_manager, selected_view, sel_sid, VIEW_ACCORDION_VERTICAL));
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1878,15 +1937,19 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             struct token_value value = token_to_value(get_token(&message));
             float real;
             if (value.type == TOKEN_TYPE_INVALID) {
-                float split_ratio = sel_sid ? space_manager_find_view(&g_space_manager, sel_sid)->split_ratio
-                                            : g_space_manager.split_ratio;
+                float split_ratio = sel_sid ? selected_view->split_ratio : g_space_manager.split_ratio;
                 fprintf(rsp, "%.4f\n", split_ratio);
             } else if (token_value_to_float(value, &real) && in_range_ii(real, 0.1f, 0.9f)) {
-                enum declarative_apply_result result = declarative_apply_runtime_setting(
-                    DECLARATIVE_CONFIG_SPLIT_RATIO,
-                    &(struct declarative_value) { .present = true, .real = real }, sel_sid);
-                if (result == DECLARATIVE_APPLY_OK && declarative_installed_has_scaffold()) {
-                    declarative_configuration_request_reconcile();
+                struct declarative_value setting = { .present = true, .real = real };
+                if (sel_sid) {
+                    apply_scoped_setting(rsp, selected_view, sel_sid,
+                                         DECLARATIVE_CONFIG_SPLIT_RATIO, &setting, true);
+                } else {
+                    enum declarative_apply_result result = declarative_apply_runtime_setting(
+                        DECLARATIVE_CONFIG_SPLIT_RATIO, &setting, 0);
+                    if (result == DECLARATIVE_APPLY_OK && declarative_installed_has_scaffold()) {
+                        declarative_configuration_request_reconcile();
+                    }
                 }
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
@@ -1894,15 +1957,15 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_SPLIT_TYPE)) {
             struct token value = get_token(&message);
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (!token_is_valid(value)) {
                     fprintf(rsp, "%s\n", window_node_split_str[view->split_type]);
                 } else if (token_equals(value, ARGUMENT_CONFIG_SPLIT_TYPE_Y)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_Y }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_Y }, false);
                 } else if (token_equals(value, ARGUMENT_CONFIG_SPLIT_TYPE_X)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_X }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_X }, false);
                 } else if (token_equals(value, ARGUMENT_CONFIG_SPLIT_TYPE_AUTO)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_AUTO }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SPLIT_TYPE, &(struct declarative_value) { .present = true, .enumeration = SPLIT_AUTO }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -1922,17 +1985,17 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         } else if (token_equals(command, COMMAND_CONFIG_AUTO_BALANCE)) {
             struct token value = get_token(&message);
             if (sel_sid) {
-                struct view *view = space_manager_find_view(&g_space_manager, sel_sid);
+                struct view *view = selected_view;
                 if (!token_is_valid(value)) {
                     fprintf(rsp, "%s\n", auto_balance_str[view->auto_balance]);
                 } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_NONE }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_NONE }, false);
                 } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_X | SPLIT_Y }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_X | SPLIT_Y }, false);
                 } else if (token_equals(value, ARGUMENT_COMMON_VAL_AXIS_X)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_X }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_X }, false);
                 } else if (token_equals(value, ARGUMENT_COMMON_VAL_AXIS_Y)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_Y }, sel_sid);
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_AUTO_BALANCE, &(struct declarative_value) { .present = true, .u32 = SPLIT_Y }, false);
                 } else {
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
@@ -2725,16 +2788,16 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_WINDOW_OPACITY)) {
-            struct token_value value = token_to_value(get_token(&message));
+            struct token opacity_token = get_token(&message);
             float opacity;
-            if (token_value_to_float(value, &opacity) && in_range_ii(opacity, 0.0f, 1.0f)) {
+            if (parse_window_opacity_token(opacity_token, &opacity)) {
                 if (window_manager_set_opacity(&g_window_manager, acting_window, opacity)) {
                     acting_window->opacity = opacity;
                 } else {
                     daemon_fail(rsp, "could not change opacity of window with id '%d' due to an error with the scripting-addition.\n", acting_window->id);
                 }
             } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", opacity_token.length, opacity_token.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_WINDOW_RAISE)) {
             struct selector selector = parse_window_selector(rsp, &message, acting_window, true);
@@ -2793,7 +2856,17 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
     TIME_FUNCTION;
 
     struct token command = get_token(&message);
-    if (token_equals(command, COMMAND_QUERY_DISPLAYS)) {
+    if (token_equals(command, COMMAND_QUERY_DAEMON_IDENTITY)) {
+        if (token_is_valid(get_token(&message))) {
+            daemon_fail(rsp, "query --daemon-identity does not accept trailing arguments.\n");
+            return;
+        }
+        const struct mach_header *loaded_header = _dyld_get_image_header(0);
+        if (!loaded_header || !daemon_identity_write_json(rsp, getpid(),
+                (const struct mach_header_64 *) loaded_header)) {
+            daemon_fail(rsp, "could not inspect loaded daemon identity.\n");
+        }
+    } else if (token_equals(command, COMMAND_QUERY_DISPLAYS)) {
         struct properties properties = parse_properties(rsp, get_token(&message), display_property_val, display_property_str, array_count(display_property_str));
         if (properties.did_error) return;
 
@@ -3573,25 +3646,71 @@ void handle_message(FILE *rsp, char *message, size_t message_length)
     }
 }
 
+static void message_loop_send_overloaded(int fd)
+{
+    static const char overloaded[] = { DAEMON_MESSAGE_FAILURE_MARKER,
+                                       't','o','o',' ','m','a','n','y',' ','p','e','n','d','i','n','g',' ','m','e','s','s','a','g','e','s','.','\n' };
+    (void) socket_io_write_all_until(fd, overloaded, sizeof(overloaded),
+                                     socket_io_deadline_after_ms(DAEMON_IO_WRITE_TIMEOUT_MS));
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
+static bool message_loop_accept_error_is_transient(int error_code)
+{
+    return error_code == EINTR || error_code == ECONNABORTED
+#ifdef EPROTO
+        || error_code == EPROTO
+#endif
+        ;
+}
+
+static bool message_loop_accept_error_is_resource_pressure(int error_code)
+{
+    return error_code == EMFILE || error_code == ENFILE || error_code == ENOBUFS || error_code == ENOMEM;
+}
+
 static void *message_loop_run(void *context)
 {
-    while (g_message_loop.is_running) {
-        int sockfd = accept(g_message_loop.sockfd, NULL, 0);
-        if (sockfd == -1) continue;
+    int listener = (int) (intptr_t) context;
+    while (__atomic_load_n(&g_message_loop.is_running, __ATOMIC_ACQUIRE)) {
+        int sockfd = message_loop_accept_call(listener, NULL, 0);
+        if (sockfd == -1) {
+            int error_code = errno;
+            if (!__atomic_load_n(&g_message_loop.is_running, __ATOMIC_ACQUIRE)) break;
+            if (message_loop_accept_error_is_transient(error_code)) continue;
+            if (message_loop_accept_error_is_resource_pressure(error_code)) {
+                const struct timespec delay = { .tv_nsec = 10 * 1000 * 1000L };
+                while (message_loop_backoff_call(&delay, NULL) != 0 && errno == EINTR) {
+                    if (!__atomic_load_n(&g_message_loop.is_running, __ATOMIC_ACQUIRE)) break;
+                }
+                continue;
+            }
+            warn("message accept failed permanently: %s\n", strerror(error_code));
+            __atomic_store_n(&g_message_loop.state, MESSAGE_LOOP_FAILED, __ATOMIC_RELEASE);
+            __atomic_store_n(&g_message_loop.is_running, false, __ATOMIC_RELEASE);
+            break;
+        }
+        if (!__atomic_load_n(&g_message_loop.is_running, __ATOMIC_ACQUIRE)) {
+            socket_close(sockfd);
+            break;
+        }
         if (!socket_set_cloexec(sockfd)) {
             socket_close(sockfd);
             continue;
         }
 
         if (!daemon_message_admission_acquire(&g_daemon_message_admission)) {
-            daemon_message_send_overloaded(sockfd);
+            message_loop_send_overloaded(sockfd);
             socket_close(sockfd);
             continue;
         }
 
-        event_loop_post(&g_event_loop, DAEMON_MESSAGE, NULL, sockfd);
+        if (!daemon_io_enqueue_fd(sockfd)) {
+            message_loop_send_overloaded(sockfd);
+            socket_close(sockfd);
+            daemon_message_admission_release(&g_daemon_message_admission);
+        }
     }
 
     return NULL;
@@ -3600,32 +3719,86 @@ static void *message_loop_run(void *context)
 
 bool message_loop_begin(char *socket_path)
 {
-    bool bound = false;
-    g_message_loop.is_running = false;
     struct sockaddr_un socket_address;
     if (!socket_address_init(&socket_address, socket_path)) return false;
 
-    g_message_loop.sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (g_message_loop.sockfd == -1) return false;
-    if (!socket_set_cloexec(g_message_loop.sockfd)) goto fail;
-
-    unlink(socket_address.sun_path);
-    if (bind(g_message_loop.sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1) goto fail;
-    bound = true;
-
-    if (chmod(socket_address.sun_path, 0600) != 0) goto fail;
-    if (listen(g_message_loop.sockfd, SOMAXCONN) == -1) goto fail;
-
-    g_message_loop.is_running = true;
-    if (pthread_create(&g_message_loop.thread, NULL, &message_loop_run, NULL) != 0) {
-        g_message_loop.is_running = false;
-        goto fail;
+    pthread_mutex_lock(&g_message_loop.mutex);
+    if (g_message_loop.thread_started || g_message_loop.daemon_io_acquired ||
+        g_message_loop.sockfd != -1 || g_message_loop.bound_entry.valid) {
+        pthread_mutex_unlock(&g_message_loop.mutex);
+        return false;
     }
 
+    uid_t uid = getuid();
+    g_message_loop.sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (g_message_loop.sockfd == -1) goto fail;
+    if (!socket_set_cloexec(g_message_loop.sockfd)) goto fail;
+    if (!yabai_runtime_remove_stale_socket(socket_address.sun_path, uid)) goto fail;
+    if (bind(g_message_loop.sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) == -1 ||
+        !yabai_runtime_capture_bound_socket(socket_address.sun_path, uid, &g_message_loop.bound_entry)) goto fail;
+    snprintf(g_message_loop.socket_path, sizeof(g_message_loop.socket_path), "%s", socket_address.sun_path);
+    if (chmod(socket_address.sun_path, 0600) != 0 ||
+        !yabai_runtime_validate_bound_socket(socket_address.sun_path, &g_message_loop.bound_entry)) goto fail;
+    if (listen(g_message_loop.sockfd, SOMAXCONN) == -1) goto fail;
+
+    uint64_t generation = event_loop_generation_snapshot(&g_event_loop);
+    if (!daemon_io_begin(generation)) goto fail;
+    g_message_loop.daemon_io_acquired = true;
+    __atomic_store_n(&g_message_loop.state, MESSAGE_LOOP_RUNNING, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_message_loop.is_running, true, __ATOMIC_RELEASE);
+    if (message_loop_thread_create(&g_message_loop.thread, NULL, &message_loop_run,
+                                   (void *) (intptr_t) g_message_loop.sockfd) != 0) {
+        __atomic_store_n(&g_message_loop.is_running, false, __ATOMIC_RELEASE);
+        goto fail;
+    }
+    g_message_loop.thread_started = true;
+    pthread_mutex_unlock(&g_message_loop.mutex);
     return true;
 
 fail:
-    g_message_loop.is_running = false;
-    socket_listener_cleanup(&g_message_loop.sockfd, socket_address.sun_path, bound);
+    __atomic_store_n(&g_message_loop.state, MESSAGE_LOOP_STOPPED, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_message_loop.is_running, false, __ATOMIC_RELEASE);
+    if (g_message_loop.daemon_io_acquired) {
+        (void) daemon_io_end();
+        g_message_loop.daemon_io_acquired = false;
+    }
+    if (g_message_loop.sockfd != -1) socket_close(g_message_loop.sockfd);
+    g_message_loop.sockfd = -1;
+    yabai_runtime_cleanup_bound_socket(g_message_loop.socket_path[0] ? g_message_loop.socket_path : socket_address.sun_path,
+                                       &g_message_loop.bound_entry);
+    g_message_loop.socket_path[0] = '\0';
+    pthread_mutex_unlock(&g_message_loop.mutex);
     return false;
+}
+
+bool message_loop_end(void)
+{
+    if (event_loop_is_worker_thread(&g_event_loop)) return false;
+    pthread_mutex_lock(&g_message_loop.mutex);
+    if (g_message_loop.thread_started && pthread_equal(pthread_self(), g_message_loop.thread)) {
+        pthread_mutex_unlock(&g_message_loop.mutex);
+        return false;
+    }
+
+    __atomic_store_n(&g_message_loop.is_running, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_message_loop.state, MESSAGE_LOOP_STOPPED, __ATOMIC_RELEASE);
+    if (g_message_loop.sockfd != -1) {
+        shutdown(g_message_loop.sockfd, SHUT_RDWR);
+        socket_close(g_message_loop.sockfd);
+        g_message_loop.sockfd = -1;
+    }
+    if (g_message_loop.thread_started) {
+        pthread_join(g_message_loop.thread, NULL);
+        g_message_loop.thread_started = false;
+    }
+    yabai_runtime_cleanup_bound_socket(g_message_loop.socket_path, &g_message_loop.bound_entry);
+    g_message_loop.socket_path[0] = '\0';
+
+    bool result = true;
+    if (g_message_loop.daemon_io_acquired) {
+        result = daemon_io_end();
+        if (result) g_message_loop.daemon_io_acquired = false;
+    }
+    pthread_mutex_unlock(&g_message_loop.mutex);
+    return result;
 }

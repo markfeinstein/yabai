@@ -3,7 +3,9 @@
 // the same ring. A full ring grows instead of overwriting unread events,
 // because queued contexts are owned by their eventual handlers.
 
-#define EVENT_QUEUE_CAPACITY 4096
+#define EVENT_QUEUE_CAPACITY        4096
+#define EVENT_QUEUE_NORMAL_CAPACITY 65536
+#define EVENT_QUEUE_HARD_CAPACITY   69632
 
 #ifndef EVENT_QUEUE_ALLOCATE
 #define EVENT_QUEUE_ALLOCATE(size) malloc(size)
@@ -12,7 +14,8 @@
 static bool event_queue_init(struct event_queue *queue, uint32_t capacity)
 {
     *queue = (struct event_queue) { 0 };
-    struct event *events = EVENT_QUEUE_ALLOCATE(capacity * sizeof(struct event));
+    if (capacity == 0 || capacity > EVENT_QUEUE_HARD_CAPACITY) return false;
+    struct event *events = EVENT_QUEUE_ALLOCATE((size_t) capacity * sizeof(struct event));
     if (!events) return false;
 
     if (pthread_mutex_init(&queue->lock, NULL) != 0) {
@@ -23,6 +26,8 @@ static bool event_queue_init(struct event_queue *queue, uint32_t capacity)
 
     queue->events = events;
     queue->capacity = capacity;
+    queue->normal_capacity = capacity > EVENT_QUEUE_NORMAL_CAPACITY ? capacity : EVENT_QUEUE_NORMAL_CAPACITY;
+    queue->hard_capacity = capacity > EVENT_QUEUE_HARD_CAPACITY ? capacity : EVENT_QUEUE_HARD_CAPACITY;
     return true;
 }
 
@@ -39,12 +44,13 @@ static uint32_t event_queue_slot(struct event_queue *queue, uint32_t offset)
     return slot < queue->capacity ? slot : slot - queue->capacity;
 }
 
-static bool event_queue_grow(struct event_queue *queue)
+static bool event_queue_grow(struct event_queue *queue, uint32_t limit)
 {
-    if (queue->capacity > UINT32_MAX / 2) return false;
+    if (queue->capacity >= limit || queue->capacity > UINT32_MAX / 2) return false;
 
     uint32_t capacity = queue->capacity * 2;
-    struct event *events = EVENT_QUEUE_ALLOCATE(capacity * sizeof(struct event));
+    if (capacity > limit) capacity = limit;
+    struct event *events = EVENT_QUEUE_ALLOCATE((size_t) capacity * sizeof(struct event));
     if (!events) return false;
 
     for (uint32_t i = 0; i < queue->count; ++i) {
@@ -79,8 +85,19 @@ static enum event_queue_result event_queue_push(struct event_queue *queue, struc
         }
     }
 
+    bool critical = event.type == APPLICATION_TERMINATED ||
+                    event.type == WINDOW_DESTROYED ||
+                    event.type == SLS_WINDOW_DESTROYED ||
+                    event.type == SLS_SPACE_DESTROYED ||
+                    event.type == DISPLAY_REMOVED;
+    uint32_t limit = critical ? queue->hard_capacity : queue->normal_capacity;
+    if (queue->count >= limit) {
+        result = EVENT_QUEUE_FULL;
+        goto out;
+    }
+
     if (queue->count == queue->capacity) {
-        if (!event_queue_grow(queue)) {
+        if (!event_queue_grow(queue, limit)) {
             result = EVENT_QUEUE_FULL;
             goto out;
         }

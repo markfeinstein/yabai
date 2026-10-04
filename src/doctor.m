@@ -570,12 +570,21 @@ static enum doctor_service_plist doctor_inspect_service(const struct doctor_coll
 static enum doctor_probe doctor_inspect_socket(const struct doctor_collect_ops *ops,
                                                 const struct doctor_identity *identity)
 {
-    char path[MAXLEN];
-    if (!doctor_format(path, sizeof(path), SA_SOCKET_PATH_FMT, identity->name)) return DOCTOR_PROBE_UNKNOWN;
+    struct yabai_runtime_paths paths;
+    if (!yabai_runtime_derive_for_uid(identity->uid, identity->home, &paths)) {
+        return DOCTOR_PROBE_UNKNOWN;
+    }
+
+    enum yabai_runtime_directory_status directory_status =
+        yabai_runtime_validate_directories_readonly(&paths);
+    if (directory_status == YABAI_RUNTIME_DIRECTORY_ABSENT) return DOCTOR_PROBE_NO;
+    if (directory_status != YABAI_RUNTIME_DIRECTORY_VALID) return DOCTOR_PROBE_UNKNOWN;
+
     struct stat socket_stat;
-    if (ops->lstat_fn(path, &socket_stat) == 0) {
-        return S_ISSOCK(socket_stat.st_mode) && socket_stat.st_uid == identity->uid &&
-               (socket_stat.st_mode & 0777) == 0600 ? DOCTOR_PROBE_YES : DOCTOR_PROBE_UNKNOWN;
+    if (ops->lstat_fn(paths.sa_socket, &socket_stat) == 0) {
+        return yabai_runtime_safe_socket_stat(&socket_stat, identity->uid, true) &&
+               yabai_runtime_safe_socket_acl(paths.sa_socket, &socket_stat) ?
+               DOCTOR_PROBE_YES : DOCTOR_PROBE_UNKNOWN;
     }
     return errno == ENOENT ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
 }

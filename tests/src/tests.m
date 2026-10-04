@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdio.h>
+#include <unistd.h>
 
 unsigned char __src_osax_payload[1];
 unsigned int __src_osax_payload_len;
@@ -15,6 +17,30 @@ static void *event_queue_test_allocate(size_t size)
 }
 
 #define EVENT_QUEUE_ALLOCATE(size) event_queue_test_allocate(size)
+static bool g_daemon_response_test_fail_allocate;
+static bool g_daemon_response_test_fail_fmemopen;
+static void *daemon_response_test_allocate(size_t size)
+{
+    return g_daemon_response_test_fail_allocate ? NULL : malloc(size);
+}
+static FILE *daemon_response_test_fmemopen(void *bytes, size_t size, const char *mode)
+{
+    if (g_daemon_response_test_fail_fmemopen) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    return fmemopen(bytes, size, mode);
+}
+#define DAEMON_RESPONSE_ALLOCATE(size) daemon_response_test_allocate(size)
+#define DAEMON_RESPONSE_FMEMOPEN(bytes, size, mode) daemon_response_test_fmemopen(bytes, size, mode)
+static const char *g_test_runtime_home_override;
+static uid_t g_test_runtime_effective_uid = (uid_t) -1;
+static uid_t test_runtime_effective_uid(void)
+{
+    return g_test_runtime_effective_uid == (uid_t) -1 ? geteuid() : g_test_runtime_effective_uid;
+}
+#define YABAI_RUNTIME_HOME_OVERRIDE g_test_runtime_home_override
+#define YABAI_RUNTIME_GETEUID() test_runtime_effective_uid()
 #include "../../src/manifest.m"
 #include "../../src/osax/message_validation.h"
 #include "../../src/sa_message.h"
@@ -39,6 +65,7 @@ typedef TEST_SIG(function);
 #include "view.c"
 #include "accordion.c"
 #include "window_manager.c"
+#include "process_manager.c"
 #include "event_loop.c"
 #include "inactive_space_launch.c"
 #include "space_gesture.c"
@@ -63,7 +90,16 @@ typedef TEST_SIG(function);
 #include "declarative_space_phase3b.c"
 #include "declarative_space_phase3c.c"
 #include "ffm.c"
+#include "mission_control.c"
 #include "message_frame.c"
+#include "daemon_io.c"
+#include "daemon_io_additional.c"
+#include "daemon_io_lifecycle.c"
+#include "daemon_io_concurrency.c"
+#include "message_loop_accept.c"
+#include "daemon_io_capacity.c"
+#include "daemon_io_failures.c"
+#include "daemon_identity.c"
 #include "sa_message.c"
 #include "deferred_convergence.c"
 #include "animation_failure.c"
@@ -122,6 +158,10 @@ TEST_FUNC(managed_space_topology_parsing_is_type_safe_and_ordered,
     TEST_CHECK(managed_space_last(NULL), 0ULL);
     TEST_CHECK(managed_space_select(NULL, 1), 0ULL);
     TEST_CHECK(managed_space_index(NULL, 1), 0);
+    TEST_CHECK(managed_space_next_index(0), 0);
+    TEST_CHECK(managed_space_next_index(1), 2);
+    TEST_CHECK(managed_space_next_index(INT_MAX - 1), INT_MAX);
+    TEST_CHECK(managed_space_next_index(INT_MAX), 0);
 
     NSArray *empty = @[];
     TEST_CHECK(managed_space_first((CFArrayRef) empty), 0ULL);
@@ -154,6 +194,55 @@ TEST_FUNC(managed_space_topology_parsing_is_type_safe_and_ordered,
     TEST_CHECK(managed_space_next((CFArrayRef) topology, 99), 0ULL);
 });
 
+TEST_FUNC(managed_space_ids_require_positive_signed_64_bit_values,
+{
+    NSDictionary *minimum = @{ @"id64": @((long long) INT64_MIN) };
+    NSDictionary *negative = @{ @"id64": @-1 };
+    NSDictionary *zero = @{ @"id64": @0 };
+    NSDictionary *one = @{ @"id64": @1 };
+    NSDictionary *maximum = @{ @"id64": @((long long) INT64_MAX) };
+    NSDictionary *wrong_type = @{ @"id64": @"1" };
+    NSDictionary *absent = @{};
+
+    uint64_t sid = 99;
+    TEST_CHECK(managed_space_id((CFTypeRef) minimum, &sid), false);
+    TEST_CHECK(sid, 0ULL);
+    sid = 99;
+    TEST_CHECK(managed_space_id((CFTypeRef) negative, &sid), false);
+    TEST_CHECK(sid, 0ULL);
+    sid = 99;
+    TEST_CHECK(managed_space_id((CFTypeRef) zero, &sid), false);
+    TEST_CHECK(sid, 0ULL);
+    TEST_CHECK(managed_space_id((CFTypeRef) one, &sid), true);
+    TEST_CHECK(sid, 1ULL);
+    TEST_CHECK(managed_space_id((CFTypeRef) maximum, &sid), true);
+    TEST_CHECK(sid, (uint64_t) INT64_MAX);
+    sid = 99;
+    TEST_CHECK(managed_space_id((CFTypeRef) wrong_type, &sid), false);
+    TEST_CHECK(sid, 0ULL);
+    sid = 99;
+    TEST_CHECK(managed_space_id((CFTypeRef) absent, &sid), false);
+    TEST_CHECK(sid, 0ULL);
+    TEST_CHECK(managed_space_id((CFTypeRef) one, NULL), false);
+
+    NSArray *mixed = @[ minimum, negative, zero, one, wrong_type, absent, maximum ];
+    int count = -1;
+    TEST_CHECK(managed_space_count_valid_checked((CFArrayRef) mixed, &count), true);
+    TEST_CHECK(count, 2);
+    uint64_t list[2] = { 0, 0 };
+    TEST_CHECK(managed_space_copy_valid((CFArrayRef) mixed, list), 2);
+    TEST_CHECK(list[0], 1ULL);
+    TEST_CHECK(list[1], (uint64_t) INT64_MAX);
+
+    NSArray *topology = @[ @{ @"Display Identifier": @"A", @"Spaces": mixed } ];
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 1), 1ULL);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 2), (uint64_t) INT64_MAX);
+    TEST_CHECK(managed_space_select((CFArrayRef) topology, 3), 0ULL);
+    TEST_CHECK(managed_space_index((CFArrayRef) topology, 0), 0);
+    TEST_CHECK(managed_space_index((CFArrayRef) topology, 1), 1);
+    TEST_CHECK(managed_space_index((CFArrayRef) topology, (uint64_t) INT64_MAX), 2);
+});
+
 TEST_FUNC(managed_display_space_extraction_skips_malformed_entries,
 {
     NSDictionary *missing_spaces = @{ @"Display Identifier": @"missing" };
@@ -179,6 +268,144 @@ TEST_FUNC(managed_display_space_extraction_skips_malformed_entries,
     TEST_CHECK(managed_space_copy_valid(spaces, list), 2);
     TEST_CHECK(list[0], 1ULL);
     TEST_CHECK(list[1], 3ULL);
+});
+
+struct active_display_list_test_fixture
+{
+    CGError errors[2];
+    uint32_t counts[2];
+    uint32_t ids[3];
+    uint32_t capacities[2];
+    int calls;
+};
+
+static struct active_display_list_test_fixture active_display_list_test_fixture;
+
+static CGError active_display_list_test_call(uint32_t capacity, CGDirectDisplayID *displays, uint32_t *count)
+{
+    int call = active_display_list_test_fixture.calls++;
+    active_display_list_test_fixture.capacities[call] = capacity;
+    uint32_t available = active_display_list_test_fixture.counts[call];
+    if (call == 1 && displays) {
+        uint32_t copied = available < capacity ? available : capacity;
+        *count = copied;
+        for (uint32_t i = 0; i < copied; ++i) displays[i] = active_display_list_test_fixture.ids[i];
+    } else {
+        *count = available;
+    }
+    return active_display_list_test_fixture.errors[call];
+}
+
+static void active_display_list_test_reset(CGError first_error, uint32_t first_count,
+                                           CGError second_error, uint32_t second_count)
+{
+    active_display_list_test_fixture = (struct active_display_list_test_fixture) {
+        .errors = { first_error, second_error },
+        .counts = { first_count, second_count },
+        .ids = { 11, 22, 33 }
+    };
+}
+
+TEST_FUNC(active_display_enumeration_rejects_errors_and_unstable_samples,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+    display_manager_test_set_active_display_list_fn(active_display_list_test_call);
+
+    active_display_list_test_reset(kCGErrorFailure, 2, kCGErrorSuccess, 2);
+    TEST_CHECK(display_manager_active_display_count(), 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 1);
+
+    active_display_list_test_reset(kCGErrorSuccess, (uint32_t) INT_MAX + 1U, kCGErrorSuccess, 0);
+    TEST_CHECK(display_manager_active_display_count(), 0);
+
+    active_display_list_test_reset(kCGErrorSuccess, 2, kCGErrorSuccess, 2);
+    TEST_CHECK(display_manager_active_display_count(), 2);
+
+    int count = 99;
+    active_display_list_test_reset(kCGErrorFailure, 2, kCGErrorSuccess, 2);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 1);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, 0, kCGErrorSuccess, 0);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 1);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, (uint32_t) INT_MAX + 1U, kCGErrorSuccess, 0);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 1);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, 2, kCGErrorFailure, 2);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 2);
+    TEST_CHECK(active_display_list_test_fixture.capacities[1], 3U);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, 2, kCGErrorSuccess, 3);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.capacities[1], 3U);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, 2, kCGErrorSuccess, 1);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.capacities[1], 3U);
+
+    count = 99;
+    active_display_list_test_reset(kCGErrorSuccess, 2, kCGErrorSuccess, 2);
+    uint32_t *displays = display_manager_active_display_list(&count);
+    TEST_CHECK(displays != NULL, true);
+    TEST_CHECK(count, 2);
+    TEST_CHECK(active_display_list_test_fixture.capacities[1], 3U);
+    if (displays) {
+        TEST_CHECK(displays[0], 11U);
+        TEST_CHECK(displays[1], 22U);
+    }
+
+    ts_reset();
+    count = 99;
+    uint32_t oversized_count = (uint32_t) (g_temp_storage.size / sizeof(uint32_t));
+    active_display_list_test_reset(kCGErrorSuccess, oversized_count, kCGErrorSuccess, oversized_count);
+    TEST_CHECK(display_manager_active_display_list(&count) == NULL, true);
+    TEST_CHECK(count, 0);
+    TEST_CHECK(active_display_list_test_fixture.calls, 1);
+    TEST_CHECK(g_temp_storage.used, 0ULL);
+    TEST_CHECK(ts_alloc_list_checked(uint32_t, 1) != NULL, true);
+    TEST_CHECK(g_temp_storage.used, sizeof(uint32_t));
+
+    TEST_CHECK(display_manager_active_display_list(NULL) == NULL, true);
+    display_manager_test_set_active_display_list_fn(NULL);
+});
+
+TEST_FUNC(temporary_storage_checked_allocation_is_fallible_and_atomic,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    TEST_CHECK(ts_alloc_list_checked(uint8_t, 1) != NULL, true);
+    uint64_t used = g_temp_storage.used;
+    TEST_CHECK(ts_alloc_aligned_checked(3, 1) == NULL, true);
+    TEST_CHECK(g_temp_storage.used, used);
+    TEST_CHECK(ts_alloc_list_checked(uint64_t, UINT64_MAX) == NULL, true);
+    TEST_CHECK(g_temp_storage.used, used);
+    TEST_CHECK(ts_alloc_aligned_checked(8, g_temp_storage.size + 1) == NULL, true);
+    TEST_CHECK(g_temp_storage.used, used);
+
+    uint64_t *aligned = ts_alloc_list_checked(uint64_t, 1);
+    TEST_CHECK(aligned != NULL, true);
+    if (aligned) TEST_CHECK((uintptr_t) aligned % __alignof__(uint64_t), 0ULL);
 });
 
 TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
@@ -467,39 +694,6 @@ TEST_FUNC(socket_address_initializer_enforces_unix_path_boundaries,
     unlink(rejected_path);
 });
 
-TEST_FUNC(socket_listener_cleanup_invalidates_descriptor_and_only_unlinks_bound_path,
-{
-    char path[] = "/tmp/yabai-listener-cleanup.XXXXXX";
-    int file_fd = mkstemp(path);
-    TEST_CHECK(file_fd != -1, true);
-    if (file_fd != -1) {
-        close(file_fd);
-
-        int sockets[2] = { -1, -1 };
-        TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
-        if (sockets[0] != -1 && sockets[1] != -1) {
-            int listener_fd = sockets[0];
-            socket_listener_cleanup(&sockets[0], path, false);
-            TEST_CHECK(sockets[0], -1);
-            TEST_CHECK(fcntl(listener_fd, F_GETFD), -1);
-            TEST_CHECK(access(path, F_OK), 0);
-            close(sockets[1]);
-        }
-
-        sockets[0] = -1;
-        sockets[1] = -1;
-        TEST_CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
-        if (sockets[0] != -1 && sockets[1] != -1) {
-            socket_listener_cleanup(&sockets[0], path, true);
-            TEST_CHECK(sockets[0], -1);
-            TEST_CHECK(access(path, F_OK), -1);
-            close(sockets[1]);
-        }
-
-        unlink(path);
-    }
-});
-
 TEST_FUNC(scripting_addition_socket_identity_requires_strict_nonroot_uid,
 {
     char *saved_sudo_uid = getenv("SUDO_UID") ? strdup(getenv("SUDO_UID")) : NULL;
@@ -518,14 +712,33 @@ TEST_FUNC(scripting_addition_socket_identity_requires_strict_nonroot_uid,
     TEST_CHECK(scripting_addition_socket_path_for_sudo_uid("0", socket_path, sizeof(socket_path)), false);
 
     uid_t current_uid = getuid();
-    struct passwd *current_account = current_uid ? getpwuid(current_uid) : NULL;
-    if (current_account) {
+    char fixture[] = "/private/tmp/yabai-controller-test.XXXXXX";
+    char *fixture_root = mkdtemp(fixture);
+    char fixture_home[PATH_MAX], fixture_library[PATH_MAX], fixture_caches[PATH_MAX];
+    if (current_uid && fixture_root) {
+        snprintf(fixture_home, sizeof(fixture_home), "%s/home", fixture_root);
+        snprintf(fixture_library, sizeof(fixture_library), "%s/Library", fixture_home);
+        snprintf(fixture_caches, sizeof(fixture_caches), "%s/Caches", fixture_library);
+        TEST_CHECK(mkdir(fixture_home, 0700), 0);
+        TEST_CHECK(mkdir(fixture_library, 0700), 0);
+        TEST_CHECK(mkdir(fixture_caches, 0700), 0);
+        g_test_runtime_home_override = fixture_home;
         char current_uid_string[32];
-        char expected_socket_path[MAXLEN];
+        struct yabai_runtime_paths expected;
         snprintf(current_uid_string, sizeof(current_uid_string), "%llu", (unsigned long long) current_uid);
-        snprintf(expected_socket_path, sizeof(expected_socket_path), SA_SOCKET_PATH_FMT, current_account->pw_name);
+        TEST_CHECK(yabai_runtime_derive_for_uid(current_uid, fixture_home, &expected), true);
         TEST_CHECK(scripting_addition_socket_path_for_sudo_uid(current_uid_string, socket_path, sizeof(socket_path)), true);
-        TEST_CHECK(strcmp(socket_path, expected_socket_path), 0);
+        TEST_CHECK(strcmp(socket_path, expected.sa_socket), 0);
+        char yabai_dir[PATH_MAX];
+        snprintf(yabai_dir, sizeof(yabai_dir), "%s/Library/Caches/yabai", fixture_home);
+        TEST_CHECK(access(yabai_dir, F_OK), -1);
+        TEST_CHECK(scripting_addition_socket_path_for_sudo_uid(current_uid_string, socket_path, 2), false);
+        TEST_CHECK(access(yabai_dir, F_OK), -1);
+        g_test_runtime_home_override = NULL;
+        rmdir(fixture_caches);
+        rmdir(fixture_library);
+        rmdir(fixture_home);
+        rmdir(fixture_root);
     }
 
     uid_t nonexistent_uid = (uid_t) -1;
@@ -1871,16 +2084,38 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(doctor_runtime_orchestration_and_exact_cli_are_injectable) \
     TEST_ENTRY(doctor_sa_bundle_absence_and_nested_metadata_are_distinct) \
     TEST_ENTRY(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded) \
+    TEST_ENTRY(mission_control_observe_rejects_zero_pid_and_creation_failures) \
+    TEST_ENTRY(mission_control_observe_rolls_back_each_notification_failure) \
+    TEST_ENTRY(mission_control_observe_publishes_only_complete_success_and_is_repeatable) \
+    TEST_ENTRY(mission_control_unobserve_cleans_partial_state_without_boolean_gate) \
+    TEST_ENTRY(mission_control_observe_retries_after_transaction_failure) \
+    TEST_ENTRY(os_timer_elapsed_is_baseline_independent_and_regression_safe) \
+    TEST_ENTRY(mission_control_linearized_contexts_polls_and_side_effects) \
+    TEST_ENTRY(mission_control_ingress_epoch_ordering_and_observer_retry) \
+    TEST_ENTRY(mission_control_sample_tristate_is_defensive) \
+    TEST_ENTRY(mission_control_poll_reservation_and_inconclusive_backoff) \
+    TEST_ENTRY(mission_control_rejected_ingress_recovers_without_token_corruption) \
+    TEST_ENTRY(mission_control_initial_allocation_fallback_recovers_all_kinds) \
+    TEST_ENTRY(mission_control_shutdown_closes_retry_and_restart_admission) \
+    TEST_ENTRY(mission_control_real_event_loop_context_ownership) \
+    TEST_ENTRY(mission_control_show_a_show_b_delayed_exit_confirms_b) \
+    TEST_ENTRY(mission_control_fallback_ring_preserves_order_overflow_and_reuse) \
+    TEST_ENTRY(mission_control_fallback_concurrent_cancel_and_drain_is_owned) \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
     TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
+    TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
+    TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
+    TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
+    TEST_ENTRY(application_launch_and_startup_table_failures_retry_and_recover_through_callers) \
+    TEST_ENTRY(window_created_event_ax_ownership_matrix_is_exact) \
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
@@ -1922,17 +2157,28 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
+    TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
+    TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
+    TEST_ENTRY(view_insertion_preparation_enforces_single_root_capacity_and_layout) \
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
+    TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
+    TEST_ENTRY(mouse_no_target_cross_space_transfer_prepares_before_source_mutation) \
+    TEST_ENTRY(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits) \
+    TEST_ENTRY(window_manager_warp_preparation_failure_preserves_trees) \
+    TEST_ENTRY(window_manager_warp_success_state_and_reconcile_matrix) \
     TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
     TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
+    TEST_ENTRY(process_table_failures_recover_through_launch_and_startup_callers) \
+    TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
+    TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
     TEST_ENTRY(config_file_execution_preserves_literal_path)     \
     TEST_ENTRY(safe_exec_reports_child_outcomes)                 \
     TEST_ENTRY(socket_open_sets_cloexec)                         \
     TEST_ENTRY(socket_cloexec_helper_sets_flag_and_rejects_invalid_fd) \
     TEST_ENTRY(socket_address_initializer_enforces_unix_path_boundaries) \
-    TEST_ENTRY(socket_listener_cleanup_invalidates_descriptor_and_only_unlinks_bound_path) \
     TEST_ENTRY(scripting_addition_socket_identity_requires_strict_nonroot_uid) \
     TEST_ENTRY(scripting_addition_helpers_propagate_failures_and_use_literal_paths) \
     TEST_ENTRY(plist_xml_validator_accepts_xml_characters_and_rejects_invalid_text) \
@@ -1974,6 +2220,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(view_padding_sum_widens_before_addition)         \
     TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
+    TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
+    TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
+    TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
     TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
     TEST_ENTRY(scaffold_identity_is_invalidated_across_rapid_layout_conversions) \
@@ -1988,11 +2237,22 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
     TEST_ENTRY(macos_version_newer_than_listed)                 \
     TEST_ENTRY(managed_space_topology_parsing_is_type_safe_and_ordered) \
+    TEST_ENTRY(managed_space_ids_require_positive_signed_64_bit_values) \
     TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
+    TEST_ENTRY(active_display_enumeration_rejects_errors_and_unstable_samples) \
+    TEST_ENTRY(temporary_storage_checked_allocation_is_fallible_and_atomic) \
     TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
     TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
     TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
     TEST_ENTRY(event_loop_begin_thread_creation_failure_is_atomic) \
+    TEST_ENTRY(event_queue_normal_and_hard_cap_reserve_is_bounded) \
+    TEST_ENTRY(event_loop_topology_retry_chain_is_single_and_generation_bound) \
+    TEST_ENTRY(event_queue_all_destructive_events_use_hard_reserve) \
+    TEST_ENTRY(event_queue_topology_rejections_coalesce_and_rearm_without_admission) \
+    TEST_ENTRY(event_loop_topology_recovery_is_transactional_complete_and_retryable) \
+    TEST_ENTRY(event_loop_topology_recovery_preserves_identity_through_sid_cycles) \
+    TEST_ENTRY(event_loop_topology_double_capture_uuidless_stability_failures_and_ownership) \
+    TEST_ENTRY(event_loop_accepted_space_creation_failure_reserves_and_recovers_topology) \
     TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
     TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
     TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
@@ -2000,6 +2260,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_different_mouse_button_drags_preserve_fifo) \
     TEST_ENTRY(event_queue_mouse_up_boundary_preserves_drag_fifo) \
     TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
+    TEST_ENTRY(window_created_retry_rejection_consumes_context_and_ax_reference_once) \
     TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
     TEST_ENTRY(event_queue_full_failstops_destructive_events)    \
     TEST_ENTRY(event_queue_binary_wake_converges_after_merges)   \
@@ -2041,6 +2302,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_inventory_is_canonical)                         \
     TEST_ENTRY(declarative_jsonc_normalization_preserves_source)           \
     TEST_ENTRY(declarative_jsonc_rejects_encoding_duplicates_and_surrogates) \
+    TEST_ENTRY(declarative_json_numeric_domain_table_matches_documented_contract) \
     TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
     TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
     TEST_ENTRY(declarative_split_ratio_is_valid_globally_and_in_space_policy) \
@@ -2077,9 +2339,14 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
     TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
     TEST_ENTRY(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space) \
+    TEST_ENTRY(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup) \
     TEST_ENTRY(space_manager_global_split_ratio_preserves_runtime_space_ownership) \
     TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
+    TEST_ENTRY(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects) \
+    TEST_ENTRY(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation) \
     TEST_ENTRY(declarative_runtime_live_matrix_covers_all_39_typed_setters)   \
+    TEST_ENTRY(imperative_numeric_domain_table_matches_documented_contract)  \
+    TEST_ENTRY(documented_numeric_domains_match_runtime_boundaries)           \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
     TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
     TEST_ENTRY(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership) \
@@ -2154,6 +2421,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_topology_startup_preparation_is_worker_confined_and_transactional) \
     TEST_ENTRY(declarative_topology_production_bootstrap_retains_no_early_candidate) \
     TEST_ENTRY(declarative_topology_allocation_failures_leave_no_owned_state) \
+    TEST_ENTRY(declarative_view_adoption_is_atomic_at_every_registry_allocation) \
     TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
     TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
@@ -2209,6 +2477,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \
     TEST_ENTRY(message_rule_grid_numeric_validation)                      \
+    TEST_ENTRY(message_direct_opacity_numeric_validation)                 \
     TEST_ENTRY(message_rule_opacity_numeric_validation)                   \
     TEST_ENTRY(message_external_bar_parser_is_strict)                     \
     TEST_ENTRY(message_space_padding_parser_is_strict)                    \
@@ -2217,10 +2486,33 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
     TEST_ENTRY(daemon_message_incomplete_frame_has_failure_response)      \
     TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
+    TEST_ENTRY(daemon_identity_macho_uuid_bounds_are_strict)                \
+    TEST_ENTRY(daemon_identity_json_contains_protocol_identity)             \
     TEST_ENTRY(daemon_response_buffer_preserves_exact_bytes)              \
     TEST_ENTRY(daemon_response_buffer_accepts_empty_and_boundary_responses) \
     TEST_ENTRY(daemon_response_buffer_overflow_selects_failure_response)  \
+    TEST_ENTRY(daemon_io_partial_worker_initialization_rolls_back)       \
+    TEST_ENTRY(daemon_io_post_rejection_consumes_owned_job_once)         \
+    TEST_ENTRY(daemon_io_all_startup_failures_are_idempotent_and_restartable) \
+    TEST_ENTRY(daemon_io_rejects_shutdown_from_event_and_transport_workers) \
+    TEST_ENTRY(daemon_io_open_peer_read_and_writer_stalls_observe_injected_deadlines) \
+    TEST_ENTRY(daemon_io_response_failures_skip_or_preserve_handler_and_static_fallback) \
+    TEST_ENTRY(daemon_io_stale_generation_is_discarded_after_event_loop_restart) \
+    TEST_ENTRY(daemon_io_queue_growth_rejection_finalizes_once)            \
+    TEST_ENTRY(daemon_io_shutdown_times_out_without_event_progress_then_recovers_after_drain) \
+    TEST_ENTRY(daemon_io_concurrent_end_has_single_teardown_owner)          \
+    TEST_ENTRY(daemon_io_immediate_reader_finalize_cannot_create_phantom_active_job) \
+    TEST_ENTRY(daemon_io_enqueue_lease_blocks_teardown_until_transfer_or_release) \
+    TEST_ENTRY(message_loop_accept_errors_retry_backoff_fail_and_recover)   \
+    TEST_ENTRY(message_loop_lifecycle_unblocks_accept_and_recovers_from_thread_failure) \
+    TEST_ENTRY(message_loop_admission_caps_at_32_and_excess_gets_overload_wire) \
+    TEST_ENTRY(daemon_io_allocation_reserve_and_submit_failures_finalize_cleanly) \
+    TEST_ENTRY(daemon_io_writer_submit_failure_finalizes_static_fallback_once) \
+    TEST_ENTRY(daemon_io_partial_body_never_blocks_event_worker)         \
+    TEST_ENTRY(daemon_io_nonreading_peer_never_blocks_event_worker_and_handler_is_event_thread) \
+    TEST_ENTRY(daemon_io_invalid_frame_is_rejected_before_handler)       \
     TEST_ENTRY(socket_io_fragmented_exact_read)                           \
+    TEST_ENTRY(socket_io_read_retries_interrupted_poll)                   \
     TEST_ENTRY(socket_io_write_all_delivers_fragmented_buffer)            \
     TEST_ENTRY(daemon_response_large_buffer_reaches_draining_peer)        \
     TEST_ENTRY(daemon_response_stalled_peer_has_bounded_write_failure)    \
@@ -2239,9 +2531,17 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(sa_handshake_rejects_early_eof)                            \
     TEST_ENTRY(sa_handshake_observes_total_timeout)                       \
     TEST_ENTRY(sa_request_without_status_observes_total_timeout)          \
+    TEST_ENTRY(sa_operation_response_has_separate_bounded_budget)         \
     TEST_ENTRY(sa_payload_builder_boundaries_and_variable_counts)         \
+    TEST_ENTRY(sa_legacy_hashtable_init_fails_stop_on_allocation_failure) \
+    TEST_ENTRY(sa_checked_hashtable_insert_rehashes_and_rolls_back_failures) \
     TEST_ENTRY(sa_message_fixed_sender_layouts_are_strict)                \
     TEST_ENTRY(sa_message_opacity_fade_duration_is_validated)             \
+    TEST_ENTRY(sa_sender_validation_precedes_transport_and_valid_boundaries_dispatch_once) \
+    TEST_ENTRY(sa_message_layer_and_order_modes_are_exact)                \
+    TEST_ENTRY(sa_fade_generation_retries_stale_blocked_getter_failure)   \
+    TEST_ENTRY(sa_fade_generation_retries_stale_blocked_setter_failure)   \
+    TEST_ENTRY(sa_message_scale_geometry_and_derived_boundaries)          \
     TEST_ENTRY(sa_message_swap_sparse_and_mixed_records_are_strict)       \
     TEST_ENTRY(sa_message_variable_counts_and_entries_are_strict)
 

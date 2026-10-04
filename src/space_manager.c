@@ -1,6 +1,41 @@
 extern struct window_manager g_window_manager;
 extern int g_connection;
 
+#ifdef TESTS
+static uint32_t *(*space_manager_test_active_display_list)(int *count);
+static uint64_t *(*space_manager_test_display_space_list)(uint32_t did, int *count);
+static uint32_t *(*space_manager_test_layout_window_list)(uint64_t *, int, int, int *, bool, bool *);
+static bool (*space_manager_test_layout_space_is_user)(uint64_t);
+static size_t space_manager_test_lookup_count;
+static size_t space_manager_layout_allocation_ordinal;
+static size_t space_manager_layout_fail_ordinal;
+static size_t space_manager_layout_outstanding;
+#endif
+
+static void *space_manager_layout_allocate(size_t count, size_t size)
+{
+    if (count && size > SIZE_MAX / count) return NULL;
+#ifdef TESTS
+    ++space_manager_layout_allocation_ordinal;
+    if (space_manager_layout_fail_ordinal &&
+        space_manager_layout_allocation_ordinal == space_manager_layout_fail_ordinal) return NULL;
+#endif
+    void *result = calloc(count, size);
+#ifdef TESTS
+    if (result) ++space_manager_layout_outstanding;
+#endif
+    return result;
+}
+
+static void space_manager_layout_free(void *pointer)
+{
+    if (!pointer) return;
+    free(pointer);
+#ifdef TESTS
+    --space_manager_layout_outstanding;
+#endif
+}
+
 static TABLE_HASH_FUNC(hash_view)
 {
     return *(uint64_t *) key;
@@ -98,18 +133,31 @@ bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
     return true;
 }
 
+struct view *space_manager_lookup_view(struct space_manager *sm, uint64_t sid)
+{
+#ifdef TESTS
+    ++space_manager_test_lookup_count;
+#endif
+    if (!sm || !sid) return NULL;
+    return table_find(&sm->view, &sid);
+}
+
 struct view *space_manager_query_view(struct space_manager *sm, uint64_t sid)
 {
-    if (sm->did_begin) return space_manager_find_view(sm, sid);
-    return table_find(&sm->view, &sid);
+    return space_manager_lookup_view(sm, sid);
 }
 
 struct view *space_manager_find_view(struct space_manager *sm, uint64_t sid)
 {
-    struct view *view = table_find(&sm->view, &sid);
+    struct view *view = space_manager_lookup_view(sm, sid);
     if (!view) {
         view = view_create(sid);
-        table_add(&sm->view, &sid, view);
+        if (!view) return NULL;
+        if (!table_try_add(&sm->view, &sid, view)) {
+            view_destroy(view);
+            legacy_allocation_free(view);
+            return NULL;
+        }
     }
     return view;
 }
@@ -117,7 +165,7 @@ struct view *space_manager_find_view(struct space_manager *sm, uint64_t sid)
 void space_manager_refresh_view(struct space_manager *sm, uint64_t sid)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return;
+    if (!view || view->layout == VIEW_FLOAT) return;
 
     view_update(view);
     view_flush(view);
@@ -126,14 +174,14 @@ void space_manager_refresh_view(struct space_manager *sm, uint64_t sid)
 void space_manager_mark_view_invalid(struct space_manager *sm,  uint64_t sid)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return;
+    if (!view || view->layout == VIEW_FLOAT) return;
 
     view_clear_flag(view, VIEW_IS_VALID);
 }
 
 void space_manager_untile_window(struct view *view, struct window *window)
 {
-    if (view->layout == VIEW_FLOAT) return;
+    if (!view || view->layout == VIEW_FLOAT) return;
 
     window_manager_adjust_layer(window, LAYER_NORMAL);
     struct window_node *node = view_remove_window_node(view, window);
@@ -252,23 +300,206 @@ bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct
     return true;
 }
 
+static void space_manager_layout_synthetic_uuid(char *buffer, size_t capacity, uint64_t sid)
+{
+    snprintf(buffer, capacity, "imperative-space-%016llx", (unsigned long long) sid);
+}
+
+struct space_manager_layout_capture {
+    const struct declarative_space_target *targets;
+    size_t count;
+    enum view_type layout;
+};
+
+static enum declarative_space_query_result space_manager_layout_query_inventory(
+    uint64_t sid, const uint32_t **wids, size_t *count, void *opaque)
+{
+    struct space_manager_layout_capture *capture = opaque;
+    const struct declarative_space_target *target = NULL;
+    for (size_t i = 0; i < capture->count; ++i) {
+        if (capture->targets[i].sid == sid) { target = &capture->targets[i]; break; }
+    }
+    if (!target) return DECLARATIVE_SPACE_QUERY_TERMINAL;
+    int window_count = 0;
+    uint32_t *window_list = NULL;
+    if (target->imperative_layout_target) {
+        if (capture->layout != VIEW_FLOAT) {
+            bool succeeded = false;
+#ifdef TESTS
+            uint32_t *(*inventory)(uint64_t *, int, int, int *, bool, bool *) =
+                space_manager_test_layout_window_list ? space_manager_test_layout_window_list
+                                                      : space_window_list_for_connection_with_status;
+            window_list = inventory(&sid, 1, 0, &window_count, false, &succeeded);
+#else
+            window_list = space_window_list_for_connection_with_status(&sid, 1, 0, &window_count,
+                                                                        false, &succeeded);
+#endif
+            if (!succeeded || window_count < 0 || (window_count && !window_list)) {
+                return DECLARATIVE_SPACE_QUERY_TERMINAL;
+            }
+        }
+    } else {
+        window_list = view_find_window_list(target->view, &window_count);
+        if (!window_list || window_count < 0) return DECLARATIVE_SPACE_QUERY_RESOURCE;
+    }
+    *wids = window_list;
+    *count = (size_t) window_count;
+    return DECLARATIVE_SPACE_QUERY_OK;
+}
+
+static bool space_manager_layout_query_inventory_bool(uint64_t sid, const uint32_t **wids,
+                                                       size_t *count, void *context)
+{
+    return space_manager_layout_query_inventory(sid, wids, count, context) == DECLARATIVE_SPACE_QUERY_OK;
+}
+
+static struct window *space_manager_layout_find_window(uint32_t wid, void *context)
+{
+    (void) context;
+    return window_manager_find_window(&g_window_manager, wid);
+}
+
+static bool space_manager_layout_window_is_eligible(struct window *window, void *context)
+{
+    (void) context;
+    return window_manager_should_manage_window(window);
+}
+
+struct space_manager_layout_publication {
+    struct space_manager *manager;
+    enum view_type layout;
+};
+
+static void space_manager_layout_publish(void *opaque)
+{
+    struct space_manager_layout_publication *publication = opaque;
+    publication->manager->layout = publication->layout;
+}
+
+static bool space_manager_apply_layout_transaction(struct space_manager *sm, struct view *selected,
+                                                   enum view_type layout, bool global)
+{
+    if (!sm || layout < VIEW_BSP || layout > VIEW_ACCORDION_VERTICAL) return false;
+    size_t count = (size_t) sm->view.count;
+    if (!count) {
+        if (global) sm->layout = layout;
+        return true;
+    }
+#ifdef TESTS
+    space_manager_layout_allocation_ordinal = 0;
+#endif
+    struct declarative_space_target *targets = space_manager_layout_allocate(count, sizeof(*targets));
+    struct declarative_space_topology_entry *topology = space_manager_layout_allocate(count, sizeof(*topology));
+    char (*uuids)[DECLARATIVE_SPACE_IDENTITY_STRING_CAPACITY] =
+        space_manager_layout_allocate(count, sizeof(*uuids));
+    if (!targets || !topology || !uuids) {
+        space_manager_layout_free(targets);
+        space_manager_layout_free(topology);
+        space_manager_layout_free(uuids);
+        return false;
+    }
+    bool valid = true;
+    size_t at = 0;
+    table_for (struct view *view, sm->view, {
+        if (!valid) continue;
+#ifdef TESTS
+        bool is_user_space = space_manager_test_layout_space_is_user
+                           ? space_manager_test_layout_space_is_user(view->sid)
+                           : declarative_space_identity_valid(&view->declarative_identity)
+                           ? view->declarative_identity.kind == 0
+                           : space_is_user(view->sid);
+#else
+        bool is_user_space = space_is_user(view->sid);
+#endif
+        if (view->uuid) {
+            if (!CFStringGetCString(view->uuid, uuids[at], sizeof(uuids[at]), kCFStringEncodingUTF8) ||
+                !uuids[at][0]) {
+                valid = false;
+                continue;
+            }
+        } else {
+            space_manager_layout_synthetic_uuid(uuids[at], sizeof(uuids[at]), view->sid);
+        }
+        struct declarative_space_identity identity = ((struct declarative_space_identity) {
+            .has_uuid = true, .sid = view->sid, .kind = is_user_space ? 0 : 2,
+            .mission_control_ordinal = (int) at
+        });
+        memcpy(identity.uuid, uuids[at], strlen(uuids[at]) + 1);
+        identity.fingerprint = declarative_space_identity_fingerprint(&identity);
+        bool affected = global ? (!view_check_flag(view, VIEW_LAYOUT) && is_user_space)
+                               : view == selected;
+        targets[at] = ((struct declarative_space_target) {
+            .view = view, .sid = view->sid, .index = identity.mission_control_ordinal + 1,
+            .uuid = uuids[at], .is_user_space = identity.kind == 0, .identity = identity,
+            .imperative_layout_target = affected
+        });
+        topology[at] = ((struct declarative_space_topology_entry) {
+            .sid = view->sid, .index = identity.mission_control_ordinal + 1,
+            .uuid = uuids[at], .is_user_space = identity.kind == 0, .identity = identity
+        });
+        ++at;
+    })
+    if (!valid || at != count) {
+        space_manager_layout_free(targets);
+        space_manager_layout_free(topology);
+        space_manager_layout_free(uuids);
+        return false;
+    }
+    struct declarative_space_defaults defaults = {
+        .layout = sm->layout >= VIEW_BSP ? sm->layout : VIEW_BSP,
+        .top_padding = sm->top_padding, .bottom_padding = sm->bottom_padding,
+        .left_padding = sm->left_padding, .right_padding = sm->right_padding,
+        .window_gap = sm->window_gap, .accordion_padding = sm->accordion_padding,
+        .window_gap_enabled = true, .split_type = sm->split_type,
+        .auto_balance = sm->auto_balance,
+        .split_ratio = sm->split_ratio >= 0.1f && sm->split_ratio <= 0.9f ? sm->split_ratio : 0.5f,
+        .window_placement = sm->window_placement == CHILD_FIRST ? CHILD_FIRST : CHILD_SECOND,
+        .window_insertion_point = sm->window_insertion_point,
+        .focused_window_id = g_window_manager.focused_window_id,
+        .window_zoom_persist = sm->window_zoom_persist
+    };
+    struct declarative_space_table_contract view_contract = {
+        .hash = sm->view.hash, .cmp = sm->view.cmp, .key_size = sizeof(uint64_t)
+    };
+    struct declarative_space_table_contract managed_contract = {
+        .hash = g_window_manager.managed_window.hash, .cmp = g_window_manager.managed_window.cmp,
+        .key_size = sizeof(uint32_t)
+    };
+    struct space_manager_layout_capture context = { .targets = targets, .count = count, .layout = layout };
+    struct declarative_space_capture_ops capture = {
+        .query_sid = space_manager_layout_query_inventory_bool,
+        .query_sid_result = space_manager_layout_query_inventory,
+        .find_window = space_manager_layout_find_window,
+        .is_eligible = space_manager_layout_window_is_eligible,
+        .context = &context
+    };
+    struct space_manager_layout_publication publication = { .manager = sm, .layout = layout };
+    enum declarative_space_apply_result result = declarative_space_apply_imperative_layout(
+        targets, count, topology, &sm->view, &view_contract, &managed_contract,
+        &defaults, layout, &capture, global ? space_manager_layout_publish : NULL,
+        global ? &publication : NULL);
+    space_manager_layout_free(targets);
+    space_manager_layout_free(topology);
+    space_manager_layout_free(uuids);
+    return result == DECLARATIVE_SPACE_APPLY_OK;
+}
+
+bool space_manager_set_layout_for_view(struct space_manager *sm, struct view *view, enum view_type layout)
+{
+    if (!sm || !view || table_find(&sm->view, &view->sid) != view) return false;
+    return space_manager_apply_layout_transaction(sm, view, layout, false);
+}
+
 bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type layout)
 {
-    struct view *view = space_manager_find_view(sm, sid);
-    if (layout == VIEW_FLOAT) {
-        return space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, NULL, 0, false);
-    }
-
-    int window_count = 0;
-    bool inventory_succeeded = false;
-    uint32_t *window_list = space_window_list_for_connection_with_status(&sid, 1, 0, &window_count, false, &inventory_succeeded);
-    return space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, window_list, window_count, inventory_succeeded);
+    struct view *view = space_manager_lookup_view(sm, sid);
+    return view && space_manager_set_layout_for_view(sm, view, layout);
 }
 
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return false;
+    if (!view || view->layout == VIEW_FLOAT) return false;
 
     if (type == TYPE_ABS) {
         view->window_gap = gap;
@@ -285,7 +516,7 @@ bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int
 bool space_manager_toggle_gap_for_space(struct space_manager *sm, uint64_t sid)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return false;
+    if (!view || view->layout == VIEW_FLOAT) return false;
 
     if (view_check_flag(view, VIEW_ENABLE_GAP)) {
         view_clear_flag(view, VIEW_ENABLE_GAP);
@@ -313,61 +544,7 @@ void space_manager_toggle_show_desktop(uint64_t sid)
 
 bool space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view_type layout)
 {
-    if (layout == VIEW_FLOAT) {
-        sm->layout = layout;
-        table_for (struct view *view, sm->view, {
-            if (!view_check_flag(view, VIEW_LAYOUT) && space_is_user(view->sid)) {
-                space_manager_apply_layout_with_inventory(&g_window_manager, view, layout, NULL, 0, false);
-            }
-        })
-        return true;
-    }
-
-    struct layout_inventory {
-        struct view *view;
-        uint32_t *window_list;
-        int window_count;
-        struct view **mutated_views;
-        int mutated_capacity;
-    };
-
-    int inventory_capacity = sm->view.count;
-    struct layout_inventory *inventories = inventory_capacity ? calloc((size_t) inventory_capacity, sizeof(struct layout_inventory)) : NULL;
-    if (inventory_capacity && !inventories) return false;
-
-    int inventory_count = 0;
-    bool success = true;
-    table_for (struct view *view, sm->view, {
-        if (success && !view_check_flag(view, VIEW_LAYOUT) && space_is_user(view->sid)) {
-            struct layout_inventory *inventory = &inventories[inventory_count++];
-            inventory->view = view;
-            uint64_t sid = view->sid;
-            bool inventory_succeeded = false;
-            inventory->window_list = space_window_list_for_connection_with_status(&sid, 1, 0, &inventory->window_count, false, &inventory_succeeded);
-            if (!space_manager_layout_inventory_is_valid(&g_window_manager, layout, inventory->window_list, inventory->window_count, inventory_succeeded)) {
-                success = false;
-                break;
-            }
-            inventory->mutated_capacity = inventory->window_count + 1;
-            inventory->mutated_views = calloc((size_t) inventory->mutated_capacity, sizeof(struct view *));
-            if (!inventory->mutated_views) {
-                success = false;
-                break;
-            }
-        }
-    })
-
-    if (success) {
-        sm->layout = layout;
-        for (int i = 0; i < inventory_count; ++i) {
-            struct layout_inventory *inventory = &inventories[i];
-            space_manager_commit_layout_with_inventory(&g_window_manager, inventory->view, layout, inventory->window_list, inventory->window_count, inventory->mutated_views, inventory->mutated_capacity);
-        }
-    }
-
-    for (int i = 0; i < inventory_count; ++i) free(inventories[i].mutated_views);
-    free(inventories);
-    return success;
+    return space_manager_apply_layout_transaction(sm, NULL, layout, true);
 }
 
 void space_manager_set_window_gap_for_all_spaces(struct space_manager *sm, int window_gap)
@@ -478,7 +655,7 @@ void space_manager_set_auto_balance_for_all_spaces(struct space_manager *sm, uin
 bool space_manager_set_padding_for_space(struct space_manager *sm, uint64_t sid, int type, int top, int bottom, int left, int right)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return false;
+    if (!view || view->layout == VIEW_FLOAT) return false;
 
     if (type == TYPE_ABS) {
         view->top_padding    = top;
@@ -501,7 +678,7 @@ bool space_manager_set_padding_for_space(struct space_manager *sm, uint64_t sid,
 bool space_manager_toggle_padding_for_space(struct space_manager *sm, uint64_t sid)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return false;
+    if (!view || view->layout == VIEW_FLOAT) return false;
 
     if (view_check_flag(view, VIEW_ENABLE_PADDING)) {
         view_clear_flag(view, VIEW_ENABLE_PADDING);
@@ -518,7 +695,7 @@ bool space_manager_toggle_padding_for_space(struct space_manager *sm, uint64_t s
 bool space_manager_rotate_space(struct space_manager *sm, uint64_t sid, int degrees)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout != VIEW_BSP) return false;
+    if (!view || view->layout != VIEW_BSP) return false;
 
     window_node_rotate(view->root, degrees);
     view_update(view);
@@ -530,7 +707,7 @@ bool space_manager_rotate_space(struct space_manager *sm, uint64_t sid, int degr
 bool space_manager_mirror_space(struct space_manager *sm, uint64_t sid, enum window_node_split axis)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout != VIEW_BSP) return false;
+    if (!view || view->layout != VIEW_BSP) return false;
 
     window_node_mirror(view->root, axis);
     view_update(view);
@@ -542,7 +719,7 @@ bool space_manager_mirror_space(struct space_manager *sm, uint64_t sid, enum win
 bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout != VIEW_BSP) return false;
+    if (!view || view->layout != VIEW_BSP) return false;
 
     window_node_equalize(view->root, axis_flag, view->split_ratio);
     view_update(view);
@@ -554,7 +731,7 @@ bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32
 bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout != VIEW_BSP) return false;
+    if (!view || view->layout != VIEW_BSP) return false;
 
     window_node_balance(view->root, axis_flag);
     view_update(view);
@@ -566,22 +743,13 @@ bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_
 struct view *space_manager_tile_window_on_space_with_insertion_point(struct space_manager *sm, struct window *window, uint64_t sid, uint32_t insertion_point)
 {
     struct view *view = space_manager_find_view(sm, sid);
-    if (view->layout == VIEW_FLOAT) return view;
+    if (!view || view->layout == VIEW_FLOAT) return view;
 
     window_manager_adjust_layer(window, LAYER_BELOW);
     struct window_node *node = view_add_window_node_with_insertion_point(view, window, insertion_point);
     if (!node) {
         window_manager_adjust_layer(window, LAYER_NORMAL);
         return NULL;
-    }
-
-    if (view_layout_is_accordion(view->layout)) {
-        view_update(view);
-        view_flush(view);
-    } else if (space_is_visible(view->sid)) {
-        window_node_flush(node);
-    } else {
-        view_set_flag(view, VIEW_IS_DIRTY);
     }
 
     return view;
@@ -592,10 +760,25 @@ struct view *space_manager_tile_window_on_space(struct space_manager *sm, struct
     return space_manager_tile_window_on_space_with_insertion_point(sm, window, sid, 0);
 }
 
+void space_manager_flush_tiled_window(struct view *view, struct window *window)
+{
+    if (!view || !window || view->layout == VIEW_FLOAT) return;
+    struct window_node *node = view_find_window_node(view, window->id);
+    if (!node) return;
+    if (view_layout_is_accordion(view->layout)) {
+        view_update(view);
+        view_flush(view);
+    } else if (view_space_is_visible(view->sid)) {
+        window_node_flush(node);
+    } else {
+        view_set_flag(view, VIEW_IS_DIRTY);
+    }
+}
+
 void space_manager_toggle_window_split(struct space_manager *sm, struct window *window)
 {
     struct view *view = space_manager_find_view(sm, window_space(window->id));
-    if (view->layout != VIEW_BSP) return;
+    if (!view || view->layout != VIEW_BSP) return;
 
     struct window_node *node = view_find_window_node(view, window->id);
     if (node && window_node_is_intermediate(node)) {
@@ -709,8 +892,18 @@ void space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list
     }
 }
 
+#ifdef TESTS
+static void (*space_manager_test_move_window_to_space)(uint64_t, struct window *);
+#endif
+
 void space_manager_move_window_to_space(uint64_t sid, struct window *window)
 {
+#ifdef TESTS
+    if (space_manager_test_move_window_to_space) {
+        space_manager_test_move_window_to_space(sid, window);
+        return;
+    }
+#endif
     if (SLSPerformAsynchronousBridgedWindowManagementOperation) {
         CFArrayRef window_list_ref = cfarray_of_cfnumbers(&window->id, sizeof(uint32_t), 1, kCFNumberSInt32Type);
         Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
@@ -1204,63 +1397,75 @@ static bool space_manager_uuid_can_remap(CFStringRef uuid)
     return cf_is_type(uuid, CFStringGetTypeID()) && CFStringGetLength(uuid) > 0;
 }
 
-void space_manager_handle_display_add(struct space_manager *sm, uint32_t did)
+bool space_manager_handle_display_add(struct space_manager *sm, uint32_t did)
 {
+    struct display_add_remap {
+        struct view *view;
+        struct space_label *label;
+        uint64_t old_sid;
+        uint64_t new_sid;
+        CFStringRef uuid;
+    };
     int space_count;
     uint64_t *space_list = display_space_list(did, &space_count);
-    if (!space_list) return;
+    if (!space_list || space_count < 0) return false;
+    struct display_add_remap *remaps = calloc((size_t) space_count, sizeof(*remaps));
+    if (space_count && !remaps) return false;
 
-    int list_count = 0;
-    struct view *view_list[sm->view.count];
-    CFStringRef uuid_list[sm->view.count];
-
-    table_for (struct view *view, sm->view, {
-        view_list[list_count] = view;
-        uuid_list[list_count] = view->uuid;
-        ++list_count;
-    })
-
+    bool result = false;
+    struct table new_views = {0};
     for (int i = 0; i < space_count; ++i) {
-        uint64_t sid = space_list[i];
-        CFStringRef uuid = SLSSpaceCopyName(g_connection, sid);
-        if (!uuid) continue;
-        if (!space_manager_uuid_can_remap(uuid)) {
-            CFRelease(uuid);
-            continue;
-        }
-
-        for (int j = 0; j < list_count; ++j) {
-            CFStringRef view_uuid = uuid_list[j];
-            if (!view_uuid) continue;
-
-            if (CFEqual(view_uuid, uuid)) {
-                struct view *view = view_list[j];
-
-                uuid_list[j] = NULL;
-                view_list[j] = NULL;
-
-                table_remove(&sm->view, &view->sid);
-                CFRelease(view->uuid);
-
-                struct space_label *label = space_manager_get_label_for_space(sm, view->sid);
-                if (label) label->sid = sid;
-
-                view->sid = sid;
-                view->uuid = CFRetain(uuid);
-
-                table_add(&sm->view, &sid, view);
-                break;
+        remaps[i].new_sid = space_list[i];
+        remaps[i].uuid = SLSSpaceCopyName(g_connection, space_list[i]);
+        if (!space_manager_uuid_can_remap(remaps[i].uuid)) goto out;
+        table_for (struct view *view, sm->view, {
+            if (!remaps[i].view && space_manager_uuid_can_remap(view->uuid) && CFEqual(view->uuid, remaps[i].uuid)) {
+                for (int j = 0; j < i; ++j) if (remaps[j].view == view) goto out;
+                remaps[i].view = view;
+                remaps[i].old_sid = view->sid;
+                for (int label = 0; label < buf_len(sm->labels); ++label) {
+                    if (sm->labels[label].sid == view->sid) remaps[i].label = &sm->labels[label];
+                }
             }
-        }
-
-        CFRelease(uuid);
+        })
     }
 
-    sm->current_space_id = space_manager_active_space();
-    sm->last_space_id = sm->current_space_id;
+    if (!table_try_init(&new_views, sm->view.capacity, sm->view.hash, sm->view.cmp)) goto out;
+    table_for (struct view *view, sm->view, {
+        uint64_t sid = view->sid;
+        for (int i = 0; i < space_count; ++i) if (remaps[i].view == view) sid = remaps[i].new_sid;
+        if (!table_try_add(&new_views, &sid, view)) goto out;
+    })
+    if (new_views.count != sm->view.count) goto out;
+    uint64_t active_sid = space_manager_active_space();
+    if (!active_sid) goto out;
+
+    struct table old_views = sm->view;
+    sm->view = new_views;
+    new_views = (struct table) {0};
+    for (int i = 0; i < space_count; ++i) {
+        if (!remaps[i].view) continue;
+        if (remaps[i].view->uuid) CFRelease(remaps[i].view->uuid);
+        remaps[i].view->uuid = remaps[i].uuid;
+        remaps[i].uuid = NULL;
+        remaps[i].view->sid = remaps[i].new_sid;
+    }
+    for (int i = 0; i < space_count; ++i) {
+        if (remaps[i].label) remaps[i].label->sid = remaps[i].new_sid;
+    }
+    table_free(&old_views);
+    sm->current_space_id = active_sid;
+    sm->last_space_id = active_sid;
+    result = true;
+
+out:
+    table_free(&new_views);
+    for (int i = 0; i < space_count; ++i) if (remaps[i].uuid) CFRelease(remaps[i].uuid);
+    free(remaps);
+    return result;
 }
 
-void space_manager_begin(struct space_manager *sm)
+bool space_manager_begin(struct space_manager *sm)
 {
     sm->layout = VIEW_FLOAT;
     sm->accordion_padding = 30;
@@ -1272,24 +1477,51 @@ void space_manager_begin(struct space_manager *sm)
     sm->window_zoom_persist = true;
     sm->labels = NULL;
     sm->skip_window_focus_animation = false;
-    table_init(&sm->view, 23, hash_view, compare_view);
+    if (!table_try_init(&sm->view, 23, hash_view, compare_view)) return false;
 
     int display_count;
+#ifdef TESTS
+    uint32_t *display_list = space_manager_test_active_display_list
+                           ? space_manager_test_active_display_list(&display_count)
+                           : display_manager_active_display_list(&display_count);
+#else
     uint32_t *display_list = display_manager_active_display_list(&display_count);
-    if (!display_list) return;
+#endif
+    if (!display_list) goto fail;
 
     for (int i = 0; i < display_count; ++i) {
         int space_count;
+#ifdef TESTS
+        uint64_t *space_list = space_manager_test_display_space_list
+                             ? space_manager_test_display_space_list(display_list[i], &space_count)
+                             : display_space_list(display_list[i], &space_count);
+#else
         uint64_t *space_list = display_space_list(display_list[i], &space_count);
-        if (!space_list) continue;
+#endif
+        if (!space_list) goto fail;
 
         for (int j = 0; j < space_count; ++j) {
             struct view *view = view_create(space_list[j]);
-            table_add(&sm->view, &space_list[j], view);
+            if (!view) goto fail;
+            if (!table_try_add(&sm->view, &space_list[j], view)) {
+                view_destroy(view);
+                legacy_allocation_free(view);
+                goto fail;
+            }
         }
     }
 
     sm->current_space_id = space_manager_active_space();
     sm->last_space_id = sm->current_space_id;
     sm->did_begin = true;
+    return true;
+
+fail:
+    table_for (struct view *view, sm->view, {
+        view_destroy(view);
+        legacy_allocation_free(view);
+    })
+    table_free(&sm->view);
+    sm->did_begin = false;
+    return false;
 }

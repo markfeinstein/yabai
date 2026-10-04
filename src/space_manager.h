@@ -52,7 +52,11 @@ bool space_manager_query_space(FILE *rsp, uint64_t sid, uint64_t flags);
 bool space_manager_query_spaces_for_window(FILE *rsp, struct window *window, uint64_t flags);
 bool space_manager_query_spaces_for_display(FILE *rsp, uint32_t did, uint64_t flags);
 bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags);
+/* Direct table lookup only; never allocates, creates, or publishes a view. */
+struct view *space_manager_lookup_view(struct space_manager *sm, uint64_t sid);
+/* Query lookup only; never allocates, creates, or publishes a view. */
 struct view *space_manager_query_view(struct space_manager *sm, uint64_t sid);
+/* Finds or creates an owned table entry; returns NULL without publication on failure. */
 struct view *space_manager_find_view(struct space_manager *sm, uint64_t sid);
 void space_manager_refresh_view(struct space_manager *sm, uint64_t sid);
 void space_manager_mark_view_invalid(struct space_manager *sm,  uint64_t sid);
@@ -60,6 +64,7 @@ void space_manager_mark_view_dirty(struct space_manager *sm,  uint64_t sid);
 void space_manager_untile_window(struct view *view, struct window *window);
 struct view *space_manager_tile_window_on_space_with_insertion_point(struct space_manager *sm, struct window *window, uint64_t sid, uint32_t insertion_point);
 struct view *space_manager_tile_window_on_space(struct space_manager *sm, struct window *window, uint64_t sid);
+void space_manager_flush_tiled_window(struct view *view, struct window *window);
 bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 void space_manager_toggle_window_split(struct space_manager *sm, struct window *window);
@@ -76,6 +81,7 @@ struct space_label *space_manager_get_space_for_label(struct space_manager *sm, 
 bool space_manager_remove_label_for_space(struct space_manager *sm, uint64_t sid);
 void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, char *label);
 bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded);
+bool space_manager_set_layout_for_view(struct space_manager *sm, struct view *view, enum view_type type);
 bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type type);
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap);
 bool space_manager_toggle_gap_for_space(struct space_manager *sm, uint64_t sid);
@@ -112,7 +118,7 @@ bool space_manager_is_window_on_space(uint64_t sid, struct window *window);
 void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uint32_t did);
 void space_manager_mark_spaces_invalid(struct space_manager *sm);
 bool space_manager_refresh_application_windows(struct space_manager *sm);
-void space_manager_handle_display_add(struct space_manager *sm, uint32_t did);
-void space_manager_begin(struct space_manager *sm);
+bool space_manager_handle_display_add(struct space_manager *sm, uint32_t did);
+bool space_manager_begin(struct space_manager *sm);
 
 #endif

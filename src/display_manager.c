@@ -400,18 +400,47 @@ bool display_manager_display_is_animating(uint32_t did)
     return false; // This does not return a correct result on modern macOS versions.
 }
 
+#ifdef TESTS
+static display_manager_active_display_list_fn display_manager_active_display_list_call = CGGetActiveDisplayList;
+
+void display_manager_test_set_active_display_list_fn(display_manager_active_display_list_fn fn)
+{
+    display_manager_active_display_list_call = fn ? fn : CGGetActiveDisplayList;
+}
+#else
+#define display_manager_active_display_list_call CGGetActiveDisplayList
+#endif
+
 int display_manager_active_display_count(void)
 {
-    uint32_t count;
-    CGGetActiveDisplayList(0, NULL, &count);
-    return (int)count;
+    uint32_t count = 0;
+    if (display_manager_active_display_list_call(0, NULL, &count) != kCGErrorSuccess || count > INT_MAX) return 0;
+    return (int) count;
 }
 
 uint32_t *display_manager_active_display_list(int *count)
 {
-    int display_count = display_manager_active_display_count();
-    uint32_t *result = ts_alloc_list(uint32_t, display_count);
-    CGGetActiveDisplayList(display_count, result, (uint32_t*)count);
+    if (count) *count = 0;
+    if (!count) return NULL;
+
+    uint32_t capacity = 0;
+    if (display_manager_active_display_list_call(0, NULL, &capacity) != kCGErrorSuccess ||
+        capacity == 0 || capacity > INT_MAX) {
+        return NULL;
+    }
+
+    uint32_t expected_count = capacity;
+    uint32_t fill_capacity = expected_count + 1;
+    uint32_t *result = ts_alloc_list_checked(uint32_t, fill_capacity);
+    if (!result) return NULL;
+
+    uint32_t observed_count = 0;
+    if (display_manager_active_display_list_call(fill_capacity, result, &observed_count) != kCGErrorSuccess ||
+        observed_count != expected_count) {
+        return NULL;
+    }
+
+    *count = (int) observed_count;
     return result;
 }
 

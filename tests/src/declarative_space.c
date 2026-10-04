@@ -267,8 +267,8 @@ TEST_FUNC(declarative_space_root_validation_accepts_retained_split_child_and_rej
     root.child = (enum window_node_child) (CHILD_FIRST + 1);
     TEST_CHECK(declarative_space_validate_root(&view, &image), false);
 
-    free(root.left);
-    free(root.right);
+    legacy_allocation_free(root.left);
+    legacy_allocation_free(root.right);
 })
 
 TEST_FUNC(declarative_space_preparation_classifies_removals_and_owns_clear_images_without_live_writes,
@@ -538,7 +538,7 @@ TEST_FUNC(declarative_scaffold_ratio_change_rebuilds_existing_canonical_root,
     struct declarative_space_preparation preparation;
     TEST_CHECK(declarative_space_prepare_effective(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
         &native, native.spaces, native.space_count, 8, &runtime, &defaults,
-        DECLARATIVE_SPACE_PRESERVE_RUNTIME, &ops, &preparation), true);
+        DECLARATIVE_SPACE_PRESERVE_RUNTIME, &ops, false, VIEW_DEFAULT, &preparation), true);
     TEST_CHECK(preparation.targets[0].scaffold_changed, true);
     TEST_CHECK(preparation.targets[0].changed, true);
     TEST_CHECK(preparation.targets[0].final_root != &root, true);
