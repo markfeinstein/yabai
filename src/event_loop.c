@@ -44,6 +44,18 @@ static void event_loop_test_mouse_drag_move_window_direct(struct window *window,
 }
 
 static void (*event_loop_test_mouse_drag_move_window)(struct window *, float, float) = event_loop_test_mouse_drag_move_window_direct;
+
+static void event_loop_test_mouse_drag_resize_window_direct(struct window *window, CGRect frame)
+{
+    AX_ENHANCED_UI_WORKAROUND(window->application->ref, {
+        window_manager_move_window(window, frame.origin.x, frame.origin.y);
+        window_manager_resize_window(window, frame.size.width, frame.size.height);
+    });
+}
+
+static void (*event_loop_test_mouse_drag_resize_window)(struct window *, CGRect) = event_loop_test_mouse_drag_resize_window_direct;
+static uint64_t (*event_loop_test_mouse_drag_time)(void) = read_os_timer;
+static void (*event_loop_test_mouse_drop_try_adjust_bsp_grid)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *) = mouse_drop_try_adjust_bsp_grid;
 #endif
 
 static bool update_window_notifications(void)
@@ -1485,6 +1497,9 @@ static bool mouse_drag_begin(struct mouse_state *mouse_state, enum mouse_mode ac
     mouse_state->window = window;
     mouse_state->window_frame = window->frame;
     mouse_state->down_location = point;
+    mouse_state->resize_requested_location = point;
+    mouse_state->resize_requested_frame = window->frame;
+    mouse_state->resize_requested_time = read_os_timer();
     mouse_state->direction = 0;
     mouse_state->current_action = action;
     mouse_state->active_button = button;
@@ -1503,6 +1518,48 @@ static bool mouse_drag_begin(struct mouse_state *mouse_state, enum mouse_mode ac
 static bool mouse_drag_event_is_owner(struct mouse_state *mouse_state, int64_t button)
 {
     return mouse_state->active_button != MOUSE_BUTTON_NONE && mouse_state->active_button == button;
+}
+
+#define MOUSE_RESIZE_MINIMUM_DISTANCE 2.0
+#define MOUSE_RESIZE_MINIMUM_DURATION_MS (1000.0 / 60.0)
+
+static CGRect mouse_drag_resize_frame(struct mouse_state *mouse_state, CGPoint point)
+{
+    CGFloat dx = point.x - mouse_state->down_location.x;
+    CGFloat dy = point.y - mouse_state->down_location.y;
+    int x_mod = (mouse_state->direction & HANDLE_LEFT) ? -1 : (mouse_state->direction & HANDLE_RIGHT) ? 1 : 0;
+    int y_mod = (mouse_state->direction & HANDLE_TOP) ? -1 : (mouse_state->direction & HANDLE_BOTTOM) ? 1 : 0;
+    CGFloat width = max(1.0, mouse_state->window_frame.size.width + dx * x_mod);
+    CGFloat height = max(1.0, mouse_state->window_frame.size.height + dy * y_mod);
+    CGFloat x = (mouse_state->direction & HANDLE_LEFT) ? mouse_state->window_frame.origin.x + mouse_state->window_frame.size.width - width : mouse_state->window_frame.origin.x;
+    CGFloat y = (mouse_state->direction & HANDLE_TOP) ? mouse_state->window_frame.origin.y + mouse_state->window_frame.size.height - height : mouse_state->window_frame.origin.y;
+    return CGRectMake(x, y, width, height);
+}
+
+static bool mouse_drag_resize_window(struct mouse_state *mouse_state, CGPoint point, uint64_t event_time, bool force)
+{
+    CGRect frame = mouse_drag_resize_frame(mouse_state, point);
+    if (CGRectEqualToRect(frame, mouse_state->resize_requested_frame)) return false;
+
+    CGFloat dx = point.x - mouse_state->resize_requested_location.x;
+    CGFloat dy = point.y - mouse_state->resize_requested_location.y;
+    if (!force) {
+        if (dx * dx + dy * dy < MOUSE_RESIZE_MINIMUM_DISTANCE * MOUSE_RESIZE_MINIMUM_DISTANCE) return false;
+        double dt = (double) (event_time - mouse_state->resize_requested_time) * (1000.0 / (double) read_os_freq());
+        if (dt < MOUSE_RESIZE_MINIMUM_DURATION_MS) return false;
+    }
+
+#ifdef TESTS
+    event_loop_test_mouse_drag_resize_window(mouse_state->window, frame);
+#else
+    CGFloat total_dx = point.x - mouse_state->down_location.x;
+    CGFloat total_dy = point.y - mouse_state->down_location.y;
+    window_manager_resize_window_relative_internal(mouse_state->window, mouse_state->window_frame, mouse_state->direction, total_dx, total_dy, false);
+#endif
+    mouse_state->resize_requested_location = point;
+    mouse_state->resize_requested_frame = frame;
+    mouse_state->resize_requested_time = event_time;
+    return true;
 }
 
 static void mouse_drag_reset(struct mouse_state *mouse_state)
@@ -1567,11 +1624,23 @@ static EVENT_HANDLER(MOUSE_UP)
     CGPoint point = CGEventGetLocation(context);
     debug("%s: %.2f, %.2f\n", __FUNCTION__, point.x, point.y);
 
+    if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+#ifdef TESTS
+        mouse_drag_resize_window(&g_mouse_state, point, event_loop_test_mouse_drag_time(), true);
+#else
+        mouse_drag_resize_window(&g_mouse_state, point, read_os_timer(), true);
+#endif
+    }
+
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
     if (!src_view) goto reset;
 
     struct mouse_window_info info;
-    mouse_window_info_populate(&g_mouse_state, &info);
+    if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+        mouse_window_info_populate_frame(&g_mouse_state, g_mouse_state.resize_requested_frame, &info);
+    } else {
+        mouse_window_info_populate(&g_mouse_state, &info);
+    }
 
     if (info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
@@ -1619,7 +1688,11 @@ static EVENT_HANDLER(MOUSE_UP)
             mouse_drop_no_target(&g_space_manager, &g_window_manager, src_view, dst_view, g_mouse_state.window, a_node);
         }
     } else if (info.changed_position || info.changed_size) {
+#ifdef TESTS
+        event_loop_test_mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
+#else
         mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
+#endif
     }
 
 reset:
@@ -1666,24 +1739,22 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         }
 #endif
     } else if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
-        uint64_t event_time = read_os_timer();
-        float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float)read_os_freq());
-        if (dt < 67.67f) goto out;
-
-        int dx = point.x - g_mouse_state.down_location.x;
-        int dy = point.y - g_mouse_state.down_location.y;
-
-        window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
-
-        g_mouse_state.last_moved_time = event_time;
-        g_mouse_state.down_location = point;
+#ifdef TESTS
+        if (!mouse_drag_resize_window(&g_mouse_state, point, event_loop_test_mouse_drag_time(), false)) goto out;
+#else
+        if (!mouse_drag_resize_window(&g_mouse_state, point, read_os_timer(), false)) goto out;
+#endif
     }
 
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
     if (!src_view) goto out;
 
     struct mouse_window_info info;
-    mouse_window_info_populate(&g_mouse_state, &info);
+    if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+        mouse_window_info_populate_frame(&g_mouse_state, g_mouse_state.resize_requested_frame, &info);
+    } else {
+        mouse_window_info_populate(&g_mouse_state, &info);
+    }
 
     if (info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));

@@ -84,9 +84,11 @@ struct mouse_state
     enum mouse_mode current_action;
     int64_t active_button;
     CGPoint down_location;
-    uint64_t last_moved_time;
+    CGPoint resize_requested_location;
+    uint64_t resize_requested_time;
     struct window *window;
     CGRect window_frame;
+    CGRect resize_requested_frame;
     uint32_t ffm_window_id;
     uint8_t direction;
     struct window_node *feedback_node;
@@ -111,6 +113,7 @@ static char *mouse_mode_str[] =
     [MOUSE_MODE_STACK]  = "stack"
 };
 
+void mouse_window_info_populate_frame(struct mouse_state *ms, CGRect frame, struct mouse_window_info *info);
 void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info);
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point);
 void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, struct window *src_window, struct view *dst_view, struct window *dst_window);

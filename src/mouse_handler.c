@@ -168,10 +168,8 @@ static MOUSE_HANDLER(mouse_handler)
 }
 #pragma clang diagnostic pop
 
-void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info)
+void mouse_window_info_populate_frame(struct mouse_state *ms, CGRect frame, struct mouse_window_info *info)
 {
-    CGRect frame = ms->window->frame;
-
     info->dx = frame.origin.x    - ms->window_frame.origin.x;
     info->dy = frame.origin.y    - ms->window_frame.origin.y;
     info->dw = frame.size.width  - ms->window_frame.size.width;
@@ -184,6 +182,11 @@ void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info
 
     info->changed_position = info->changed_x || info->changed_y;
     info->changed_size     = info->changed_w || info->changed_h;
+}
+
+void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info)
+{
+    mouse_window_info_populate_frame(ms, ms->window->frame, info);
 }
 
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point)
