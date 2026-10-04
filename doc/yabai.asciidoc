@@ -180,6 +180,8 @@ Numeric fields are:
 * `menubar_opacity`: `0...1`;
 * `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
 * `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `insert_feedback_radius`: finite display points greater than or equal to zero, default 9;
+* `insert_feedback_width`: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
 * `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`: mathematical integer `INT_MIN...INT_MAX`;
 * `accordion_padding`: mathematical integer `0...INT_MAX`, default 30 display points;
 * `split_ratio`: `0.1...0.9`.
@@ -480,6 +482,13 @@ Global Settings
 *insert_feedback_color* ['0xAARRGGBB']::
     Color of the *window --insert* message and mouse_drag selection. +
     The purpose is to provide a visual preview of the new window frame.
+
+*insert_feedback_radius* ['float']::
+    Corner radius in display points for insert feedback. Must be finite and greater than or equal to zero. (default: 9)
+
+*insert_feedback_width* ['float']::
+    Stroke width in display points for insert feedback. Must be finite and greater than zero. +
+    Rendering clamps the width to half the shorter feedback-frame dimension. (default: 2)
 
 *split_ratio* ['<FLOAT_SEL>']::
     Specify the size distribution when a window is split.

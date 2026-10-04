@@ -279,6 +279,20 @@ struct view
 #define view_clear_flag(v, x) ((v)->flags &= ~(x))
 #define view_set_flag(v, x)   ((v)->flags |=  (x))
 
+struct insert_feedback_geometry {
+    CGFloat stroke_width;
+    CGFloat corner_radius_x;
+    CGFloat corner_radius_y;
+    CGFloat fill_radius_x;
+    CGFloat fill_radius_y;
+    CGRect stroke_rect;
+    CGRect fill_rect;
+};
+struct insert_feedback_geometry insert_feedback_geometry_make(CGRect frame, float configured_width, float configured_radius);
+void insert_feedback_refresh_all(void);
+#ifdef TESTS
+void insert_feedback_refresh_all_with(void (*refresh)(struct window_node *));
+#endif
 void insert_feedback_show(struct window_node *node);
 void insert_feedback_destroy(struct window_node *node);
 void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id);

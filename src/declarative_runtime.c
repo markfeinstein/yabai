@@ -104,6 +104,7 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .set_menubar_opacity = declarative_operation_set_menubar_opacity, \
     .set_active_window_opacity = declarative_operation_set_active_opacity, \
     .set_normal_window_opacity = declarative_operation_set_normal_opacity, \
+    .refresh_insert_feedback = insert_feedback_refresh_all, \
     .set_shadow = declarative_operation_set_shadow, \
     .set_menu_enabled = declarative_operation_set_menu_enabled, \
     .set_menu_style = declarative_operation_set_menu_style, \
@@ -211,6 +212,8 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return value->real > 0.0f && value->real <= 1.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return value->u32 != 0;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return value->real >= 0.0f && isfinite(value->real);
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return value->real > 0.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_LAYOUT: return value->enumeration >= VIEW_BSP && value->enumeration <= VIEW_ACCORDION_VERTICAL;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: return value->integer >= 0;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return value->real >= 0.1f && value->real <= 0.9f && isfinite(value->real);
@@ -282,7 +285,18 @@ enum declarative_apply_result declarative_apply_runtime_setting(enum declarative
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: declarative_runtime_operation_ops.set_menubar_opacity(&g_window_manager, value->real); break;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: declarative_runtime_operation_ops.set_active_window_opacity(&g_window_manager, value->real); break;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: declarative_runtime_operation_ops.set_normal_window_opacity(&g_window_manager, value->real); break;
-    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: g_window_manager.insert_feedback_color = rgba_color_from_hex(value->u32); break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR:
+        g_window_manager.insert_feedback_color = rgba_color_from_hex(value->u32);
+        declarative_runtime_operation_ops.refresh_insert_feedback();
+        break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS:
+        g_window_manager.insert_feedback_radius = value->real;
+        declarative_runtime_operation_ops.refresh_insert_feedback();
+        break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH:
+        g_window_manager.insert_feedback_width = value->real;
+        declarative_runtime_operation_ops.refresh_insert_feedback();
+        break;
     case DECLARATIVE_CONFIG_TOP_PADDING:
         if (view) { view_set_flag(view, VIEW_TOP_PADDING); view->top_padding = value->integer; declarative_runtime_operation_ops.update_and_flush_space(view); }
         else declarative_runtime_operation_ops.set_global_space_geometry(&g_space_manager, id, value->integer);

@@ -1681,6 +1681,26 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
+        } else if (token_equals(command, COMMAND_CONFIG_INSERT_FEEDBACK_RADIUS)) {
+            struct token_value value = token_to_value(get_token(&message));
+            float real;
+            if (value.type == TOKEN_TYPE_INVALID) {
+                fprintf(rsp, "%.9g\n", g_window_manager.insert_feedback_radius);
+            } else if (token_value_to_float(value, &real) && real >= 0.0f && isfinite(real)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, &(struct declarative_value) { .present = true, .real = real }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_INSERT_FEEDBACK_WIDTH)) {
+            struct token_value value = token_to_value(get_token(&message));
+            float real;
+            if (value.type == TOKEN_TYPE_INVALID) {
+                fprintf(rsp, "%.9g\n", g_window_manager.insert_feedback_width);
+            } else if (token_value_to_float(value, &real) && real > 0.0f && isfinite(real)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &(struct declarative_value) { .present = true, .real = real }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
         } else if (token_equals(command, COMMAND_CONFIG_TOP_PADDING)) {
             struct token_value value = token_to_value(get_token(&message));
             if (sel_sid) {

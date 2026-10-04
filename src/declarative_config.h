@@ -41,6 +41,8 @@
     X(ACTIVE_WINDOW_OPACITY, COMMAND_CONFIG_ACTIVE_WINDOW_OPACITY, "active_window_opacity",         FLOAT,      GLOBAL, POSITIVE_UNIT,    ACTIVE_WINDOW_OPACITY) \
     X(NORMAL_WINDOW_OPACITY, COMMAND_CONFIG_NORMAL_WINDOW_OPACITY, "normal_window_opacity",         FLOAT,      GLOBAL, POSITIVE_UNIT,    NORMAL_WINDOW_OPACITY) \
     X(INSERT_FEEDBACK_COLOR, COMMAND_CONFIG_INSERT_FEEDBACK_COLOR, "insert_feedback_color",         UINT,       GLOBAL, NONZERO_U32,      INSERT_FEEDBACK_COLOR) \
+    X(INSERT_FEEDBACK_RADIUS, COMMAND_CONFIG_INSERT_FEEDBACK_RADIUS, "insert_feedback_radius",       FLOAT,      GLOBAL, NONNEGATIVE,      INSERT_FEEDBACK_RADIUS) \
+    X(INSERT_FEEDBACK_WIDTH, COMMAND_CONFIG_INSERT_FEEDBACK_WIDTH, "insert_feedback_width",          FLOAT,      GLOBAL, POSITIVE,         INSERT_FEEDBACK_WIDTH) \
     X(TOP_PADDING,           COMMAND_CONFIG_TOP_PADDING,           "top_padding",                   INT,        SPACE,  INT,              TOP_PADDING) \
     X(BOTTOM_PADDING,        COMMAND_CONFIG_BOTTOM_PADDING,        "bottom_padding",                INT,        SPACE,  INT,              BOTTOM_PADDING) \
     X(LEFT_PADDING,          COMMAND_CONFIG_LEFT_PADDING,          "left_padding",                  INT,        SPACE,  INT,              LEFT_PADDING) \

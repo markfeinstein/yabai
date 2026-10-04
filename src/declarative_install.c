@@ -148,6 +148,8 @@ static bool declarative_install_window_manager_init(struct window_manager *wm)
     wm->normal_window_opacity = 1.0f;
     wm->window_animation_easing = ease_out_circ_type;
     wm->insert_feedback_color = rgba_color_from_hex(0xffd75f5f);
+    wm->insert_feedback_radius = INSERT_FEEDBACK_RADIUS_DEFAULT;
+    wm->insert_feedback_width = INSERT_FEEDBACK_WIDTH_DEFAULT;
     if (!declarative_install_table_init(&wm->application, 150, hash_wm, compare_wm) ||
         !declarative_install_table_init(&wm->window, 150, hash_wm, compare_wm) ||
         !declarative_install_table_init(&wm->managed_window, 150, hash_wm, compare_wm) ||
@@ -274,6 +276,8 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: wm->active_window_opacity = value->real; break;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: wm->normal_window_opacity = value->real; break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: wm->insert_feedback_color = rgba_color_from_hex(value->u32); break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: wm->insert_feedback_radius = value->real; break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: wm->insert_feedback_width = value->real; break;
     case DECLARATIVE_CONFIG_TOP_PADDING: sm->top_padding = value->integer; break;
     case DECLARATIVE_CONFIG_BOTTOM_PADDING: sm->bottom_padding = value->integer; break;
     case DECLARATIVE_CONFIG_LEFT_PADDING: sm->left_padding = value->integer; break;
@@ -450,6 +454,8 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     destination->window_animation_duration = source->window_animation_duration;
     destination->window_animation_easing = source->window_animation_easing;
     destination->insert_feedback_color = source->insert_feedback_color;
+    destination->insert_feedback_radius = source->insert_feedback_radius;
+    destination->insert_feedback_width = source->insert_feedback_width;
     destination->scratchpad_window = source->scratchpad_window;
     memset(source, 0, sizeof(*source));
 }
@@ -528,6 +534,7 @@ struct declarative_reload_ops
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     const struct declarative_space_postcommit_ops *postcommit_ops;
+    void (*refresh_insert_feedback)(void *context);
     void (*postcommit_probe)(bool committed, void *context);
     void *context;
 };
@@ -595,6 +602,12 @@ static bool declarative_reload_window_is_eligible(struct window *window, void *c
     return window && window_manager_should_manage_window(window);
 }
 
+static void declarative_reload_refresh_insert_feedback(void *context)
+{
+    (void) context;
+    insert_feedback_refresh_all();
+}
+
 static void declarative_reload_apply_scalars(const struct declarative_startup_bundle *bundle)
 {
     const struct window_manager *wm = &bundle->window_manager;
@@ -613,6 +626,8 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     g_window_manager.window_animation_duration = wm->window_animation_duration;
     g_window_manager.window_animation_easing = wm->window_animation_easing;
     g_window_manager.insert_feedback_color = wm->insert_feedback_color;
+    g_window_manager.insert_feedback_radius = wm->insert_feedback_radius;
+    g_window_manager.insert_feedback_width = wm->insert_feedback_width;
 
     g_space_manager.layout = bundle->space_manager.layout;
     g_space_manager.top_padding = bundle->space_manager.top_padding;
@@ -1051,6 +1066,7 @@ static bool declarative_config_reload_with_ops(FILE *response,
         if (transaction.previous_normal_opacity != g_window_manager.normal_window_opacity) {
             window_manager_set_normal_window_opacity(&g_window_manager, g_window_manager.normal_window_opacity);
         }
+        if (ops->refresh_insert_feedback) ops->refresh_insert_feedback(ops->context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_TOPOLOGY);
     }
     if (ops->postcommit_probe) ops->postcommit_probe(result, ops->context);
@@ -1070,7 +1086,8 @@ bool declarative_config_reload(FILE *response)
         .capture_topology = declarative_reload_capture_topology_system,
         .query_sid = declarative_reload_query_sid,
         .find_window = declarative_reload_find_window,
-        .is_eligible = declarative_reload_window_is_eligible
+        .is_eligible = declarative_reload_window_is_eligible,
+        .refresh_insert_feedback = declarative_reload_refresh_insert_feedback
     };
     return declarative_config_reload_with_ops(response, &ops);
 }
@@ -1091,6 +1108,7 @@ static struct declarative_reload_ops declarative_reload_ops_from_test(
         .find_window = test_ops->find_window,
         .is_eligible = test_ops->is_eligible,
         .postcommit_ops = test_ops->postcommit_ops,
+        .refresh_insert_feedback = test_ops->refresh_insert_feedback,
         .postcommit_probe = test_ops->postcommit_probe,
         .context = test_ops->context
     };

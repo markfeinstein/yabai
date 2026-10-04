@@ -4,8 +4,54 @@ extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
 
-#define INSERT_FEEDBACK_WIDTH 2
-#define INSERT_FEEDBACK_RADIUS 9
+struct insert_feedback_geometry insert_feedback_geometry_make(CGRect frame, float configured_width, float configured_radius)
+{
+    frame.size.width = fmax(0.0, frame.size.width);
+    frame.size.height = fmax(0.0, frame.size.height);
+    CGFloat minimum_dimension = fmin(frame.size.width, frame.size.height);
+    CGFloat stroke_width = fmin((CGFloat) configured_width, 0.5 * minimum_dimension);
+    CGFloat radius_inset = 0.5 * stroke_width;
+    CGRect stroke_rect = CGRectInset(frame, radius_inset, radius_inset);
+    CGRect fill_rect = CGRectInset(stroke_rect, radius_inset, radius_inset);
+    CGFloat corner_radius_x = cgrect_clamp_x_radius(stroke_rect, configured_radius);
+    CGFloat corner_radius_y = cgrect_clamp_y_radius(stroke_rect, configured_radius);
+    return (struct insert_feedback_geometry) {
+        .stroke_width = stroke_width,
+        .corner_radius_x = corner_radius_x,
+        .corner_radius_y = corner_radius_y,
+        .fill_radius_x = cgrect_clamp_x_radius(fill_rect, fmax(0.0, corner_radius_x - radius_inset)),
+        .fill_radius_y = cgrect_clamp_y_radius(fill_rect, fmax(0.0, corner_radius_y - radius_inset)),
+        .stroke_rect = stroke_rect,
+        .fill_rect = fill_rect
+    };
+}
+
+#ifdef TESTS
+void insert_feedback_refresh_all_with(void (*refresh)(struct window_node *))
+#else
+static void insert_feedback_refresh_all_with(void (*refresh)(struct window_node *))
+#endif
+{
+    table_for (struct window_node *node, g_window_manager.insert_feedback, {
+        refresh(node);
+    });
+}
+
+static void insert_feedback_refresh_node(struct window_node *node)
+{
+    if (node->feedback_window.id &&
+        (node->insert_dir == DIR_NORTH || node->insert_dir == DIR_EAST ||
+         node->insert_dir == DIR_SOUTH || node->insert_dir == DIR_WEST ||
+         node->insert_dir == STACK)) {
+        insert_feedback_show(node);
+    }
+}
+
+void insert_feedback_refresh_all(void)
+{
+    insert_feedback_refresh_all_with(insert_feedback_refresh_node);
+}
+
 void insert_feedback_show(struct window_node *node)
 {
     if (node->insert_dir != DIR_NORTH &&
@@ -34,17 +80,6 @@ void insert_feedback_show(struct window_node *node)
         SLSSetWindowLevel(g_connection, node->feedback_window.id, window_level(node->window_order[0]));
         SLSSetWindowSubLevel(g_connection, node->feedback_window.id, window_sub_level(node->window_order[0]));
         node->feedback_window.context = SLWindowContextCreate(g_connection, node->feedback_window.id, 0);
-        CGContextSetLineWidth(node->feedback_window.context, INSERT_FEEDBACK_WIDTH);
-        CGContextSetRGBFillColor(node->feedback_window.context,
-                                   g_window_manager.insert_feedback_color.r,
-                                   g_window_manager.insert_feedback_color.g,
-                                   g_window_manager.insert_feedback_color.b,
-                                   g_window_manager.insert_feedback_color.a*0.25f);
-        CGContextSetRGBStrokeColor(node->feedback_window.context,
-                                   g_window_manager.insert_feedback_color.r,
-                                   g_window_manager.insert_feedback_color.g,
-                                   g_window_manager.insert_feedback_color.b,
-                                   g_window_manager.insert_feedback_color.a);
         SLSDisableUpdate(g_connection);
         CGContextClearRect(node->feedback_window.context, frame);
         CGContextFlush(node->feedback_window.context);
@@ -56,58 +91,76 @@ void insert_feedback_show(struct window_node *node)
         }
     }
 
+    struct insert_feedback_geometry geometry = insert_feedback_geometry_make(frame,
+                                                                              g_window_manager.insert_feedback_width,
+                                                                              g_window_manager.insert_feedback_radius);
+    CGFloat width = geometry.stroke_width;
     CGFloat clip_x, clip_y, clip_w, clip_h;
     CGFloat midx = CGRectGetMidX(frame);
     CGFloat midy = CGRectGetMidY(frame);
 
     switch (node->insert_dir) {
     case DIR_NORTH: {
-        clip_x = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_y = midy - 0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_w = INSERT_FEEDBACK_WIDTH;
-        clip_h = INSERT_FEEDBACK_WIDTH;
+        clip_x = -0.5f * width;
+        clip_y = midy - 0.5f * width;
+        clip_w = width;
+        clip_h = width;
     } break;
     case DIR_EAST: {
-        clip_x = midx - 0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_y = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_w = INSERT_FEEDBACK_WIDTH;
-        clip_h = INSERT_FEEDBACK_WIDTH;
+        clip_x = midx - 0.5f * width;
+        clip_y = -0.5f * width;
+        clip_w = width;
+        clip_h = width;
     } break;
     case DIR_SOUTH: {
-        clip_x = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_y = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_w = INSERT_FEEDBACK_WIDTH;
-        clip_h = -midy + INSERT_FEEDBACK_WIDTH;
+        clip_x = -0.5f * width;
+        clip_y = -0.5f * width;
+        clip_w = width;
+        clip_h = -midy + width;
     } break;
     case DIR_WEST: {
-        clip_x = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_y = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_w = -midx + INSERT_FEEDBACK_WIDTH;
-        clip_h = INSERT_FEEDBACK_WIDTH;
+        clip_x = -0.5f * width;
+        clip_y = -0.5f * width;
+        clip_w = -midx + width;
+        clip_h = width;
     } break;
     case STACK: {
-        clip_x = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_y = -0.5f * INSERT_FEEDBACK_WIDTH;
-        clip_w = INSERT_FEEDBACK_WIDTH;
-        clip_h = INSERT_FEEDBACK_WIDTH;
+        clip_x = -0.5f * width;
+        clip_y = -0.5f * width;
+        clip_w = width;
+        clip_h = width;
     } break;
     }
 
-    CGRect rect = (CGRect) {{ 0.5f*INSERT_FEEDBACK_WIDTH, 0.5f*INSERT_FEEDBACK_WIDTH }, { frame.size.width - INSERT_FEEDBACK_WIDTH, frame.size.height - INSERT_FEEDBACK_WIDTH }};
-    CGRect fill = CGRectInset(rect, 0.5f*INSERT_FEEDBACK_WIDTH, 0.5f*INSERT_FEEDBACK_WIDTH);
+    CGRect rect = geometry.stroke_rect;
+    CGRect fill = geometry.fill_rect;
     CGRect clip = { { rect.origin.x + clip_x, rect.origin.y + clip_y }, { rect.size.width + clip_w, rect.size.height + clip_h } };
-    CGPathRef path = CGPathCreateWithRoundedRect(rect, cgrect_clamp_x_radius(rect, INSERT_FEEDBACK_RADIUS), cgrect_clamp_y_radius(rect, INSERT_FEEDBACK_RADIUS), NULL);
+    CGPathRef path = CGPathCreateWithRoundedRect(rect, geometry.corner_radius_x, geometry.corner_radius_y, NULL);
+    CGPathRef fill_path = CGPathCreateWithRoundedRect(fill, geometry.fill_radius_x, geometry.fill_radius_y, NULL);
 
+    CGContextSetLineWidth(node->feedback_window.context, width);
+    CGContextSetRGBFillColor(node->feedback_window.context,
+                             g_window_manager.insert_feedback_color.r,
+                             g_window_manager.insert_feedback_color.g,
+                             g_window_manager.insert_feedback_color.b,
+                             g_window_manager.insert_feedback_color.a*0.25f);
+    CGContextSetRGBStrokeColor(node->feedback_window.context,
+                               g_window_manager.insert_feedback_color.r,
+                               g_window_manager.insert_feedback_color.g,
+                               g_window_manager.insert_feedback_color.b,
+                               g_window_manager.insert_feedback_color.a);
     SLSDisableUpdate(g_connection);
     SLSSetWindowShape(g_connection, node->feedback_window.id, 0.0f, 0.0f, frame_region);
     CGContextClearRect(node->feedback_window.context, frame);
     CGContextClipToRect(node->feedback_window.context, clip);
-    CGContextFillRect(node->feedback_window.context, fill);
+    CGContextAddPath(node->feedback_window.context, fill_path);
+    CGContextFillPath(node->feedback_window.context);
     CGContextAddPath(node->feedback_window.context, path);
     CGContextStrokePath(node->feedback_window.context);
     CGContextResetClip(node->feedback_window.context);
     CGContextFlush(node->feedback_window.context);
     SLSReenableUpdate(g_connection);
+    CGPathRelease(fill_path);
     CGPathRelease(path);
     CFRelease(frame_region);
 }

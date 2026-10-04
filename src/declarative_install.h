@@ -56,6 +56,7 @@ struct declarative_reload_test_ops
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     const struct declarative_space_postcommit_ops *postcommit_ops;
+    void (*refresh_insert_feedback)(void *context);
     void (*postcommit_probe)(bool committed, void *context);
     void *context;
 };

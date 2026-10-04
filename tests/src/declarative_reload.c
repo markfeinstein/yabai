@@ -14,6 +14,7 @@ struct declarative_reload_fixture
     size_t postcommit_calls;
     size_t postcommit_failures;
     size_t probe_calls;
+    size_t refresh_calls;
     struct declarative_space_postcommit_ops postcommit_ops;
     uint32_t wids[4];
     struct window windows[4];
@@ -125,6 +126,11 @@ static bool declarative_reload_test_postcommit_feedback(struct window_node *node
     return !fixture->postcommit_fail;
 }
 
+static void declarative_reload_test_refresh_insert_feedback(void *context)
+{
+    ++((struct declarative_reload_fixture *) context)->refresh_calls;
+}
+
 static void declarative_reload_test_postcommit_probe(bool committed, void *context)
 {
     struct declarative_reload_fixture *fixture = context;
@@ -150,6 +156,7 @@ static struct declarative_reload_test_ops declarative_reload_test_ops(struct dec
         .find_window = declarative_reload_test_find_window,
         .is_eligible = declarative_reload_test_is_eligible,
         .postcommit_ops = &fixture->postcommit_ops,
+        .refresh_insert_feedback = declarative_reload_test_refresh_insert_feedback,
         .postcommit_probe = declarative_reload_test_postcommit_probe,
         .context = fixture
     };
@@ -518,6 +525,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
            stages, allocator_failures);
     TEST_CHECK(stages, (size_t) DECLARATIVE_RELOAD_TEST_STAGE_COUNT - 1);
     TEST_CHECK(allocator_failures, 4U);
+    TEST_CHECK(fixture.refresh_calls, 0U);
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
@@ -525,7 +533,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
 {
     static const char candidate_json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17},"
+        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17,\"insert_feedback_radius\":15,\"insert_feedback_width\":4},"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,"
         "\"match\":{\"app\":{\"pattern\":\"^App$\"}},\"effects\":{\"manage\":true}}]}";
     struct declarative_reload_fixture fixture = {
@@ -581,6 +589,9 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(strcmp(output, "configuration reloaded\n"), 0);
     TEST_CHECK(fixture.probe_calls, 1U);
     TEST_CHECK(fixture.probe_committed, true);
+    TEST_CHECK(fixture.refresh_calls, 1U);
+    TEST_CHECK(g_window_manager.insert_feedback_radius, 15.0f);
+    TEST_CHECK(g_window_manager.insert_feedback_width, 4.0f);
     TEST_CHECK(declarative_installed.generation, old_generation + 1);
     TEST_CHECK(declarative_installed.model != old_model, true);
     TEST_CHECK(declarative_installed.path != old_path, true);
