@@ -1,6 +1,9 @@
 extern struct event_loop g_event_loop;
 extern int g_connection;
 
+static CGRect display_bounds_platform_display_bounds(uint32_t did);
+static CGRect display_bounds_platform_visible_frame(uint32_t did);
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static DISPLAY_EVENT_HANDLER(display_handler)
@@ -65,8 +68,16 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
     if (flags & DISPLAY_PROPERTY_FRAME) {
         if (did_output) fprintf(rsp, ",\n");
 
-        CGRect frame = CGDisplayBounds(did);
+        CGRect frame = display_bounds_platform_display_bounds(did);
         fprintf(rsp, "\t\"frame\":{\n\t\t\"x\":%.4f,\n\t\t\"y\":%.4f,\n\t\t\"w\":%.4f,\n\t\t\"h\":%.4f\n\t}", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+        did_output = true;
+    }
+
+    if (flags & DISPLAY_PROPERTY_VISIBLE_FRAME) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        CGRect frame = display_bounds_platform_visible_frame(did);
+        fprintf(rsp, "\t\"visible-frame\":{\n\t\t\"x\":%.4f,\n\t\t\"y\":%.4f,\n\t\t\"w\":%.4f,\n\t\t\"h\":%.4f\n\t}", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
         did_output = true;
     }
 
@@ -172,6 +183,7 @@ static CGRect display_bounds_apply_constraints(CGRect frame, uint32_t did, uint3
 struct display_bounds_platform_ops
 {
     CGRect (*display_bounds)(uint32_t did, void *context);
+    CGRect (*visible_frame)(uint32_t did, CGRect display_bounds, void *context);
     uint32_t (*main_display_id)(void *context);
     bool (*menu_bar_hidden)(void *context);
     int (*notch_height)(uint32_t did, void *context);
@@ -191,6 +203,15 @@ static CGRect display_bounds_platform_display_bounds(uint32_t did)
     if (display_bounds_test_ops.display_bounds) return display_bounds_test_ops.display_bounds(did, display_bounds_test_ops.context);
 #endif
     return CGDisplayBounds(did);
+}
+
+static CGRect display_bounds_platform_visible_frame(uint32_t did)
+{
+    CGRect display_bounds = display_bounds_platform_display_bounds(did);
+#ifdef TESTS
+    if (display_bounds_test_ops.visible_frame) return display_bounds_test_ops.visible_frame(did, display_bounds, display_bounds_test_ops.context);
+#endif
+    return workspace_display_visible_frame(did, display_bounds);
 }
 
 static uint32_t display_bounds_platform_main_display_id(void)

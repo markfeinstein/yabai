@@ -783,10 +783,18 @@ DISPLAY
         "w": number,
         "h": number
     },
+    "visible-frame": object {
+        "x": number,
+        "y": number,
+        "w": number,
+        "h": number
+    },
     "spaces": array of number,
     "has-focus": bool
 }
 ----
+
+The display `frame` is the full display bounds. The `visible-frame` excludes the system menu bar or notch and the Dock, matching `NSScreen.visibleFrame`; it does not exclude yabai's configured external bar.
 
 SPACE
 [subs=+macros]

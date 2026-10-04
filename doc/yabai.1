@@ -1487,12 +1487,20 @@ DISPLAY
         "w": number,
         "h": number
     },
+    "visible\-frame": object {
+        "x": number,
+        "y": number,
+        "w": number,
+        "h": number
+    },
     "spaces": array of number,
     "has\-focus": bool
 }
 .fam
 .fi
 .if n .RE
+.sp
+The display \f(CRframe\fP is the full display bounds. The \f(CRvisible\-frame\fP excludes the system menu bar or notch and the Dock, matching \f(CRNSScreen.visibleFrame\fP; it does not exclude yabai's configured external bar.
 .sp
 SPACE
 .sp

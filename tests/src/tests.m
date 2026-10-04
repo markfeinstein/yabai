@@ -34,6 +34,7 @@ typedef TEST_SIG(function);
 } while (0)
 
 #include "area.c"
+#include "display.c"
 #include "window.c"
 #include "view.c"
 #include "accordion.c"
@@ -1661,6 +1662,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 #define TEST_LIST                                              \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
+    TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \
+    TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
+    TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
