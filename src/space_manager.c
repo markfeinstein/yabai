@@ -1179,8 +1179,7 @@ bool space_manager_refresh_application_windows(struct space_manager *sm)
         event_loop_process_application_windows(created_windows, created_count);
         buf_free(created_windows);
         if (result) {
-            --refresh_count;
-            if (refresh_count) g_window_manager.application_refresh_cursor %= refresh_count;
+            refresh_count = buf_len(g_window_manager.applications_to_refresh);
         } else {
             g_window_manager.application_refresh_cursor = (index + 1) % refresh_count;
             ++visited;

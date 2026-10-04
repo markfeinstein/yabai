@@ -25,6 +25,8 @@ struct declarative_reload_fixture
     bool query_fail;
     bool postcommit_fail;
     bool probe_committed;
+    struct declarative_topology_bounds_config captured_bounds[64];
+    size_t captured_bounds_count;
 };
 
 struct declarative_reload_saved_state
@@ -64,9 +66,11 @@ static bool declarative_reload_test_capture_topology(const struct declarative_to
                                                      struct declarative_topology *topology,
                                                      void *context)
 {
-    (void) bounds;
     struct declarative_reload_fixture *fixture = context;
     ++fixture->topology_calls;
+    if (bounds && fixture->captured_bounds_count < array_count(fixture->captured_bounds)) {
+        fixture->captured_bounds[fixture->captured_bounds_count++] = *bounds;
+    }
     if (fixture->mutate_topology_at_call) {
         if (fixture->topology_calls >= fixture->mutate_topology_at_call) {
             fixture->topology.replacement_uuid_sid = fixture->mutate_uuid_sid;
@@ -806,6 +810,122 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
 
+static size_t declarative_reload_match_calls_before_publish;
+static bool declarative_reload_mutate_refresh_cursor;
+static void declarative_reload_refresh_prepublication_hook(void)
+{
+    declarative_reload_match_calls_before_publish = rule_test_reservation_match_calls();
+    if (declarative_reload_mutate_refresh_cursor) ++g_window_manager.application_refresh_cursor;
+}
+
+TEST_FUNC(declarative_reload_reserves_fresh_native_one_shots_for_pending_refreshes,
+{
+    static const char json[] =
+        "{\"version\":1,\"rules\":["
+        "{\"label\":\"alpha-once\",\"one_shot\":true,\"match\":{\"app\":{\"pattern\":\"^Alpha$\"}}},"
+        "{\"label\":\"beta-once\",\"one_shot\":true,\"match\":{\"app\":{\"pattern\":\"^Beta$\"}}}]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/reload-refresh-rules.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    struct application alpha = { .pid = 501, .name = "Alpha", .launch_refresh = true };
+    struct application beta = { .pid = 502, .name = "Beta", .launch_refresh = true };
+    struct application stale = { .pid = 503, .name = "Alpha", .launch_refresh = true };
+    window_manager_add_application(&g_window_manager, &alpha);
+    window_manager_add_application(&g_window_manager, &beta);
+    buf_push(g_window_manager.applications_to_refresh, &alpha);
+    buf_push(g_window_manager.applications_to_refresh, &alpha);
+    buf_push(g_window_manager.applications_to_refresh, &stale);
+    buf_push(g_window_manager.applications_to_refresh, &beta);
+
+    g_window_manager.application_refresh_cursor = 1;
+    struct rule runtime_once = {
+        .label = strdup("runtime-refresh-once"),
+        .flags = RULE_ONE_SHOT | RULE_APP_VALID,
+        .one_shot_owner_pid = beta.pid,
+        .one_shot_owner_psn_high = (uint32_t) beta.psn.highLongOfPSN,
+        .one_shot_owner_psn_low = (uint32_t) beta.psn.lowLongOfPSN
+    };
+    TEST_CHECK(regcomp(&runtime_once.app_regex, "^Beta$", REG_EXTENDED | REG_NOSUB), 0);
+    TEST_CHECK(rule_add(&runtime_once), RULE_ADD_OK);
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    struct rule *old_rules = g_window_manager.rules;
+    size_t old_native_count = rule_native_prefix_length();
+    uint64_t old_generation = declarative_installed.generation;
+    uint64_t sid = 11;
+    struct view *old_view = table_find(&g_space_manager.view, &sid);
+    struct window_node *old_root = old_view ? old_view->root : NULL;
+    declarative_reload_test_fail_stage(DECLARATIVE_RELOAD_TEST_STAGE_RULE_BUFFER);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(g_window_manager.rules, old_rules);
+    TEST_CHECK(rule_native_prefix_length(), old_native_count);
+    declarative_reload_test_fail_stage(DECLARATIVE_RELOAD_TEST_STAGE_NONE);
+
+    rule_test_fail_reservation_allocation_at(1);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(declarative_installed.generation, old_generation);
+    TEST_CHECK(g_window_manager.rules, old_rules);
+    TEST_CHECK(old_view ? old_view->root : NULL, old_root);
+    rule_test_fail_reservation_allocation_at(0);
+
+    rule_test_set_reservation_match_result(REG_ESPACE);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(rule_test_reservation_match_calls() > 0, true);
+    TEST_CHECK(declarative_installed.generation, old_generation);
+    TEST_CHECK(g_window_manager.rules, old_rules);
+    TEST_CHECK(old_view ? old_view->root : NULL, old_root);
+    rule_test_set_reservation_match_result(-1);
+
+    declarative_reload_test_set_prepublication_hook(declarative_reload_refresh_prepublication_hook);
+    declarative_reload_mutate_refresh_cursor = true;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(declarative_installed.generation, old_generation);
+    TEST_CHECK(g_window_manager.rules, old_rules);
+    TEST_CHECK(old_view ? old_view->root : NULL, old_root);
+    --g_window_manager.application_refresh_cursor;
+    declarative_reload_mutate_refresh_cursor = false;
+
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(rule_test_reservation_match_calls(), declarative_reload_match_calls_before_publish);
+    declarative_reload_test_set_prepublication_hook(NULL);
+    TEST_CHECK(rule_native_prefix_length(), 2U);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, alpha.pid);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, beta.pid);
+    TEST_CHECK(g_window_manager.rules[2].one_shot_owner_pid, beta.pid);
+    TEST_CHECK(strcmp(g_window_manager.rules[2].label, "runtime-refresh-once"), 0);
+
+    struct window alpha_window = { .id = 7001, .application = &alpha };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &alpha_window,
+                                         "Alpha", "AXWindow", "AXStandardWindow", true, alpha.pid);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, alpha_window.id);
+    rule_cleanup_consumed_one_shots(&alpha);
+    TEST_CHECK(rule_native_prefix_length(), 1U);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, beta.pid);
+    beta.launch_refresh = false;
+    rule_finalize_one_shots(&beta);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_owner_pid, 0);
+    struct application ordinary = { .pid = 504, .psn = { 4, 4 }, .name = "Alpha" };
+    struct window nonmatch = { .id = 7002, .application = &ordinary };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &nonmatch,
+                                         "Alpha", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, 0U);
+    struct application later_beta = { .pid = 505, .psn = { 5, 5 }, .name = "Beta" };
+    struct window matching = { .id = 7003, .application = &later_beta };
+    window_manager_apply_rules_to_window(&g_space_manager, &g_window_manager, &matching,
+                                         "Beta", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(g_window_manager.rules[0].one_shot_window_id, matching.id);
+    rule_cleanup_one_shots();
+    TEST_CHECK(rule_native_prefix_length(), 0U);
+    TEST_CHECK(buf_len(g_window_manager.rules), 0);
+
+    window_manager_remove_application(&g_window_manager, alpha.pid);
+    window_manager_remove_application(&g_window_manager, beta.pid);
+    buf_free(g_window_manager.applications_to_refresh);
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
 TEST_FUNC(declarative_reconcile_refreshes_stale_rule_context_without_retargeting,
 {
     static const char candidate_json[] =
@@ -1141,6 +1261,57 @@ TEST_FUNC(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_li
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 })
+
+TEST_FUNC(declarative_preserve_runtime_topology_uses_effective_external_bar,
+{
+    static const char json[] =
+        "{\"version\":2,\"config\":{\"external_bar\":{\"mode\":\"all\","
+        "\"top_padding\":3,\"bottom_padding\":4}},"
+        "\"modes\":[{\"name\":\"work\",\"spaces\":[]}],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = { .json = json, .path = "/tmp/effective-bar.jsonc" };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(fixture.captured_bounds_count, 1U);
+    TEST_CHECK(fixture.captured_bounds[0].external_bar_mode, EXTERNAL_BAR_ALL);
+    TEST_CHECK(fixture.captured_bounds[0].external_bar_top_padding, 3);
+    TEST_CHECK(fixture.captured_bounds[0].external_bar_bottom_padding, 4);
+
+    declarative_reload_test_set_message_ops(&ops);
+    g_display_manager.mode = EXTERNAL_BAR_MAIN;
+    g_display_manager.top_padding = 17;
+    g_display_manager.bottom_padding = 19;
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_EXTERNAL_BAR] =
+        (struct declarative_runtime_cell) {
+            .present = true, .source = DECLARATIVE_SETTING_RUNTIME_GLOBAL,
+            .value.external_bar = { .mode = EXTERNAL_BAR_MAIN,
+                                    .top_padding = 17, .bottom_padding = 19 }
+        };
+    size_t preserve_start = 1;
+    struct declarative_mode_worker_context activate = { .name = "work", .activate = true };
+    TEST_CHECK(declarative_mode_run(&activate), true);
+    TEST_CHECK(activate.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    struct declarative_mode_worker_context deactivate = { .activate = false };
+    TEST_CHECK(declarative_mode_run(&deactivate), true);
+    TEST_CHECK(deactivate.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(fixture.captured_bounds_count > preserve_start, true);
+    for (size_t i = preserve_start; i < fixture.captured_bounds_count; ++i) {
+        TEST_CHECK(fixture.captured_bounds[i].external_bar_mode, EXTERNAL_BAR_MAIN);
+        TEST_CHECK(fixture.captured_bounds[i].external_bar_top_padding, 17);
+        TEST_CHECK(fixture.captured_bounds[i].external_bar_bottom_padding, 19);
+    }
+    TEST_CHECK(g_display_manager.mode, EXTERNAL_BAR_MAIN);
+    TEST_CHECK(g_display_manager.top_padding, 17);
+    TEST_CHECK(g_display_manager.bottom_padding, 19);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_EXTERNAL_BAR].present, true);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
 
 TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
 {

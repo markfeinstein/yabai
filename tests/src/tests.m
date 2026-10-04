@@ -1887,8 +1887,13 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
     TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
     TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \
+    TEST_ENTRY(inactive_space_launch_refresh_cursor_tracks_swap_deleted_identity) \
     TEST_ENTRY(inactive_space_launch_global_probe_budget_round_robins_queue) \
     TEST_ENTRY(inactive_space_launch_retry_survives_finalization_and_rejects_stale_pid_reuse) \
+    TEST_ENTRY(inactive_space_launch_window_creation_defers_all_rule_effects_until_retry) \
+    TEST_ENTRY(inactive_space_launch_unreserved_one_shots_preserve_ordinary_semantics) \
+    TEST_ENTRY(inactive_space_launch_initial_reservation_failures_are_atomic_and_retried) \
+    TEST_ENTRY(inactive_space_launch_one_shot_handoff_is_cursor_ordered_and_psn_stable) \
     TEST_ENTRY(inactive_space_launch_termination_cancels_reservation_and_real_queue_entry) \
     TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
     TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
@@ -2148,9 +2153,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reconcile_omits_floating_windows_from_published_management) \
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
+    TEST_ENTRY(declarative_reload_reserves_fresh_native_one_shots_for_pending_refreshes) \
     TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
     TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
     TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
+    TEST_ENTRY(declarative_preserve_runtime_topology_uses_effective_external_bar) \
     TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
     TEST_ENTRY(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile) \
     TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \

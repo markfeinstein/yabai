@@ -115,6 +115,8 @@ struct rule
     struct declarative_space_identity space_identity;
     struct rule_warning_state *warning_state;
     int one_shot_owner_pid;
+    uint32_t one_shot_owner_psn_high;
+    uint32_t one_shot_owner_psn_low;
     uint32_t one_shot_window_id;
 };
 
@@ -144,11 +146,20 @@ void rule_native_generation_clear(void);
 uint64_t rule_native_generation(void);
 size_t rule_native_prefix_length(void);
 bool rule_native_label_is_protected(const char *label);
-void rule_reserve_one_shots(struct application *application);
-void rule_finalize_one_shots(struct application *application);
-void rule_cancel_one_shots(struct application *application);
+bool rule_reserve_one_shots_in_buffer(struct rule *rules, size_t count, struct application *application);
+bool rule_reserve_one_shots(struct application *application);
+bool rule_retry_pending_one_shots(void);
+bool rule_one_shot_reassignment_is_pending(void);
+bool rule_finalize_one_shots(struct application *application);
+bool rule_cancel_one_shots(struct application *application);
 void rule_cleanup_consumed_one_shots(struct application *application);
 void rule_cleanup_one_shots(void);
+#ifdef TESTS
+void rule_test_set_reservation_match_result(int result);
+void rule_test_fail_reservation_match_at(size_t ordinal, int result);
+void rule_test_fail_reservation_allocation_at(size_t ordinal);
+size_t rule_test_reservation_match_calls(void);
+#endif
 enum rule_add_result rule_add(struct rule *rule);
 enum rule_remove_result rule_remove_by_index(int index);
 enum rule_remove_result rule_remove_by_label(char *label);

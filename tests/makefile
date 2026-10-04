@@ -22,3 +22,9 @@ run: build
 	./bin/loader_protocol
 	/bin/sh ./install.sh
 	python3 ./seticon.py
+	@phrase='one active reservation token spanning the queued event and its retry/backoff lifecycle'; \
+		grep -Fq "$$phrase" ../doc/yabai.asciidoc; \
+		grep -Fq "$$phrase" ../doc/yabai.1; \
+		! grep -Fq 'event handler clears the reservation on entry' ../doc/yabai.asciidoc; \
+		! grep -Fq 'event handler clears the reservation on entry' ../doc/yabai.1; \
+		echo 'documentation reconciliation lifecycle parity passed'
