@@ -15,6 +15,7 @@ enum declarative_test_effect {
     DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY,
     DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY,
     DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY,
+    DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH,
     DECLARATIVE_TEST_EFFECT_SHADOW,
     DECLARATIVE_TEST_EFFECT_MENU_ENABLED,
     DECLARATIVE_TEST_EFFECT_MENU_STYLE,
@@ -104,6 +105,7 @@ static void declarative_test_opacity_enabled(void *manager, bool value) { ((stru
 static void declarative_test_menubar_opacity(void *manager, float value) { ((struct window_manager *) manager)->menubar_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY]; }
 static void declarative_test_active_opacity(void *manager, float value) { ((struct window_manager *) manager)->active_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY]; }
 static void declarative_test_normal_opacity(void *manager, float value) { ((struct window_manager *) manager)->normal_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY]; }
+static void declarative_test_refresh_insert_feedback(void) { ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH]; }
 static void declarative_test_shadow(void *manager, int value) { ((struct window_manager *) manager)->purify_mode = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SHADOW]; }
 static void declarative_test_menu_enabled(int value) { g_menu_bar_manager.settings.enabled = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_ENABLED]; }
 static void declarative_test_menu_style(int value) { g_menu_bar_manager.settings.style = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_STYLE]; }
@@ -127,6 +129,7 @@ static const struct declarative_runtime_operation_ops declarative_test_operation
     .set_menubar_opacity = declarative_test_menubar_opacity,
     .set_active_window_opacity = declarative_test_active_opacity,
     .set_normal_window_opacity = declarative_test_normal_opacity,
+    .refresh_insert_feedback = declarative_test_refresh_insert_feedback,
     .set_shadow = declarative_test_shadow,
     .set_menu_enabled = declarative_test_menu_enabled,
     .set_menu_style = declarative_test_menu_style,
@@ -182,7 +185,9 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_MENUBAR_OPACITY, "0.5", "0.5000\n", DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY },
     { DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, "0.8", "0.8000\n", DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY },
     { DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, "0.7", "0.7000\n", DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY },
-    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR, "0xff", "0xff\n", -1 },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR, "0xff", "0xff\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, "12.5", "12.5\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, "3.25", "3.25\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
     { DECLARATIVE_CONFIG_TOP_PADDING, "11", "11\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_BOTTOM_PADDING, "12", "12\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_LEFT_PADDING, "13", "13\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
@@ -280,6 +285,8 @@ static struct declarative_value declarative_test_value(enum declarative_config_i
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: value.real = 0.9f; break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: value.u32 = 1; break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: value.real = 0.0f; break;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: value.real = 0.5f; break;
     case DECLARATIVE_CONFIG_LAYOUT: value.enumeration = VIEW_BSP; break;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: value.real = 0.5f; break;
     case DECLARATIVE_CONFIG_SPLIT_TYPE: value.enumeration = SPLIT_AUTO; break;
@@ -324,8 +331,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_37_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 37);
+TEST_FUNC(declarative_command_matrix_covers_all_39_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 39);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -543,8 +550,8 @@ TEST_FUNC(declarative_scoped_mixed_batch_preflights_before_space_mutation,
     }
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_37_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 37);
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_39_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 39);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
@@ -646,6 +653,12 @@ TEST_FUNC(declarative_runtime_scalar_application_records_ownership_after_success
     struct declarative_value invalid = { .present = true, .real = -1.0f };
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_ANIMATION_DURATION].present, false);
+    struct declarative_value nonfinite = { .present = true, .real = INFINITY };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    nonfinite.real = NAN;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    invalid.real = 0.0f;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
 )
 
 TEST_FUNC(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership,

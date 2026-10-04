@@ -88,6 +88,88 @@ TEST_FUNC(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry,
     }
 });
 
+static size_t insert_feedback_refresh_test_calls;
+static struct window_node *insert_feedback_refresh_test_nodes[2];
+static void insert_feedback_refresh_test_record(struct window_node *node)
+{
+    if (insert_feedback_refresh_test_calls < 2) insert_feedback_refresh_test_nodes[insert_feedback_refresh_test_calls] = node;
+    ++insert_feedback_refresh_test_calls;
+}
+
+TEST_FUNC(insert_feedback_refresh_visits_each_active_node_once,
+{
+    struct table saved = g_window_manager.insert_feedback;
+    memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
+    table_init(&g_window_manager.insert_feedback, 4, hash_wm, compare_wm);
+    struct window_node first = { .window_order = { 101 } };
+    struct window_node second = { .window_order = { 202 } };
+    table_add(&g_window_manager.insert_feedback, &first.window_order[0], &first);
+    table_add(&g_window_manager.insert_feedback, &second.window_order[0], &second);
+    insert_feedback_refresh_test_calls = 0;
+    memset(insert_feedback_refresh_test_nodes, 0, sizeof(insert_feedback_refresh_test_nodes));
+    insert_feedback_refresh_all_with(insert_feedback_refresh_test_record);
+    TEST_CHECK(insert_feedback_refresh_test_calls, 2U);
+    TEST_CHECK((insert_feedback_refresh_test_nodes[0] == &first && insert_feedback_refresh_test_nodes[1] == &second) ||
+               (insert_feedback_refresh_test_nodes[0] == &second && insert_feedback_refresh_test_nodes[1] == &first), true);
+    table_free(&g_window_manager.insert_feedback);
+    g_window_manager.insert_feedback = saved;
+});
+
+TEST_FUNC(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles,
+{
+    TEST_CHECK(INSERT_FEEDBACK_RADIUS_DEFAULT, 9.0f);
+    TEST_CHECK(INSERT_FEEDBACK_WIDTH_DEFAULT, 2.0f);
+    CGRect frame = CGRectMake(0.0, 0.0, 100.0, 40.0);
+    struct insert_feedback_geometry defaults = insert_feedback_geometry_make(frame, INSERT_FEEDBACK_WIDTH_DEFAULT, INSERT_FEEDBACK_RADIUS_DEFAULT);
+    TEST_CHECK(defaults.stroke_width, 2.0);
+    TEST_CHECK(defaults.corner_radius_x, 9.0);
+    TEST_CHECK(defaults.corner_radius_y, 9.0);
+    TEST_CHECK(defaults.fill_radius_x, 8.0);
+    TEST_CHECK(defaults.fill_radius_y, 8.0);
+    TEST_CHECK(defaults.stroke_rect.size.width, 98.0);
+    TEST_CHECK(defaults.stroke_rect.size.height, 38.0);
+    TEST_CHECK(defaults.fill_rect.size.width, 96.0);
+    TEST_CHECK(defaults.fill_rect.size.height, 36.0);
+
+    struct insert_feedback_geometry clamped = insert_feedback_geometry_make(CGRectMake(0.0, 0.0, 8.0, 4.0), 100.0f, 100.0f);
+    TEST_CHECK(clamped.stroke_width, 2.0);
+    TEST_CHECK(clamped.stroke_rect.size.width, 6.0);
+    TEST_CHECK(clamped.stroke_rect.size.height, 2.0);
+    TEST_CHECK(clamped.fill_rect.size.width, 4.0);
+    TEST_CHECK(clamped.fill_rect.size.height, 0.0);
+    TEST_CHECK(clamped.corner_radius_x, 3.0);
+    TEST_CHECK(clamped.corner_radius_y, 1.0);
+    TEST_CHECK(clamped.fill_radius_x, 2.0);
+    TEST_CHECK(clamped.fill_radius_y, 0.0);
+
+    struct insert_feedback_geometry rounded = insert_feedback_geometry_make(CGRectMake(0.0, 0.0, 20.0, 20.0), 2.0f, 100.0f);
+    TEST_CHECK(rounded.corner_radius_x, 9.0);
+    TEST_CHECK(rounded.corner_radius_y, 9.0);
+    TEST_CHECK(rounded.fill_radius_x, 8.0);
+    TEST_CHECK(rounded.fill_radius_y, 8.0);
+    CGPathRef fill_path = CGPathCreateWithRoundedRect(rounded.fill_rect, rounded.fill_radius_x, rounded.fill_radius_y, NULL);
+    TEST_CHECK(CGPathContainsPoint(fill_path, NULL, CGPointMake(rounded.fill_rect.origin.x, rounded.fill_rect.origin.y), false), false);
+    TEST_CHECK(CGPathContainsPoint(fill_path, NULL, CGPointMake(CGRectGetMidX(rounded.fill_rect), CGRectGetMidY(rounded.fill_rect)), false), true);
+    CGPathRelease(fill_path);
+
+    struct insert_feedback_geometry zero = insert_feedback_geometry_make(CGRectMake(3.0, 4.0, 0.0, 0.0), FLT_MAX, FLT_MAX);
+    TEST_CHECK(zero.stroke_width, 0.0);
+    TEST_CHECK(zero.stroke_rect.size.width, 0.0);
+    TEST_CHECK(zero.stroke_rect.size.height, 0.0);
+    TEST_CHECK(zero.fill_rect.size.width, 0.0);
+    TEST_CHECK(zero.fill_rect.size.height, 0.0);
+    TEST_CHECK(zero.corner_radius_x, 0.0);
+    TEST_CHECK(zero.corner_radius_y, 0.0);
+    TEST_CHECK(zero.fill_radius_x, 0.0);
+    TEST_CHECK(zero.fill_radius_y, 0.0);
+
+    struct insert_feedback_geometry negative = insert_feedback_geometry_make(CGRectMake(3.0, 4.0, -8.0, -4.0), 2.0f, 9.0f);
+    TEST_CHECK(negative.stroke_rect.size.width, 0.0);
+    TEST_CHECK(negative.stroke_rect.size.height, 0.0);
+    TEST_CHECK(negative.fill_rect.size.width, 0.0);
+    TEST_CHECK(negative.fill_rect.size.height, 0.0);
+});
+
 TEST_FUNC(view_find_min_depth_leaf_node_handles_complete_tree_boundary,
 {
     struct window_node nodes[257] = {0};

@@ -558,6 +558,28 @@ Numeric fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
+\f(CRinsert_feedback_radius\fP: finite display points greater than or equal to zero, default 9;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRinsert_feedback_width\fP: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
 \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP: mathematical integer \f(CRINT_MIN...INT_MAX\fP;
 .RE
 .sp
@@ -1042,6 +1064,18 @@ for details.
 Color of the \fBwindow \-\-insert\fP message and mouse_drag selection.
 .br
 The purpose is to provide a visual preview of the new window frame.
+.RE
+.sp
+\fBinsert_feedback_radius\fP [\fIfloat\fP]
+.RS 4
+Corner radius in display points for insert feedback. Must be finite and greater than or equal to zero. (default: 9)
+.RE
+.sp
+\fBinsert_feedback_width\fP [\fIfloat\fP]
+.RS 4
+Stroke width in display points for insert feedback. Must be finite and greater than zero.
+.br
+Rendering clamps the width to half the shorter feedback\-frame dimension. (default: 2)
 .RE
 .sp
 \fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]

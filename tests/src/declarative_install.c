@@ -63,6 +63,8 @@ static int declarative_install_test_mutex_destroy_counting(pthread_mutex_t *mute
     X(float, window_animation_duration) \
     X(int, window_animation_easing) \
     X(struct rgba_color, insert_feedback_color) \
+    X(float, insert_feedback_radius) \
+    X(float, insert_feedback_width) \
     X(struct scratchpad *, scratchpad_window)
 
 struct declarative_install_test_window_manager_state
@@ -157,6 +159,8 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: return bundle->window_manager.active_window_opacity == value->real;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return bundle->window_manager.normal_window_opacity == value->real;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return bundle->window_manager.insert_feedback_color.p == value->u32;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return bundle->window_manager.insert_feedback_radius == value->real;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return bundle->window_manager.insert_feedback_width == value->real;
     case DECLARATIVE_CONFIG_TOP_PADDING: return bundle->space_manager.top_padding == value->integer;
     case DECLARATIVE_CONFIG_BOTTOM_PADDING: return bundle->space_manager.bottom_padding == value->integer;
     case DECLARATIVE_CONFIG_LEFT_PADDING: return bundle->space_manager.left_padding == value->integer;

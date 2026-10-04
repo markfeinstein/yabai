@@ -86,6 +86,9 @@ struct scratchpad
     struct window *window;
 };
 
+#define INSERT_FEEDBACK_RADIUS_DEFAULT 9.0f
+#define INSERT_FEEDBACK_WIDTH_DEFAULT 2.0f
+
 struct window_manager
 {
     AXUIElementRef system_element;
@@ -118,6 +121,8 @@ struct window_manager
     float window_animation_duration;
     int window_animation_easing;
     struct rgba_color insert_feedback_color;
+    float insert_feedback_radius;
+    float insert_feedback_width;
     struct scratchpad *scratchpad_window;
 };
 

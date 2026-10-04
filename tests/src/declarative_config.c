@@ -1,5 +1,5 @@
 TEST_FUNC(declarative_inventory_is_canonical,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 37);
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 39);
     TEST_CHECK(DECLARATIVE_RULE_FIELD_COUNT, 17);
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         const char *name = declarative_config_descriptors[i].name;
@@ -281,7 +281,7 @@ TEST_FUNC(declarative_source_positions_handle_cr_and_crlf,
 )
 
 TEST_FUNC(declarative_numeric_field_matrix,
-    struct numeric_case{const char*key;const char*good;const char*bad;}cases[]={{"window_opacity_duration","0","-1"},{"window_animation_duration","0","-1"},{"menubar_opacity","1","1.0001"},{"active_window_opacity","1","0"},{"normal_window_opacity","1","0"},{"insert_feedback_color","4294967295","4294967296"},{"top_padding","-2147483648","-2147483649"},{"bottom_padding","2147483647","2147483648"},{"left_padding","0","0.5"},{"right_padding","0","true"},{"window_gap","0","1e100"},{"accordion_padding","0","-1"},{"split_ratio","0.1","0.099"}};
+    struct numeric_case{const char*key;const char*good;const char*bad;}cases[]={{"window_opacity_duration","0","-1"},{"window_animation_duration","0","-1"},{"menubar_opacity","1","1.0001"},{"active_window_opacity","1","0"},{"normal_window_opacity","1","0"},{"insert_feedback_color","4294967295","4294967296"},{"insert_feedback_radius","0","-1"},{"insert_feedback_width","0.25","0"},{"top_padding","-2147483648","-2147483649"},{"bottom_padding","2147483647","2147483648"},{"left_padding","0","0.5"},{"right_padding","0","true"},{"window_gap","0","1e100"},{"accordion_padding","0","-1"},{"split_ratio","0.1","0.099"}};
     for(size_t i=0;i<sizeof(cases)/sizeof(*cases);++i)for(int valid=0;valid<2;++valid){char json[300];snprintf(json,sizeof(json),"{\"version\":1,\"config\":{\"%s\":%s}}",cases[i].key,valid?cases[i].good:cases[i].bad);struct declarative_config_model*m=NULL;struct declarative_error e={0};TEST_CHECK(declarative_config_parse_bytes((uint8_t*)json,strlen(json),"numeric",&m,&e),valid);declarative_config_destroy(m);}
     double roundable=nextafter((double)FLT_MIN,DBL_MAX);float f=0;TEST_CHECK(declarative_number_to_float(@0.0,true,&f),true);TEST_CHECK(declarative_number_to_float(@0.0,false,&f),false);TEST_CHECK(declarative_number_to_float(@(nextafter((double)FLT_MIN,0.0)),true,&f),false);TEST_CHECK(declarative_number_to_float(@(roundable),true,&f),true);TEST_CHECK(declarative_number_to_float(@((double)FLT_MAX),true,&f),true);TEST_CHECK(declarative_number_to_float(@(nextafter((double)FLT_MAX,DBL_MAX)),true,&f),false);
     int iv=0;uint32_t uv=0;TEST_CHECK(declarative_number_to_int(@((double)INT_MIN),INT_MIN,INT_MAX,&iv),true);TEST_CHECK(declarative_number_to_int(@((double)INT_MAX),INT_MIN,INT_MAX,&iv),true);TEST_CHECK(declarative_number_to_int(@((double)INT_MAX+1.0),INT_MIN,INT_MAX,&iv),false);TEST_CHECK(declarative_number_to_uint(@0.0,0,UINT_MAX,&uv),true);TEST_CHECK(declarative_number_to_uint(@4294967295.0,0,UINT_MAX,&uv),true);
