@@ -297,36 +297,47 @@ static inline bool token_is_valid(struct token token)
 
 static bool token_is_decimal(struct token token)
 {
-    for (int i = 0; i < token.length; ++i) {
+    int start = token.length > 0 && (token.text[0] == '-' || token.text[0] == '+');
+    if (start == token.length) return false;
+
+    for (int i = start; i < token.length; ++i) {
         char c = token.text[i];
-        if (!(c >= '0' && c <= '9')) {
-            return false;
-        }
+        if (!(c >= '0' && c <= '9')) return false;
     }
 
     return token.length > 0;
 }
 
-static bool token_is_positive_integer(struct token token, int *value)
+static bool token_is_integer(struct token token, int *value)
 {
     *value = 0;
+    bool negative = token.length > 0 && token.text[0] == '-';
+    int start = token.length > 0 && (negative || token.text[0] == '+');
+    if (start == token.length) return false;
 
-    for (int i = 0; i < token.length; ++i) {
+    int result = 0;
+    for (int i = start; i < token.length; ++i) {
         char c = token.text[i];
-        if (!(c >= '0' && c <= '9')) {
-            return false;
-        }
+        if (!(c >= '0' && c <= '9')) return false;
 
         int digit = token_char_int_table[(int)c];
-        if (*value > (INT_MAX - digit) / 10) {
-            *value = 0;
-            return false;
+        if (negative) {
+            if (result < (INT_MIN + digit) / 10) return false;
+            result = result * 10 - digit;
+        } else {
+            if (result > (INT_MAX - digit) / 10) return false;
+            result = result * 10 + digit;
         }
-
-        *value = *value * 10 + digit;
     }
 
+    *value = result;
     return true;
+}
+
+static bool token_is_positive_integer(struct token token, int *value)
+{
+    return token_is_integer(token, value) && *value >= 0 &&
+           token.text[0] != '-' && token.text[0] != '+';
 }
 
 static bool token_has_hexadecimal_prefix(struct token token)
@@ -392,7 +403,7 @@ static struct token_value token_to_value(struct token token)
     struct token_value value = { .token = token, .type = TOKEN_TYPE_INVALID };
 
     if (token_is_valid(token)) {
-        if (token_is_positive_integer(token, &value.int_value)) {
+        if (token_is_integer(token, &value.int_value)) {
             value.type = TOKEN_TYPE_INT;
         } else if (token_is_decimal(token)) {
             value.type = TOKEN_TYPE_UNKNOWN;
@@ -677,9 +688,17 @@ static bool parse_rule_opacity(char *text, float *opacity)
     return parse_float_component(&cursor, opacity, '\0') && in_range_ii(*opacity, 0.0f, 1.0f);
 }
 
-static bool token_value_is_nonnegative_float(struct token_value value)
+static bool token_value_to_float(struct token_value value, float *result)
 {
-    return value.type == TOKEN_TYPE_FLOAT && value.float_value >= 0.0f;
+    if (value.type == TOKEN_TYPE_FLOAT) {
+        *result = value.float_value;
+        return true;
+    }
+    if (value.type == TOKEN_TYPE_INT) {
+        *result = (float) value.int_value;
+        return true;
+    }
+    return false;
 }
 
 enum label_type
@@ -851,7 +870,7 @@ static struct selector parse_display_selector(FILE *rsp, char **message, uint32_
     struct selector result = { .token = get_token(message), .did_parse = true };
 
     struct token_value value = token_to_value(result.token);
-    if (value.type == TOKEN_TYPE_INT) {
+    if (value.type == TOKEN_TYPE_INT && value.int_value > 0) {
         uint32_t did = display_manager_arrangement_display_id(value.int_value);
         if (did) {
             result.did = did;
@@ -976,7 +995,7 @@ static struct selector parse_space_selector(FILE *rsp, char **message, uint64_t 
     struct selector result = { .token = get_token(message), .did_parse = true };
 
     struct token_value value = token_to_value(result.token);
-    if (value.type == TOKEN_TYPE_INT) {
+    if (value.type == TOKEN_TYPE_INT && value.int_value > 0) {
         uint64_t sid = space_manager_mission_control_space(value.int_value);
         if (sid) {
             result.sid = sid;
@@ -1057,8 +1076,8 @@ static struct selector parse_window_selector(FILE *rsp, char **message, struct w
     struct selector result = { .token = get_token(message), .did_parse = true };
 
     struct token_value value = token_to_value(result.token);
-    if (value.type == TOKEN_TYPE_INT) {
-        struct window *window = window_manager_find_window(&g_window_manager, value.int_value);
+    if (value.type == TOKEN_TYPE_INT && value.int_value > 0) {
+        struct window *window = window_manager_find_window(&g_window_manager, (uint32_t) value.int_value);
         if (window) {
             result.window = window;
         } else {
@@ -1376,7 +1395,27 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
         command = get_token(&message);
     }
 
+    if (sel_sid) {
+        char *preflight_message = message;
+        for (struct token preflight_command = command; token_is_valid(preflight_command); preflight_command = get_token(&preflight_message)) {
+            int config_id = declarative_config_id_for_name(preflight_command.text, (size_t) preflight_command.length);
+            if (config_id >= 0) {
+                if (declarative_config_descriptors[config_id].scope == DECLARATIVE_SCOPE_GLOBAL) {
+                    daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", preflight_command.length, preflight_command.text, domain.length, domain.text);
+                    return;
+                }
+                get_token(&preflight_message);
+            }
+        }
+    }
+
     for (; token_is_valid(command); command = get_token(&message)) {
+        int config_id = declarative_config_id_for_name(command.text, (size_t) command.length);
+        if (sel_sid && config_id >= 0 && declarative_config_descriptors[config_id].scope == DECLARATIVE_SCOPE_GLOBAL) {
+            daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", command.length, command.text, domain.length, domain.text);
+            return;
+        }
+
         if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
@@ -1445,10 +1484,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_CONFIG_WINDOW_FOCUS_FALLBACK)) {
-            if (sel_sid) {
-                daemon_fail(rsp, "command '%.*s' for domain '%.*s' is global-only.\n", command.length, command.text, domain.length, domain.text);
-                return;
-            }
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", window_focus_fallback_str[g_window_manager.window_focus_fallback]);
@@ -1518,20 +1553,22 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_CONFIG_OPACITY_DURATION)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%f\n", g_window_manager.window_opacity_duration);
-            } else if (token_value_is_nonnegative_float(value) &&
-                       sa_opacity_duration_is_safe(value.float_value)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_OPACITY_DURATION, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && real >= 0.0f &&
+                       sa_opacity_duration_is_safe(real)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_OPACITY_DURATION, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_CONFIG_ANIMATION_DURATION)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%f\n", g_window_manager.window_animation_duration);
-            } else if (token_value_is_nonnegative_float(value)) {
-                enum declarative_apply_result apply_result = declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && real >= 0.0f) {
+                enum declarative_apply_result apply_result = declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &(struct declarative_value) { .present = true, .real = real }, 0);
                 if (apply_result == DECLARATIVE_APPLY_SIP_DENIED) {
                     daemon_fail(rsp, "command '%.*s' for domain '%.*s' requires System Integrity Protection to be partially disabled! ignoring request..\n", command.length, command.text, domain.length, domain.text);
                 } else if (apply_result == DECLARATIVE_APPLY_SCREEN_CAPTURE_DENIED) {
@@ -1607,28 +1644,31 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_OPACITY)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%.4f\n", g_window_manager.menubar_opacity);
-            } else if (value.type == TOKEN_TYPE_FLOAT && in_range_ii(value.float_value, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && in_range_ii(real, 0.0f, 1.0f)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_OPACITY)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%.4f\n", g_window_manager.active_window_opacity);
-            } else if (value.type == TOKEN_TYPE_FLOAT && in_range_ei(value.float_value, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && in_range_ei(real, 0.0f, 1.0f)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_CONFIG_NORMAL_WINDOW_OPACITY)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%.4f\n", g_window_manager.normal_window_opacity);
-            } else if (value.type == TOKEN_TYPE_FLOAT && in_range_ei(value.float_value, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && in_range_ei(real, 0.0f, 1.0f)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1799,10 +1839,11 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_CONFIG_SPLIT_RATIO)) {
             struct token_value value = token_to_value(get_token(&message));
+            float real;
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "%.4f\n", g_space_manager.split_ratio);
-            } else if (value.type == TOKEN_TYPE_FLOAT && in_range_ii(value.float_value, 0.1f, 0.9f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_RATIO, &(struct declarative_value) { .present = true, .real = value.float_value }, 0);
+            } else if (token_value_to_float(value, &real) && in_range_ii(real, 0.1f, 0.9f)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_RATIO, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
@@ -2641,9 +2682,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             }
         } else if (token_equals(command, COMMAND_WINDOW_OPACITY)) {
             struct token_value value = token_to_value(get_token(&message));
-            if (value.type == TOKEN_TYPE_FLOAT && in_range_ii(value.float_value, 0.0f, 1.0f)) {
-                if (window_manager_set_opacity(&g_window_manager, acting_window, value.float_value)) {
-                    acting_window->opacity = value.float_value;
+            float opacity;
+            if (token_value_to_float(value, &opacity) && in_range_ii(opacity, 0.0f, 1.0f)) {
+                if (window_manager_set_opacity(&g_window_manager, acting_window, opacity)) {
+                    acting_window->opacity = opacity;
                 } else {
                     daemon_fail(rsp, "could not change opacity of window with id '%d' due to an error with the scripting-addition.\n", acting_window->id);
                 }
@@ -3119,7 +3161,7 @@ static void handle_domain_rule(FILE *rsp, struct token domain, char *message)
         }
     } else if (token_equals(command, COMMAND_RULE_APPLY)) {
         struct token_value value = token_to_value(get_token(&message));
-        if (value.type == TOKEN_TYPE_INT) {
+        if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
             if (!rule_reapply_by_index(value.int_value, NULL)) {
                 daemon_fail(rsp, "rule with index '%d' not found.\n", value.int_value);
             }
@@ -3138,7 +3180,7 @@ static void handle_domain_rule(FILE *rsp, struct token domain, char *message)
         }
     } else if (token_equals(command, COMMAND_RULE_REM)) {
         struct token_value value = token_to_value(get_token(&message));
-        if (value.type == TOKEN_TYPE_INT) {
+        if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
             enum rule_remove_result remove_result = rule_remove_by_index(value.int_value);
             if (remove_result == RULE_REMOVE_NOT_FOUND) {
                 daemon_fail(rsp, "rule with index '%d' not found.\n", value.int_value);
@@ -3265,7 +3307,7 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
         }
     } else if (token_equals(command, COMMAND_SIGNAL_REM)) {
         struct token_value value = token_to_value(get_token(&message));
-        if (value.type == TOKEN_TYPE_INT) {
+        if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
             if (!event_signal_remove_by_index(value.int_value)) {
                 daemon_fail(rsp, "signal with index '%d' not found.\n", value.int_value);
             }

@@ -261,8 +261,23 @@ TEST_FUNC(message_numeric_token_boundaries,
     TEST_CHECK(value.type, TOKEN_TYPE_INT);
     TEST_CHECK(value.int_value, INT_MAX);
 
+    value = token_to_value(message_test_token("-2147483648"));
+    TEST_CHECK(value.type, TOKEN_TYPE_INT);
+    TEST_CHECK(value.int_value, INT_MIN);
+
     value = token_to_value(message_test_token("2147483648"));
     TEST_CHECK(value.type, TOKEN_TYPE_UNKNOWN);
+    value = token_to_value(message_test_token("-2147483649"));
+    TEST_CHECK(value.type, TOKEN_TYPE_UNKNOWN);
+
+    value = token_to_value(message_test_token("-1"));
+    TEST_CHECK(value.type, TOKEN_TYPE_INT);
+    TEST_CHECK(value.int_value, -1);
+
+    float real;
+    value = token_to_value(message_test_token("1"));
+    TEST_CHECK(token_value_to_float(value, &real), true);
+    TEST_CHECK(real == 1.0f, true);
 
     value = token_to_value(message_test_token("-2.5"));
     TEST_CHECK(value.type, TOKEN_TYPE_FLOAT);
@@ -276,6 +291,38 @@ TEST_FUNC(message_numeric_token_boundaries,
 
     value = token_to_value(message_test_token("1e999"));
     TEST_CHECK(value.type, TOKEN_TYPE_STRING);
+});
+
+TEST_FUNC(event_signal_pool_drops_records_when_full_without_overwriting,
+{
+    enum signal_type type = SIGNAL_DOCK_DID_RESTART;
+    struct memory_pool saved_storage = g_signal_storage;
+    struct signal *saved_signals = g_signal_event[type];
+    size_t record_size = sizeof(struct event_signal);
+    uint64_t sentinel_value = 0xfeedfacecafebeefULL;
+    uint8_t *storage = calloc(1, record_size + sizeof(sentinel_value));
+    TEST_CHECK(storage != NULL, true);
+    if (storage) {
+        memcpy(storage + record_size, &sentinel_value, sizeof(sentinel_value));
+        g_signal_storage = (struct memory_pool) { .memory = storage, .size = record_size, .used = 0 };
+        g_signal_event[type] = NULL;
+        buf_push(g_signal_event[type], ((struct signal) {0}));
+
+        event_signal_push(type, NULL);
+        TEST_CHECK(g_signal_storage.used, record_size);
+        TEST_CHECK(((struct event_signal *) storage)->type, type);
+
+        event_signal_push(type, NULL);
+        TEST_CHECK(g_signal_storage.used, record_size);
+        uint64_t sentinel_after = 0;
+        memcpy(&sentinel_after, storage + record_size, sizeof(sentinel_after));
+        TEST_CHECK(sentinel_after, sentinel_value);
+
+        buf_free(g_signal_event[type]);
+        g_signal_event[type] = saved_signals;
+        g_signal_storage = saved_storage;
+        free(storage);
+    }
 });
 
 TEST_FUNC(message_hexadecimal_token_boundaries,
@@ -298,19 +345,38 @@ TEST_FUNC(message_hexadecimal_token_boundaries,
 
 TEST_FUNC(message_duration_values_must_be_finite_and_nonnegative,
 {
-    struct token_value value = token_to_value(message_test_token("0.25"));
-    TEST_CHECK(token_value_is_nonnegative_float(value), true);
+    float saved_duration = g_window_manager.window_opacity_duration;
+    struct declarative_runtime_cell saved_ownership =
+        g_declarative_runtime_state.global[DECLARATIVE_CONFIG_OPACITY_DURATION];
+    const char *invalid[] = { "-0.25", "nan", "inf", "2147483.75", "2147484" };
 
-    value = token_to_value(message_test_token("-0.25"));
-    TEST_CHECK(token_value_is_nonnegative_float(value), false);
-
-    value = token_to_value(message_test_token("nan"));
-    TEST_CHECK(token_value_is_nonnegative_float(value), false);
+    for (int i = 0; i < array_count(invalid); ++i) {
+        size_t value_length = strlen(invalid[i]);
+        char message[sizeof("window_opacity_duration") + value_length + 2];
+        memset(message, 0, sizeof(message));
+        memcpy(message, "window_opacity_duration", sizeof("window_opacity_duration"));
+        memcpy(message + sizeof("window_opacity_duration"), invalid[i], value_length);
+        FILE *rsp = tmpfile();
+        TEST_CHECK(rsp != NULL, true);
+        if (rsp) {
+            handle_domain_config(rsp, message_test_token("config"), message);
+            rewind(rsp);
+            char output[256] = {0};
+            fread(output, 1, sizeof(output) - 1, rsp);
+            fclose(rsp);
+            char expected[256];
+            snprintf(expected, sizeof(expected), FAILURE_MESSAGE "unknown value '%s' given to command 'window_opacity_duration' for domain 'config'\n", invalid[i]);
+            TEST_CHECK(strcmp(output, expected), 0);
+        }
+        TEST_CHECK(g_window_manager.window_opacity_duration == saved_duration, true);
+        TEST_CHECK(memcmp(&g_declarative_runtime_state.global[DECLARATIVE_CONFIG_OPACITY_DURATION],
+                          &saved_ownership, sizeof(saved_ownership)), 0);
+    }
 
     TEST_CHECK(sa_opacity_duration_is_safe(2147483.5f), true);
     TEST_CHECK(sa_opacity_duration_is_safe(2147483.75f), false);
-    TEST_CHECK(sa_opacity_duration_is_safe(-0.25f), false);
-    TEST_CHECK(sa_opacity_duration_is_safe(INFINITY), false);
+    g_window_manager.window_opacity_duration = saved_duration;
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_OPACITY_DURATION] = saved_ownership;
 });
 
 TEST_FUNC(message_window_grid_numeric_validation,

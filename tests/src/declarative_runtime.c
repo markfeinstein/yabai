@@ -164,7 +164,7 @@ struct declarative_command_case {
 static const struct declarative_command_case declarative_command_cases[DECLARATIVE_CONFIG_COUNT] = {
     { DECLARATIVE_CONFIG_DEBUG_OUTPUT, "on", "on\n", -1 },
     { DECLARATIVE_CONFIG_MFF, "on", "on\n", -1 },
-    { DECLARATIVE_CONFIG_FFM, "off", "disabled\n", DECLARATIVE_TEST_EFFECT_FFM },
+    { DECLARATIVE_CONFIG_FFM, "off", "off\n", DECLARATIVE_TEST_EFFECT_FFM },
     { DECLARATIVE_CONFIG_DISPLAY_ORDER, "horizontal", "horizontal\n", DECLARATIVE_TEST_EFFECT_DISPLAY_DIRTY },
     { DECLARATIVE_CONFIG_WINDOW_ORIGIN, "cursor", "cursor\n", -1 },
     { DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, "recent", "recent\n", -1 },
@@ -239,12 +239,21 @@ static char *declarative_test_run_space_layout_surface(bool config_surface)
     return output;
 }
 
-static char *declarative_test_run_scoped_focus_fallback(void)
+static char *declarative_test_run_scoped_config(const char *command, const char *value)
 {
     char *output = NULL;
     size_t output_length = 0;
     FILE *rsp = open_memstream(&output, &output_length);
-    char message[] = "--space\0recent\0window_focus_fallback\0recent\0";
+    if (!rsp) return NULL;
+    size_t command_length = strlen(command);
+    size_t value_length = value ? strlen(value) : 0;
+    char message[command_length + value_length + 20];
+    memset(message, 0, sizeof(message));
+    char *at = message;
+    memcpy(at, "--space", 7); at += 8;
+    memcpy(at, "recent", 6); at += 7;
+    memcpy(at, command, command_length); at += command_length + 1;
+    if (value) memcpy(at, value, value_length);
     handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
     fclose(rsp);
     return output;
@@ -362,22 +371,176 @@ TEST_FUNC(declarative_command_matrix_covers_all_37_query_invalid_and_mutation_pa
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_window_focus_fallback_scoped_command_rejects_before_mutation,
-    uint64_t saved_last_space_id = g_space_manager.last_space_id;
-    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
-    struct declarative_runtime_cell saved_ownership = g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK];
-    g_space_manager.last_space_id = UINT64_MAX - 60;
-    g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_OFF;
-    memset(&g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK], 0,
-           sizeof(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK]));
-    char *output = declarative_test_run_scoped_focus_fallback();
-    TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'window_focus_fallback' for domain 'config' is global-only.\n"), 0);
-    TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_OFF);
-    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK].present, false);
+TEST_FUNC(focus_follows_mouse_query_is_canonical_and_round_trips,
+    enum ffm_mode saved_mode = g_window_manager.configured_ffm_mode;
+    struct declarative_runtime_cell saved_ownership = g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM];
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED);
+    char *query = declarative_test_run_config("focus_follows_mouse", NULL);
+    TEST_CHECK(strcmp(query, "off\n"), 0);
+    query[strcspn(query, "\n")] = '\0';
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
+    char *output = declarative_test_run_config("focus_follows_mouse", query);
+    TEST_CHECK(strcmp(output, ""), 0);
+    TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_DISABLED);
     free(output);
+    free(query);
+    declarative_runtime_reset_operation_ops();
+    g_window_manager.configured_ffm_mode = saved_mode;
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM] = saved_ownership;
+    window_manager_recompute_effective_ffm_mode(&g_window_manager);
+)
+
+TEST_FUNC(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats,
+    int saved_top_padding = g_space_manager.top_padding;
+    int saved_bottom_padding = g_space_manager.bottom_padding;
+    int saved_window_gap = g_space_manager.window_gap;
+    float saved_opacity_duration = g_window_manager.window_opacity_duration;
+    float saved_animation_duration = g_window_manager.window_animation_duration;
+    float saved_menubar_opacity = g_window_manager.menubar_opacity;
+    float saved_active_opacity = g_window_manager.active_window_opacity;
+    float saved_normal_opacity = g_window_manager.normal_window_opacity;
+    enum declarative_config_id touched_ids[] = {
+        DECLARATIVE_CONFIG_TOP_PADDING, DECLARATIVE_CONFIG_BOTTOM_PADDING,
+        DECLARATIVE_CONFIG_WINDOW_GAP, DECLARATIVE_CONFIG_OPACITY_DURATION,
+        DECLARATIVE_CONFIG_ANIMATION_DURATION, DECLARATIVE_CONFIG_MENUBAR_OPACITY,
+        DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY
+    };
+    struct declarative_runtime_cell saved_cells[array_count(touched_ids)];
+    for (int i = 0; i < array_count(touched_ids); ++i) saved_cells[i] = g_declarative_runtime_state.global[touched_ids[i]];
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_set_animation_permission_ops(&permissions);
+
+    struct { const char *command; const char *value; const char *query; } accepted[] = {
+        { "top_padding", "-2147483648", "-2147483648\n" },
+        { "bottom_padding", "2147483647", "2147483647\n" },
+        { "window_gap", "-1", "-1\n" },
+        { "window_opacity_duration", "0", "0.000000\n" },
+        { "window_animation_duration", "1", "1.000000\n" },
+        { "menubar_opacity", "0", "0.0000\n" },
+        { "active_window_opacity", "1", "1.0000\n" },
+        { "normal_window_opacity", "1", "1.0000\n" },
+    };
+    for (int i = 0; i < array_count(accepted); ++i) {
+        char *output = declarative_test_run_config(accepted[i].command, accepted[i].value);
+        TEST_CHECK(strcmp(output, ""), 0);
+        free(output);
+        output = declarative_test_run_config(accepted[i].command, NULL);
+        TEST_CHECK(strcmp(output, accepted[i].query), 0);
+        free(output);
+    }
+
+    int top_before = g_space_manager.top_padding;
+    int bottom_before = g_space_manager.bottom_padding;
+    char *output = declarative_test_run_config("top_padding", "-2147483649");
+    TEST_CHECK(strstr(output, "unknown value '-2147483649'") != NULL, true);
+    TEST_CHECK(g_space_manager.top_padding, top_before);
+    free(output);
+    output = declarative_test_run_config("bottom_padding", "2147483648");
+    TEST_CHECK(strstr(output, "unknown value '2147483648'") != NULL, true);
+    TEST_CHECK(g_space_manager.bottom_padding, bottom_before);
+    free(output);
+
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+    g_space_manager.top_padding = saved_top_padding;
+    g_space_manager.bottom_padding = saved_bottom_padding;
+    g_space_manager.window_gap = saved_window_gap;
+    g_window_manager.window_opacity_duration = saved_opacity_duration;
+    g_window_manager.window_animation_duration = saved_animation_duration;
+    g_window_manager.menubar_opacity = saved_menubar_opacity;
+    g_window_manager.active_window_opacity = saved_active_opacity;
+    g_window_manager.normal_window_opacity = saved_normal_opacity;
+    for (int i = 0; i < array_count(touched_ids); ++i) g_declarative_runtime_state.global[touched_ids[i]] = saved_cells[i];
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    TEST_CHECK(pthread_mutex_lock(&g_window_manager.window_animations_lock), 0);
+    TEST_CHECK(pthread_mutex_unlock(&g_window_manager.window_animations_lock), 0);
+)
+
+TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes,
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    g_space_manager.last_space_id = UINT64_MAX - 60;
+
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_GLOBAL) continue;
+        const char *command = declarative_config_descriptors[i].name;
+        const char *values[] = { NULL, declarative_command_cases[i].value };
+        for (int operation = 0; operation < 2; ++operation) {
+            char *value_before = declarative_test_run_config(command, NULL);
+            struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+            memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+            char *output = declarative_test_run_scoped_config(command, values[operation]);
+            char expected[256];
+            snprintf(expected, sizeof(expected), FAILURE_MESSAGE "command '%s' for domain 'config' is global-only.\n", command);
+            TEST_CHECK(output != NULL, true);
+            if (output) TEST_CHECK(strcmp(output, expected), 0);
+            char *value_after = declarative_test_run_config(command, NULL);
+            TEST_CHECK(value_before != NULL, true);
+            TEST_CHECK(value_after != NULL, true);
+            if (value_before && value_after) TEST_CHECK(strcmp(value_before, value_after), 0);
+            TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+            for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) TEST_CHECK(declarative_test_effects[effect], 0);
+            free(value_after);
+            free(value_before);
+            free(output);
+        }
+    }
+
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
     g_space_manager.last_space_id = saved_last_space_id;
-    g_window_manager.window_focus_fallback = saved_policy;
-    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK] = saved_ownership;
+)
+
+TEST_FUNC(declarative_scoped_mixed_batch_preflights_before_space_mutation,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    if (g_space_manager.view.buckets) {
+        uint64_t sid = UINT64_MAX - 61;
+        struct view view = { .sid = sid, .top_padding = 17 };
+        table_add(&g_space_manager.view, &sid, &view);
+        uint64_t saved_last_space_id = g_space_manager.last_space_id;
+        bool saved_verbose = g_verbose;
+        int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+        memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+        int top_field = declarative_space_field_for_id(DECLARATIVE_CONFIG_TOP_PADDING);
+        struct declarative_runtime_cell ownership_before = view.runtime_ownership[top_field];
+        g_space_manager.last_space_id = sid;
+        memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+        declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+        char message[] = "--space\0recent\0top_padding\0" "41\0debug_output\0on\0";
+        char *output = NULL;
+        size_t output_length = 0;
+        FILE *rsp = open_memstream(&output, &output_length);
+        TEST_CHECK(rsp != NULL, true);
+        if (rsp) {
+            handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+            fclose(rsp);
+            TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'debug_output' for domain 'config' is global-only.\n"), 0);
+            free(output);
+        }
+        TEST_CHECK(view.top_padding, 17);
+        TEST_CHECK(memcmp(&view.runtime_ownership[top_field], &ownership_before, sizeof(ownership_before)), 0);
+        TEST_CHECK(g_verbose, saved_verbose);
+        for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) TEST_CHECK(declarative_test_effects[effect], 0);
+
+        declarative_runtime_reset_operation_ops();
+        memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+        g_space_manager.last_space_id = saved_last_space_id;
+        g_verbose = saved_verbose;
+        table_remove(&g_space_manager.view, &sid);
+    }
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
 )
 
 TEST_FUNC(declarative_runtime_live_matrix_covers_all_37_typed_setters,

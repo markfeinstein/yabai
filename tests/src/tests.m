@@ -1832,7 +1832,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
     TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
     TEST_ENTRY(declarative_command_matrix_covers_all_37_query_invalid_and_mutation_paths) \
-    TEST_ENTRY(declarative_window_focus_fallback_scoped_command_rejects_before_mutation) \
+    TEST_ENTRY(focus_follows_mouse_query_is_canonical_and_round_trips)       \
+    TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
+    TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
+    TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
     TEST_ENTRY(declarative_runtime_live_matrix_covers_all_37_typed_setters)   \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
     TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
@@ -1943,6 +1946,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(ffm_menu_bar_tracking_transitions_count_once_without_derived_events) \
     TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
     TEST_ENTRY(message_numeric_token_boundaries)                          \
+    TEST_ENTRY(event_signal_pool_drops_records_when_full_without_overwriting) \
     TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \

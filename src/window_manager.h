@@ -49,7 +49,7 @@ _Static_assert(FFM_AUTORAISE <= UINT32_MAX, "ffm mode must fit its atomic storag
 
 static const char *ffm_mode_str[] =
 {
-    "disabled",
+    "off",
     "autofocus",
     "autoraise"
 };

@@ -114,8 +114,14 @@ void event_signal_push(enum signal_type type, void *context)
 
     uint64_t arg_size = 128;
     uint64_t size = sizeof(struct event_signal);
+    uint64_t used;
 
-    uint64_t used = __sync_fetch_and_add(&g_signal_storage.used, size);
+    for (;;) {
+        used = __atomic_load_n(&g_signal_storage.used, __ATOMIC_RELAXED);
+        if (size > g_signal_storage.size || used > g_signal_storage.size - size) return;
+        if (__sync_bool_compare_and_swap(&g_signal_storage.used, used, used + size)) break;
+    }
+
     struct event_signal *es = g_signal_storage.memory + used;
 
     es->type         = type;
