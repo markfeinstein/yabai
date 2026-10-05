@@ -197,9 +197,10 @@ publish:
 # verifies before and after replacement, and rolls back post-rename verification
 # failures. Once final verification commits, SA/restart failure is reported but
 # intentionally leaves the verified binary installed.
-deploy: release
+deploy:
 	@set -eu; \
 	requirement='$(DEPLOY_REQUIREMENT)'; [ -n "$$requirement" ]; source='$(RELEASE_BIN)'; \
+	[ -f "$$source" ] && [ -x "$$source" ]; \
 	stage=$$(mktemp "$${TMPDIR:-/tmp}/yabai-deploy-source.XXXXXX"); trap 'rm -f "$$stage"' 0 HUP INT TERM; \
 	/bin/cp "$$source" "$$stage"; /bin/chmod 0500 "$$stage"; '$(CODESIGN)' --verify --strict -R "$$requirement" "$$stage"; \
 	expected=$$('$(SHASUM)' -a 256 "$$stage" | /usr/bin/cut -d ' ' -f 1); expected_size=$$('$(STAT)' -f %z "$$stage"); \

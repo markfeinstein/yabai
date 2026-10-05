@@ -67,6 +67,12 @@ BIN
     *) printf 'native artifact\n' > "$out" ;;
 esac
 TOOL
+cat > "$TOOL_ROOT/tools/xxd" <<'TOOL'
+#!/bin/sh
+set -eu
+printf 'xxd:%s\n' "$*" >> "$XCRUN_LOG"
+printf 'unsigned char fixture[] = { 0 };\n'
+TOOL
 cat > "$TOOL_ROOT/tools/codesign" <<'TOOL'
 #!/bin/sh
 set -eu
@@ -131,7 +137,8 @@ printf 'manual\n' > "$out"
 TOOL
 cat > "$TOOL_ROOT/tools/python" <<'TOOL'
 #!/bin/sh
-exit 0
+set -eu
+printf 'python:%s\n' "$*" >> "$DEPLOY_LOG"
 TOOL
 cat > "$TOOL_ROOT/tools/tar-fail" <<'TOOL'
 #!/bin/sh
@@ -154,6 +161,7 @@ run_make()
 {
     make -f "$WORK/makefile" \
         "XCRUN=$TOOL_ROOT/tools/xcrun" \
+        "XXD=$TOOL_ROOT/tools/xxd" \
         "CODESIGN=$TOOL_ROOT/tools/codesign" \
         "SUDO=$TOOL_ROOT/tools/sudo" \
         "STAT=$TOOL_ROOT/tools/stat" \
@@ -222,10 +230,31 @@ reset_verify() { printf '0\n' > "$VERIFY_COUNT"; : > "$LOG"; }
 # Sign is explicit; deploy only verifies an already signed artifact.
 prepare_signed
 
+# Dry-run deploy has no build, generation, icon, or signing commands.
+dry_run=$(run_make -n "DEPLOY_REQUIREMENT=$TRUSTED" deploy)
+! printf '%s\n' "$dry_run" | grep -E '(^|[ /])(xcrun|xxd)([ /]|$)|clang|seticon\.py|codesign[^;]* -fs '
+
 # Missing or untrusted cryptographic requirements fail closed.
+reset_verify
 if run_make "DEPLOY_DIR=$WORK/deploy" "DEPLOY_TRUST_ROOT=$TMP" "DEPLOY_OWNER_UID=$uid" deploy >/dev/null 2>&1; then exit 1; fi
+! grep -q '^sudo$' "$LOG"
+reset_verify
 if run_make "DEPLOY_DIR=$WORK/deploy" "DEPLOY_TRUST_ROOT=$TMP" "DEPLOY_OWNER_UID=$uid" 'DEPLOY_REQUIREMENT=certificate leaf = H"BBBB"' deploy >/dev/null 2>&1; then exit 1; fi
+! grep -q '^sudo$' "$LOG"
 test ! -e "$WORK/deploy/yabai"
+
+# Missing release artifacts and unsigned rebuilds fail before privilege.
+rm -f "$WORK/bin/release/yabai"; reset_verify; : > "$XCRUN_LOG"
+if DEPLOY_REQUIREMENT="$TRUSTED" run_deploy deploy >/dev/null 2>&1; then exit 1; fi
+! grep -q '^sudo$' "$LOG"
+test ! -s "$XCRUN_LOG"
+run_make release >/dev/null
+reset_verify; : > "$XCRUN_LOG"
+if DEPLOY_REQUIREMENT="$TRUSTED" run_deploy deploy >/dev/null 2>&1; then exit 1; fi
+! grep -q '^sudo$' "$LOG"
+! grep -q 'codesign:-fs' "$LOG"
+test ! -s "$XCRUN_LOG"
+prepare_signed
 
 # Replacement immediately before local verification fails without privilege.
 reset_verify
@@ -236,11 +265,19 @@ unset MUTATE_BEFORE_LOCAL
 test ! -e "$WORK/deploy/yabai"
 prepare_signed
 
-# Successful deploy ignores attacker PATH and orders verification before SA/restart.
-reset_verify
+# Successful deploy preserves the signed source, invokes no mutation tools,
+# ignores attacker PATH, and orders verification before SA/restart.
+source_hash=$(/usr/bin/shasum -a 256 "$WORK/bin/release/yabai")
+source_mtime=$(/usr/bin/stat -f %m "$WORK/bin/release/yabai")
+reset_verify; : > "$XCRUN_LOG"
 ATTACKER_PATH="$TOOL_ROOT/attacker" DEPLOY_REQUIREMENT="$TRUSTED" run_deploy deploy >/dev/null
 unset ATTACKER_PATH
 ! grep -q '^attacker:' "$LOG"
+! grep -q 'codesign:-fs' "$LOG"
+! grep -q '^python:' "$LOG"
+test ! -s "$XCRUN_LOG"
+test "$source_hash" = "$(/usr/bin/shasum -a 256 "$WORK/bin/release/yabai")"
+test "$source_mtime" = "$(/usr/bin/stat -f %m "$WORK/bin/release/yabai")"
 test "$(grep -F -c 'codesign:--verify --strict -R' "$LOG")" -eq 3
 final_verify=$(grep -F -n 'codesign:--verify --strict -R' "$LOG" | tail -1 | cut -d: -f1)
 uninstall=$(grep -n 'binary:--uninstall-sa' "$LOG" | cut -d: -f1)
