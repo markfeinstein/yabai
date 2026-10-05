@@ -13,10 +13,12 @@
 #define YB_MENU_BAR_STATUS_HEIGHT       22.0
 #define YB_MENU_BAR_BUTTON_PAD_X         7.0
 #define YB_MENU_BAR_GAP                  0.0
-#define YB_MENU_BAR_DISPLAY_GAP          4.0
+#define YB_MENU_BAR_DISPLAY_GAP          8.0
 #define YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA 0.035
 #define YB_MENU_BAR_DISPLAY_TINT_ALPHA    0.075
-#define YB_MENU_BAR_SEPARATOR_ALPHA       0.38
+#define YB_MENU_BAR_SEPARATOR_WIDTH       2.0
+#define YB_MENU_BAR_SEPARATOR_ALPHA       0.70
+#define YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA 0.90
 #define YB_MENU_BAR_OUTER_INSET          2.0
 #define YB_MENU_BAR_CELL_WIDTH          25.0
 #define YB_MENU_BAR_SCREEN_WIDTH        22.0
@@ -102,12 +104,14 @@ yb_draw_display_group(NSRect group_rect, size_t display_index)
 static void
 yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 {
-    CGFloat x = floor((NSMaxX(left_cell) + NSMinX(right_cell)) * 0.5) + 0.5;
+    CGFloat x = floor((NSMaxX(left_cell) + NSMinX(right_cell)) * 0.5);
     NSBezierPath *separator = [NSBezierPath bezierPath];
     [separator moveToPoint:NSMakePoint(x, 4.0)];
     [separator lineToPoint:NSMakePoint(x, NSHeight([strip bounds]) - 4.0)];
-    [separator setLineWidth:1.0];
-    [[[NSColor separatorColor] colorWithAlphaComponent:yb_increased_contrast() ? 0.68 : YB_MENU_BAR_SEPARATOR_ALPHA] setStroke];
+    [separator setLineWidth:YB_MENU_BAR_SEPARATOR_WIDTH];
+    [[[NSColor separatorColor] colorWithAlphaComponent:yb_increased_contrast()
+                                                       ? YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA
+                                                       : YB_MENU_BAR_SEPARATOR_ALPHA] setStroke];
     [separator stroke];
 }
 
