@@ -533,6 +533,45 @@ TEST_FUNC(declarative_reconcile_omits_floating_windows_from_published_management
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
 
+TEST_FUNC(declarative_native_edge_resize_reload_defaults_and_failures_are_transactional,
+{
+    static const char enabled_json[] =
+        "{\"version\":1,\"config\":{\"native_edge_resize\":true},\"rules\":[]}";
+    static const char invalid_json[] =
+        "{\"version\":1,\"config\":{\"native_edge_resize\":\"on\"},\"rules\":[]}";
+    static const char omitted_json[] = "{\"version\":1,\"rules\":[]}";
+    struct declarative_reload_fixture fixture = {
+        .json = enabled_json, .path = "/tmp/native-edge-resize.jsonc"
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    TEST_CHECK(g_mouse_state.native_edge_resize, false);
+    g_mouse_state.native_resize.window_id = 999;
+    g_mouse_state.native_resize.generation = 7;
+    g_mouse_state.native_resize.claimed = true;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(g_mouse_state.native_edge_resize, true);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_mouse_state.native_resize.generation != 7U, true);
+    uint64_t generation = declarative_installed.generation;
+
+    fixture.json = invalid_json;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(g_mouse_state.native_edge_resize, true);
+    TEST_CHECK(declarative_installed.generation, generation);
+
+    fixture.json = omitted_json;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(g_mouse_state.native_edge_resize, false);
+    TEST_CHECK(declarative_installed.generation, generation + 1);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
 TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 {
     static const char candidate_json[] =

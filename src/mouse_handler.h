@@ -67,6 +67,23 @@ struct mouse_click_state
     CGEventRef down_event;
 };
 
+struct native_resize_state
+{
+    uint32_t window_id;
+    uint32_t generation;
+    CGPoint down_location;
+    CGPoint observed_origin;
+    CGSize observed_size;
+    CGRect initial_frame;
+    CGRect latest_frame;
+    uint8_t edges;
+    bool released;
+    bool claimed;
+    bool provisional;
+    bool pending_size;
+    bool saw_resize;
+};
+
 struct mouse_state
 {
     CFMachPortRef handle;
@@ -81,6 +98,8 @@ struct mouse_state
     enum mouse_mode action2;
     uint8_t modifier;
     enum mouse_mode drop_action;
+    bool native_edge_resize;
+    struct native_resize_state native_resize;
     enum mouse_mode current_action;
     int64_t active_button;
     CGPoint down_location;

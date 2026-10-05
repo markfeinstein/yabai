@@ -207,7 +207,271 @@ static void event_loop_test_mouse_drag_resize_window_direct(struct window *windo
 static void (*event_loop_test_mouse_drag_resize_window)(struct window *, CGRect) = event_loop_test_mouse_drag_resize_window_direct;
 static uint64_t (*event_loop_test_mouse_drag_time)(void) = read_os_timer;
 static void (*event_loop_test_mouse_drop_try_adjust_bsp_grid)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *) = mouse_drop_try_adjust_bsp_grid;
+static bool (*event_loop_test_native_resize_space_visible)(uint64_t);
+static void (*event_loop_test_native_resize_schedule)(uint32_t, uint64_t);
+static void (*event_loop_test_native_resize_restore)(uint32_t);
 #endif
+
+#define NATIVE_RESIZE_TRAILING_DELAY_MS 100u
+#define NATIVE_RESIZE_TIMEOUT_MS 10000u
+#define NATIVE_RESIZE_EDGE_TOLERANCE 6.0
+
+static bool native_resize_space_visible(uint64_t sid)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_space_visible) return event_loop_test_native_resize_space_visible(sid);
+#endif
+    return space_is_visible(sid);
+}
+
+static uint32_t native_resize_next_generation(struct native_resize_state *state)
+{
+    if (++state->generation == 0) ++state->generation;
+    return state->generation;
+}
+
+static void native_resize_schedule(uint32_t generation, uint64_t delay_ms)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_schedule) {
+        event_loop_test_native_resize_schedule(generation, delay_ms);
+        return;
+    }
+#endif
+    uint64_t loop_generation = event_loop_generation_snapshot(&g_event_loop);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        (void) event_loop_try_post_generation(&g_event_loop, loop_generation,
+                                               NATIVE_RESIZE_FINALIZE,
+                                               (void *) (uintptr_t) generation, 0);
+    });
+}
+
+static void native_resize_clear(struct mouse_state *mouse_state)
+{
+    struct native_resize_state *state = &mouse_state->native_resize;
+    native_resize_next_generation(state);
+    state->window_id = 0;
+    state->down_location = CGPointZero;
+    state->observed_origin = CGPointZero;
+    state->observed_size = CGSizeZero;
+    state->initial_frame = CGRectZero;
+    state->latest_frame = CGRectZero;
+    state->edges = 0;
+    state->released = false;
+    state->claimed = false;
+    state->provisional = false;
+    state->pending_size = false;
+    state->saw_resize = false;
+}
+
+static void native_resize_abort(struct mouse_state *mouse_state, bool restore)
+{
+    uint32_t window_id = mouse_state->native_resize.window_id;
+    bool claimed = mouse_state->native_resize.claimed;
+    native_resize_clear(mouse_state);
+    if (!restore || !claimed || !window_id) return;
+#ifdef TESTS
+    if (event_loop_test_native_resize_restore) {
+        event_loop_test_native_resize_restore(window_id);
+        return;
+    }
+#endif
+
+    struct window *window = window_manager_find_window(&g_window_manager, window_id);
+    if (!window || !__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) return;
+    struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+    struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+    if (!node) return;
+    if (native_resize_space_visible(view->sid)) window_node_flush(node);
+    else view_set_flag(view, VIEW_IS_DIRTY);
+}
+
+static bool native_resize_window_is_eligible(struct window *window, struct view *view,
+                                             struct window_node *node)
+{
+    return g_mouse_state.native_edge_resize &&
+           g_mouse_state.current_action == MOUSE_MODE_NONE &&
+           g_mission_control_mode == MISSION_CONTROL_MODE_INACTIVE &&
+           window && view && node && !node->zoom && node->window_count == 1 &&
+           view->layout == VIEW_BSP && native_resize_space_visible(view->sid) &&
+           g_window_manager.focused_window_id == window->id &&
+           window_check_flag(window, WINDOW_RESIZABLE) &&
+           !window_check_flag(window, WINDOW_FULLSCREEN) &&
+           !window_check_flag(window, WINDOW_MINIMIZE);
+}
+
+static CGRect native_resize_node_frame(struct window_node *node)
+{
+    return CGRectMake(node->area.x, node->area.y, node->area.w, node->area.h);
+}
+
+static uint8_t native_resize_edges_at_point(CGPoint point, CGRect frame)
+{
+    if (point.x < CGRectGetMinX(frame) - NATIVE_RESIZE_EDGE_TOLERANCE ||
+        point.x > CGRectGetMaxX(frame) + NATIVE_RESIZE_EDGE_TOLERANCE ||
+        point.y < CGRectGetMinY(frame) - NATIVE_RESIZE_EDGE_TOLERANCE ||
+        point.y > CGRectGetMaxY(frame) + NATIVE_RESIZE_EDGE_TOLERANCE) return 0;
+
+    uint8_t edges = 0;
+    if (fabs(point.x - CGRectGetMinX(frame)) <= NATIVE_RESIZE_EDGE_TOLERANCE) edges |= HANDLE_LEFT;
+    if (fabs(point.x - CGRectGetMaxX(frame)) <= NATIVE_RESIZE_EDGE_TOLERANCE) edges |= HANDLE_RIGHT;
+    if (fabs(point.y - CGRectGetMinY(frame)) <= NATIVE_RESIZE_EDGE_TOLERANCE) edges |= HANDLE_TOP;
+    if (fabs(point.y - CGRectGetMaxY(frame)) <= NATIVE_RESIZE_EDGE_TOLERANCE) edges |= HANDLE_BOTTOM;
+    return edges;
+}
+
+static void native_resize_candidate_begin(CGEventRef event)
+{
+    if (CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber) != kCGMouseButtonLeft) return;
+    native_resize_abort(&g_mouse_state, true);
+    if (!g_mouse_state.native_edge_resize || g_mouse_state.current_action != MOUSE_MODE_NONE ||
+        g_mission_control_mode != MISSION_CONTROL_MODE_INACTIVE) return;
+
+    struct window *window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+    struct view *view = window ? window_manager_find_managed_window(&g_window_manager, window) : NULL;
+    struct window_node *node = view && window ? view_find_window_node(view, window->id) : NULL;
+    if (!native_resize_window_is_eligible(window, view, node)) return;
+
+    CGRect frame = native_resize_node_frame(node);
+    CGPoint point = CGEventGetLocation(event);
+    uint8_t edges = native_resize_edges_at_point(point, frame);
+    if (!edges) return;
+
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    state->window_id = window->id;
+    state->down_location = point;
+    state->observed_origin = frame.origin;
+    state->observed_size = frame.size;
+    state->initial_frame = frame;
+    state->latest_frame = frame;
+    state->edges = edges;
+    state->released = false;
+    state->claimed = false;
+    state->provisional = false;
+    state->pending_size = false;
+    state->saw_resize = false;
+    uint32_t generation = native_resize_next_generation(state);
+    native_resize_schedule(generation, NATIVE_RESIZE_TIMEOUT_MS);
+}
+
+static bool native_resize_baseline_matches(const struct native_resize_state *state,
+                                           struct window_node *node)
+{
+    if (!node) return false;
+    CGRect frame = native_resize_node_frame(node);
+    return !AX_DIFF(CGRectGetMinX(state->initial_frame), CGRectGetMinX(frame)) &&
+           !AX_DIFF(CGRectGetMinY(state->initial_frame), CGRectGetMinY(frame)) &&
+           !AX_DIFF(CGRectGetWidth(state->initial_frame), CGRectGetWidth(frame)) &&
+           !AX_DIFF(CGRectGetHeight(state->initial_frame), CGRectGetHeight(frame));
+}
+
+static uint8_t native_resize_changed_edges(const struct native_resize_state *state, CGRect frame)
+{
+    uint8_t changed = 0;
+    if (AX_DIFF(CGRectGetMinX(state->initial_frame), CGRectGetMinX(frame))) changed |= HANDLE_LEFT;
+    if (AX_DIFF(CGRectGetMaxX(state->initial_frame), CGRectGetMaxX(frame))) changed |= HANDLE_RIGHT;
+    if (AX_DIFF(CGRectGetMinY(state->initial_frame), CGRectGetMinY(frame))) changed |= HANDLE_TOP;
+    if (AX_DIFF(CGRectGetMaxY(state->initial_frame), CGRectGetMaxY(frame))) changed |= HANDLE_BOTTOM;
+    return changed;
+}
+
+static bool native_resize_geometry_matches(const struct native_resize_state *state, CGRect frame)
+{
+    uint8_t changed = native_resize_changed_edges(state, frame);
+    return (changed & state->edges) != 0 && (changed & ~state->edges) == 0;
+}
+
+static bool native_resize_geometry_is_provisional(const struct native_resize_state *state, CGRect frame)
+{
+    uint8_t changed = native_resize_changed_edges(state, frame);
+    uint8_t provisional = 0;
+    if (state->edges & HANDLE_LEFT) provisional |= HANDLE_RIGHT;
+    if (state->edges & HANDLE_TOP) provisional |= HANDLE_BOTTOM;
+    uint8_t allowed = state->edges | provisional;
+    return (changed & provisional) != 0 && (changed & ~allowed) == 0;
+}
+
+static bool native_resize_move_matches(const struct native_resize_state *state, CGPoint origin)
+{
+    bool moved_x = AX_DIFF(CGRectGetMinX(state->initial_frame), origin.x);
+    bool moved_y = AX_DIFF(CGRectGetMinY(state->initial_frame), origin.y);
+    if (!moved_x && !moved_y) return false;
+    if (moved_x && !(state->edges & HANDLE_LEFT)) return false;
+    if (moved_y && !(state->edges & HANDLE_TOP)) return false;
+    return true;
+}
+
+static bool native_resize_observe(struct window *window, struct view *view,
+                                  struct window_node *node, CGRect frame, bool resized)
+{
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    if (!state->window_id || state->window_id != window->id) return false;
+    if (!native_resize_window_is_eligible(window, view, node) ||
+        !native_resize_baseline_matches(state, node)) {
+        native_resize_abort(&g_mouse_state, false);
+        return false;
+    }
+
+    bool settled = false;
+    if (resized) {
+        if (native_resize_geometry_matches(state, frame)) {
+            state->observed_origin = frame.origin;
+            state->observed_size = frame.size;
+            state->latest_frame = frame;
+            state->pending_size = false;
+            settled = true;
+        } else {
+            if (!(state->edges & (HANDLE_LEFT | HANDLE_TOP))) {
+                native_resize_abort(&g_mouse_state, false);
+                return false;
+            }
+            state->observed_size = frame.size;
+            state->pending_size = true;
+            CGRect merged = { state->observed_origin, state->observed_size };
+            if (native_resize_geometry_matches(state, merged)) {
+                state->latest_frame = merged;
+                state->pending_size = false;
+                settled = true;
+            } else if (!native_resize_geometry_is_provisional(state, frame) &&
+                       !native_resize_geometry_is_provisional(state, merged)) {
+                native_resize_abort(&g_mouse_state, false);
+                return false;
+            }
+        }
+        state->provisional = !settled;
+        if (settled) state->saw_resize = true;
+    } else {
+        if (!native_resize_move_matches(state, frame.origin)) {
+            native_resize_abort(&g_mouse_state, false);
+            return false;
+        }
+        state->observed_origin = frame.origin;
+        CGRect merged = { state->observed_origin, state->observed_size };
+        if (state->pending_size && native_resize_geometry_matches(state, merged)) {
+            state->latest_frame = merged;
+            state->provisional = false;
+            state->pending_size = false;
+            state->saw_resize = true;
+        } else {
+            state->provisional = true;
+        }
+    }
+
+    state->claimed = true;
+    uint32_t generation = native_resize_next_generation(state);
+    native_resize_schedule(generation, state->released ? NATIVE_RESIZE_TRAILING_DELAY_MS
+                                                        : NATIVE_RESIZE_TIMEOUT_MS);
+    return true;
+}
+
+static void native_resize_mouse_up(int64_t button)
+{
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    if (button != kCGMouseButtonLeft || !state->window_id) return;
+    state->released = true;
+    uint32_t generation = native_resize_next_generation(state);
+    native_resize_schedule(generation, NATIVE_RESIZE_TRAILING_DELAY_MS);
+}
 
 static bool update_window_notifications(void)
 {
@@ -249,6 +513,9 @@ static bool update_window_notifications(void)
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
 {
+    if (ms->native_resize.window_id && ms->native_resize.window_id != window->id) {
+        native_resize_abort(ms, true);
+    }
     bool focus_changed = wm->focused_window_id != window->id;
     struct window *focused_window = window_manager_find_window(wm, wm->focused_window_id);
     struct view *previous_view = focused_window ? window_manager_find_managed_window(wm, focused_window) : NULL;
@@ -711,6 +978,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
         }
 
         if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+        if (g_mouse_state.native_resize.window_id == window->id) native_resize_clear(&g_mouse_state);
         if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
         if (window->is_eligible) {
@@ -903,6 +1171,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     struct application *application;
     struct application *deactivated_application;
     if (!event_loop_commit_application_front_switched(&event, &application, &deactivated_application)) return;
+    native_resize_abort(&g_mouse_state, true);
 
     // Application destruction is serialized on this event-loop worker, so both captured pointers remain valid here.
     event_loop_handle_application_front_space(application);
@@ -1002,6 +1271,11 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
     }
 
     debug("%s: %s\n", __FUNCTION__, application->name);
+    struct window *native_resize_window = window_manager_find_window(
+        &g_window_manager, g_mouse_state.native_resize.window_id);
+    if (native_resize_window && native_resize_window->application == application) {
+        native_resize_clear(&g_mouse_state);
+    }
     application->is_hidden = true;
 
     int window_count;
@@ -1136,6 +1410,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     }
 
     if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+    if (g_mouse_state.native_resize.window_id == window->id) native_resize_clear(&g_mouse_state);
     if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
     if (window->is_eligible) {
@@ -1229,19 +1504,18 @@ static EVENT_HANDLER(WINDOW_MOVED)
 
         if (!g_mouse_state.window || g_mouse_state.window != window) {
             struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-            if (view) {
-                struct window_node *node = view_find_window_node(view, window->id);
-                if (node && (AX_DIFF(node->area.x, new_origin.x) ||
-                             AX_DIFF(node->area.y, new_origin.y))
-                         &&
-                   (!node->zoom || AX_DIFF(node->zoom->area.x, new_origin.x) ||
-                                   AX_DIFF(node->zoom->area.y, new_origin.y))) {
-                    if (space_is_visible(view->sid)) {
-                        window_node_flush(node);
-                    } else {
-                        view_set_flag(view, VIEW_IS_DIRTY);
-                    }
-                }
+            struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+            bool differs = node &&
+                (AX_DIFF(node->area.x, new_origin.x) || AX_DIFF(node->area.y, new_origin.y)) &&
+                (!node->zoom || AX_DIFF(node->zoom->area.x, new_origin.x) ||
+                               AX_DIFF(node->zoom->area.y, new_origin.y));
+            bool native_owned = false;
+            if (g_mouse_state.native_resize.window_id == window->id) {
+                native_owned = native_resize_observe(window, view, node, window->frame, false);
+            }
+            if (differs && !native_owned) {
+                if (space_is_visible(view->sid)) window_node_flush(node);
+                else view_set_flag(view, VIEW_IS_DIRTY);
             }
         }
     }
@@ -1306,6 +1580,10 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
 
+    if (was_fullscreen != is_fullscreen && g_mouse_state.native_resize.window_id == window->id) {
+        native_resize_abort(&g_mouse_state, false);
+    }
+
     if (!was_fullscreen && is_fullscreen) {
         struct view *view = window_manager_find_managed_window(&g_window_manager, window);
         if (view) {
@@ -1331,23 +1609,23 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
             if (!g_mouse_state.window || g_mouse_state.window != window) {
                 struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-                if (view) {
-                    struct window_node *node = view_find_window_node(view, window->id);
-                    if (node && (AX_DIFF(node->area.x, new_frame.origin.x)   ||
-                                 AX_DIFF(node->area.y, new_frame.origin.y)   ||
-                                 AX_DIFF(node->area.w, new_frame.size.width) ||
-                                 AX_DIFF(node->area.h, new_frame.size.height))
-                             &&
-                       (!node->zoom || AX_DIFF(node->zoom->area.x, new_frame.origin.x)   ||
-                                       AX_DIFF(node->zoom->area.y, new_frame.origin.y)   ||
-                                       AX_DIFF(node->zoom->area.w, new_frame.size.width) ||
-                                       AX_DIFF(node->zoom->area.h, new_frame.size.height))) {
-                        if (space_is_visible(view->sid)) {
-                            window_node_flush(node);
-                        } else {
-                            view_set_flag(view, VIEW_IS_DIRTY);
-                        }
-                    }
+                struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+                bool differs = node &&
+                    (AX_DIFF(node->area.x, new_frame.origin.x)   ||
+                     AX_DIFF(node->area.y, new_frame.origin.y)   ||
+                     AX_DIFF(node->area.w, new_frame.size.width) ||
+                     AX_DIFF(node->area.h, new_frame.size.height)) &&
+                    (!node->zoom || AX_DIFF(node->zoom->area.x, new_frame.origin.x)   ||
+                                   AX_DIFF(node->zoom->area.y, new_frame.origin.y)   ||
+                                   AX_DIFF(node->zoom->area.w, new_frame.size.width) ||
+                                   AX_DIFF(node->zoom->area.h, new_frame.size.height));
+                bool native_owned = false;
+                if (g_mouse_state.native_resize.window_id == window->id) {
+                    native_owned = native_resize_observe(window, view, node, new_frame, true);
+                }
+                if (differs && !native_owned) {
+                    if (space_is_visible(view->sid)) window_node_flush(node);
+                    else view_set_flag(view, VIEW_IS_DIRTY);
                 }
             }
         }
@@ -1370,6 +1648,7 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
     }
 
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
+    if (g_mouse_state.native_resize.window_id == window->id) native_resize_clear(&g_mouse_state);
     window_set_flag(window, WINDOW_MINIMIZE);
 
     if (window_ax_can_move(window)) {
@@ -1870,10 +2149,60 @@ static bool mouse_drag_reset_if_owner(struct mouse_state *mouse_state, int64_t b
     return true;
 }
 
+static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
+{
+    (void) param1;
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    if (!state->window_id || state->generation != (uint32_t) (uintptr_t) context) return;
+    if (!state->released || !state->claimed || state->provisional ||
+        !state->saw_resize || !native_resize_geometry_matches(state, state->latest_frame)) {
+        native_resize_abort(&g_mouse_state, true);
+        return;
+    }
+
+    struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
+    if (!window || !__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
+        native_resize_clear(&g_mouse_state);
+        return;
+    }
+    struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+    struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+    if (!native_resize_window_is_eligible(window, view, node) ||
+        !native_resize_baseline_matches(state, node)) {
+        native_resize_abort(&g_mouse_state, true);
+        return;
+    }
+
+    struct mouse_state geometry = { .window_frame = state->initial_frame };
+    struct mouse_window_info info;
+    mouse_window_info_populate_frame(&geometry, state->latest_frame, &info);
+    native_resize_clear(&g_mouse_state);
+    if (info.changed_position || info.changed_size) {
+#ifdef TESTS
+        event_loop_test_mouse_drop_try_adjust_bsp_grid(&g_window_manager, view, window, &info);
+#else
+        mouse_drop_try_adjust_bsp_grid(&g_window_manager, view, window, &info);
+#endif
+    } else {
+        window_node_flush(node);
+    }
+}
+
+static EVENT_HANDLER(NATIVE_RESIZE_CANCEL)
+{
+    (void) context;
+    (void) param1;
+    native_resize_abort(&g_mouse_state, true);
+}
+
 static EVENT_HANDLER(MOUSE_DOWN)
 {
     enum mouse_mode action = (enum mouse_mode) param1;
-    if (!mouse_drag_action_is_valid(action))              goto out;
+    if (!mouse_drag_action_is_valid(action)) {
+        native_resize_candidate_begin(context);
+        goto out;
+    }
+    native_resize_abort(&g_mouse_state, true);
     if (mission_control_is_active())                      goto out;
     if (g_mouse_state.current_action != MOUSE_MODE_NONE)  goto out;
 
@@ -1895,6 +2224,7 @@ out:
 static EVENT_HANDLER(MOUSE_UP)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
+    native_resize_mouse_up(button);
     if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
     if (mission_control_is_active())                        goto reset;
     if (!g_mouse_state.window)                             goto reset;
@@ -2225,6 +2555,7 @@ out:
 static void mission_control_begin_session(enum mission_control_mode mode, uint64_t observer_epoch,
                                           uint64_t ax_token, bool poll)
 {
+    native_resize_abort(&g_mouse_state, true);
     g_mission_control_session = (struct mission_control_session_state) {
         .generation = mission_control_next_generation(), .observer_epoch = observer_epoch,
         .ax_token = ax_token, .active = true
@@ -3057,10 +3388,43 @@ static bool event_loop_consume_topology_resync(struct event_loop *event_loop)
 static void event_loop_dispatch_event(struct event event)
 {
     switch (event.type) {
+    case SPACE_CHANGED:
+    case DISPLAY_ADDED:
+    case DISPLAY_REMOVED:
+    case DISPLAY_MOVED:
+    case DISPLAY_RESIZED:
+    case DISPLAY_CHANGED:
+        native_resize_abort(&g_mouse_state, true);
+        break;
+    default:
+        break;
+    }
+    switch (event.type) {
 #define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(event.context, event.param1); break;
         EVENT_TYPE_LIST
 #undef EVENT_TYPE_ENTRY
     }
+}
+
+static void event_loop_execute_final_sync(struct event_loop *event_loop)
+{
+    pthread_mutex_lock(&event_loop->producer_lock);
+    if (!event_loop->final_sync_pending) {
+        pthread_mutex_unlock(&event_loop->producer_lock);
+        return;
+    }
+    bool (*callback)(void *) = event_loop->final_sync_callback;
+    void *context = event_loop->final_sync_context;
+    event_loop->final_sync_pending = false;
+    pthread_mutex_unlock(&event_loop->producer_lock);
+
+    bool result = !callback || callback(context);
+
+    pthread_mutex_lock(&event_loop->producer_lock);
+    event_loop->final_sync_result = result;
+    event_loop->final_sync_completed = true;
+    pthread_cond_broadcast(&event_loop->producer_cond);
+    pthread_mutex_unlock(&event_loop->producer_lock);
 }
 
 static void *event_loop_run(void *context)
@@ -3101,6 +3465,7 @@ static void *event_loop_run(void *context)
             event_signal_flush();
             ts_reset();
         }
+        event_loop_execute_final_sync(event_loop);
 
         [pool drain];
     }
@@ -3199,6 +3564,8 @@ static void event_loop_discard_event(enum event_type type, void *context, int pa
 #ifdef TESTS
 static void (*event_loop_admit_producer_test_hook)(void);
 static void (*event_loop_leave_producer_test_hook)(void);
+static void (*event_loop_shutdown_admitted_test_hook)(struct event_loop *);
+static void (*event_loop_shutdown_owner_test_hook)(bool);
 #endif
 
 static uint32_t event_loop_admission_count(uint32_t state)
@@ -3237,21 +3604,24 @@ static void event_loop_leave_producer(struct event_loop *event_loop)
 #ifdef TESTS
     if (event_loop_leave_producer_test_hook) event_loop_leave_producer_test_hook();
 #endif
-    if (!event_loop_admission_is_open(current) && event_loop_admission_count(current) == 0) {
-        pthread_cond_broadcast(&event_loop->producer_cond);
+    if (!event_loop_admission_is_open(current)) pthread_cond_broadcast(&event_loop->producer_cond);
+    pthread_mutex_unlock(&event_loop->producer_lock);
+}
+
+static void event_loop_wait_for_producer_count(struct event_loop *event_loop, uint32_t count)
+{
+    if (!event_loop->producer_sync_initialized) return;
+
+    pthread_mutex_lock(&event_loop->producer_lock);
+    while (event_loop_admission_count(__atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE)) > count) {
+        pthread_cond_wait(&event_loop->producer_cond, &event_loop->producer_lock);
     }
     pthread_mutex_unlock(&event_loop->producer_lock);
 }
 
 static void event_loop_wait_for_producers_closed(struct event_loop *event_loop)
 {
-    if (!event_loop->producer_sync_initialized) return;
-
-    pthread_mutex_lock(&event_loop->producer_lock);
-    while (event_loop_admission_count(__atomic_load_n(&event_loop->producer_admission, __ATOMIC_ACQUIRE)) != 0) {
-        pthread_cond_wait(&event_loop->producer_cond, &event_loop->producer_lock);
-    }
-    pthread_mutex_unlock(&event_loop->producer_lock);
+    event_loop_wait_for_producer_count(event_loop, 0);
 }
 
 static void event_loop_close_producer_admission(struct event_loop *event_loop)
@@ -3385,8 +3755,14 @@ static void event_loop_cleanup(struct event_loop *event_loop)
         pthread_mutex_destroy(&event_loop->producer_lock);
     }
     memset(&event_loop->thread, 0, sizeof(event_loop->thread));
+    event_loop->final_sync_pending = false;
+    event_loop->final_sync_completed = false;
+    event_loop->final_sync_result = false;
+    event_loop->final_sync_callback = NULL;
+    event_loop->final_sync_context = NULL;
     event_loop->producer_sync_initialized = false;
     __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&event_loop->shutdown_owner, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&event_loop->topology_resync_pending, 0, __ATOMIC_RELEASE);
     event_loop_cancel_topology_retry(event_loop);
 }
@@ -3399,6 +3775,7 @@ bool event_loop_begin_bootstrap(struct event_loop *event_loop, event_loop_bootst
      * atomically so generation-bound transports can safely reject stale work
      * while this lifetime is being initialized. */
     __atomic_store_n(&event_loop->producer_admission, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&event_loop->shutdown_owner, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
     event_loop->producer_sync_initialized = false;
     event_loop->semaphore = NULL;
@@ -3514,6 +3891,42 @@ bool event_loop_perform_sync(struct event_loop *event_loop, event_loop_sync_call
     return result;
 }
 
+static bool event_loop_cancel_native_resize(void *context)
+{
+    (void) context;
+    native_resize_abort(&g_mouse_state, true);
+    return true;
+}
+
+static bool event_loop_close_with_final_sync(struct event_loop *event_loop,
+                                             bool (*callback)(void *), void *context)
+{
+    __atomic_fetch_and(&event_loop->producer_admission, EVENT_LOOP_ADMISSION_COUNT_MASK, __ATOMIC_ACQ_REL);
+    event_loop_wait_for_producer_count(event_loop, 1);
+
+    pthread_mutex_lock(&event_loop->producer_lock);
+    event_loop->final_sync_callback = callback;
+    event_loop->final_sync_context = context;
+    event_loop->final_sync_result = false;
+    event_loop->final_sync_completed = false;
+    event_loop->final_sync_pending = true;
+    pthread_mutex_unlock(&event_loop->producer_lock);
+
+    event_loop_leave_producer(event_loop);
+    event_loop_wait_for_producers_closed(event_loop);
+    sem_post(event_loop->semaphore);
+
+    pthread_mutex_lock(&event_loop->producer_lock);
+    while (!event_loop->final_sync_completed) {
+        pthread_cond_wait(&event_loop->producer_cond, &event_loop->producer_lock);
+    }
+    bool result = event_loop->final_sync_result;
+    event_loop->final_sync_callback = NULL;
+    event_loop->final_sync_context = NULL;
+    pthread_mutex_unlock(&event_loop->producer_lock);
+    return result;
+}
+
 void event_loop_end(struct event_loop *event_loop)
 {
     if (!event_loop_admit_producer(event_loop)) return;
@@ -3522,12 +3935,33 @@ void event_loop_end(struct event_loop *event_loop)
         warn("%s: ignoring event-loop shutdown requested from the event-loop thread\n", __FUNCTION__);
         return;
     }
+#ifdef TESTS
+    if (event_loop_shutdown_admitted_test_hook) event_loop_shutdown_admitted_test_hook(event_loop);
+#endif
+
+    uint32_t expected_owner = 0;
+    if (!__atomic_compare_exchange_n(&event_loop->shutdown_owner, &expected_owner, 1, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+#ifdef TESTS
+        if (event_loop_shutdown_owner_test_hook) event_loop_shutdown_owner_test_hook(false);
+#endif
+        event_loop_leave_producer(event_loop);
+        return;
+    }
+#ifdef TESTS
+    if (event_loop_shutdown_owner_test_hook) event_loop_shutdown_owner_test_hook(true);
+#endif
 
     if (event_loop == &g_event_loop) {
         declarative_configuration_reconcile_shutdown();
         mission_control_shutdown();
     }
-    event_loop_close_producer_admission_after_admitted_self(event_loop);
+    bool running = __atomic_load_n(&event_loop->is_running, __ATOMIC_ACQUIRE);
+    if (event_loop == &g_event_loop && running) {
+        (void) event_loop_close_with_final_sync(event_loop, event_loop_cancel_native_resize, NULL);
+    } else {
+        event_loop_close_producer_admission_after_admitted_self(event_loop);
+    }
     __atomic_store_n(&event_loop->is_running, false, __ATOMIC_RELEASE);
     sem_post(event_loop->semaphore);
     pthread_join(event_loop->thread, NULL);

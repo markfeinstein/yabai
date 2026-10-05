@@ -54,6 +54,7 @@
     X(SPLIT_RATIO,           COMMAND_CONFIG_SPLIT_RATIO,           "split_ratio",                   FLOAT,      SPACE,  SPLIT_RATIO,      SPLIT_RATIO) \
     X(SPLIT_TYPE,            COMMAND_CONFIG_SPLIT_TYPE,            "split_type",                    ENUM,       SPACE,  SPLIT_TYPE,       SPLIT_TYPE) \
     X(AUTO_BALANCE,          COMMAND_CONFIG_AUTO_BALANCE,          "auto_balance",                  ENUM,       SPACE,  AUTO_BALANCE,     AUTO_BALANCE) \
+    X(NATIVE_EDGE_RESIZE,    COMMAND_CONFIG_NATIVE_EDGE_RESIZE,    "native_edge_resize",            BOOL,       GLOBAL, BOOL,             NATIVE_EDGE_RESIZE) \
     X(MOUSE_MOD,             COMMAND_CONFIG_MOUSE_MOD,             "mouse_modifier",                ENUM,       GLOBAL, MOUSE_MOD,        MOUSE_MOD) \
     X(MOUSE_ACTION1,         COMMAND_CONFIG_MOUSE_ACTION1,         "mouse_action1",                 ENUM,       GLOBAL, MOUSE_ACTION,     MOUSE_ACTION1) \
     X(MOUSE_ACTION2,         COMMAND_CONFIG_MOUSE_ACTION2,         "mouse_action2",                 ENUM,       GLOBAL, MOUSE_ACTION,     MOUSE_ACTION2) \

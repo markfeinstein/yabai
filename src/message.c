@@ -2014,6 +2014,17 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_NATIVE_EDGE_RESIZE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_mouse_state.native_edge_resize]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, &(struct declarative_value) { .present = true, .boolean = false }, 0);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, &(struct declarative_value) { .present = true, .boolean = true }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
         } else if (token_equals(command, COMMAND_CONFIG_MOUSE_MOD)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {

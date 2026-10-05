@@ -324,7 +324,7 @@ display and Space target index: \f(CR1...INT_MAX\fP.
 .sp
 \f(CRconfig\fP accepts every current \f(CRconfig\fP setting. Omitting a field leaves the built\-in value at startup; a successful reload restores the built\-in value before applying the new native fields.
 .sp
-Boolean fields are \f(CRdebug_output\fP, \f(CRmouse_follows_focus\fP, \f(CRwindow_zoom_persist\fP, \f(CRskip_window_focus_animation\fP and \f(CRwindow_opacity\fP.
+Boolean fields are \f(CRdebug_output\fP, \f(CRmouse_follows_focus\fP, \f(CRwindow_zoom_persist\fP, \f(CRskip_window_focus_animation\fP, \f(CRwindow_opacity\fP and \f(CRnative_edge_resize\fP.
 .sp
 Enum fields are:
 .sp
@@ -1147,6 +1147,11 @@ Rendering clamps the width to half the shorter feedback\-frame dimension. (defau
 \fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]
 .RS 4
 Set the default size distribution for new BSP splits on Spaces without a higher\-precedence scoped value. The valid range is \f(CR0.1...0.9\fP.
+.RE
+.sp
+\fBnative_edge_resize\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application\(cqs mouse events. Only a focused, visible, resizable, unzoomed single\-window BSP leaf can start a native resize; stacked leaves are not supported. Auto\-balance and managed\-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
 .RE
 .sp
 \fBmouse_modifier\fP [\fIcmd|alt|shift|ctrl|fn\fP]

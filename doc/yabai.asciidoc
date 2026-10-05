@@ -169,7 +169,7 @@ Global settings
 
 `config` accepts every current `config` setting. Omitting a field leaves the built-in value at startup; a successful reload restores the built-in value before applying the new native fields.
 
-Boolean fields are `debug_output`, `mouse_follows_focus`, `window_zoom_persist`, `skip_window_focus_animation` and `window_opacity`.
+Boolean fields are `debug_output`, `mouse_follows_focus`, `window_zoom_persist`, `skip_window_focus_animation`, `window_opacity` and `native_edge_resize`.
 
 Enum fields are:
 
@@ -550,6 +550,9 @@ Global Settings
 
 *split_ratio* ['<SPLIT_RATIO_SEL>']::
     Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value.
+
+*native_edge_resize* ['<BOOL_SEL>']::
+    Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application's mouse events. Only a focused, visible, resizable, unzoomed single-window BSP leaf can start a native resize; stacked leaves are not supported. Auto-balance and managed-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
 
 *mouse_modifier* ['cmd|alt|shift|ctrl|fn']::
     Keyboard modifier used for moving and resizing windows.

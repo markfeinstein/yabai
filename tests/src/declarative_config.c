@@ -1,5 +1,5 @@
 TEST_FUNC(declarative_inventory_is_canonical,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 39);
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 40);
     TEST_CHECK(DECLARATIVE_RULE_FIELD_COUNT, 17);
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         const char *name = declarative_config_descriptors[i].name;

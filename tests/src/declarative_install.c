@@ -171,6 +171,7 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return bundle->space_manager.split_ratio == value->real;
     case DECLARATIVE_CONFIG_SPLIT_TYPE: return bundle->space_manager.split_type == value->enumeration;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: return bundle->space_manager.auto_balance == value->u32;
+    case DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE: return bundle->mouse_state.native_edge_resize == value->boolean;
     case DECLARATIVE_CONFIG_MOUSE_MOD: return bundle->mouse_state.modifier == value->enumeration;
     case DECLARATIVE_CONFIG_MOUSE_ACTION1: return bundle->mouse_state.action1 == value->enumeration;
     case DECLARATIVE_CONFIG_MOUSE_ACTION2: return bundle->mouse_state.action2 == value->enumeration;

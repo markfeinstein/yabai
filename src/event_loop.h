@@ -54,6 +54,8 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(MOUSE_UP) \
     EVENT_TYPE_ENTRY(MOUSE_DRAGGED) \
     EVENT_TYPE_ENTRY(MOUSE_MOVED) \
+    EVENT_TYPE_ENTRY(NATIVE_RESIZE_FINALIZE) \
+    EVENT_TYPE_ENTRY(NATIVE_RESIZE_CANCEL) \
     EVENT_TYPE_ENTRY(MISSION_CONTROL_SHOW_ALL_WINDOWS) \
     EVENT_TYPE_ENTRY(MISSION_CONTROL_SHOW_FRONT_WINDOWS) \
     EVENT_TYPE_ENTRY(MISSION_CONTROL_SHOW_DESKTOP) \
@@ -119,8 +121,14 @@ struct event_loop
     bool producer_sync_initialized;
     uint64_t generation;
     volatile uint32_t producer_admission;
+    volatile uint32_t shutdown_owner;
     pthread_mutex_t producer_lock;
     pthread_cond_t producer_cond;
+    bool final_sync_pending;
+    bool final_sync_completed;
+    bool final_sync_result;
+    bool (*final_sync_callback)(void *);
+    void *final_sync_context;
     pthread_t thread;
     sem_t *semaphore;
     struct event_queue queue;

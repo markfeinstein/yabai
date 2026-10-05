@@ -206,6 +206,7 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", DECLARATIVE_TEST_EFFECT_SPLIT_RATIO },
     { DECLARATIVE_CONFIG_SPLIT_TYPE, "auto", "auto\n", DECLARATIVE_TEST_EFFECT_SPLIT_TYPE },
     { DECLARATIVE_CONFIG_AUTO_BALANCE, "on", "on\n", DECLARATIVE_TEST_EFFECT_AUTO_BALANCE },
+    { DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, "on", "on\n", -1 },
     { DECLARATIVE_CONFIG_MOUSE_MOD, "alt", "alt\n", DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER },
     { DECLARATIVE_CONFIG_MOUSE_ACTION1, "resize", "resize\n", DECLARATIVE_TEST_EFFECT_MOUSE_ACTION1 },
     { DECLARATIVE_CONFIG_MOUSE_ACTION2, "move", "move\n", DECLARATIVE_TEST_EFFECT_MOUSE_ACTION2 },
@@ -345,8 +346,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_39_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 39);
+TEST_FUNC(declarative_command_matrix_covers_all_40_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 40);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -819,8 +820,8 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
     }
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_39_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 39);
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_40_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 40);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);

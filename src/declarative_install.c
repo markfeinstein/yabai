@@ -296,6 +296,7 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_SPLIT_RATIO: sm->split_ratio = value->real; break;
     case DECLARATIVE_CONFIG_SPLIT_TYPE: sm->split_type = value->enumeration; break;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: sm->auto_balance = value->u32; break;
+    case DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE: mouse->native_edge_resize = value->boolean; break;
     case DECLARATIVE_CONFIG_MOUSE_MOD: mouse->modifier = value->enumeration; break;
     case DECLARATIVE_CONFIG_MOUSE_ACTION1: mouse->action1 = value->enumeration; break;
     case DECLARATIVE_CONFIG_MOUSE_ACTION2: mouse->action2 = value->enumeration; break;
@@ -497,6 +498,7 @@ static bool declarative_startup_bundle_publish(struct declarative_startup_state 
     __atomic_store_n(&g_mouse_state.action1, bundle->mouse_state.action1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mouse_state.action2, bundle->mouse_state.action2, __ATOMIC_RELEASE);
     g_mouse_state.drop_action = bundle->mouse_state.drop_action;
+    g_mouse_state.native_edge_resize = bundle->mouse_state.native_edge_resize;
     menu_bar_manager_startup_settings_commit(&bundle->menu_settings);
 
     declarative_installed.generation = 1;
@@ -712,11 +714,13 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     __atomic_store_n(&g_mouse_state.action1, bundle->mouse_state.action1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mouse_state.action2, bundle->mouse_state.action2, __ATOMIC_RELEASE);
     g_mouse_state.drop_action = bundle->mouse_state.drop_action;
+    g_mouse_state.native_edge_resize = bundle->mouse_state.native_edge_resize;
     menu_bar_manager_settings_commit_no_post(&bundle->menu_settings);
 }
 
 static void declarative_reload_publish(void *context)
 {
+    native_resize_abort(&g_mouse_state, true);
     struct declarative_reload_transaction *transaction = context;
     transaction->previous_menu_settings = menu_bar_manager_settings();
     transaction->previous_opacity_enabled = g_window_manager.enable_window_opacity;
@@ -1068,6 +1072,7 @@ struct declarative_reconcile_publication
 
 static void declarative_reconcile_publish(void *context)
 {
+    native_resize_abort(&g_mouse_state, true);
     struct declarative_reconcile_publication *publication = context;
     publication->retired_topology = declarative_installed.topology;
     publication->retired_fold_context = declarative_installed.fold_context;
@@ -1512,6 +1517,7 @@ struct declarative_mode_publication
 
 static void declarative_mode_publish(void *context)
 {
+    native_resize_abort(&g_mouse_state, true);
     struct declarative_mode_publication *publication = context;
     publication->retired_selected_mode = declarative_installed.selected_mode;
     declarative_installed.selected_mode = publication->selected_mode;

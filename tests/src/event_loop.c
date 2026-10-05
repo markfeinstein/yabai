@@ -1,3 +1,68 @@
+static uint32_t native_resize_shutdown_restored_window_id;
+static int native_resize_shutdown_restore_count;
+
+static void native_resize_shutdown_restore(uint32_t window_id)
+{
+    native_resize_shutdown_restored_window_id = window_id;
+    ++native_resize_shutdown_restore_count;
+}
+
+static bool native_resize_shutdown_seed(void *context)
+{
+    uint32_t window_id = *(uint32_t *) context;
+    g_mouse_state.native_resize.window_id = window_id;
+    g_mouse_state.native_resize.generation = 41;
+    g_mouse_state.native_resize.claimed = true;
+    return true;
+}
+
+struct concurrent_event_loop_end_context
+{
+    struct event_loop *event_loop;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int ready;
+    int admitted;
+    int winners;
+    int losers;
+    bool go;
+};
+
+static struct concurrent_event_loop_end_context *concurrent_event_loop_end_active;
+
+static void concurrent_event_loop_end_admitted(struct event_loop *event_loop)
+{
+    struct concurrent_event_loop_end_context *end = concurrent_event_loop_end_active;
+    if (!end || end->event_loop != event_loop) return;
+    pthread_mutex_lock(&end->mutex);
+    ++end->admitted;
+    pthread_cond_broadcast(&end->cond);
+    while (end->admitted != 2) pthread_cond_wait(&end->cond, &end->mutex);
+    pthread_mutex_unlock(&end->mutex);
+}
+
+static void concurrent_event_loop_end_owner(bool won)
+{
+    struct concurrent_event_loop_end_context *end = concurrent_event_loop_end_active;
+    if (!end) return;
+    pthread_mutex_lock(&end->mutex);
+    if (won) ++end->winners; else ++end->losers;
+    pthread_cond_broadcast(&end->cond);
+    pthread_mutex_unlock(&end->mutex);
+}
+
+static void *concurrent_event_loop_end(void *context)
+{
+    struct concurrent_event_loop_end_context *end = context;
+    pthread_mutex_lock(&end->mutex);
+    ++end->ready;
+    pthread_cond_broadcast(&end->cond);
+    while (!end->go) pthread_cond_wait(&end->cond, &end->mutex);
+    pthread_mutex_unlock(&end->mutex);
+    event_loop_end(end->event_loop);
+    return NULL;
+}
+
 static AXError application_test_create_result;
 static AXError application_test_notification_results[7];
 static int application_test_notification_index;
@@ -36,6 +101,96 @@ static void application_test_reset(AXError default_result)
         application_test_notification_results[i] = default_result;
     }
 }
+
+TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    __auto_type saved_restore = event_loop_test_native_resize_restore;
+    bool saved_fail_allocation = g_event_queue_test_fail_allocation;
+    g_event_loop = (struct event_loop) {0};
+    memset(&g_mouse_state.native_resize, 0, sizeof(g_mouse_state.native_resize));
+    native_resize_shutdown_restored_window_id = 0;
+    native_resize_shutdown_restore_count = 0;
+    event_loop_test_native_resize_restore = native_resize_shutdown_restore;
+
+    TEST_CHECK(event_loop_begin(&g_event_loop), true);
+    uint32_t window_id = 4242;
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, native_resize_shutdown_seed, &window_id), true);
+    g_event_queue_test_fail_allocation = true;
+    event_loop_end(&g_event_loop);
+    g_event_queue_test_fail_allocation = false;
+    TEST_CHECK(native_resize_shutdown_restored_window_id, window_id);
+    TEST_CHECK(native_resize_shutdown_restore_count, 1);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_mouse_state.native_resize.generation != 41U, true);
+
+    TEST_CHECK(event_loop_begin(&g_event_loop), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    event_loop_end(&g_event_loop);
+
+    event_loop_test_native_resize_restore = saved_restore;
+    g_event_queue_test_fail_allocation = saved_fail_allocation;
+    g_mouse_state = saved_mouse_state;
+    g_event_loop = saved_event_loop;
+});
+
+TEST_FUNC(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    __auto_type saved_restore = event_loop_test_native_resize_restore;
+    __auto_type saved_admitted = event_loop_shutdown_admitted_test_hook;
+    __auto_type saved_owner = event_loop_shutdown_owner_test_hook;
+    g_event_loop = (struct event_loop) {0};
+    memset(&g_mouse_state.native_resize, 0, sizeof(g_mouse_state.native_resize));
+    native_resize_shutdown_restored_window_id = 0;
+    native_resize_shutdown_restore_count = 0;
+    event_loop_test_native_resize_restore = native_resize_shutdown_restore;
+    TEST_CHECK(event_loop_begin(&g_event_loop), true);
+    uint32_t window_id = 4343;
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, native_resize_shutdown_seed, &window_id), true);
+
+    struct concurrent_event_loop_end_context end = {
+        .event_loop = &g_event_loop,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER
+    };
+    concurrent_event_loop_end_active = &end;
+    event_loop_shutdown_admitted_test_hook = concurrent_event_loop_end_admitted;
+    event_loop_shutdown_owner_test_hook = concurrent_event_loop_end_owner;
+    pthread_t first, second;
+    TEST_CHECK(pthread_create(&first, NULL, concurrent_event_loop_end, &end), 0);
+    TEST_CHECK(pthread_create(&second, NULL, concurrent_event_loop_end, &end), 0);
+    pthread_mutex_lock(&end.mutex);
+    while (end.ready != 2) pthread_cond_wait(&end.cond, &end.mutex);
+    end.go = true;
+    pthread_cond_broadcast(&end.cond);
+    pthread_mutex_unlock(&end.mutex);
+    pthread_join(first, NULL);
+    pthread_join(second, NULL);
+    concurrent_event_loop_end_active = NULL;
+    event_loop_shutdown_admitted_test_hook = saved_admitted;
+    event_loop_shutdown_owner_test_hook = saved_owner;
+    TEST_CHECK(end.admitted, 2);
+    TEST_CHECK(end.winners, 1);
+    TEST_CHECK(end.losers, 1);
+    TEST_CHECK(__atomic_load_n(&g_event_loop.producer_admission, __ATOMIC_ACQUIRE), 0U);
+    TEST_CHECK(native_resize_shutdown_restore_count, 1);
+    TEST_CHECK(g_event_loop.semaphore == NULL, true);
+    TEST_CHECK(g_event_loop.queue.events == NULL, true);
+
+    TEST_CHECK(event_loop_begin(&g_event_loop), true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, NULL, NULL), true);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    event_loop_end(&g_event_loop);
+    pthread_cond_destroy(&end.cond);
+    pthread_mutex_destroy(&end.mutex);
+    event_loop_test_native_resize_restore = saved_restore;
+    g_mouse_state = saved_mouse_state;
+    g_event_loop = saved_event_loop;
+});
 
 TEST_FUNC(application_observation_retries_only_transient_required_failures,
 {

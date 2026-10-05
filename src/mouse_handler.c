@@ -95,6 +95,7 @@ static MOUSE_HANDLER(mouse_handler)
     switch (type) {
     case kCGEventTapDisabledByTimeout:
     case kCGEventTapDisabledByUserInput: {
+        event_loop_post(&g_event_loop, NATIVE_RESIZE_CANCEL, NULL, 0);
         CFMachPortRef handle = handler_context->handle;
         if (handle) CGEventTapEnable(handle, true);
     } break;

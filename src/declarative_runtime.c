@@ -367,6 +367,10 @@ static enum declarative_apply_result declarative_apply_runtime_setting_to_view(e
         if (view) { view_set_flag(view, VIEW_AUTO_BALANCE); view->auto_balance = value->u32; }
         else declarative_runtime_operation_ops.set_auto_balance_for_all_spaces(&g_space_manager, value->u32);
         break;
+    case DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE:
+        if (g_mouse_state.native_edge_resize != value->boolean) native_resize_abort(&g_mouse_state, true);
+        g_mouse_state.native_edge_resize = value->boolean;
+        break;
     case DECLARATIVE_CONFIG_MOUSE_MOD: declarative_runtime_operation_ops.set_mouse_modifier(&g_mouse_state, value->enumeration); break;
     case DECLARATIVE_CONFIG_MOUSE_ACTION1: declarative_runtime_operation_ops.set_mouse_action1(&g_mouse_state, value->enumeration); break;
     case DECLARATIVE_CONFIG_MOUSE_ACTION2: declarative_runtime_operation_ops.set_mouse_action2(&g_mouse_state, value->enumeration); break;
