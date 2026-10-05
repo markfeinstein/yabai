@@ -161,7 +161,7 @@ TEST_FUNC(declarative_stale_warning_acknowledges_after_sink_failure_and_rearms_b
     TEST_CHECK(warning.emitted_generation, 7ULL);
     TEST_CHECK(state.notifications, 1);
     TEST_CHECK(state.logs, 1);
-    TEST_CHECK(strstr(state.notification, "native rule target is stale") != NULL, true);
+    TEST_CHECK(strstr(state.notification, "native rule target is unavailable or stale; move and follow effects were skipped") != NULL, true);
 
     rule_report_fold_warning(&rule, RULE_FOLD_OK);
     TEST_CHECK(state.notifications, 1);

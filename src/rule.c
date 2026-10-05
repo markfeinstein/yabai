@@ -63,6 +63,8 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
     char *role       = rule->role;
     char *srole      = rule->subrole;
     char *scratchpad = rule->effects.scratchpad;
+    uint32_t did = rule->target_unavailable ? 0 : rule->effects.did;
+    uint64_t sid = rule->target_unavailable ? 0 : rule->effects.sid;
 
     char *escaped_label      = label      ? ts_string_escape(label)      : NULL;
     char *escaped_app        = app        ? ts_string_escape(app)        : NULL;
@@ -99,8 +101,8 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_TITLE].query_name, escaped_title ? escaped_title : title ? title : "",
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_ROLE].query_name, escaped_role ? escaped_role : role ? role : "",
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SUBROLE].query_name, escaped_srole ? escaped_srole : srole ? srole : "",
-            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_DISPLAY].query_name, rule->effects.did ? display_manager_display_id_arrangement(rule->effects.did) : 0,
-            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SPACE].query_name, rule->effects.sid ? space_manager_mission_control_index(rule->effects.sid) : 0,
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_DISPLAY].query_name, did ? display_manager_display_id_arrangement(did) : 0,
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SPACE].query_name, sid ? space_manager_mission_control_index(sid) : 0,
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_FOLLOW].query_name, json_bool(rule_effects_check_flag(&rule->effects, RULE_FOLLOW_SPACE)),
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_OPACITY].query_name, rule->effects.opacity,
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_MANAGE].query_name, json_optional_bool(rule->effects.manage),
@@ -176,9 +178,11 @@ enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_e
         return RULE_FOLD_OK;
     }
 
-    bool has_target = rule->effects.sid || rule->effects.did;
+    bool has_target = rule->target_unavailable || rule->effects.sid || rule->effects.did;
     bool valid = !has_target;
-    if (has_target) {
+    if (rule->target_unavailable) {
+        valid = false;
+    } else if (has_target) {
         if (rule->effects.sid) {
             valid = rule_fold_context_target_is_valid(context, RULE_TARGET_SPACE,
                                                        rule->effects.sid, rule->space_uuid,
@@ -275,11 +279,15 @@ bool rule_reapply_by_label(char *label, const struct rule_fold_context *context)
 void rule_apply(struct rule *rule, const struct rule_fold_context *context)
 {
     struct rule_effects effects = {0};
-    enum rule_fold_result fold = rule_combine_rule_effects(rule, &effects, context);
-    rule_report_fold_warning(rule, fold);
+    bool folded = false;
     table_for (struct window *window, g_window_manager.window, {
         if (window->is_root) {
             if (window_manager_rule_matches_window(rule, window, window_title_ts(window), window_role_ts(window), window_subrole_ts(window))) {
+                if (!folded) {
+                    enum rule_fold_result fold = rule_combine_rule_effects(rule, &effects, context);
+                    rule_report_fold_warning(rule, fold);
+                    folded = true;
+                }
                 window_manager_apply_manage_rule_effects_to_window(&g_space_manager, &g_window_manager, window, &effects);
 
                 if (window_manager_is_window_eligible(window)) {

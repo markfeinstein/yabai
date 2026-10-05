@@ -216,7 +216,92 @@ TEST_FUNC(declarative_rule_preparation_resolves_orders_fingerprints_and_effects,
     declarative_prepared_rules_destroy(&prepared);
     model.display_index = 4;
     TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
-                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 1, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_MISSING_TARGET);
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 1, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
+    TEST_CHECK(prepared.live[0].target_unavailable, true);
+    TEST_CHECK(prepared.live[0].effects.did, 0U);
+    TEST_CHECK(rule_effects_check_flag(&prepared.live[0].effects, RULE_FOLLOW_SPACE), true);
+    declarative_prepared_rules_destroy(&prepared);
+});
+
+TEST_FUNC(declarative_rule_unavailable_targets_preserve_rules_precedence_and_independent_effects,
+{
+    struct declarative_rule_model model = declarative_rule_test_model();
+    struct declarative_prepared_rules prepared = {0};
+
+    model.space_index = 9;
+    model.display_index = 1;
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 17, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
+    TEST_CHECK(prepared.count, 1ULL);
+    TEST_CHECK(prepared.live_present[0], true);
+    TEST_CHECK(prepared.live[0].source_rule_index, 0U);
+    TEST_CHECK(strcmp(prepared.live[0].label, "native"), 0);
+    TEST_CHECK(prepared.live[0].target_unavailable, true);
+    TEST_CHECK(prepared.templates[0].target_unavailable, true);
+    TEST_CHECK(prepared.live[0].effects.did, 0U);
+    TEST_CHECK(prepared.live[0].effects.sid, 0ULL);
+    TEST_CHECK(prepared.templates[0].effects.did, 0U);
+    TEST_CHECK(prepared.templates[0].effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&prepared.live[0].effects, RULE_FOLLOW_SPACE), true);
+
+    char *query = NULL;
+    size_t query_length = 0;
+    FILE *query_stream = open_memstream(&query, &query_length);
+    rule_serialize(query_stream, &prepared.live[0], 0);
+    fclose(query_stream);
+    TEST_CHECK(strstr(query, "\"display\":0") != NULL, true);
+    TEST_CHECK(strstr(query, "\"space\":0") != NULL, true);
+    free(query);
+
+    /* Serialization fails closed even if unavailable provenance is paired with
+     * corrupt internal target IDs. */
+    prepared.live[0].effects.did = 10;
+    prepared.live[0].effects.sid = 101;
+    query = NULL;
+    query_length = 0;
+    query_stream = open_memstream(&query, &query_length);
+    rule_serialize(query_stream, &prepared.live[0], 0);
+    fclose(query_stream);
+    TEST_CHECK(strstr(query, "\"display\":0") != NULL, true);
+    TEST_CHECK(strstr(query, "\"space\":0") != NULL, true);
+    free(query);
+    prepared.live[0].effects.did = 0;
+    prepared.live[0].effects.sid = 0;
+
+    struct rule_effects effects = {0};
+    TEST_CHECK(rule_combine_rule_effects(&prepared.live[0], &effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(effects.did, 0U);
+    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), false);
+    TEST_CHECK(effects.sticky, RULE_PROP_ON);
+    TEST_CHECK(effects.fullscreen, RULE_PROP_ON);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_OPACITY), true);
+    TEST_CHECK(rule_combine_rule_effects(&prepared.live[0], &effects, NULL), RULE_FOLD_OK);
+    free(effects.scratchpad);
+
+    rule_destroy(&prepared.live[0]);
+    prepared.live_present[0] = false;
+    TEST_CHECK(declarative_prepared_rule_rearm(&prepared, 0), true);
+    TEST_CHECK(prepared.live[0].target_unavailable, true);
+    TEST_CHECK(prepared.live[0].warning_state, &prepared.warning_states[0]);
+    declarative_prepared_rules_destroy(&prepared);
+
+    model.space_index = 2;
+    model.display_index = 99;
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 18, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
+    TEST_CHECK(prepared.live[0].target_unavailable, false);
+    TEST_CHECK(prepared.live[0].effects.sid, 102ULL);
+    TEST_CHECK(prepared.live[0].effects.did, 0U);
+    declarative_prepared_rules_destroy(&prepared);
+
+    model.space_index = 0;
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 19, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY);
+    model.space_present = false;
+    model.display_index = 0;
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 19, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY);
 });
 
 TEST_FUNC(declarative_rule_preparation_supports_each_matcher_independently,
@@ -439,7 +524,40 @@ TEST_FUNC(declarative_rule_warning_state_survives_rearm_acknowledges_and_fails_c
     declarative_prepared_rules_destroy(&prepared);
 });
 
-TEST_FUNC(declarative_rule_reapply_index_and_label_use_provenance_fold,
+TEST_FUNC(declarative_rule_apply_warns_only_after_first_matching_root,
+{
+    struct declarative_rule_model model = {0};
+    model.matcher_present[0] = true;
+    model.matchers[0] = (struct declarative_matcher) { "^Match$", false };
+    model.display_present = true;
+    model.display_index = 4;
+    struct declarative_prepared_rules prepared = {0};
+    TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 23, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
+
+    struct table saved_windows = g_window_manager.window;
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    struct application application = { .name = "Other" };
+    struct window window = { .id = 9001, .application = &application, .is_root = true };
+    table_add(&g_window_manager.window, &window.id, &window);
+
+    rule_apply(&prepared.live[0], NULL);
+    TEST_CHECK(prepared.warning_states[0].pending_generation, 0ULL);
+    application.name = "Match";
+    rule_apply(&prepared.live[0], NULL);
+    TEST_CHECK(prepared.warning_states[0].pending_generation, 23ULL);
+    TEST_CHECK(prepared.warning_states[0].emitted_generation, 23ULL);
+    rule_apply(&prepared.live[0], NULL);
+    TEST_CHECK(prepared.warning_states[0].pending_generation, 23ULL);
+    TEST_CHECK(prepared.warning_states[0].emitted_generation, 23ULL);
+
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    declarative_prepared_rules_destroy(&prepared);
+});
+
+TEST_FUNC(declarative_rule_reapply_without_matching_roots_does_not_transition_warning,
 {
     struct rule *saved = g_window_manager.rules;
     g_window_manager.rules = NULL;
@@ -460,11 +578,11 @@ TEST_FUNC(declarative_rule_reapply_index_and_label_use_provenance_fold,
     struct rule_fold_context *context = declarative_rule_fold_context_create(&current_topology);
     TEST_CHECK(context != NULL, true);
     TEST_CHECK(rule_reapply_by_index(0, context), true);
-    TEST_CHECK(prepared.warning_states[0].pending_generation, 13ULL);
-    TEST_CHECK(rule_acknowledge_stale_warning(&g_window_manager.rules[0]), true);
+    TEST_CHECK(prepared.warning_states[0].pending_generation, 0ULL);
+    TEST_CHECK(rule_acknowledge_stale_warning(&g_window_manager.rules[0]), false);
     g_window_manager.rules[0].generation = 14;
     TEST_CHECK(rule_reapply_by_label("native", context), true);
-    TEST_CHECK(prepared.warning_states[0].pending_generation, 14ULL);
+    TEST_CHECK(prepared.warning_states[0].pending_generation, 0ULL);
     declarative_rule_fold_context_destroy(context);
     rule_destroy(&g_window_manager.rules[0]);
     buf_free(g_window_manager.rules);

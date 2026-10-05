@@ -207,6 +207,22 @@ TEST_FUNC(declarative_startup_install_candidate_mapping_covers_all_settings,
     }
 });
 
+static struct declarative_config_model *declarative_install_test_unavailable_model(void)
+{
+    static const char json[] =
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":9},\"settings\":{\"top_padding\":777}}],"
+        "\"rules\":["
+        "{\"label\":\"future-a\",\"match\":{\"app\":{\"pattern\":\"^FutureA$\"}},"
+        "\"effects\":{\"space\":{\"index\":9},\"follow\":true,\"manage\":true}},"
+        "{\"label\":\"future-b\",\"match\":{\"app\":{\"pattern\":\"^FutureB$\"}},"
+        "\"effects\":{\"space\":{\"index\":10},\"sticky\":true}}]}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    if (!declarative_config_parse_bytes((const uint8_t *) json, strlen(json),
+                                        "/tmp/install-unavailable.jsonc", &model, &error)) return NULL;
+    return model;
+}
+
 static struct declarative_config_model *declarative_install_test_model(void)
 {
     static const char json[] =
@@ -223,6 +239,72 @@ static struct declarative_config_model *declarative_install_test_model(void)
     if (!declarative_config_parse_bytes((const uint8_t *) json, strlen(json), "/tmp/install.jsonc", &model, &error)) return NULL;
     return model;
 }
+
+TEST_FUNC(declarative_startup_install_retains_unavailable_rules_and_dormant_policy,
+{
+    struct event_loop saved_event_loop = g_event_loop;
+    struct declarative_install_test_window_manager_state saved_window_manager =
+        declarative_install_test_window_manager_capture(&g_window_manager);
+    struct space_manager saved_space_manager = g_space_manager;
+    struct display_manager saved_display_manager = g_display_manager;
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    struct menu_bar_manager_state saved_menu_manager = g_menu_bar_manager;
+
+    g_event_loop = (struct event_loop) {0};
+    declarative_install_test_window_manager_clear_nonmutex(&g_window_manager);
+    g_space_manager = (struct space_manager) {0};
+    g_display_manager = (struct display_manager) {0};
+    g_mouse_state = (struct mouse_state) { .modifier = MOUSE_MOD_FN };
+    g_menu_bar_manager = (struct menu_bar_manager_state) { .initialized = true };
+    menu_bar_manager_startup_staging_open();
+    declarative_install_test_reset();
+
+    struct declarative_topology_fixture fixture;
+    declarative_topology_test_fixture_init(&fixture, false);
+    struct declarative_topology_capture_ops ops = declarative_topology_test_ops(&fixture);
+    struct declarative_startup_state startup = {
+        .model = declarative_install_test_unavailable_model(), .present = true
+    };
+    snprintf(startup.path, sizeof(startup.path), "%s", "/tmp/install-unavailable.jsonc");
+    struct declarative_install_test_context context = { .startup = &startup, .ops = &ops };
+    TEST_CHECK(startup.model != NULL, true);
+    TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, declarative_install_test_bootstrap, &context), true);
+
+    TEST_CHECK(declarative_installed_generation(), 1ULL);
+    TEST_CHECK(declarative_installed_model() != NULL, true);
+    TEST_CHECK(declarative_installed_model()->rule_count, 2ULL);
+    TEST_CHECK(declarative_installed_model()->rules[0].space_index, 9);
+    TEST_CHECK(declarative_installed_model()->rules[1].space_index, 10);
+    TEST_CHECK(rule_native_prefix_length(), 2U);
+    TEST_CHECK(buf_len(g_window_manager.rules), 2);
+    TEST_CHECK(g_window_manager.rules[0].source_rule_index, 0U);
+    TEST_CHECK(g_window_manager.rules[1].source_rule_index, 1U);
+    TEST_CHECK(strcmp(g_window_manager.rules[0].label, "future-a"), 0);
+    TEST_CHECK(strcmp(g_window_manager.rules[1].label, "future-b"), 0);
+    TEST_CHECK(g_window_manager.rules[0].target_unavailable, true);
+    TEST_CHECK(g_window_manager.rules[1].target_unavailable, true);
+    TEST_CHECK(rule_native_label_is_protected("future-a"), true);
+    TEST_CHECK(rule_native_label_is_protected("future-b"), true);
+    uint64_t current_sids[] = { 11, 12, 21 };
+    for (size_t i = 0; i < array_count(current_sids); ++i) {
+        struct view *view = table_find(&g_space_manager.view, &current_sids[i]);
+        TEST_CHECK(view != NULL, true);
+        TEST_CHECK(view && view->top_padding != 777, true);
+    }
+
+    event_loop_end(&g_event_loop);
+    declarative_install_test_reset();
+    declarative_startup_destroy(&startup);
+    declarative_topology_test_fixture_destroy(&fixture);
+    menu_bar_manager_startup_staging_abort();
+    g_menu_bar_manager = saved_menu_manager;
+    g_mouse_state = saved_mouse_state;
+    g_display_manager = saved_display_manager;
+    g_space_manager = saved_space_manager;
+    declarative_install_test_window_manager_restore(&g_window_manager, &saved_window_manager);
+    g_event_loop = saved_event_loop;
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
 
 TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
 {

@@ -109,6 +109,7 @@ struct rule
     enum rule_owner owner;
     uint32_t source_rule_index;
     uint64_t generation;
+    bool target_unavailable;
     char *display_uuid;
     char *space_uuid;
     int expected_space_kind;

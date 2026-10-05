@@ -290,7 +290,7 @@ void declarative_report_error_client(FILE *primary, const struct declarative_err
 void declarative_report_stale_rule(void)
 {
     declarative_report_runtime(stderr, "rule", declarative_installed_path(), "$.rules.effects",
-                               0, 0, "native rule target is stale; move and follow effects were skipped");
+                               0, 0, "native rule target is unavailable or stale; move and follow effects were skipped");
 }
 
 #ifdef TESTS

@@ -2358,6 +2358,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_per_space_ownership_follows_retained_view_identity) \
     TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
     TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
+    TEST_ENTRY(declarative_space_index_policy_is_dormant_until_target_appears) \
     TEST_ENTRY(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay) \
     TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
     TEST_ENTRY(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash) \
@@ -2423,6 +2424,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_topology_allocation_failures_leave_no_owned_state) \
     TEST_ENTRY(declarative_view_adoption_is_atomic_at_every_registry_allocation) \
     TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
+    TEST_ENTRY(declarative_startup_install_retains_unavailable_rules_and_dormant_policy) \
     TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
     TEST_ENTRY(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable) \
@@ -2430,6 +2432,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
     TEST_ENTRY(declarative_reload_reserves_fresh_native_one_shots_for_pending_refreshes) \
+    TEST_ENTRY(declarative_reload_accepts_unavailable_native_targets_atomically) \
     TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
     TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
     TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
@@ -2453,6 +2456,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_rule_topology_is_strict_and_cross_linked) \
     TEST_ENTRY(declarative_rule_maximum_topology_validates_once_and_folds_are_bounded) \
     TEST_ENTRY(declarative_rule_preparation_resolves_orders_fingerprints_and_effects) \
+    TEST_ENTRY(declarative_rule_unavailable_targets_preserve_rules_precedence_and_independent_effects) \
     TEST_ENTRY(declarative_rule_preparation_supports_each_matcher_independently) \
     TEST_ENTRY(declarative_rule_preparation_rejects_labels_regex_and_preserves_manager) \
     TEST_ENTRY(declarative_rule_preparation_cleans_every_allocator_failure) \
@@ -2461,7 +2465,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_native_one_shot_template_survives_live_destruction_and_rearms) \
     TEST_ENTRY(declarative_rule_folding_is_provenance_aware_and_warns_once) \
     TEST_ENTRY(declarative_rule_warning_state_survives_rearm_acknowledges_and_fails_closed) \
-    TEST_ENTRY(declarative_rule_reapply_index_and_label_use_provenance_fold) \
+    TEST_ENTRY(declarative_rule_apply_warns_only_after_first_matching_root) \
+    TEST_ENTRY(declarative_rule_reapply_without_matching_roots_does_not_transition_warning) \
     TEST_ENTRY(declarative_rule_owned_context_is_immutable_and_rejects_stale_targets) \
     TEST_ENTRY(rule_protected_label_messages_are_exact_and_ordered) \
     TEST_ENTRY(rule_label_ownership_results_preserve_runtime_order_and_protect_native) \

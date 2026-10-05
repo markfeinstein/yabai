@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Accept native rule and Space-policy targets that are not yet present in an
+  otherwise valid topology; native rules bind on explicit reload while Space
+  policies remain dormant until topology reconciliation finds their target.
 - Add ordered managed-window scaffolds to native per-Space policy, with
   opening-order-independent one-, two-, and three-primary BSP geometry.
 - Add native managed `accordion_horizontal` and `accordion_vertical` layouts

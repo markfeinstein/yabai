@@ -51,6 +51,36 @@ TEST_FUNC(declarative_space_resolver_is_fieldwise_and_mode_explicit,
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer, 5);
 })
 
+TEST_FUNC(declarative_space_index_policy_is_dormant_until_target_appears,
+{
+    struct declarative_space_defaults defaults = declarative_space_test_defaults();
+    struct declarative_space_policy policy = { .by_index = true, .index = 9 };
+    policy.settings[DECLARATIVE_CONFIG_LAYOUT] = (struct declarative_value) {
+        .present = true, .enumeration = VIEW_FLOAT
+    };
+    struct declarative_config_model native = { .spaces = &policy, .space_count = 1 };
+    struct declarative_space_effective effective;
+    for (int index = 1; index <= 8; ++index) {
+        struct view view = { .sid = (uint64_t) index, .layout = VIEW_BSP };
+        struct declarative_space_target target = {
+            .view = &view, .sid = (uint64_t) index, .index = index,
+            .uuid = "current", .is_user_space = true
+        };
+        TEST_CHECK(declarative_space_resolve_policy(&native, NULL, &defaults, &target,
+                                                    DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+        TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_BSP);
+        TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].source, DECLARATIVE_SETTING_BUILTIN);
+    }
+    struct view future = { .sid = 9, .layout = VIEW_BSP };
+    struct declarative_space_target target9 = {
+        .view = &future, .sid = 9, .index = 9, .uuid = "future", .is_user_space = true
+    };
+    TEST_CHECK(declarative_space_resolve_policy(&native, NULL, &defaults, &target9,
+                                                DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_FLOAT);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].source, DECLARATIVE_SETTING_NATIVE_SPACE);
+})
+
 TEST_FUNC(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay,
 {
     struct view view = { .sid = 92, .split_ratio = 0.5f };

@@ -29,6 +29,25 @@ struct declarative_reload_fixture
     size_t captured_bounds_count;
 };
 
+static CFStringRef declarative_reload_test_copy_space_uuid(uint64_t sid, void *context)
+{
+    (void) context;
+    return CFStringCreateWithFormat(NULL, NULL, CFSTR("space-%llu"), sid);
+}
+
+static bool declarative_reload_test_space_is_user(uint64_t sid, void *context)
+{
+    (void) sid;
+    (void) context;
+    return true;
+}
+
+static void declarative_reload_test_update_created_view(struct view *view, void *context)
+{
+    (void) context;
+    view->root->area = (struct area) { .x = 0.0f, .y = 0.0f, .w = 800.0f, .h = 600.0f };
+}
+
 struct declarative_reload_saved_state
 {
     struct event_loop event_loop;
@@ -922,6 +941,107 @@ TEST_FUNC(declarative_reload_reserves_fresh_native_one_shots_for_pending_refresh
     window_manager_remove_application(&g_window_manager, alpha.pid);
     window_manager_remove_application(&g_window_manager, beta.pid);
     buf_free(g_window_manager.applications_to_refresh);
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
+TEST_FUNC(declarative_reload_accepts_unavailable_native_targets_atomically,
+{
+    static const char candidate_json[] =
+        "{\"version\":1,\"spaces\":[{\"match\":{\"index\":4},\"settings\":{\"layout\":\"float\"}}],"
+        "\"rules\":["
+        "{\"label\":\"future-four\",\"match\":{\"app\":{\"pattern\":\"^Future$\"}},"
+        "\"effects\":{\"space\":{\"index\":4},\"follow\":true,\"manage\":true}},"
+        "{\"label\":\"future-ten\",\"one_shot\":true,\"match\":{\"app\":{\"pattern\":\"^Once$\"}},"
+        "\"effects\":{\"space\":{\"index\":10},\"manage\":true}}]}";
+    struct declarative_reload_fixture fixture = {
+        .json = candidate_json, .path = "/tmp/reload-unavailable-targets.jsonc"
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    declarative_reload_add_runtime_rule("runtime-suffix");
+    uint64_t old_generation = declarative_installed.generation;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(declarative_installed.generation, old_generation + 1);
+    TEST_CHECK(rule_native_prefix_length(), 2U);
+    TEST_CHECK(buf_len(g_window_manager.rules), 3);
+    TEST_CHECK(strcmp(g_window_manager.rules[0].label, "future-four"), 0);
+    TEST_CHECK(strcmp(g_window_manager.rules[1].label, "future-ten"), 0);
+    TEST_CHECK(strcmp(g_window_manager.rules[2].label, "runtime-suffix"), 0);
+    TEST_CHECK(g_window_manager.rules[0].target_unavailable, true);
+    TEST_CHECK(g_window_manager.rules[1].target_unavailable, true);
+    TEST_CHECK(rule_check_flag(&g_window_manager.rules[1], RULE_ONE_SHOT), true);
+
+    struct application once = { .pid = 601, .psn = { 6, 1 }, .name = "Once" };
+    TEST_CHECK(rule_reserve_one_shots(&once), true);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_owner_pid, once.pid);
+    struct rule_effects once_effects = {0};
+    TEST_CHECK(rule_combine_rule_effects(&g_window_manager.rules[1], &once_effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(once_effects.did, 0U);
+    TEST_CHECK(once_effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&once_effects, RULE_FOLLOW_SPACE), false);
+    TEST_CHECK(once_effects.manage, RULE_PROP_ON);
+    free(once_effects.scratchpad);
+
+    struct window once_window = { .id = 7100, .application = &once };
+    window_manager_test_rule_window = &once_window;
+    window_manager_apply_manage_rules_to_window(&g_space_manager, &g_window_manager, &once_window,
+                                                "Once", "AXWindow", "AXStandardWindow", true, once.pid);
+    window_manager_test_rule_window = NULL;
+    TEST_CHECK(window_check_rule_flag(&once_window, WINDOW_RULE_MANAGED), true);
+    TEST_CHECK(g_window_manager.rules[1].one_shot_window_id, once_window.id);
+    rule_cleanup_consumed_one_shots(&once);
+    TEST_CHECK(rule_native_prefix_length(), 1U);
+    TEST_CHECK(buf_len(g_window_manager.rules), 2);
+    TEST_CHECK(strcmp(g_window_manager.rules[1].label, "runtime-suffix"), 0);
+    TEST_CHECK(rule_native_label_is_protected("future-ten"), true);
+
+    struct rule_effects effects = {0};
+    TEST_CHECK(rule_combine_rule_effects(&g_window_manager.rules[0], &effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), false);
+    TEST_CHECK(effects.manage, RULE_PROP_ON);
+    free(effects.scratchpad);
+
+    uint64_t generation = declarative_installed.generation;
+    uint64_t first[] = { 11, 12 };
+    uint64_t second[] = { 21, 22 };
+    for (int i = 0; i < 2; ++i) {
+        CFRelease(fixture.topology.topology[i]);
+        fixture.topology.topology[i] = declarative_topology_test_topology(CFSTR("display-a"), first, 2,
+                                                                         CFSTR("display-b"), second, 2);
+        fixture.topology.active_sid[i] = 11;
+    }
+    struct view_test_platform_ops view_ops = {
+        .update_windows = declarative_reload_test_update_created_view,
+        .copy_space_uuid = declarative_reload_test_copy_space_uuid,
+        .space_is_user = declarative_reload_test_space_is_user
+    };
+    view_test_set_platform_ops(&view_ops);
+    uint64_t future_sid = 22;
+    TEST_CHECK(space_manager_find_view(&g_space_manager, future_sid) != NULL, true);
+    view_test_set_platform_ops(NULL);
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    TEST_CHECK(declarative_reconcile_run(&ops), true);
+    TEST_CHECK(declarative_installed.generation, generation);
+    TEST_CHECK(g_window_manager.rules[0].target_unavailable, true);
+    TEST_CHECK(g_window_manager.rules[0].effects.sid, 0ULL);
+    struct view *future_view = table_find(&g_space_manager.view, &future_sid);
+    TEST_CHECK(future_view != NULL, true);
+    TEST_CHECK(future_view ? future_view->layout : VIEW_BSP, VIEW_FLOAT);
+
+    fixture.topology.observation = 0;
+    fixture.topology.query_count = 0;
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(declarative_installed.generation, generation + 1);
+    TEST_CHECK(g_window_manager.rules[0].target_unavailable, false);
+    TEST_CHECK(g_window_manager.rules[0].effects.sid, future_sid);
+    TEST_CHECK(strcmp(g_window_manager.rules[2].label, "runtime-suffix"), 0);
+
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });

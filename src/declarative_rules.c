@@ -315,6 +315,7 @@ static bool declarative_rule_clone(const struct rule *source, struct rule *desti
     destination->owner = source->owner;
     destination->source_rule_index = source->source_rule_index;
     destination->generation = source->generation;
+    destination->target_unavailable = source->target_unavailable;
     destination->expected_space_kind = source->expected_space_kind;
     destination->space_identity = source->space_identity;
     destination->warning_state = source->warning_state;
@@ -344,12 +345,14 @@ static enum declarative_rule_prepare_result declarative_rule_from_model(const st
                                                                          size_t model_index, uint64_t generation,
                                                                          const struct declarative_rule_display_entry *display,
                                                                          const struct declarative_rule_space_entry *space,
+                                                                         bool target_unavailable,
                                                                          struct rule *rule)
 {
     memset(rule, 0, sizeof(*rule));
     rule->owner = RULE_OWNER_NATIVE;
     rule->source_rule_index = (uint32_t) model_index;
     rule->generation = generation;
+    rule->target_unavailable = target_unavailable;
     if (model->label && !(rule->label = declarative_rule_strdup(model->label))) goto allocation_failure;
     for (int i = 0; i < 4; ++i) {
         if (model->matcher_present[i] && !declarative_rule_copy_matcher(rule, i, model->matchers[i].pattern, model->matchers[i].exclude)) {
@@ -371,7 +374,7 @@ static enum declarative_rule_prepare_result declarative_rule_from_model(const st
         if (!declarative_rule_space_identity(space, &rule->space_identity)) goto allocation_failure;
         if (!(rule->space_uuid = declarative_rule_strdup(space->uuid))) goto allocation_failure;
     }
-    if ((display || space) && model->follow) rule_effects_set_flag(&rule->effects, RULE_FOLLOW_SPACE);
+    if ((model->display_present || model->space_present) && model->follow) rule_effects_set_flag(&rule->effects, RULE_FOLLOW_SPACE);
     if (model->grid_present) memcpy(rule->effects.grid, model->grid, sizeof(model->grid));
     if (model->opacity_present) { rule->effects.opacity = model->opacity; rule_effects_set_flag(&rule->effects, RULE_OPACITY); }
     rule->effects.manage = model->scratchpad ? RULE_PROP_OFF :
@@ -465,18 +468,44 @@ enum declarative_rule_prepare_result declarative_prepare_rules(const struct decl
     for (size_t i = 0; i < count; ++i) {
         const struct declarative_rule_display_entry *display = NULL;
         const struct declarative_rule_space_entry *space = NULL;
-        if (models[i].display_present) {
-            if (models[i].display_index <= 0 || (size_t) models[i].display_index > snapshot->display_count) { result = DECLARATIVE_RULE_PREPARE_MISSING_TARGET; break; }
-            display = ordered[models[i].display_index - 1];
+        bool target_unavailable = false;
+        if (models[i].display_present && models[i].display_index <= 0) {
+            result = DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY;
+            break;
         }
+        if (models[i].space_present && models[i].space_index <= 0) {
+            result = DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY;
+            break;
+        }
+
+        /* Space is the effective target when both are authored. An absent
+         * lower-priority display must not invalidate or suppress a valid Space. */
         if (models[i].space_present) {
-            if (models[i].space_index <= 0 || (size_t) models[i].space_index > snapshot->space_count) { result = DECLARATIVE_RULE_PREPARE_MISSING_TARGET; break; }
-            for (size_t j = 0; j < snapshot->space_count; ++j) {
-                if (snapshot->spaces[j].mission_control_ordinal == models[i].space_index - 1) space = &snapshot->spaces[j];
+            if ((size_t) models[i].space_index > snapshot->space_count) {
+                target_unavailable = true;
+            } else {
+                for (size_t j = 0; j < snapshot->space_count; ++j) {
+                    if (snapshot->spaces[j].mission_control_ordinal == models[i].space_index - 1) {
+                        space = &snapshot->spaces[j];
+                        break;
+                    }
+                }
+                if (!space) { result = DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY; break; }
             }
-            if (!space) { result = DECLARATIVE_RULE_PREPARE_MISSING_TARGET; break; }
+            if (space && models[i].display_present && (size_t) models[i].display_index <= snapshot->display_count) {
+                display = ordered[models[i].display_index - 1];
+                if (!display) { result = DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY; break; }
+            }
+        } else if (models[i].display_present) {
+            if ((size_t) models[i].display_index > snapshot->display_count) {
+                target_unavailable = true;
+            } else {
+                display = ordered[models[i].display_index - 1];
+                if (!display) { result = DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY; break; }
+            }
         }
-        result = declarative_rule_from_model(&models[i], i, generation, display, space, &prepared->templates[i]);
+        result = declarative_rule_from_model(&models[i], i, generation, display, space,
+                                             target_unavailable, &prepared->templates[i]);
         if (result != DECLARATIVE_RULE_PREPARE_OK) break;
         prepared->templates[i].warning_state = &prepared->warning_states[i];
         if (!declarative_rule_clone(&prepared->templates[i], &prepared->live[i])) { result = DECLARATIVE_RULE_PREPARE_ALLOCATION_FAILED; break; }
