@@ -587,6 +587,118 @@ static struct application *event_loop_find_processed_front_application(void)
     return application;
 }
 
+static uint32_t event_loop_application_front_focused_window(struct application *application)
+{
+    return application_focused_window(application);
+}
+
+static uint64_t event_loop_application_front_window_space(uint32_t window_id)
+{
+    return window_space(window_id);
+}
+
+static uint64_t event_loop_application_front_process_space(int connection)
+{
+    return process_manager_active_space_for_psn(connection);
+}
+
+static bool event_loop_application_front_space_is_visible(uint64_t sid)
+{
+    return space_is_visible(sid);
+}
+
+static void event_loop_application_front_set_psn(uint64_t sid, ProcessSerialNumber psn)
+{
+    SLSSpaceSetFrontPSN(g_connection, sid, psn);
+}
+
+static void event_loop_application_front_focus_space(uint64_t sid)
+{
+    space_manager_focus_space_using_gesture(space_display_id(sid), sid);
+}
+
+#ifdef TESTS
+static uint32_t (*event_loop_application_front_find_focused_window)(struct application *) = event_loop_application_front_focused_window;
+static uint64_t (*event_loop_application_front_find_window_space)(uint32_t) = event_loop_application_front_window_space;
+static uint64_t (*event_loop_application_front_find_process_space)(int) = event_loop_application_front_process_space;
+static bool (*event_loop_application_front_is_space_visible)(uint64_t) = event_loop_application_front_space_is_visible;
+static void (*event_loop_application_front_assign_psn)(uint64_t, ProcessSerialNumber) = event_loop_application_front_set_psn;
+static void (*event_loop_application_front_focus)(uint64_t) = event_loop_application_front_focus_space;
+#else
+#define event_loop_application_front_find_focused_window event_loop_application_front_focused_window
+#define event_loop_application_front_find_window_space event_loop_application_front_window_space
+#define event_loop_application_front_find_process_space event_loop_application_front_process_space
+#define event_loop_application_front_is_space_visible event_loop_application_front_space_is_visible
+#define event_loop_application_front_assign_psn event_loop_application_front_set_psn
+#define event_loop_application_front_focus event_loop_application_front_focus_space
+#endif
+
+static void event_loop_focus_application_front_space(struct application *application, uint32_t focused_window_id)
+{
+    if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+
+    uint64_t sid = focused_window_id ? event_loop_application_front_find_window_space(focused_window_id) : 0;
+    if (!sid) {
+        sid = event_loop_application_front_find_process_space(application->connection);
+        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+
+        uint32_t current_focused_window_id = event_loop_application_front_find_focused_window(application);
+        uint64_t current_sid = current_focused_window_id ? event_loop_application_front_find_window_space(current_focused_window_id) : 0;
+        if (current_sid) sid = current_sid;
+    }
+    if (!sid || event_loop_application_front_is_space_visible(sid)) return;
+    if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+
+    event_loop_application_front_assign_psn(sid, application->psn);
+    event_loop_application_front_focus(sid);
+}
+
+static void event_loop_handle_application_front_space(struct application *application)
+{
+    if (!g_space_manager.skip_window_focus_animation) return;
+
+    uint64_t last_cmd_tab_time = __atomic_load_n(&__last_cmd_tab_time, __ATOMIC_RELAXED);
+    float dt = ((float) read_os_timer() - last_cmd_tab_time) * (1000.0f / (float)read_os_freq());
+    if (dt > 1500.0f) {
+        CFTypeRef dummy = NULL;
+        AXUIElementCopyAttributeValue(application->ref, CFSTR("__fence"), &dummy);
+    }
+
+    uint32_t focused_window_id = event_loop_application_front_find_focused_window(application);
+    event_loop_focus_application_front_space(application, focused_window_id);
+}
+
+static void event_loop_update_application_front_focus(struct application *application)
+{
+    uint32_t focused_window_id = event_loop_application_front_find_focused_window(application);
+    if (!focused_window_id) {
+        struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+        if (focused_window) {
+            window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.normal_window_opacity);
+        }
+
+        g_window_manager.last_window_id = g_window_manager.focused_window_id;
+        g_window_manager.focused_window_id = 0;
+        g_window_manager.focused_window_psn = application->psn;
+        g_mouse_state.ffm_window_id = 0;
+        return;
+    }
+
+    struct window *window = window_manager_find_window(&g_window_manager, focused_window_id);
+    if (!window) {
+        struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+        if (focused_window) {
+            window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.normal_window_opacity);
+        }
+
+        window_manager_add_lost_focused_event(&g_window_manager, focused_window_id);
+        return;
+    }
+
+    window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
+    event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
+}
+
 static bool event_loop_commit_application_front_switched(struct application_front_switched_event *event, struct application **application, struct application **deactivated_application)
 {
     *application = NULL;
@@ -630,23 +742,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     if (!event_loop_commit_application_front_switched(&event, &application, &deactivated_application)) return;
 
     // Application destruction is serialized on this event-loop worker, so both captured pointers remain valid here.
-    if (g_space_manager.skip_window_focus_animation) {
-        uint64_t psn_sid = process_manager_active_space_for_psn(application->connection);
-
-        uint64_t last_cmd_tab_time = __atomic_load_n(&__last_cmd_tab_time, __ATOMIC_RELAXED);
-        float dt = ((float) read_os_timer() - last_cmd_tab_time) * (1000.0f / (float)read_os_freq());
-        if (dt > 1500.0f) {
-            CFTypeRef dummy = NULL;
-            AXUIElementCopyAttributeValue(application->ref, CFSTR("__fence"), &dummy);
-        }
-
-        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) == 0) {
-            if (psn_sid && !space_is_visible(psn_sid)) {
-                SLSSpaceSetFrontPSN(g_connection, psn_sid, event.psn);
-                space_manager_focus_space_using_gesture(space_display_id(psn_sid), psn_sid);
-            }
-        }
-    }
+    event_loop_handle_application_front_space(application);
 
     if (deactivated_application) event_signal_push(SIGNAL_APPLICATION_DEACTIVATED, deactivated_application);
 
@@ -670,33 +766,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
         }
     }
 
-    uint32_t application_focused_window_id = application_focused_window(application);
-    if (!application_focused_window_id) {
-        struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
-        if (focused_window) {
-            window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.normal_window_opacity);
-        }
-
-        g_window_manager.last_window_id = g_window_manager.focused_window_id;
-        g_window_manager.focused_window_id = 0;
-        g_window_manager.focused_window_psn = application->psn;
-        g_mouse_state.ffm_window_id = 0;
-        return;
-    }
-
-    struct window *window = window_manager_find_window(&g_window_manager, application_focused_window_id);
-    if (!window) {
-        struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
-        if (focused_window) {
-            window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.normal_window_opacity);
-        }
-
-        window_manager_add_lost_focused_event(&g_window_manager, application_focused_window_id);
-        return;
-    }
-
-    window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
-    event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
+    event_loop_update_application_front_focus(application);
 }
 #pragma clang diagnostic pop
 

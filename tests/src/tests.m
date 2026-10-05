@@ -1913,6 +1913,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
+    TEST_ENTRY(application_front_space_prefers_focused_window_and_preserves_fallback_guards) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_focus_fallback_trigger_policy_and_behavior_are_deterministic) \
     TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \

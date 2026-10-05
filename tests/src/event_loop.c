@@ -1273,6 +1273,206 @@ TEST_FUNC(display_change_rejects_invalid_pairs_before_commit,
     TEST_CHECK(sm.current_space_id, 30ULL);
 });
 
+static uint32_t application_front_space_test_focused_window_id;
+static uint64_t application_front_space_test_window_sid;
+static uint64_t application_front_space_test_process_sid;
+static uint64_t application_front_space_test_visible_sid;
+static uint64_t application_front_space_test_assigned_sid;
+static uint64_t application_front_space_test_focused_sid;
+static uint32_t application_front_space_test_window_id;
+static int application_front_space_test_connection;
+static int application_front_space_test_focused_window_calls;
+static int application_front_space_test_window_calls;
+static int application_front_space_test_process_calls;
+static int application_front_space_test_assign_calls;
+static int application_front_space_test_focus_calls;
+static bool application_front_space_test_process_reserves_pending_focus;
+
+static uint32_t application_front_space_test_focused_window(struct application *application)
+{
+    (void) application;
+    ++application_front_space_test_focused_window_calls;
+    return application_front_space_test_focused_window_id;
+}
+
+static uint64_t application_front_space_test_window_space(uint32_t window_id)
+{
+    application_front_space_test_window_id = window_id;
+    ++application_front_space_test_window_calls;
+    return application_front_space_test_window_sid;
+}
+
+static uint64_t application_front_space_test_process_space(int connection)
+{
+    application_front_space_test_connection = connection;
+    ++application_front_space_test_process_calls;
+    if (application_front_space_test_process_reserves_pending_focus) {
+        __atomic_store_n(&__pending_window_focus, 1, __ATOMIC_RELEASE);
+    }
+    return application_front_space_test_process_sid;
+}
+
+static bool application_front_space_test_is_visible(uint64_t sid)
+{
+    return sid == application_front_space_test_visible_sid;
+}
+
+static void application_front_space_test_assign_psn(uint64_t sid, ProcessSerialNumber psn)
+{
+    (void) psn;
+    ++application_front_space_test_assign_calls;
+    application_front_space_test_assigned_sid = sid;
+}
+
+static void application_front_space_test_focus(uint64_t sid)
+{
+    ++application_front_space_test_focus_calls;
+    application_front_space_test_focused_sid = sid;
+}
+
+static void application_front_space_test_reset(void)
+{
+    application_front_space_test_focused_window_id = 0;
+    application_front_space_test_visible_sid = 0;
+    application_front_space_test_assigned_sid = 0;
+    application_front_space_test_focused_sid = 0;
+    application_front_space_test_window_id = 0;
+    application_front_space_test_connection = 0;
+    application_front_space_test_focused_window_calls = 0;
+    application_front_space_test_window_calls = 0;
+    application_front_space_test_process_calls = 0;
+    application_front_space_test_assign_calls = 0;
+    application_front_space_test_focus_calls = 0;
+    application_front_space_test_process_reserves_pending_focus = false;
+}
+
+TEST_FUNC(application_front_space_prefers_focused_window_and_preserves_fallback_guards,
+{
+    __auto_type saved_focused_window = event_loop_application_front_find_focused_window;
+    __auto_type saved_window_space = event_loop_application_front_find_window_space;
+    __auto_type saved_process_space = event_loop_application_front_find_process_space;
+    __auto_type saved_is_visible = event_loop_application_front_is_space_visible;
+    __auto_type saved_assign_psn = event_loop_application_front_assign_psn;
+    __auto_type saved_focus = event_loop_application_front_focus;
+    uint32_t saved_pending_window_focus = __atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE);
+    bool saved_skip_window_focus_animation = g_space_manager.skip_window_focus_animation;
+    struct table saved_window_table = g_window_manager.window;
+    struct table saved_lost_focused_table = g_window_manager.window_lost_focused_event;
+    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    struct application application = { .connection = 17, .psn = { .highLongOfPSN = 1, .lowLongOfPSN = 2 } };
+
+    event_loop_application_front_find_focused_window = application_front_space_test_focused_window;
+    event_loop_application_front_find_window_space = application_front_space_test_window_space;
+    event_loop_application_front_find_process_space = application_front_space_test_process_space;
+    event_loop_application_front_is_space_visible = application_front_space_test_is_visible;
+    event_loop_application_front_assign_psn = application_front_space_test_assign_psn;
+    event_loop_application_front_focus = application_front_space_test_focus;
+    __atomic_store_n(&__pending_window_focus, 0, __ATOMIC_RELEASE);
+
+    application_front_space_test_window_sid = 4;
+    application_front_space_test_process_sid = 6;
+    application_front_space_test_reset();
+    event_loop_focus_application_front_space(&application, 58);
+    TEST_CHECK(application_front_space_test_window_calls, 1);
+    TEST_CHECK(application_front_space_test_window_id, 58U);
+    TEST_CHECK(application_front_space_test_process_calls, 0);
+    TEST_CHECK(application_front_space_test_assign_calls, 1);
+    TEST_CHECK(application_front_space_test_focus_calls, 1);
+    TEST_CHECK(application_front_space_test_assigned_sid, 4ULL);
+    TEST_CHECK(application_front_space_test_focused_sid, 4ULL);
+
+    application_front_space_test_reset();
+    event_loop_focus_application_front_space(&application, 0);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 1);
+    TEST_CHECK(application_front_space_test_window_calls, 0);
+    TEST_CHECK(application_front_space_test_process_calls, 1);
+    TEST_CHECK(application_front_space_test_connection, 17);
+    TEST_CHECK(application_front_space_test_focused_sid, 6ULL);
+
+    application_front_space_test_window_sid = 0;
+    application_front_space_test_reset();
+    event_loop_focus_application_front_space(&application, 58);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 1);
+    TEST_CHECK(application_front_space_test_window_calls, 1);
+    TEST_CHECK(application_front_space_test_process_calls, 1);
+    TEST_CHECK(application_front_space_test_focused_sid, 6ULL);
+
+    application_front_space_test_window_sid = 4;
+    application_front_space_test_reset();
+    application_front_space_test_visible_sid = 4;
+    event_loop_focus_application_front_space(&application, 58);
+    TEST_CHECK(application_front_space_test_process_calls, 0);
+    TEST_CHECK(application_front_space_test_assign_calls, 0);
+    TEST_CHECK(application_front_space_test_focus_calls, 0);
+
+    application_front_space_test_reset();
+    application_front_space_test_process_reserves_pending_focus = true;
+    __atomic_store_n(&__pending_window_focus, 0, __ATOMIC_RELEASE);
+    event_loop_focus_application_front_space(&application, 0);
+    TEST_CHECK(application_front_space_test_process_calls, 1);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 0);
+    TEST_CHECK(application_front_space_test_assign_calls, 0);
+    TEST_CHECK(application_front_space_test_focus_calls, 0);
+
+    application_front_space_test_reset();
+    application_front_space_test_focused_window_id = 58;
+    __atomic_store_n(&__pending_window_focus, 0, __ATOMIC_RELEASE);
+    event_loop_focus_application_front_space(&application, 0);
+    TEST_CHECK(application_front_space_test_process_calls, 1);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 1);
+    TEST_CHECK(application_front_space_test_window_calls, 1);
+    TEST_CHECK(application_front_space_test_assigned_sid, 4ULL);
+    TEST_CHECK(application_front_space_test_focused_sid, 4ULL);
+
+    application_front_space_test_reset();
+    __atomic_store_n(&__pending_window_focus, 1, __ATOMIC_RELEASE);
+    event_loop_focus_application_front_space(&application, 58);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 0);
+    TEST_CHECK(application_front_space_test_window_calls, 0);
+    TEST_CHECK(application_front_space_test_process_calls, 0);
+    TEST_CHECK(application_front_space_test_assign_calls, 0);
+    TEST_CHECK(application_front_space_test_focus_calls, 0);
+
+    application_front_space_test_reset();
+    __atomic_store_n(&__pending_window_focus, 0, __ATOMIC_RELEASE);
+    g_space_manager.skip_window_focus_animation = false;
+    event_loop_handle_application_front_space(&application);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 0);
+    TEST_CHECK(application_front_space_test_window_calls, 0);
+    TEST_CHECK(application_front_space_test_process_calls, 0);
+    TEST_CHECK(application_front_space_test_assign_calls, 0);
+    TEST_CHECK(application_front_space_test_focus_calls, 0);
+
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.window_lost_focused_event = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    table_init(&g_window_manager.window_lost_focused_event, 4, hash_wm, compare_wm);
+    g_window_manager.focused_window_id = 0;
+    application_front_space_test_reset();
+    application_front_space_test_focused_window_id = 58;
+    uint32_t early_focused_window_id = event_loop_application_front_find_focused_window(&application);
+    TEST_CHECK(early_focused_window_id, 58U);
+    application_front_space_test_focused_window_id = 59;
+    event_loop_update_application_front_focus(&application);
+    TEST_CHECK(application_front_space_test_focused_window_calls, 2);
+    TEST_CHECK(window_manager_find_lost_focused_event(&g_window_manager, 58), false);
+    TEST_CHECK(window_manager_find_lost_focused_event(&g_window_manager, 59), true);
+    table_free(&g_window_manager.window);
+    table_free(&g_window_manager.window_lost_focused_event);
+    g_window_manager.window = saved_window_table;
+    g_window_manager.window_lost_focused_event = saved_lost_focused_table;
+    g_window_manager.focused_window_id = saved_focused_window_id;
+
+    event_loop_application_front_find_focused_window = saved_focused_window;
+    event_loop_application_front_find_window_space = saved_window_space;
+    event_loop_application_front_find_process_space = saved_process_space;
+    event_loop_application_front_is_space_visible = saved_is_visible;
+    event_loop_application_front_assign_psn = saved_assign_psn;
+    event_loop_application_front_focus = saved_focus;
+    g_space_manager.skip_window_focus_animation = saved_skip_window_focus_animation;
+    __atomic_store_n(&__pending_window_focus, saved_pending_window_focus, __ATOMIC_RELEASE);
+});
+
 TEST_FUNC(update_window_notifications_append_grows_past_fixed_boundary,
 {
     uint32_t *window_list = NULL;
