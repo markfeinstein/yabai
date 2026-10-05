@@ -330,6 +330,61 @@ menu_bar_ui_render_screen(YBMenuBarScreenCell *cell,
     return metrics;
 }
 
+struct menu_bar_ui_strip_decoration_metrics
+{
+    CGFloat first_group_alpha;
+    CGFloat second_group_alpha;
+    CGFloat separator_alpha;
+};
+
+static CGFloat
+menu_bar_ui_pixel_alpha(NSBitmapImageRep *bitmap, NSPoint point)
+{
+    NSColor *pixel = [[bitmap colorAtX:(NSInteger) floor(point.x)
+                                     y:(NSInteger) floor(point.y)] colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+    return [pixel alphaComponent];
+}
+
+static struct menu_bar_ui_strip_decoration_metrics
+menu_bar_ui_render_strip_decorations(YBMenuBarStripView *strip,
+                                     NSPoint first_group,
+                                     NSPoint second_group,
+                                     NSPoint separator)
+{
+    NSInteger width = (NSInteger) NSWidth([strip bounds]);
+    NSInteger height = (NSInteger) NSHeight([strip bounds]);
+    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                      pixelsWide:width
+                                                                      pixelsHigh:height
+                                                                   bitsPerSample:8
+                                                                 samplesPerPixel:4
+                                                                        hasAlpha:YES
+                                                                        isPlanar:NO
+                                                                  colorSpaceName:NSCalibratedRGBColorSpace
+                                                                     bitmapFormat:0
+                                                                      bytesPerRow:0
+                                                                     bitsPerPixel:0];
+    NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [strip setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameAqua]];
+    g_yb_menu_bar_contrast_override = 0;
+
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:context];
+    [[NSColor clearColor] setFill];
+    NSRectFill([strip bounds]);
+    [strip drawRect:[strip bounds]];
+    [NSGraphicsContext restoreGraphicsState];
+
+    struct menu_bar_ui_strip_decoration_metrics metrics = {
+        .first_group_alpha = menu_bar_ui_pixel_alpha(bitmap, first_group),
+        .second_group_alpha = menu_bar_ui_pixel_alpha(bitmap, second_group),
+        .separator_alpha = menu_bar_ui_pixel_alpha(bitmap, separator)
+    };
+    g_yb_menu_bar_contrast_override = -1;
+    [bitmap release];
+    return metrics;
+}
+
 static size_t
 menu_bar_ui_screen_selection(NSView *strip, uint32_t *indexes, size_t capacity, size_t *omitted_out)
 {
@@ -598,6 +653,10 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(occupied_one->yb_state == YB_MENU_BAR_SCREEN_OCCUPIED);
     TEST_CHECK(occupied_two->yb_state == YB_MENU_BAR_SCREEN_OCCUPIED);
     TEST_CHECK(active->yb_state == YB_MENU_BAR_SCREEN_ACTIVE);
+    TEST_CHECK(visible_other->yb_display_index == 0);
+    TEST_CHECK(occupied_one->yb_display_index == 0);
+    TEST_CHECK(occupied_two->yb_display_index == 1);
+    TEST_CHECK(active->yb_display_index == 1);
     TEST_CHECK(NSWidth([active frame]) == YB_MENU_BAR_CELL_WIDTH);
     TEST_CHECK(NSHeight([active frame]) == YB_MENU_BAR_STATUS_HEIGHT);
     TEST_CHECK(YB_MENU_BAR_STATUS_HEIGHT == 22.0);
@@ -609,6 +668,9 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(YB_MENU_BAR_INDEX_PAD_X == 8.0);
     TEST_CHECK(YB_MENU_BAR_GAP == 0.0);
     TEST_CHECK(YB_MENU_BAR_DISPLAY_GAP == 4.0);
+    TEST_CHECK(YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA == 0.035);
+    TEST_CHECK(YB_MENU_BAR_DISPLAY_TINT_ALPHA == 0.075);
+    TEST_CHECK(YB_MENU_BAR_SEPARATOR_ALPHA == 0.38);
     TEST_CHECK([active image] == nil);
     TEST_CHECK([[active title] length] == 0);
     TEST_CHECK(occupied_one->yb_index == 3);
@@ -624,6 +686,13 @@ test_expanded_screen_cells_and_compact_option(void)
     }
     TEST_CHECK(NSMaxX([visible_other frame]) == NSMinX([occupied_one frame]));
     CGFloat display_gap = (NSMaxX([occupied_one frame]) + NSMinX([occupied_two frame])) * 0.5;
+    struct menu_bar_ui_strip_decoration_metrics decorations = menu_bar_ui_render_strip_decorations((YBMenuBarStripView *) expanded,
+                                                                                                    NSMakePoint(NSMinX([visible_other frame]), NSMidY([expanded bounds])),
+                                                                                                    NSMakePoint(NSMinX([occupied_two frame]), NSMidY([expanded bounds])),
+                                                                                                    NSMakePoint(display_gap, NSMidY([expanded bounds])));
+    TEST_CHECK(decorations.first_group_alpha > 0.02);
+    TEST_CHECK(decorations.second_group_alpha > decorations.first_group_alpha + 0.02);
+    TEST_CHECK(decorations.separator_alpha > decorations.second_group_alpha * 3.0);
     TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == nil);
     TEST_CHECK([expanded hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
                                              NSMidY([expanded bounds]))] == nil);

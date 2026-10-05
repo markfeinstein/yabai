@@ -14,6 +14,9 @@
 #define YB_MENU_BAR_BUTTON_PAD_X         7.0
 #define YB_MENU_BAR_GAP                  0.0
 #define YB_MENU_BAR_DISPLAY_GAP          4.0
+#define YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA 0.035
+#define YB_MENU_BAR_DISPLAY_TINT_ALPHA    0.075
+#define YB_MENU_BAR_SEPARATOR_ALPHA       0.38
 #define YB_MENU_BAR_OUTER_INSET          2.0
 #define YB_MENU_BAR_CELL_WIDTH          25.0
 #define YB_MENU_BAR_SCREEN_WIDTH        22.0
@@ -59,6 +62,7 @@ enum yb_menu_bar_control_kind
 @public
     enum yb_menu_bar_screen_state yb_state;
     uint32_t yb_index;
+    size_t yb_display_index;
     bool yb_pressed;
 }
 - (void)setYBPressed:(bool)pressed;
@@ -78,6 +82,34 @@ enum yb_menu_bar_control_kind
 
 @interface YBMenuBarStripView : NSView
 @end
+
+static bool yb_increased_contrast(void);
+
+static void
+yb_draw_display_group(NSRect group_rect, size_t display_index)
+{
+    bool alternate = display_index % 2;
+    NSColor *color = alternate ? [NSColor controlAccentColor] : [NSColor labelColor];
+    CGFloat alpha = alternate
+                  ? (yb_increased_contrast() ? 0.12 : YB_MENU_BAR_DISPLAY_TINT_ALPHA)
+                  : (yb_increased_contrast() ? 0.07 : YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA);
+    [[color colorWithAlphaComponent:alpha] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(group_rect, -1.0, 2.0)
+                                      xRadius:4.0
+                                      yRadius:4.0] fill];
+}
+
+static void
+yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
+{
+    CGFloat x = floor((NSMaxX(left_cell) + NSMinX(right_cell)) * 0.5) + 0.5;
+    NSBezierPath *separator = [NSBezierPath bezierPath];
+    [separator moveToPoint:NSMakePoint(x, 4.0)];
+    [separator lineToPoint:NSMakePoint(x, NSHeight([strip bounds]) - 4.0)];
+    [separator setLineWidth:1.0];
+    [[[NSColor separatorColor] colorWithAlphaComponent:yb_increased_contrast() ? 0.68 : YB_MENU_BAR_SEPARATOR_ALPHA] setStroke];
+    [separator stroke];
+}
 
 @interface YBMenuBarController : NSObject <NSMenuDelegate> {
     struct menu_bar_callbacks _callbacks;
@@ -125,6 +157,59 @@ enum yb_menu_bar_control_kind
 {
     NSView *target = [super hitTest:point];
     return target == self ? nil : target;
+}
+
+- (void)drawRect:(NSRect)dirty_rect
+{
+    (void) dirty_rect;
+
+    size_t group_count = 0;
+    size_t previous_display_index = SIZE_MAX;
+    for (NSView *view in [self subviews]) {
+        if (![view isKindOfClass:[YBMenuBarScreenCell class]]) continue;
+        size_t display_index = ((YBMenuBarScreenCell *) view)->yb_display_index;
+        if (display_index != previous_display_index) {
+            ++group_count;
+            previous_display_index = display_index;
+        }
+    }
+    if (group_count < 2) return;
+
+    NSAppearance *appearance = [self effectiveAppearance];
+    void (^draw_groups)(void) = ^{
+        NSRect group_rect = NSZeroRect;
+        size_t group_display_index = SIZE_MAX;
+        NSRect previous_cell_frame = NSZeroRect;
+        bool has_group = false;
+
+        for (NSView *view in [self subviews]) {
+            if (![view isKindOfClass:[YBMenuBarScreenCell class]]) continue;
+            YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
+            NSRect cell_frame = [cell frame];
+
+            if (has_group && cell->yb_display_index != group_display_index) {
+                yb_draw_display_group(group_rect, group_display_index);
+                yb_draw_display_separator(self, previous_cell_frame, cell_frame);
+                group_rect = cell_frame;
+                group_display_index = cell->yb_display_index;
+            } else if (!has_group) {
+                group_rect = cell_frame;
+                group_display_index = cell->yb_display_index;
+                has_group = true;
+            } else {
+                group_rect = NSUnionRect(group_rect, cell_frame);
+            }
+            previous_cell_frame = cell_frame;
+        }
+
+        if (has_group) yb_draw_display_group(group_rect, group_display_index);
+    };
+
+    if (appearance) {
+        [appearance performAsCurrentDrawingAppearance:draw_groups];
+    } else {
+        draw_groups();
+    }
 }
 @end
 
@@ -843,6 +928,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     cell->yb_generation = _snapshot ? _snapshot->generation : 0;
     cell->yb_state = yb_screen_state(display, space);
     cell->yb_index = space ? space->mission_control_index : 0;
+    cell->yb_display_index = display ? display_index : 0;
 
     NSString *description = display && space
                           ? [NSString stringWithFormat:@"%@; read-only; opens yabai Spaces menu",
