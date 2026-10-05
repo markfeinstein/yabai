@@ -671,8 +671,8 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA == 0.035);
     TEST_CHECK(YB_MENU_BAR_DISPLAY_TINT_ALPHA == 0.075);
     TEST_CHECK(YB_MENU_BAR_SEPARATOR_WIDTH == 2.0);
-    TEST_CHECK(YB_MENU_BAR_SEPARATOR_ALPHA == 0.70);
-    TEST_CHECK(YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA == 0.90);
+    TEST_CHECK(YB_MENU_BAR_SEPARATOR_ALPHA == 0.85);
+    TEST_CHECK(YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA == 1.0);
     TEST_CHECK(YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA > YB_MENU_BAR_SEPARATOR_ALPHA);
     TEST_CHECK([active image] == nil);
     TEST_CHECK([[active title] length] == 0);
@@ -695,8 +695,8 @@ test_expanded_screen_cells_and_compact_option(void)
                                                                                                     NSMakePoint(display_gap, NSMidY([expanded bounds])));
     TEST_CHECK(decorations.first_group_alpha > 0.02);
     TEST_CHECK(decorations.second_group_alpha > decorations.first_group_alpha + 0.02);
-    TEST_CHECK(decorations.separator_alpha > 0.60);
-    TEST_CHECK(decorations.separator_alpha > decorations.second_group_alpha * 6.0);
+    TEST_CHECK(decorations.separator_alpha > 0.80);
+    TEST_CHECK(decorations.separator_alpha > decorations.second_group_alpha * 8.0);
     TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == nil);
     TEST_CHECK([expanded hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
                                              NSMidY([expanded bounds]))] == nil);

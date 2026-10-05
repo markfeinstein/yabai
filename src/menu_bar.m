@@ -17,8 +17,8 @@
 #define YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA 0.035
 #define YB_MENU_BAR_DISPLAY_TINT_ALPHA    0.075
 #define YB_MENU_BAR_SEPARATOR_WIDTH       2.0
-#define YB_MENU_BAR_SEPARATOR_ALPHA       0.70
-#define YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA 0.90
+#define YB_MENU_BAR_SEPARATOR_ALPHA       0.85
+#define YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA 1.0
 #define YB_MENU_BAR_OUTER_INSET          2.0
 #define YB_MENU_BAR_CELL_WIDTH          25.0
 #define YB_MENU_BAR_SCREEN_WIDTH        22.0
@@ -109,9 +109,9 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     [separator moveToPoint:NSMakePoint(x, 4.0)];
     [separator lineToPoint:NSMakePoint(x, NSHeight([strip bounds]) - 4.0)];
     [separator setLineWidth:YB_MENU_BAR_SEPARATOR_WIDTH];
-    [[[NSColor separatorColor] colorWithAlphaComponent:yb_increased_contrast()
-                                                       ? YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA
-                                                       : YB_MENU_BAR_SEPARATOR_ALPHA] setStroke];
+    [[[NSColor labelColor] colorWithAlphaComponent:yb_increased_contrast()
+                                                   ? YB_MENU_BAR_SEPARATOR_CONTRAST_ALPHA
+                                                   : YB_MENU_BAR_SEPARATOR_ALPHA] setStroke];
     [separator stroke];
 }
 
