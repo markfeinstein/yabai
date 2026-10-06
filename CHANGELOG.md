@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Remove the automatic synthetic Space transition from ordinary passive application
+  and window activation. Explicit Space commands and explicitly configured
+  Space-follow or fullscreen rules retain their intentional Space operations.
 - Accept native rule and Space-policy targets that are not yet present in an
   otherwise valid topology; native rules bind on explicit reload while Space
   policies remain dormant until topology reconciliation finds their target.

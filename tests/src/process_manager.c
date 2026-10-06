@@ -176,7 +176,7 @@ TEST_FUNC(process_table_failures_recover_through_launch_and_startup_callers,
     event_loop_test_application_retry_scheduler = saved_launch_retry;
 });
 
-TEST_FUNC(process_front_switch_observation_invalidates_retry_before_missing_process_discovery,
+TEST_FUNC(process_front_switch_observation_publishes_identity_before_missing_process_discovery,
 {
     __auto_type saved_pid = process_manager_test_pid_for_psn;
     __auto_type saved_event_psn = process_manager_test_event_psn;
@@ -187,27 +187,16 @@ TEST_FUNC(process_front_switch_observation_invalidates_retry_before_missing_proc
     uint64_t saved_front_switch_psn = g_process_manager.front_switch_psn;
     pid_t saved_front_pid = g_process_manager.front_pid;
     ProcessSerialNumber saved_front_psn = g_process_manager.front_psn;
-    uint64_t saved_request_generation = g_application_front_space_request_generation;
 
     ProcessSerialNumber old_psn = { .highLongOfPSN = 1, .lowLongOfPSN = 2 };
     ProcessSerialNumber missing_psn = { .highLongOfPSN = 3, .lowLongOfPSN = 4 };
-    struct application application = { .pid = 101, .psn = old_psn };
-    struct application_front_space_retry_context retry = {
-        .request_generation = 12,
-        .front_switch_generation = 20,
-        .psn = old_psn,
-        .pid = application.pid,
-        .attempt = APPLICATION_FRONT_SPACE_RETRY_COUNT
-    };
 
     g_process_manager.process = (struct table) {0};
     table_init(&g_process_manager.process, 4, hash_psn, compare_psn);
-    g_process_manager.front_pid = application.pid;
+    g_process_manager.front_pid = 101;
     g_process_manager.front_psn = old_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, 20, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, process_manager_pack_psn(old_psn), __ATOMIC_RELEASE);
-    __atomic_store_n(&g_application_front_space_request_generation, 12, __ATOMIC_RELEASE);
-    TEST_CHECK(event_loop_application_front_space_retry_is_current(&retry, &application), true);
 
     memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
     process_caller_test_psn = missing_psn;
@@ -220,7 +209,6 @@ TEST_FUNC(process_front_switch_observation_invalidates_retry_before_missing_proc
     TEST_CHECK(process_handler(NULL, (EventRef) (uintptr_t) 1, &g_process_manager), noErr);
     TEST_CHECK(__atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE), 21ULL);
     TEST_CHECK(__atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE), process_manager_pack_psn(missing_psn));
-    TEST_CHECK(event_loop_application_front_space_retry_is_current(&retry, &application), false);
     TEST_CHECK(process_discovery_test_queue_calls, 1U);
 
     memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
@@ -230,7 +218,6 @@ TEST_FUNC(process_front_switch_observation_invalidates_retry_before_missing_proc
     g_process_manager.front_psn = saved_front_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_switch_psn, __ATOMIC_RELEASE);
-    __atomic_store_n(&g_application_front_space_request_generation, saved_request_generation, __ATOMIC_RELEASE);
     process_manager_test_pid_for_psn = saved_pid;
     process_manager_test_event_psn = saved_event_psn;
     process_manager_test_event_kind = saved_event_kind;

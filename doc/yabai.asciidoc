@@ -503,9 +503,9 @@ Global Settings
     Windows will keep their zoom-state through layout changes.
 
 *skip_window_focus_animation* ['<BOOL_SEL>']::
-    Bypass macOS space animation when an application or window on an inactive space is focused. +
-    You should only enable this if you do NOT use the scripting addition. +
-    The scripting addition implements the same functionality in a more robust way.
+    Deprecated compatibility setting with no effect. +
+    Ordinary application activation, Dock activation, Cmd-Tab, link opening and Accessibility focus notifications use native macOS space transitions without an automatic synthetic animation-skip transition. +
+    Explicit space focus commands and explicitly configured Space-follow or fullscreen rules may still perform Space operations and use a synthetic gesture fallback when the scripting addition is unavailable; those operations are not controlled by this setting.
 
 *window_shadow* ['<BOOL_SEL>|float']::
     Draw shadow for windows. +

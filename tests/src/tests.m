@@ -2854,7 +2854,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
-    TEST_ENTRY(application_front_space_prefers_focused_window_and_preserves_fallback_guards) \
+    TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
+    TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_focus_fallback_trigger_policy_and_behavior_are_deterministic) \
     TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \
@@ -2877,7 +2878,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
     TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
     TEST_ENTRY(process_table_failures_recover_through_launch_and_startup_callers) \
-    TEST_ENTRY(process_front_switch_observation_invalidates_retry_before_missing_process_discovery) \
+    TEST_ENTRY(process_front_switch_observation_publishes_identity_before_missing_process_discovery) \
     TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
     TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
