@@ -1429,6 +1429,27 @@ static bool g_native_resize_space_visible;
 static int g_native_resize_schedule_count;
 static uint32_t g_native_resize_scheduled_generation;
 static uint64_t g_native_resize_scheduled_delay;
+static bool g_native_resize_live_frame_result;
+static bool g_native_resize_live_frame_override;
+static CGRect g_native_resize_live_frame;
+static int g_native_resize_restore_count;
+
+enum native_resize_ax_frame_case
+{
+    NATIVE_RESIZE_AX_FRAME_VALID,
+    NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL,
+    NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL,
+    NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE,
+    NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE,
+    NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL,
+    NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL,
+    NATIVE_RESIZE_AX_FRAME_NONFINITE,
+    NATIVE_RESIZE_AX_FRAME_NONPOSITIVE
+};
+
+static enum native_resize_ax_frame_case g_native_resize_ax_frame_case;
+static CGRect g_native_resize_ax_frame;
+static int g_native_resize_ax_release_count;
 
 static bool test_native_resize_space_visible(uint64_t sid)
 {
@@ -1439,6 +1460,63 @@ static bool test_native_resize_space_visible(uint64_t sid)
 static void test_native_resize_restore(uint32_t window_id)
 {
     (void) window_id;
+    ++g_native_resize_restore_count;
+}
+
+static bool test_native_resize_live_frame(struct window *window, CGRect *frame)
+{
+    (void) window;
+    if (!g_native_resize_live_frame_result) return false;
+    *frame = g_native_resize_live_frame_override ? g_native_resize_live_frame
+                                                  : g_mouse_state.native_resize.latest_frame;
+    return true;
+}
+
+static AXError test_native_resize_ax_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
+{
+    (void) element;
+    bool position = CFEqual(attribute, kAXPositionAttribute);
+    *value = NULL;
+    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL) {
+        return kAXErrorCannotComplete;
+    }
+    if (!position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL) {
+        return kAXErrorCannotComplete;
+    }
+    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE) {
+        *value = CFRetain(CFSTR("not-an-ax-value"));
+        return kAXErrorSuccess;
+    }
+    if (position) {
+        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE) {
+            CGSize size = g_native_resize_ax_frame.size;
+            *value = AXValueCreate(kAXValueTypeCGSize, &size);
+        } else {
+            CGPoint point = g_native_resize_ax_frame.origin;
+            if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONFINITE) point.x = NAN;
+            *value = AXValueCreate(kAXValueTypeCGPoint, &point);
+        }
+    } else {
+        CGSize size = g_native_resize_ax_frame.size;
+        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONPOSITIVE) size.width = 0.0;
+        *value = AXValueCreate(kAXValueTypeCGSize, &size);
+    }
+    return *value ? kAXErrorSuccess : kAXErrorFailure;
+}
+
+static Boolean test_native_resize_ax_get(AXValueRef value, AXValueType type, void *result)
+{
+    if (type == kAXValueTypeCGPoint &&
+        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL) return false;
+    if (type == kAXValueTypeCGSize &&
+        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL) return false;
+    return AXValueGetValue(value, type, result);
+}
+
+static void test_native_resize_ax_release(CFTypeRef value)
+{
+    ++g_native_resize_ax_release_count;
+    CFRelease(value);
 }
 
 static void test_native_resize_schedule(uint32_t generation, uint64_t delay)
@@ -1486,6 +1564,10 @@ struct native_resize_test_fixture
     bool (*visible_hook)(uint64_t);
     void (*schedule_hook)(uint32_t, uint64_t);
     void (*restore_hook)(uint32_t);
+    bool (*live_frame_hook)(struct window *, CGRect *);
+    AXError (*ax_copy_hook)(AXUIElementRef, CFStringRef, CFTypeRef *);
+    Boolean (*ax_get_hook)(AXValueRef, AXValueType, void *);
+    void (*ax_release_hook)(CFTypeRef);
     void (*drop_hook)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *);
     struct window window;
     struct window_node node;
@@ -1503,6 +1585,10 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->visible_hook = event_loop_test_native_resize_space_visible;
     fixture->schedule_hook = event_loop_test_native_resize_schedule;
     fixture->restore_hook = event_loop_test_native_resize_restore;
+    fixture->live_frame_hook = event_loop_test_native_resize_live_frame;
+    fixture->ax_copy_hook = event_loop_test_native_resize_ax_copy;
+    fixture->ax_get_hook = event_loop_test_native_resize_ax_get;
+    fixture->ax_release_hook = event_loop_test_native_resize_ax_release;
     fixture->drop_hook = event_loop_test_mouse_drop_try_adjust_bsp_grid;
 
     table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
@@ -1523,10 +1609,18 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     g_mouse_state = (struct mouse_state) { .native_edge_resize = true, .active_button = MOUSE_BUTTON_NONE };
     g_native_resize_space_visible = true;
     g_native_resize_schedule_count = 0;
+    g_native_resize_live_frame_result = true;
+    g_native_resize_live_frame_override = false;
+    g_native_resize_live_frame = CGRectZero;
+    g_native_resize_restore_count = 0;
+    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
+    g_native_resize_ax_frame = CGRectZero;
+    g_native_resize_ax_release_count = 0;
     g_mouse_drop_adjust_call_count = 0;
     event_loop_test_native_resize_space_visible = test_native_resize_space_visible;
     event_loop_test_native_resize_schedule = test_native_resize_schedule;
     event_loop_test_native_resize_restore = test_native_resize_restore;
+    event_loop_test_native_resize_live_frame = test_native_resize_live_frame;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = test_mouse_drop_adjust;
 }
 
@@ -1535,6 +1629,10 @@ static void native_resize_test_end(struct native_resize_test_fixture *fixture)
     event_loop_test_native_resize_space_visible = fixture->visible_hook;
     event_loop_test_native_resize_schedule = fixture->schedule_hook;
     event_loop_test_native_resize_restore = fixture->restore_hook;
+    event_loop_test_native_resize_live_frame = fixture->live_frame_hook;
+    event_loop_test_native_resize_ax_copy = fixture->ax_copy_hook;
+    event_loop_test_native_resize_ax_get = fixture->ax_get_hook;
+    event_loop_test_native_resize_ax_release = fixture->ax_release_hook;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = fixture->drop_hook;
     g_mouse_state = fixture->mouse_state;
     table_free(&g_window_manager.window);
@@ -1592,6 +1690,217 @@ TEST_FUNC(native_edge_resize_accepts_mouse_up_before_and_between_geometry_events
     TEST_CHECK(g_mouse_drop_adjust_info.dy, -5.0f);
     TEST_CHECK(g_mouse_drop_adjust_info.dw, 5.0f);
     TEST_CHECK(g_mouse_drop_adjust_info.dh, 5.0f);
+
+    native_resize_test_end(&fixture);
+});
+
+TEST_FUNC(native_edge_resize_adapts_post_release_quiescence_to_geometry_state,
+{
+    struct native_resize_test_fixture fixture;
+    native_resize_test_begin(&fixture, 996);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    uint32_t pre_release_timeout = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_TIMEOUT_MS);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    uint32_t settled_release = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) pre_release_timeout, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 996U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) settled_release, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    native_resize_test_mouse_up(CGPointMake(420.0f, 150.0f));
+    uint32_t no_geometry_grace = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_TRAILING_GRACE_MS);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    uint32_t first_settled = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 415.0f, 300.0f), true), true);
+    uint32_t second_settled = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) no_geometry_grace, 0);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) first_settled, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 996U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) second_settled, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 2);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 15.0f);
+
+    native_resize_test_mouse_down(CGPointMake(20.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    TEST_CHECK(g_mouse_state.native_resize.provisional, true);
+    native_resize_test_mouse_up(CGPointMake(10.0f, 150.0f));
+    uint32_t provisional_grace = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_TRAILING_GRACE_MS);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(10.0f, 30.0f, 410.0f, 300.0f), false), true);
+    uint32_t complementary_settled = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) provisional_grace, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 996U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) complementary_settled, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 3);
+    TEST_CHECK(g_mouse_drop_adjust_info.dx, -10.0f);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 10.0f);
+
+    native_resize_test_mouse_down(CGPointMake(20.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(15.0f, 30.0f, 405.0f, 300.0f), true), true);
+    native_resize_test_mouse_up(CGPointMake(15.0f, 150.0f));
+    uint32_t stale_settled = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(15.0f, 30.0f, 410.0f, 300.0f), true), true);
+    uint32_t later_provisional = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_mouse_state.native_resize.provisional, true);
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_TRAILING_GRACE_MS);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) stale_settled, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 996U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) later_provisional, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 3);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+
+    native_resize_test_end(&fixture);
+});
+
+TEST_FUNC(native_edge_resize_finalizer_reconciles_newer_live_ax_geometry,
+{
+    struct native_resize_test_fixture fixture;
+    native_resize_test_begin(&fixture, 997);
+    g_native_resize_live_frame_override = true;
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    uint32_t ready_settled = g_native_resize_scheduled_generation;
+    g_native_resize_live_frame = CGRectMake(20.0f, 30.0f, 420.0f, 300.0f);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) ready_settled, 0);
+    uint32_t newer_settled = g_native_resize_scheduled_generation;
+    TEST_CHECK(newer_settled != ready_settled, true);
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 997U);
+    TEST_CHECK(g_mouse_state.native_resize.latest_frame.size.width, 420.0f);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 0);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) ready_settled, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 997U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) newer_settled, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 20.0f);
+
+    native_resize_test_mouse_down(CGPointMake(20.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(15.0f, 30.0f, 405.0f, 300.0f), true), true);
+    native_resize_test_mouse_up(CGPointMake(15.0f, 150.0f));
+    uint32_t ready_before_partial = g_native_resize_scheduled_generation;
+    g_native_resize_live_frame = CGRectMake(15.0f, 30.0f, 410.0f, 300.0f);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) ready_before_partial, 0);
+    uint32_t provisional_generation = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_mouse_state.native_resize.provisional, true);
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_TRAILING_GRACE_MS);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) ready_before_partial, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 997U);
+
+    g_native_resize_live_frame = CGRectMake(10.0f, 30.0f, 410.0f, 300.0f);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) provisional_generation, 0);
+    uint32_t reconciled_generation = g_native_resize_scheduled_generation;
+    TEST_CHECK(g_mouse_state.native_resize.provisional, false);
+    TEST_CHECK(g_native_resize_scheduled_delay, (uint64_t) NATIVE_RESIZE_SETTLED_QUIESCENCE_MS);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) provisional_generation, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 997U);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE((void *) (uintptr_t) reconciled_generation, 0);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 2);
+    TEST_CHECK(g_mouse_drop_adjust_info.dx, -10.0f);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 10.0f);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    g_native_resize_live_frame_result = false;
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+    TEST_CHECK(g_native_resize_restore_count, 1);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 2);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+
+    g_native_resize_live_frame_result = true;
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    g_native_resize_live_frame = CGRectMake(15.0f, 30.0f, 405.0f, 300.0f);
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+    TEST_CHECK(g_native_resize_restore_count, 2);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 2);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+
+    native_resize_test_end(&fixture);
+});
+
+TEST_FUNC(native_edge_resize_strict_live_ax_frame_validation_restores_failures,
+{
+    struct native_resize_test_fixture fixture;
+    native_resize_test_begin(&fixture, 998);
+    event_loop_test_native_resize_live_frame = NULL;
+    event_loop_test_native_resize_ax_copy = test_native_resize_ax_copy;
+    event_loop_test_native_resize_ax_get = test_native_resize_ax_get;
+    event_loop_test_native_resize_ax_release = test_native_resize_ax_release;
+    g_native_resize_ax_frame = CGRectMake(20.0f, 30.0f, 410.0f, 300.0f);
+
+    struct {
+        enum native_resize_ax_frame_case test_case;
+        int released;
+    } failures[] = {
+        { NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL, 0 },
+        { NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL, 1 },
+        { NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE, 2 },
+        { NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE, 2 },
+        { NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL, 2 },
+        { NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL, 2 },
+        { NATIVE_RESIZE_AX_FRAME_NONFINITE, 2 },
+        { NATIVE_RESIZE_AX_FRAME_NONPOSITIVE, 2 }
+    };
+    for (size_t i = 0; i < array_count(failures); ++i) {
+        native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+        TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                         g_native_resize_ax_frame, true), true);
+        native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+        g_native_resize_ax_frame_case = failures[i].test_case;
+        g_native_resize_ax_release_count = 0;
+        int restore_before = g_native_resize_restore_count;
+        int adjust_before = g_mouse_drop_adjust_call_count;
+        EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+            (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+        TEST_CHECK(g_native_resize_ax_release_count, failures[i].released);
+        TEST_CHECK(g_native_resize_restore_count, restore_before + 1);
+        TEST_CHECK(g_mouse_drop_adjust_call_count, adjust_before);
+        TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    }
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     g_native_resize_ax_frame, true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
+    g_native_resize_ax_release_count = 0;
+    int restore_before = g_native_resize_restore_count;
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+    TEST_CHECK(g_native_resize_ax_release_count, 2);
+    TEST_CHECK(g_native_resize_restore_count, restore_before);
+    TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
+    TEST_CHECK(g_mouse_drop_adjust_info.dw, 10.0f);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
 
     native_resize_test_end(&fixture);
 });
@@ -2599,6 +2908,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mouse_queued_action_is_immutable_across_configuration_changes) \
     TEST_ENTRY(mouse_unclassified_action_does_not_begin_gesture) \
     TEST_ENTRY(native_edge_resize_accepts_mouse_up_before_and_between_geometry_events) \
+    TEST_ENTRY(native_edge_resize_adapts_post_release_quiescence_to_geometry_state) \
+    TEST_ENTRY(native_edge_resize_finalizer_reconciles_newer_live_ax_geometry) \
+    TEST_ENTRY(native_edge_resize_strict_live_ax_frame_validation_restores_failures) \
     TEST_ENTRY(native_edge_resize_partial_snapshots_settle_only_after_matching_components) \
     TEST_ENTRY(native_edge_resize_later_partial_components_never_commit_stale_settled_frame) \
     TEST_ENTRY(native_edge_resize_rejects_center_unrelated_and_expired_geometry) \

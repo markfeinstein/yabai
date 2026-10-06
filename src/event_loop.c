@@ -210,9 +210,14 @@ static void (*event_loop_test_mouse_drop_try_adjust_bsp_grid)(struct window_mana
 static bool (*event_loop_test_native_resize_space_visible)(uint64_t);
 static void (*event_loop_test_native_resize_schedule)(uint32_t, uint64_t);
 static void (*event_loop_test_native_resize_restore)(uint32_t);
+static bool (*event_loop_test_native_resize_live_frame)(struct window *, CGRect *);
+static AXError (*event_loop_test_native_resize_ax_copy)(AXUIElementRef, CFStringRef, CFTypeRef *);
+static Boolean (*event_loop_test_native_resize_ax_get)(AXValueRef, AXValueType, void *);
+static void (*event_loop_test_native_resize_ax_release)(CFTypeRef);
 #endif
 
-#define NATIVE_RESIZE_TRAILING_DELAY_MS 100u
+#define NATIVE_RESIZE_SETTLED_QUIESCENCE_MS 16u
+#define NATIVE_RESIZE_TRAILING_GRACE_MS 100u
 #define NATIVE_RESIZE_TIMEOUT_MS 10000u
 #define NATIVE_RESIZE_EDGE_TOLERANCE 6.0
 
@@ -264,12 +269,9 @@ static void native_resize_clear(struct mouse_state *mouse_state)
     state->saw_resize = false;
 }
 
-static void native_resize_abort(struct mouse_state *mouse_state, bool restore)
+static void native_resize_restore_window(uint32_t window_id)
 {
-    uint32_t window_id = mouse_state->native_resize.window_id;
-    bool claimed = mouse_state->native_resize.claimed;
-    native_resize_clear(mouse_state);
-    if (!restore || !claimed || !window_id) return;
+    if (!window_id) return;
 #ifdef TESTS
     if (event_loop_test_native_resize_restore) {
         event_loop_test_native_resize_restore(window_id);
@@ -284,6 +286,14 @@ static void native_resize_abort(struct mouse_state *mouse_state, bool restore)
     if (!node) return;
     if (native_resize_space_visible(view->sid)) window_node_flush(node);
     else view_set_flag(view, VIEW_IS_DIRTY);
+}
+
+static void native_resize_abort(struct mouse_state *mouse_state, bool restore)
+{
+    uint32_t window_id = mouse_state->native_resize.window_id;
+    bool claimed = mouse_state->native_resize.claimed;
+    native_resize_clear(mouse_state);
+    if (restore && claimed) native_resize_restore_window(window_id);
 }
 
 static bool native_resize_window_is_eligible(struct window *window, struct view *view,
@@ -381,6 +391,85 @@ static bool native_resize_geometry_matches(const struct native_resize_state *sta
     return (changed & state->edges) != 0 && (changed & ~state->edges) == 0;
 }
 
+static bool native_resize_frames_match(CGRect a, CGRect b)
+{
+    return !AX_DIFF(a.origin.x, b.origin.x) && !AX_DIFF(a.origin.y, b.origin.y) &&
+           !AX_DIFF(a.size.width, b.size.width) && !AX_DIFF(a.size.height, b.size.height);
+}
+
+static AXError native_resize_ax_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_ax_copy) {
+        return event_loop_test_native_resize_ax_copy(element, attribute, value);
+    }
+#endif
+    return AXUIElementCopyAttributeValue(element, attribute, value);
+}
+
+static Boolean native_resize_ax_get(AXValueRef value, AXValueType type, void *result)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_ax_get) {
+        return event_loop_test_native_resize_ax_get(value, type, result);
+    }
+#endif
+    return AXValueGetValue(value, type, result);
+}
+
+static void native_resize_ax_release(CFTypeRef value)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_ax_release) {
+        event_loop_test_native_resize_ax_release(value);
+        return;
+    }
+#endif
+    CFRelease(value);
+}
+
+static bool native_resize_read_ax_frame(struct window *window, CGRect *frame)
+{
+    CFTypeRef position_ref = NULL;
+    CFTypeRef size_ref = NULL;
+    CGRect live = CGRectZero;
+    bool result = false;
+
+    if (native_resize_ax_copy(window->ref, kAXPositionAttribute, &position_ref) != kAXErrorSuccess ||
+        !position_ref) goto out;
+    if (native_resize_ax_copy(window->ref, kAXSizeAttribute, &size_ref) != kAXErrorSuccess ||
+        !size_ref) goto out;
+    if (CFGetTypeID(position_ref) != AXValueGetTypeID() ||
+        CFGetTypeID(size_ref) != AXValueGetTypeID()) goto out;
+
+    AXValueRef position = (AXValueRef) position_ref;
+    AXValueRef size = (AXValueRef) size_ref;
+    if (AXValueGetType(position) != kAXValueTypeCGPoint ||
+        AXValueGetType(size) != kAXValueTypeCGSize) goto out;
+    if (!native_resize_ax_get(position, kAXValueTypeCGPoint, &live.origin) ||
+        !native_resize_ax_get(size, kAXValueTypeCGSize, &live.size)) goto out;
+    if (!isfinite(live.origin.x) || !isfinite(live.origin.y) ||
+        !isfinite(live.size.width) || !isfinite(live.size.height) ||
+        live.size.width <= 0.0 || live.size.height <= 0.0) goto out;
+
+    *frame = live;
+    result = true;
+out:
+    if (position_ref) native_resize_ax_release(position_ref);
+    if (size_ref) native_resize_ax_release(size_ref);
+    return result;
+}
+
+static bool native_resize_read_live_frame(struct window *window, CGRect *frame)
+{
+#ifdef TESTS
+    if (event_loop_test_native_resize_live_frame) {
+        return event_loop_test_native_resize_live_frame(window, frame);
+    }
+#endif
+    return native_resize_read_ax_frame(window, frame);
+}
+
 static bool native_resize_geometry_is_provisional(const struct native_resize_state *state, CGRect frame)
 {
     uint8_t changed = native_resize_changed_edges(state, frame);
@@ -389,6 +478,18 @@ static bool native_resize_geometry_is_provisional(const struct native_resize_sta
     if (state->edges & HANDLE_TOP) provisional |= HANDLE_BOTTOM;
     uint8_t allowed = state->edges | provisional;
     return (changed & provisional) != 0 && (changed & ~allowed) == 0;
+}
+
+static bool native_resize_has_settled_geometry(const struct native_resize_state *state)
+{
+    return state->claimed && state->saw_resize && !state->provisional && !state->pending_size &&
+           native_resize_geometry_matches(state, state->latest_frame);
+}
+
+static uint64_t native_resize_post_release_delay(const struct native_resize_state *state)
+{
+    return native_resize_has_settled_geometry(state) ? NATIVE_RESIZE_SETTLED_QUIESCENCE_MS
+                                                      : NATIVE_RESIZE_TRAILING_GRACE_MS;
 }
 
 static bool native_resize_move_matches(const struct native_resize_state *state, CGPoint origin)
@@ -459,8 +560,31 @@ static bool native_resize_observe(struct window *window, struct view *view,
 
     state->claimed = true;
     uint32_t generation = native_resize_next_generation(state);
-    native_resize_schedule(generation, state->released ? NATIVE_RESIZE_TRAILING_DELAY_MS
+    native_resize_schedule(generation, state->released ? native_resize_post_release_delay(state)
                                                         : NATIVE_RESIZE_TIMEOUT_MS);
+    return true;
+}
+
+static bool native_resize_reconcile_live_frame(struct window *window, struct view *view,
+                                                struct window_node *node, CGRect frame)
+{
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    if (native_resize_geometry_matches(state, frame)) {
+        return native_resize_observe(window, view, node, frame, true);
+    }
+    if (!native_resize_geometry_is_provisional(state, frame)) return false;
+
+    bool origin_changed = AX_DIFF(state->observed_origin.x, frame.origin.x) ||
+                          AX_DIFF(state->observed_origin.y, frame.origin.y);
+    bool size_changed = AX_DIFF(state->observed_size.width, frame.size.width) ||
+                        AX_DIFF(state->observed_size.height, frame.size.height);
+    if (!origin_changed && !size_changed) return false;
+
+    if (origin_changed && !native_resize_observe(window, view, node, frame, false)) return false;
+    if (size_changed) {
+        if (!g_mouse_state.native_resize.window_id) return false;
+        if (!native_resize_observe(window, view, node, frame, true)) return false;
+    }
     return true;
 }
 
@@ -470,7 +594,7 @@ static void native_resize_mouse_up(int64_t button)
     if (button != kCGMouseButtonLeft || !state->window_id) return;
     state->released = true;
     uint32_t generation = native_resize_next_generation(state);
-    native_resize_schedule(generation, NATIVE_RESIZE_TRAILING_DELAY_MS);
+    native_resize_schedule(generation, native_resize_post_release_delay(state));
 }
 
 static bool update_window_notifications(void)
@@ -2154,8 +2278,7 @@ static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
     (void) param1;
     struct native_resize_state *state = &g_mouse_state.native_resize;
     if (!state->window_id || state->generation != (uint32_t) (uintptr_t) context) return;
-    if (!state->released || !state->claimed || state->provisional ||
-        !state->saw_resize || !native_resize_geometry_matches(state, state->latest_frame)) {
+    if (!state->released || !state->claimed) {
         native_resize_abort(&g_mouse_state, true);
         return;
     }
@@ -2169,6 +2292,23 @@ static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
     struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
     if (!native_resize_window_is_eligible(window, view, node) ||
         !native_resize_baseline_matches(state, node)) {
+        native_resize_abort(&g_mouse_state, true);
+        return;
+    }
+
+    CGRect live_frame;
+    if (!native_resize_read_live_frame(window, &live_frame)) {
+        native_resize_abort(&g_mouse_state, true);
+        return;
+    }
+    if (!native_resize_frames_match(live_frame, state->latest_frame)) {
+        uint32_t window_id = state->window_id;
+        if (native_resize_reconcile_live_frame(window, view, node, live_frame)) return;
+        if (g_mouse_state.native_resize.window_id) native_resize_abort(&g_mouse_state, false);
+        native_resize_restore_window(window_id);
+        return;
+    }
+    if (!native_resize_has_settled_geometry(state)) {
         native_resize_abort(&g_mouse_state, true);
         return;
     }
