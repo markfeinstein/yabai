@@ -23,10 +23,18 @@ static uint64_t process_manager_advance_front_switch_generation(struct process_m
     return generation;
 }
 
-static uint64_t process_manager_publish_tracked_front_switch_locked(struct process_manager *pm, ProcessSerialNumber psn)
+static uint64_t process_manager_publish_front_switch_locked(struct process_manager *pm, ProcessSerialNumber psn)
 {
     uint64_t generation = process_manager_advance_front_switch_generation(pm);
     __atomic_store_n(&pm->front_switch_psn, process_manager_pack_psn(psn), __ATOMIC_RELEASE);
+    return generation;
+}
+
+static uint64_t process_manager_publish_front_switch(struct process_manager *pm, ProcessSerialNumber psn)
+{
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    uint64_t generation = process_manager_publish_front_switch_locked(pm, psn);
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
     return generation;
 }
 
@@ -398,9 +406,14 @@ static PROCESS_EVENT_HANDLER(process_handler)
         event_loop_post(&g_event_loop, APPLICATION_TERMINATED, process, 0);
     } break;
     case kEventAppFrontSwitched: {
+        uint64_t generation = process_manager_publish_front_switch(pm, psn);
         struct process *process = process_manager_find_process(pm, &psn);
         if (!process) {
+#ifdef TESTS
+            pid_t pid = process_manager_test_pid_for_psn(psn);
+#else
             pid_t pid = process_pid_for_psn(psn);
+#endif
             if (pid) process_manager_schedule_discovery_retry(pm, psn, pid, 0);
             return noErr;
         }
@@ -409,7 +422,7 @@ static PROCESS_EVENT_HANDLER(process_handler)
             process->launch_retries = 0;
             event_loop_post_application_launched(process);
         }
-        event_loop_post_tracked_application_front_switched(process);
+        event_loop_post_tracked_application_front_switched(process, generation);
     } break;
     }
 

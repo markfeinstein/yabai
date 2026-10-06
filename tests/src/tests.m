@@ -2844,7 +2844,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_reconcile_reserves_before_post_and_coalesces) \
     TEST_ENTRY(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result) \
     TEST_ENTRY(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close) \
-    TEST_ENTRY(event_loop_front_switch_helpers_use_admission_and_rollback) \
+    TEST_ENTRY(event_loop_front_switch_helpers_preserve_monotonic_observation_on_delivery_failure) \
     TEST_ENTRY(event_loop_late_pre_admission_post_after_cleanup_releases_context) \
     TEST_ENTRY(event_loop_worker_guards_reject_sync_and_self_shutdown) \
     TEST_ENTRY(event_loop_worker_identity_is_scoped_to_the_supplied_loop) \
@@ -2877,6 +2877,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
     TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
     TEST_ENTRY(process_table_failures_recover_through_launch_and_startup_callers) \
+    TEST_ENTRY(process_front_switch_observation_invalidates_retry_before_missing_process_discovery) \
     TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
     TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \

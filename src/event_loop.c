@@ -14,6 +14,18 @@ volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
 static pthread_mutex_t g_process_manager_front_switch_lock = PTHREAD_MUTEX_INITIALIZER;
+static volatile uint64_t g_application_front_space_request_generation;
+
+#define APPLICATION_FRONT_SPACE_RETRY_COUNT 3
+#define APPLICATION_FRONT_SPACE_RETRY_DELAY 0.05
+
+struct application_front_space_retry_context {
+    uint64_t request_generation;
+    uint64_t front_switch_generation;
+    ProcessSerialNumber psn;
+    pid_t pid;
+    unsigned attempt;
+};
 
 struct mission_control_session_state {
     uint64_t generation;
@@ -757,8 +769,6 @@ static void event_loop_flush_batched_views(struct view **views, int count)
 
 static bool event_loop_enqueue(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 static uint64_t process_manager_pack_psn(ProcessSerialNumber psn);
-static uint64_t process_manager_advance_front_switch_generation(struct process_manager *pm);
-static uint64_t process_manager_publish_tracked_front_switch_locked(struct process_manager *pm, ProcessSerialNumber psn);
 
 struct application_front_switched_event
 {
@@ -768,9 +778,16 @@ struct application_front_switched_event
     bool replay;
 };
 
+#ifdef TESTS
+static void *(*event_loop_application_front_switched_alloc)(size_t) = malloc;
+#define EVENT_LOOP_APPLICATION_FRONT_SWITCHED_ALLOC(size) event_loop_application_front_switched_alloc(size)
+#else
+#define EVENT_LOOP_APPLICATION_FRONT_SWITCHED_ALLOC(size) malloc(size)
+#endif
+
 static struct application_front_switched_event *event_loop_create_application_front_switched(struct process *process, uint64_t generation, bool replay)
 {
-    struct application_front_switched_event *event = malloc(sizeof(struct application_front_switched_event));
+    struct application_front_switched_event *event = EVENT_LOOP_APPLICATION_FRONT_SWITCHED_ALLOC(sizeof(struct application_front_switched_event));
     if (!event) return NULL;
 
     event->psn = process->psn;
@@ -787,23 +804,9 @@ static bool event_loop_post_application_front_switched(struct process *process, 
     return event_loop_try_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
 }
 
-static bool event_loop_post_tracked_application_front_switched(struct process *process)
+static bool event_loop_post_tracked_application_front_switched(struct process *process, uint64_t generation)
 {
-    struct application_front_switched_event *event = event_loop_create_application_front_switched(process, 0, false);
-    if (!event) return false;
-
-    pthread_mutex_lock(&g_process_manager_front_switch_lock);
-    uint64_t previous_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
-    uint64_t previous_psn = __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE);
-
-    event->generation = process_manager_publish_tracked_front_switch_locked(&g_process_manager, process->psn);
-    bool accepted = event_loop_try_post(&g_event_loop, APPLICATION_FRONT_SWITCHED, event, 0);
-    if (!accepted) {
-        __atomic_store_n(&g_process_manager.front_switch_generation, previous_generation, __ATOMIC_RELEASE);
-        __atomic_store_n(&g_process_manager.front_switch_psn, previous_psn, __ATOMIC_RELEASE);
-    }
-    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
-    return accepted;
+    return event_loop_post_application_front_switched(process, generation, false);
 }
 
 static void event_loop_replay_lost_front_switched(struct process *process)
@@ -1173,6 +1176,11 @@ static void event_loop_application_front_focus_space(uint64_t sid)
     space_manager_focus_space_using_gesture(space_display_id(sid), sid);
 }
 
+static bool event_loop_application_front_application_is_frontmost(struct application *application)
+{
+    return application_is_frontmost(application);
+}
+
 #ifdef TESTS
 static uint32_t (*event_loop_application_front_find_focused_window)(struct application *) = event_loop_application_front_focused_window;
 static uint64_t (*event_loop_application_front_find_window_space)(uint32_t) = event_loop_application_front_window_space;
@@ -1180,6 +1188,7 @@ static uint64_t (*event_loop_application_front_find_process_space)(int) = event_
 static bool (*event_loop_application_front_is_space_visible)(uint64_t) = event_loop_application_front_space_is_visible;
 static void (*event_loop_application_front_assign_psn)(uint64_t, ProcessSerialNumber) = event_loop_application_front_set_psn;
 static void (*event_loop_application_front_focus)(uint64_t) = event_loop_application_front_focus_space;
+static bool (*event_loop_application_front_is_frontmost)(struct application *) = event_loop_application_front_application_is_frontmost;
 #else
 #define event_loop_application_front_find_focused_window event_loop_application_front_focused_window
 #define event_loop_application_front_find_window_space event_loop_application_front_window_space
@@ -1187,30 +1196,147 @@ static void (*event_loop_application_front_focus)(uint64_t) = event_loop_applica
 #define event_loop_application_front_is_space_visible event_loop_application_front_space_is_visible
 #define event_loop_application_front_assign_psn event_loop_application_front_set_psn
 #define event_loop_application_front_focus event_loop_application_front_focus_space
+#define event_loop_application_front_is_frontmost event_loop_application_front_application_is_frontmost
 #endif
 
-static void event_loop_focus_application_front_space(struct application *application, uint32_t focused_window_id)
+enum application_front_space_result {
+    APPLICATION_FRONT_SPACE_DONE,
+    APPLICATION_FRONT_SPACE_DEFER
+};
+
+static bool event_loop_application_front_space_retry_is_current(struct application_front_space_retry_context *retry,
+                                                                 struct application *application);
+
+static bool event_loop_application_front_space_retry_can_commit(struct application_front_space_retry_context *retry,
+                                                                 struct application *application)
 {
-    if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+    if (!g_space_manager.skip_window_focus_animation ||
+        __atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return false;
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    bool current = event_loop_application_front_space_retry_is_current(retry, application);
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    if (!current || !event_loop_application_front_is_frontmost(application)) return false;
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    current = event_loop_application_front_space_retry_is_current(retry, application) &&
+              g_space_manager.skip_window_focus_animation &&
+              __atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) == 0;
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    return current && event_loop_application_front_is_frontmost(application);
+}
+
+static enum application_front_space_result event_loop_focus_application_front_space(struct application *application,
+                                                                                      uint32_t focused_window_id,
+                                                                                      bool allow_process_fallback,
+                                                                                      struct application_front_space_retry_context *retry)
+{
+    if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return APPLICATION_FRONT_SPACE_DONE;
 
     uint64_t sid = focused_window_id ? event_loop_application_front_find_window_space(focused_window_id) : 0;
+    bool focused_window_space = sid != 0;
     if (!sid) {
         sid = event_loop_application_front_find_process_space(application->connection);
-        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+        if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return APPLICATION_FRONT_SPACE_DONE;
 
         uint32_t current_focused_window_id = event_loop_application_front_find_focused_window(application);
         uint64_t current_sid = current_focused_window_id ? event_loop_application_front_find_window_space(current_focused_window_id) : 0;
-        if (current_sid) sid = current_sid;
+        if (current_sid) {
+            sid = current_sid;
+            focused_window_space = true;
+        }
     }
-    if (!sid || event_loop_application_front_is_space_visible(sid)) return;
-    if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) return;
+    if (!focused_window_space && !allow_process_fallback) {
+        return sid && event_loop_application_front_is_space_visible(sid) ? APPLICATION_FRONT_SPACE_DONE : APPLICATION_FRONT_SPACE_DEFER;
+    }
+    if (!sid || event_loop_application_front_is_space_visible(sid)) return APPLICATION_FRONT_SPACE_DONE;
+    if (retry) {
+        if (!event_loop_application_front_space_retry_can_commit(retry, application)) return APPLICATION_FRONT_SPACE_DONE;
+    } else if (__atomic_load_n(&__pending_window_focus, __ATOMIC_ACQUIRE) != 0) {
+        return APPLICATION_FRONT_SPACE_DONE;
+    }
 
     event_loop_application_front_assign_psn(sid, application->psn);
     event_loop_application_front_focus(sid);
+    return APPLICATION_FRONT_SPACE_DONE;
 }
 
-static void event_loop_handle_application_front_space(struct application *application)
+static uint64_t event_loop_next_application_front_space_request(void)
 {
+    uint64_t generation = __atomic_add_fetch(&g_application_front_space_request_generation, 1, __ATOMIC_ACQ_REL);
+    if (!generation) generation = __atomic_add_fetch(&g_application_front_space_request_generation, 1, __ATOMIC_ACQ_REL);
+    return generation;
+}
+
+#ifdef TESTS
+static void (*event_loop_application_front_space_schedule)(struct application_front_space_retry_context, double);
+#endif
+
+static void event_loop_post_application_front_space_retry(struct application_front_space_retry_context retry,
+                                                           uint64_t loop_generation)
+{
+    if (retry.request_generation != __atomic_load_n(&g_application_front_space_request_generation, __ATOMIC_ACQUIRE) ||
+        loop_generation != event_loop_generation_snapshot(&g_event_loop) ||
+        !__atomic_load_n(&g_event_loop.is_running, __ATOMIC_ACQUIRE)) return;
+
+    struct application_front_space_retry_context *context = malloc(sizeof(*context));
+    if (!context) return;
+    *context = retry;
+    (void) event_loop_try_post_generation(&g_event_loop, loop_generation, APPLICATION_FRONT_SPACE_RETRY, context, 0);
+}
+
+static void event_loop_schedule_application_front_space_retry(struct application_front_space_retry_context retry)
+{
+#ifdef TESTS
+    if (event_loop_application_front_space_schedule) {
+        event_loop_application_front_space_schedule(retry, APPLICATION_FRONT_SPACE_RETRY_DELAY);
+        return;
+    }
+#endif
+    uint64_t loop_generation = event_loop_generation_snapshot(&g_event_loop);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, APPLICATION_FRONT_SPACE_RETRY_DELAY * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        event_loop_post_application_front_space_retry(retry, loop_generation);
+    });
+}
+
+static bool event_loop_application_front_space_retry_is_current(struct application_front_space_retry_context *retry,
+                                                                 struct application *application)
+{
+    return retry->request_generation == __atomic_load_n(&g_application_front_space_request_generation, __ATOMIC_ACQUIRE) &&
+           retry->front_switch_generation == __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE) &&
+           process_manager_pack_psn(retry->psn) == __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE) &&
+           retry->pid == g_process_manager.front_pid &&
+           retry->pid == application->pid &&
+           psn_equals(&retry->psn, &g_process_manager.front_psn) &&
+           psn_equals(&retry->psn, &application->psn);
+}
+
+static void event_loop_handle_application_front_space_retry(struct application_front_space_retry_context retry,
+                                                             struct application *application)
+{
+    if (!g_space_manager.skip_window_focus_animation ||
+        !event_loop_application_front_space_retry_is_current(&retry, application)) return;
+
+    uint32_t focused_window_id = event_loop_application_front_find_focused_window(application);
+    bool final_attempt = retry.attempt >= APPLICATION_FRONT_SPACE_RETRY_COUNT;
+    if (event_loop_focus_application_front_space(application, focused_window_id, final_attempt, &retry) == APPLICATION_FRONT_SPACE_DEFER) {
+        ++retry.attempt;
+        event_loop_schedule_application_front_space_retry(retry);
+    }
+}
+
+static EVENT_HANDLER(APPLICATION_FRONT_SPACE_RETRY)
+{
+    struct application_front_space_retry_context retry = *(struct application_front_space_retry_context *) context;
+    free(context);
+
+    struct application *application = window_manager_find_application(&g_window_manager, retry.pid);
+    if (application) event_loop_handle_application_front_space_retry(retry, application);
+}
+
+static void event_loop_handle_application_front_space(struct application *application, uint64_t front_switch_generation)
+{
+    uint64_t request_generation = event_loop_next_application_front_space_request();
     if (!g_space_manager.skip_window_focus_animation) return;
 
     uint64_t last_cmd_tab_time = __atomic_load_n(&__last_cmd_tab_time, __ATOMIC_RELAXED);
@@ -1219,8 +1345,17 @@ static void event_loop_handle_application_front_space(struct application *applic
         AXUIElementCopyAttributeValue(application->ref, CFSTR("__fence"), &dummy);
     }
 
+    struct application_front_space_retry_context retry = {
+        .request_generation = request_generation,
+        .front_switch_generation = front_switch_generation,
+        .psn = application->psn,
+        .pid = application->pid,
+        .attempt = 1
+    };
     uint32_t focused_window_id = event_loop_application_front_find_focused_window(application);
-    event_loop_focus_application_front_space(application, focused_window_id);
+    if (event_loop_focus_application_front_space(application, focused_window_id, false, &retry) == APPLICATION_FRONT_SPACE_DEFER) {
+        event_loop_schedule_application_front_space_retry(retry);
+    }
 }
 
 static void event_loop_update_application_front_focus(struct application *application)
@@ -1298,7 +1433,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     native_resize_abort(&g_mouse_state, true);
 
     // Application destruction is serialized on this event-loop worker, so both captured pointers remain valid here.
-    event_loop_handle_application_front_space(application);
+    event_loop_handle_application_front_space(application, event.generation);
 
     if (deactivated_application) event_signal_push(SIGNAL_APPLICATION_DEACTIVATED, deactivated_application);
 
@@ -3627,7 +3762,8 @@ static void event_loop_release_event_context(enum event_type type, void *context
     if (!context) return;
 
     switch (type) {
-    case APPLICATION_FRONT_SWITCHED: {
+    case APPLICATION_FRONT_SWITCHED:
+    case APPLICATION_FRONT_SPACE_RETRY: {
         free(context);
     } break;
     case MISSION_CONTROL_SHOW_ALL_WINDOWS:
