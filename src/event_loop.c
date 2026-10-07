@@ -258,12 +258,14 @@ static void managed_window_correction_log(struct window *window, const char *eve
           event, window->application->name, window->id, source,
           (unsigned int) retry_writes, elapsed_ms);
 #ifndef TESTS
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+             "%s app=%s window=%u source=%s retry_writes=%u elapsed_ms=%.2f",
+             event, window->application->name, window->id, source,
+             (unsigned int) retry_writes, elapsed_ms);
     static os_log_t frame_recovery_log;
     if (!frame_recovery_log) frame_recovery_log = os_log_create("com.asmvik.yabai", "frame-recovery");
-    os_log_with_type(frame_recovery_log, OS_LOG_TYPE_INFO,
-                     "%{public}s app=%{public}s window=%u source=%{public}s retry_writes=%u elapsed_ms=%.2f",
-                     event, window->application->name, window->id, source,
-                     (unsigned int) retry_writes, elapsed_ms);
+    os_log_with_type(frame_recovery_log, OS_LOG_TYPE_INFO, "%{public}s", payload);
 #endif
 }
 
