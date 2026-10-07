@@ -6,19 +6,21 @@ static int managed_window_correction_schedule_count;
 static int managed_window_correction_flush_count;
 static int managed_window_correction_observe_count;
 static int managed_window_correction_unobserve_count;
-static AXError managed_window_correction_observe_result;
-static AXError managed_window_correction_unobserve_result;
+static AXError managed_window_correction_observe_result[2];
+static AXError managed_window_correction_unobserve_result[2];
 static bool managed_window_correction_admit_result;
+static uint64_t managed_window_correction_time;
 
 static AXError managed_window_correction_observe(AXObserverRef observer, AXUIElementRef element,
                                                  CFStringRef notification, void *context)
 {
     (void) observer;
     (void) element;
-    (void) notification;
     (void) context;
     ++managed_window_correction_observe_count;
-    return managed_window_correction_observe_result;
+    return CFEqual(notification, kAXValueChangedNotification)
+         ? managed_window_correction_observe_result[1]
+         : managed_window_correction_observe_result[0];
 }
 
 static AXError managed_window_correction_unobserve(AXObserverRef observer, AXUIElementRef element,
@@ -26,9 +28,15 @@ static AXError managed_window_correction_unobserve(AXObserverRef observer, AXUIE
 {
     (void) observer;
     (void) element;
-    (void) notification;
     ++managed_window_correction_unobserve_count;
-    return managed_window_correction_unobserve_result;
+    return CFEqual(notification, kAXValueChangedNotification)
+         ? managed_window_correction_unobserve_result[1]
+         : managed_window_correction_unobserve_result[0];
+}
+
+static uint64_t managed_window_correction_read_time(void)
+{
+    return managed_window_correction_time;
 }
 
 static bool managed_window_correction_admit(struct event_loop *event_loop)
@@ -126,7 +134,7 @@ static void *concurrent_event_loop_end(void *context)
 }
 
 static AXError application_test_create_result;
-static AXError application_test_notification_results[8];
+static AXError application_test_notification_results[9];
 static int application_test_notification_index;
 static int application_test_source_count;
 
@@ -164,7 +172,7 @@ static void application_test_reset(AXError default_result)
     }
 }
 
-TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
+TEST_FUNC(managed_window_correction_retries_pending_frames_after_recovery_signals,
 {
     struct table saved_applications = g_window_manager.application;
     struct table saved_windows = g_window_manager.window;
@@ -179,6 +187,7 @@ TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
     __auto_type saved_flush = event_loop_test_managed_window_correction_flush;
     __auto_type saved_admit = event_loop_test_managed_window_correction_admit;
     __auto_type saved_leave = event_loop_test_managed_window_correction_leave;
+    __auto_type saved_time = event_loop_test_frame_recovery_time;
     __auto_type saved_observe = application_observer_add_notification;
     __auto_type saved_unobserve = application_observer_remove_notification;
 
@@ -216,14 +225,18 @@ TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
     managed_window_correction_flush_count = 0;
     managed_window_correction_observe_count = 0;
     managed_window_correction_unobserve_count = 0;
-    managed_window_correction_observe_result = kAXErrorSuccess;
-    managed_window_correction_unobserve_result = kAXErrorSuccess;
+    managed_window_correction_observe_result[0] = kAXErrorSuccess;
+    managed_window_correction_observe_result[1] = kAXErrorSuccess;
+    managed_window_correction_unobserve_result[0] = kAXErrorSuccess;
+    managed_window_correction_unobserve_result[1] = kAXErrorSuccess;
     managed_window_correction_admit_result = true;
+    managed_window_correction_time = 1000000000ULL;
     event_loop_test_managed_window_correction_space_visible = managed_window_correction_visible;
     event_loop_test_managed_window_correction_schedule = managed_window_correction_schedule_test;
     event_loop_test_managed_window_correction_flush = managed_window_correction_flush_test;
     event_loop_test_managed_window_correction_admit = managed_window_correction_admit;
     event_loop_test_managed_window_correction_leave = managed_window_correction_leave;
+    event_loop_test_frame_recovery_time = managed_window_correction_read_time;
     application_observer_add_notification = managed_window_correction_observe;
     application_observer_remove_notification = managed_window_correction_unobserve;
 
@@ -235,8 +248,8 @@ TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
 
     managed_window_correction_update(&window, &view, &node, true, false);
     TEST_CHECK(window.frame_correction_pending, true);
-    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
-    TEST_CHECK(managed_window_correction_observe_count, 1);
+    TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
+    TEST_CHECK(managed_window_correction_observe_count, 2);
     TEST_CHECK(managed_window_correction_flush_count, 1);
 
     managed_window_correction_schedule_application(&application);
@@ -262,49 +275,65 @@ TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
     managed_window_correction_fire(&g_event_loop, 78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
-    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
-    TEST_CHECK(managed_window_correction_unobserve_count, 1);
+    TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == 0, true);
+    TEST_CHECK(managed_window_correction_unobserve_count, 2);
 
     window.frame.size.width = 600.0f;
-    managed_window_correction_observe_result = kAXErrorCannotComplete;
+    managed_window_correction_observe_result[0] = kAXErrorSuccess;
+    managed_window_correction_observe_result[1] = kAXErrorCannotComplete;
     managed_window_correction_update(&window, &view, &node, true, false);
     TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
+    TEST_CHECK((application.notification & AX_APPLICATION_VALUE_CHANGED) == 0, true);
+    managed_window_correction_observe_result[1] = kAXErrorSuccess;
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
+
+    managed_window_correction_schedule_application(&application);
+    window.frame.size.width = 400.0f;
     managed_window_correction_fire(&g_event_loop, 78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
 
-    managed_window_correction_observe_result = kAXErrorSuccess;
+    window.frame.size.width = 600.0f;
     managed_window_correction_update(&window, &view, &node, true, false);
     managed_window_correction_schedule_application(&application);
     window.frame.size.width = 400.0f;
-    managed_window_correction_unobserve_result = kAXErrorCannotComplete;
+    managed_window_correction_unobserve_result[0] = kAXErrorSuccess;
+    managed_window_correction_unobserve_result[1] = kAXErrorCannotComplete;
     managed_window_correction_fire(&g_event_loop, 78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
-    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
-    TEST_CHECK(application.layout_unobserve_retries, 1);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
+    TEST_CHECK((application.notification & AX_APPLICATION_VALUE_CHANGED) != 0, true);
+    TEST_CHECK(application.frame_recovery_unobserve_retries, 1);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 78ULL);
 
-    application.layout_unobserve_retries = LAYOUT_UNOBSERVE_RETRY_LIMIT;
+    application.frame_recovery_unobserve_retries = FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT;
+    application.frame_recovery_cleanup_retry_time = managed_window_correction_time + FRAME_RECOVERY_CLEANUP_COOLDOWN_NS;
     int exhausted_remove_count = managed_window_correction_unobserve_count;
     managed_window_correction_fire(&g_event_loop, 78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(managed_window_correction_unobserve_count, exhausted_remove_count);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
 
-    application.layout_unobserve_retries = 1;
-    managed_window_correction_unobserve_result = kAXErrorNotificationNotRegistered;
+    managed_window_correction_time += FRAME_RECOVERY_CLEANUP_COOLDOWN_NS;
+    managed_window_correction_unobserve_result[1] = kAXErrorNotificationNotRegistered;
     managed_window_correction_schedule();
     managed_window_correction_fire(&g_event_loop, 78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
-    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
-    TEST_CHECK(application.layout_unobserve_retries, 0);
+    TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == 0, true);
+    TEST_CHECK(application.frame_recovery_unobserve_retries, 0);
+    TEST_CHECK(application.frame_recovery_cleanup_retry_time, 0ULL);
 
     event_loop_test_managed_window_correction_space_visible = saved_visible;
     event_loop_test_managed_window_correction_schedule = saved_schedule;
     event_loop_test_managed_window_correction_flush = saved_flush;
     event_loop_test_managed_window_correction_admit = saved_admit;
     event_loop_test_managed_window_correction_leave = saved_leave;
+    event_loop_test_frame_recovery_time = saved_time;
     application_observer_add_notification = saved_observe;
     application_observer_remove_notification = saved_unobserve;
     g_mouse_state = saved_mouse_state;
@@ -412,6 +441,10 @@ TEST_FUNC(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel,
 
 TEST_FUNC(application_observation_retries_only_transient_required_failures,
 {
+    TEST_CHECK(application_notification_is_frame_recovery(kAXLayoutChangedNotification), true);
+    TEST_CHECK(application_notification_is_frame_recovery(kAXValueChangedNotification), true);
+    TEST_CHECK(application_notification_is_frame_recovery(kAXTitleChangedNotification), false);
+
     __auto_type saved_create = application_observer_create;
     __auto_type saved_add_notification = application_observer_add_notification;
     __auto_type saved_add_source = application_observer_add_run_loop_source;
@@ -427,13 +460,13 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     TEST_CHECK(application.ax_retry, false);
     TEST_CHECK(application_test_source_count, 1);
     TEST_CHECK(application_test_notification_index, 7);
-    TEST_CHECK(application_observe_layout_changed(&application), true);
-    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
-    TEST_CHECK(application_test_notification_index, 8);
+    TEST_CHECK(application_observe_frame_recovery(&application), true);
+    TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
+    TEST_CHECK(application_test_notification_index, 9);
 
     application = (struct application) { .name = "test", .is_observing = true };
     application_test_reset(kAXErrorNotificationUnsupported);
-    TEST_CHECK(application_observe_layout_changed(&application), false);
+    TEST_CHECK(application_observe_frame_recovery(&application), false);
     TEST_CHECK(application.ax_retry, false);
 
     application = (struct application) { .name = "test" };

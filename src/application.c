@@ -9,6 +9,12 @@ static void application_post_window_focused(uint32_t window_id)
     }
 }
 
+static bool application_notification_is_frame_recovery(CFStringRef notification)
+{
+    return CFEqual(notification, kAXLayoutChangedNotification) ||
+           CFEqual(notification, kAXValueChangedNotification);
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static OBSERVER_CALLBACK(application_notification_handler)
@@ -27,7 +33,7 @@ static OBSERVER_CALLBACK(application_notification_handler)
         event_loop_post(&g_event_loop, MENU_OPENED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXMenuClosedNotification)) {
         event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
-    } else if (CFEqual(notification, kAXLayoutChangedNotification)) {
+    } else if (application_notification_is_frame_recovery(notification)) {
         event_loop_schedule_managed_window_correction();
     } else if (CFEqual(notification, kAXWindowMiniaturizedNotification)) {
         event_loop_post(&g_event_loop, WINDOW_MINIMIZED, (void *)(intptr_t) ax_window_id(element), 0);
@@ -84,38 +90,55 @@ static void (*application_observer_release)(AXObserverRef);
 #define application_observer_add_run_loop_source application_observer_add_run_loop_source_direct
 #endif
 
-bool application_observe_layout_changed(struct application *application)
+bool application_observe_frame_recovery(struct application *application)
 {
     if (!application || !application->is_observing) return false;
-    if (application->notification & AX_APPLICATION_LAYOUT_CHANGED) return true;
 
-    AXError result = application_observer_add_notification(application->observer_ref, application->ref,
-                                                           kAXLayoutChangedNotification, application);
-    if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
-        application->notification |= AX_APPLICATION_LAYOUT_CHANGED;
-        application->layout_unobserve_retries = 0;
-        return true;
+    for (int i = AX_APPLICATION_LAYOUT_CHANGED_INDEX; i <= AX_APPLICATION_VALUE_CHANGED_INDEX; ++i) {
+        uint16_t flag = (uint16_t) (1U << i);
+        if ((application->notification | application->frame_recovery_unsupported) & flag) continue;
+
+        AXError result = application_observer_add_notification(application->observer_ref, application->ref,
+                                                               ax_application_notification[i], application);
+        if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
+            application->notification |= flag;
+            application->frame_recovery_unobserve_retries = 0;
+            application->frame_recovery_cleanup_retry_time = 0;
+        } else {
+            if (result != kAXErrorCannotComplete) application->frame_recovery_unsupported |= flag;
+            debug("%s: error '%s' for application '%s' and notification '%s'\n",
+                  __FUNCTION__, ax_error_str[-result], application->name, ax_application_notification_str[i]);
+        }
     }
 
-    debug("%s: error '%s' for application '%s' and notification 'kAXLayoutChangedNotification'\n",
-          __FUNCTION__, ax_error_str[-result], application->name);
-    return false;
+    uint16_t expected = AX_APPLICATION_FRAME_RECOVERY & ~application->frame_recovery_unsupported;
+    return expected && (application->notification & expected) == expected;
 }
 
-bool application_unobserve_layout_changed(struct application *application)
+bool application_unobserve_frame_recovery(struct application *application)
 {
-    if (!application || !(application->notification & AX_APPLICATION_LAYOUT_CHANGED)) return true;
-    AXError result = application_observer_remove_notification(application->observer_ref, application->ref,
-                                                              kAXLayoutChangedNotification);
-    if (result == kAXErrorSuccess || result == kAXErrorNotificationNotRegistered) {
-        application->notification &= ~AX_APPLICATION_LAYOUT_CHANGED;
-        application->layout_unobserve_retries = 0;
-        return true;
+    if (!application) return true;
+
+    for (int i = AX_APPLICATION_LAYOUT_CHANGED_INDEX; i <= AX_APPLICATION_VALUE_CHANGED_INDEX; ++i) {
+        uint16_t flag = (uint16_t) (1U << i);
+        if (!(application->notification & flag)) continue;
+
+        AXError result = application_observer_remove_notification(application->observer_ref, application->ref,
+                                                                  ax_application_notification[i]);
+        if (result == kAXErrorSuccess || result == kAXErrorNotificationNotRegistered) {
+            application->notification &= ~flag;
+        } else {
+            debug("%s: error '%s' for application '%s' and notification '%s'\n",
+                  __FUNCTION__, ax_error_str[-result], application->name, ax_application_notification_str[i]);
+        }
     }
 
-    debug("%s: error '%s' for application '%s' and notification 'kAXLayoutChangedNotification'\n",
-          __FUNCTION__, ax_error_str[-result], application->name);
-    return false;
+    bool removed = (application->notification & AX_APPLICATION_FRAME_RECOVERY) == 0;
+    if (removed) {
+        application->frame_recovery_unobserve_retries = 0;
+        application->frame_recovery_cleanup_retry_time = 0;
+    }
+    return removed;
 }
 
 bool application_observe(struct application *application)
@@ -127,7 +150,7 @@ bool application_observe(struct application *application)
     AXError create_result = application_observer_create(application->pid, application_notification_handler, &application->observer_ref);
     if (create_result == kAXErrorSuccess) {
         for (int i = 0; i < array_count(ax_application_notification); ++i) {
-            if (i == AX_APPLICATION_LAYOUT_CHANGED_INDEX) continue;
+            if (i == AX_APPLICATION_LAYOUT_CHANGED_INDEX || i == AX_APPLICATION_VALUE_CHANGED_INDEX) continue;
             AXError result = application_observer_add_notification(application->observer_ref, application->ref, ax_application_notification[i], application);
             if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
                 application->notification |= 1 << i;

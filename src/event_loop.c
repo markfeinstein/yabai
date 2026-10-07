@@ -219,10 +219,12 @@ static void (*event_loop_test_managed_window_correction_schedule)(struct event_l
 static void (*event_loop_test_managed_window_correction_flush)(struct window_node *);
 static bool (*event_loop_test_managed_window_correction_admit)(struct event_loop *);
 static void (*event_loop_test_managed_window_correction_leave)(struct event_loop *);
+static uint64_t (*event_loop_test_frame_recovery_time)(void);
 #endif
 
 #define MANAGED_WINDOW_CORRECTION_DELAY_MS 100u
-#define LAYOUT_UNOBSERVE_RETRY_LIMIT 5u
+#define FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT 5u
+#define FRAME_RECOVERY_CLEANUP_COOLDOWN_NS (5ULL * 1000000000ULL)
 #define NATIVE_RESIZE_SETTLED_QUIESCENCE_MS 16u
 #define NATIVE_RESIZE_TRAILING_GRACE_MS 100u
 #define NATIVE_RESIZE_TIMEOUT_MS 10000u
@@ -1670,6 +1672,36 @@ static bool managed_window_frame_differs(struct window_node *node, uint32_t wind
             AX_DIFF(node->zoom->area.h, frame.size.height));
 }
 
+static uint64_t frame_recovery_time(void)
+{
+#ifdef TESTS
+    if (event_loop_test_frame_recovery_time) return event_loop_test_frame_recovery_time();
+#endif
+    return read_os_timer();
+}
+
+static bool frame_recovery_cleanup_retry_ready(struct application *application)
+{
+    if (application->frame_recovery_unobserve_retries < FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT) return true;
+    uint64_t now = frame_recovery_time();
+    if (application->frame_recovery_cleanup_retry_time > now) return false;
+    application->frame_recovery_unobserve_retries = 0;
+    application->frame_recovery_cleanup_retry_time = 0;
+    return true;
+}
+
+static void frame_recovery_record_cleanup_failure(struct application *application)
+{
+    if (application->frame_recovery_unobserve_retries < FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT) {
+        ++application->frame_recovery_unobserve_retries;
+    }
+    if (application->frame_recovery_unobserve_retries < FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT) {
+        managed_window_correction_schedule();
+    } else {
+        application->frame_recovery_cleanup_retry_time = frame_recovery_time() + FRAME_RECOVERY_CLEANUP_COOLDOWN_NS;
+    }
+}
+
 static void managed_window_correction_clear(struct window *window)
 {
     if (!window->frame_correction_pending) return;
@@ -1683,10 +1715,8 @@ static void managed_window_correction_clear(struct window *window)
     for (int i = 0; i < window_count; ++i) {
         if (window_list[i]->frame_correction_pending) return;
     }
-    if (!application_unobserve_layout_changed(window->application) &&
-        window->application->layout_unobserve_retries < LAYOUT_UNOBSERVE_RETRY_LIMIT) {
-        ++window->application->layout_unobserve_retries;
-        managed_window_correction_schedule();
+    if (!application_unobserve_frame_recovery(window->application)) {
+        frame_recovery_record_cleanup_failure(window->application);
     }
 }
 
@@ -1700,10 +1730,10 @@ static void managed_window_correction_update(struct window *window, struct view 
 
     if (!window->frame_correction_pending) {
         window->frame_correction_pending = true;
-        window->application->layout_unobserve_retries = 0;
+        window->application->frame_recovery_unobserve_retries = 0;
+        window->application->frame_recovery_cleanup_retry_time = 0;
     }
-    if (!(window->application->notification & AX_APPLICATION_LAYOUT_CHANGED) &&
-        !application_observe_layout_changed(window->application)) {
+    if (!application_observe_frame_recovery(window->application)) {
         managed_window_correction_schedule();
     }
     if (managed_window_correction_space_visible(view->sid)) managed_window_correction_flush(node);
@@ -1724,10 +1754,9 @@ static void managed_window_correction_schedule_application(struct application *a
 {
     if (managed_window_correction_application_has_pending(application)) {
         managed_window_correction_schedule();
-    } else if (application->layout_unobserve_retries < LAYOUT_UNOBSERVE_RETRY_LIMIT &&
-               !application_unobserve_layout_changed(application)) {
-        ++application->layout_unobserve_retries;
-        managed_window_correction_schedule();
+    } else if (frame_recovery_cleanup_retry_ready(application) &&
+               !application_unobserve_frame_recovery(application)) {
+        frame_recovery_record_cleanup_failure(application);
     }
 }
 
@@ -1910,14 +1939,13 @@ static void managed_window_correction_retry_window(struct window *window)
         return;
     }
 
-    bool observes_layout = (window->application->notification & AX_APPLICATION_LAYOUT_CHANGED) ||
-                           application_observe_layout_changed(window->application);
+    bool observes_recovery = application_observe_frame_recovery(window->application);
     if (managed_window_correction_space_visible(view->sid)) {
         managed_window_correction_flush(node);
     } else {
         view_set_flag(view, VIEW_IS_DIRTY);
     }
-    if (!observes_layout) managed_window_correction_clear(window);
+    if (!observes_recovery) managed_window_correction_clear(window);
 }
 
 static bool managed_window_correction_consume(struct event_loop *event_loop)
@@ -1925,12 +1953,11 @@ static bool managed_window_correction_consume(struct event_loop *event_loop)
     if (!__atomic_exchange_n(&event_loop->managed_window_correction_pending, 0, __ATOMIC_ACQ_REL)) return false;
 
     table_for (struct application *application, g_window_manager.application, {
-        if ((application->notification & AX_APPLICATION_LAYOUT_CHANGED) &&
+        if ((application->notification & AX_APPLICATION_FRAME_RECOVERY) &&
             !managed_window_correction_application_has_pending(application) &&
-            application->layout_unobserve_retries < LAYOUT_UNOBSERVE_RETRY_LIMIT &&
-            !application_unobserve_layout_changed(application)) {
-            ++application->layout_unobserve_retries;
-            managed_window_correction_schedule();
+            frame_recovery_cleanup_retry_ready(application) &&
+            !application_unobserve_frame_recovery(application)) {
+            frame_recovery_record_cleanup_failure(application);
         }
     })
     table_for (struct window *window, g_window_manager.window, {

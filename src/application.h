@@ -12,6 +12,7 @@ typedef OBSERVER_CALLBACK(observer_callback);
 #define AX_APPLICATION_WINDOW_MENU_OPENED_INDEX   5
 #define AX_APPLICATION_WINDOW_MENU_CLOSED_INDEX   6
 #define AX_APPLICATION_LAYOUT_CHANGED_INDEX       7
+#define AX_APPLICATION_VALUE_CHANGED_INDEX        8
 
 #define AX_APPLICATION_WINDOW_CREATED       (1 << AX_APPLICATION_WINDOW_CREATED_INDEX)
 #define AX_APPLICATION_WINDOW_FOCUSED       (1 << AX_APPLICATION_WINDOW_FOCUSED_INDEX)
@@ -19,6 +20,8 @@ typedef OBSERVER_CALLBACK(observer_callback);
 #define AX_APPLICATION_WINDOW_RESIZED       (1 << AX_APPLICATION_WINDOW_RESIZED_INDEX)
 #define AX_APPLICATION_WINDOW_TITLE_CHANGED (1 << AX_APPLICATION_WINDOW_TITLE_CHANGED_INDEX)
 #define AX_APPLICATION_LAYOUT_CHANGED       (1 << AX_APPLICATION_LAYOUT_CHANGED_INDEX)
+#define AX_APPLICATION_VALUE_CHANGED        (1 << AX_APPLICATION_VALUE_CHANGED_INDEX)
+#define AX_APPLICATION_FRAME_RECOVERY       (AX_APPLICATION_LAYOUT_CHANGED | AX_APPLICATION_VALUE_CHANGED)
 #define AX_APPLICATION_ALL                  (AX_APPLICATION_WINDOW_CREATED |\
                                              AX_APPLICATION_WINDOW_FOCUSED |\
                                              AX_APPLICATION_WINDOW_MOVED |\
@@ -54,7 +57,8 @@ static const char *ax_application_notification_str[] =
     [AX_APPLICATION_WINDOW_TITLE_CHANGED_INDEX] = "kAXTitleChangedNotification",
     [AX_APPLICATION_WINDOW_MENU_OPENED_INDEX]   = "kAXMenuOpenedNotification",
     [AX_APPLICATION_WINDOW_MENU_CLOSED_INDEX]   = "kAXMenuClosedNotification",
-    [AX_APPLICATION_LAYOUT_CHANGED_INDEX]       = "kAXLayoutChangedNotification"
+    [AX_APPLICATION_LAYOUT_CHANGED_INDEX]       = "kAXLayoutChangedNotification",
+    [AX_APPLICATION_VALUE_CHANGED_INDEX]        = "kAXValueChangedNotification"
 };
 
 static CFStringRef ax_application_notification[] =
@@ -66,7 +70,8 @@ static CFStringRef ax_application_notification[] =
     [AX_APPLICATION_WINDOW_TITLE_CHANGED_INDEX] = kAXTitleChangedNotification,
     [AX_APPLICATION_WINDOW_MENU_OPENED_INDEX]   = kAXMenuOpenedNotification,
     [AX_APPLICATION_WINDOW_MENU_CLOSED_INDEX]   = kAXMenuClosedNotification,
-    [AX_APPLICATION_LAYOUT_CHANGED_INDEX]       = kAXLayoutChangedNotification
+    [AX_APPLICATION_LAYOUT_CHANGED_INDEX]       = kAXLayoutChangedNotification,
+    [AX_APPLICATION_VALUE_CHANGED_INDEX]        = kAXValueChangedNotification
 };
 
 struct application
@@ -77,13 +82,15 @@ struct application
     pid_t pid;
     char *name;
     AXObserverRef observer_ref;
-    uint8_t notification;
+    uint16_t notification;
+    uint16_t frame_recovery_unsupported;
     bool is_observing;
     bool is_hidden;
     bool ax_retry;
     bool launch_refresh;
-    uint8_t layout_unobserve_retries;
+    uint8_t frame_recovery_unobserve_retries;
     uint16_t inactive_probe_cursor;
+    uint64_t frame_recovery_cleanup_retry_time;
 };
 
 bool application_is_frontmost(struct application *application);
@@ -92,8 +99,8 @@ uint32_t application_main_window(struct application *application);
 uint32_t application_focused_window(struct application *application);
 CFArrayRef application_window_list(struct application *application);
 bool application_observe(struct application *application);
-bool application_observe_layout_changed(struct application *application);
-bool application_unobserve_layout_changed(struct application *application);
+bool application_observe_frame_recovery(struct application *application);
+bool application_unobserve_frame_recovery(struct application *application);
 void application_unobserve(struct application *application);
 /* Process remains caller-owned. Returns an owned application or NULL. */
 struct application *application_create(struct process *process);
