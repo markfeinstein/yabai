@@ -89,6 +89,8 @@ struct application
     bool ax_retry;
     bool launch_refresh;
     uint8_t frame_recovery_unobserve_retries;
+    bool frame_recovery_hint_pending;
+    bool frame_recovery_hint_active;
     uint16_t inactive_probe_cursor;
     uint64_t frame_recovery_cleanup_retry_time;
 };

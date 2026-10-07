@@ -1,16 +1,19 @@
 static uint32_t native_resize_shutdown_restored_window_id;
 static int native_resize_shutdown_restore_count;
 static uint64_t managed_window_correction_scheduled_generation;
+static uint64_t managed_window_correction_scheduled_token;
 static uint64_t managed_window_correction_scheduled_delay;
 static int managed_window_correction_schedule_count;
 static int managed_window_correction_flush_count;
+static struct window_capture managed_window_correction_last_capture;
+static bool managed_window_correction_hint_during_flush;
 static int managed_window_correction_observe_count;
 static int managed_window_correction_unobserve_count;
 static AXError managed_window_correction_observe_result[2];
 static AXError managed_window_correction_unobserve_result[2];
 static bool managed_window_correction_admit_result;
+static pid_t managed_window_correction_hint_pid;
 static uint64_t managed_window_correction_time;
-static struct window *managed_window_correction_point_window;
 
 static AXError managed_window_correction_observe(AXObserverRef observer, AXUIElementRef element,
                                                  CFStringRef notification, void *context)
@@ -40,6 +43,13 @@ static uint64_t managed_window_correction_read_time(void)
     return managed_window_correction_time;
 }
 
+static AXError managed_window_correction_read_hint_pid(AXUIElementRef element, pid_t *pid)
+{
+    (void) element;
+    *pid = managed_window_correction_hint_pid;
+    return kAXErrorSuccess;
+}
+
 static bool managed_window_correction_admit(struct event_loop *event_loop)
 {
     (void) event_loop;
@@ -49,12 +59,6 @@ static bool managed_window_correction_admit(struct event_loop *event_loop)
 static void managed_window_correction_leave(struct event_loop *event_loop)
 {
     (void) event_loop;
-}
-
-static struct window *managed_window_correction_window_at_test_point(CGPoint point)
-{
-    (void) point;
-    return managed_window_correction_point_window;
 }
 
 static bool managed_window_correction_visible(uint64_t sid)
@@ -68,14 +72,24 @@ static void managed_window_correction_schedule_test(struct event_loop *event_loo
 {
     (void) event_loop;
     managed_window_correction_scheduled_generation = generation;
+    managed_window_correction_scheduled_token = event_loop->managed_window_correction_scheduled;
     managed_window_correction_scheduled_delay = delay_ms;
     ++managed_window_correction_schedule_count;
 }
 
-static void managed_window_correction_flush_test(struct window_node *node)
+static void managed_window_correction_fire_test(uint64_t generation)
 {
-    (void) node;
+    managed_window_correction_fire(&g_event_loop, generation, managed_window_correction_scheduled_token);
+}
+
+static void managed_window_correction_flush_test(struct window_capture *capture)
+{
+    managed_window_correction_last_capture = *capture;
     ++managed_window_correction_flush_count;
+    if (managed_window_correction_hint_during_flush) {
+        managed_window_correction_hint_during_flush = false;
+        managed_window_correction_schedule_application_hint(capture->window->application);
+    }
 }
 
 static void native_resize_shutdown_restore(uint32_t window_id)
@@ -179,7 +193,7 @@ static void application_test_reset(AXError default_result)
     }
 }
 
-TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_interaction,
+TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals,
 {
     struct table saved_applications = g_window_manager.application;
     struct table saved_windows = g_window_manager.window;
@@ -195,7 +209,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     __auto_type saved_flush = event_loop_test_managed_window_correction_flush;
     __auto_type saved_admit = event_loop_test_managed_window_correction_admit;
     __auto_type saved_leave = event_loop_test_managed_window_correction_leave;
-    __auto_type saved_window_at_point = event_loop_test_managed_window_at_point;
+    __auto_type saved_hint_pid = event_loop_test_managed_window_correction_hint_pid;
     __auto_type saved_time = event_loop_test_frame_recovery_time;
     __auto_type saved_observe = application_observer_add_notification;
     __auto_type saved_unobserve = application_observer_remove_notification;
@@ -207,6 +221,14 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
         .pid = 909,
         .psn = { .highLongOfPSN = 1, .lowLongOfPSN = 2 },
         .name = "Any App",
+        .observer_ref = (AXObserverRef) (uintptr_t) 1,
+        .is_observing = true
+    };
+    struct application other_application = {
+        .pid = 910,
+        .psn = { .highLongOfPSN = 3, .lowLongOfPSN = 4 },
+        .name = "Other App",
+        .observer_ref = (AXObserverRef) (uintptr_t) 2,
         .is_observing = true
     };
     struct window window = {
@@ -215,16 +237,52 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
         .frame = { { 20.0f, 30.0f }, { 600.0f, 300.0f } }
     };
     window.id_ptr = &window.id;
+    struct window sibling = {
+        .application = &application,
+        .id = 809,
+        .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } }
+    };
+    sibling.id_ptr = &sibling.id;
     struct window_node node = {
         .area = { .x = 20.0f, .y = 30.0f, .w = 400.0f, .h = 300.0f },
-        .window_count = 1,
-        .window_list = { 808 },
-        .window_order = { 808 }
+        .has_window_areas = true,
+        .window_count = 2,
+        .window_list = { 808, 809 },
+        .window_order = { 808, 809 },
+        .window_area = {
+            { .x = 20.0f, .y = 30.0f, .w = 400.0f, .h = 300.0f },
+            { .x = 20.0f, .y = 30.0f, .w = 400.0f, .h = 300.0f }
+        }
     };
     struct view view = { .sid = 1, .layout = VIEW_BSP, .root = &node };
+    struct window other_window = {
+        .application = &other_application,
+        .id = 810,
+        .frame = { { 500.0f, 30.0f }, { 600.0f, 300.0f } }
+    };
+    other_window.id_ptr = &other_window.id;
+    struct window_node other_node = {
+        .area = { .x = 500.0f, .y = 30.0f, .w = 400.0f, .h = 300.0f },
+        .window_count = 1,
+        .window_list = { 810 },
+        .window_order = { 810 }
+    };
+    struct view other_view = { .sid = 2, .layout = VIEW_BSP, .root = &other_node };
+    struct window orphaned_window = {
+        .application = NULL,
+        .id = 811,
+        .id_ptr = NULL,
+        .frame_correction_pending = true
+    };
     table_add(&g_window_manager.application, &application.pid, &application);
+    table_add(&g_window_manager.application, &other_application.pid, &other_application);
     table_add(&g_window_manager.window, &window.id, &window);
+    table_add(&g_window_manager.window, &sibling.id, &sibling);
+    table_add(&g_window_manager.window, &other_window.id, &other_window);
+    table_add(&g_window_manager.window, &orphaned_window.id, &orphaned_window);
     table_add(&g_window_manager.managed_window, &window.id, &view);
+    table_add(&g_window_manager.managed_window, &sibling.id, &view);
+    table_add(&g_window_manager.managed_window, &other_window.id, &other_view);
     g_mouse_state = (struct mouse_state) { .active_button = MOUSE_BUTTON_NONE };
     g_event_loop.is_running = true;
     g_event_loop.generation = 77;
@@ -233,6 +291,8 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     g_event_loop.managed_window_correction_scheduled = 0;
     managed_window_correction_schedule_count = 0;
     managed_window_correction_flush_count = 0;
+    managed_window_correction_last_capture = (struct window_capture) {0};
+    managed_window_correction_hint_during_flush = false;
     managed_window_correction_observe_count = 0;
     managed_window_correction_unobserve_count = 0;
     managed_window_correction_observe_result[0] = kAXErrorSuccess;
@@ -246,11 +306,19 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     event_loop_test_managed_window_correction_flush = managed_window_correction_flush_test;
     event_loop_test_managed_window_correction_admit = managed_window_correction_admit;
     event_loop_test_managed_window_correction_leave = managed_window_correction_leave;
-    event_loop_test_managed_window_at_point = managed_window_correction_window_at_test_point;
+    event_loop_test_managed_window_correction_hint_pid = managed_window_correction_read_hint_pid;
     event_loop_test_frame_recovery_time = managed_window_correction_read_time;
-    managed_window_correction_point_window = &window;
     application_observer_add_notification = managed_window_correction_observe;
     application_observer_remove_notification = managed_window_correction_unobserve;
+
+    managed_window_correction_hint_pid = application.pid;
+    struct managed_window_correction_hint_context matching_hint = {
+        .observer = application.observer_ref,
+        .element = (AXUIElementRef) (uintptr_t) 3
+    };
+    TEST_CHECK(managed_window_correction_hint_application(&matching_hint), &application);
+    matching_hint.observer = other_application.observer_ref;
+    TEST_CHECK(managed_window_correction_hint_application(&matching_hint), NULL);
 
     managed_window_correction_admit_result = false;
     managed_window_correction_schedule();
@@ -264,45 +332,54 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
     TEST_CHECK(managed_window_correction_observe_count, 2);
     TEST_CHECK(managed_window_correction_flush_count, 1);
+    TEST_CHECK(managed_window_correction_last_capture.window, &window);
+    TEST_CHECK(managed_window_correction_last_capture.x, 20.0f);
+    TEST_CHECK(managed_window_correction_last_capture.w, 400.0f);
 
-    CGEventRef passive_click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                                       CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(passive_click != NULL, true);
-    if (passive_click) EVENT_HANDLER_MOUSE_UP(passive_click, 0);
     TEST_CHECK(managed_window_correction_schedule_count, 1);
     TEST_CHECK(managed_window_correction_scheduled_generation, 77ULL);
     TEST_CHECK(managed_window_correction_scheduled_delay, (uint64_t) MANAGED_WINDOW_CORRECTION_DELAY_MS);
-    passive_click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                            CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(passive_click != NULL, true);
-    if (passive_click) EVENT_HANDLER_MOUSE_UP(passive_click, 0);
-    TEST_CHECK(managed_window_correction_schedule_count, 1);
 
     g_event_loop.generation = 78;
-    managed_window_correction_fire(&g_event_loop, 77);
+    managed_window_correction_fire_test(77);
     TEST_CHECK(g_event_loop.managed_window_correction_pending, 0U);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
     managed_window_correction_schedule_application(&application);
-    TEST_CHECK(managed_window_correction_schedule_count, 2);
+    uint64_t superseded_token = managed_window_correction_scheduled_token;
+    managed_window_correction_schedule_application(&application);
+    uint64_t current_token = managed_window_correction_scheduled_token;
+    TEST_CHECK(managed_window_correction_schedule_count, 3);
+    TEST_CHECK(current_token != superseded_token, true);
+    managed_window_correction_fire(&g_event_loop, 78, superseded_token);
+    TEST_CHECK(g_event_loop.managed_window_correction_pending, 0U);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, current_token);
+    g_event_loop.managed_window_correction_hint_pending = 1;
+    application.frame_recovery_hint_pending = 1;
+    managed_window_correction_hint_during_flush = true;
     managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(orphaned_window.frame_correction_pending, true);
+    TEST_CHECK(orphaned_window.frame_correction_retry_active, false);
     TEST_CHECK(managed_window_correction_flush_count, 2);
+    TEST_CHECK(managed_window_correction_last_capture.window, &window);
+    TEST_CHECK(managed_window_correction_last_capture.window != &sibling, true);
     TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK(g_event_loop.managed_window_correction_hint_pending, 1U);
+    uint64_t interleaved_hint_token = managed_window_correction_scheduled_token;
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, interleaved_hint_token);
+    TEST_CHECK(managed_window_correction_scheduled_delay, 50ULL);
 
     managed_window_correction_schedule_application(&application);
     window.frame.size.width = 400.0f;
     managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
+    TEST_CHECK(application.frame_recovery_hint_pending, 0U);
+    TEST_CHECK(application.frame_recovery_hint_active, false);
     TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == 0, true);
     TEST_CHECK(managed_window_correction_unobserve_count, 2);
-    passive_click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                            CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(passive_click != NULL, true);
-    if (passive_click) EVENT_HANDLER_MOUSE_UP(passive_click, 0);
-    TEST_CHECK(managed_window_correction_schedule_count, 3);
 
     window.frame.size.width = 600.0f;
     managed_window_correction_update(&window, &view, &node, true, false);
@@ -315,16 +392,56 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     managed_window_correction_retry_window(&window, false, managed_window_correction_time);
     TEST_CHECK(window.frame_correction_retry_active, false);
     application.is_hidden = false;
+    TEST_CHECK(array_count(frame_correction_retry_delay_ms), 11);
+    TEST_CHECK(frame_correction_retry_delay_ms[array_count(frame_correction_retry_delay_ms) - 1], 30150ULL);
     managed_window_correction_start_retries(&window, WINDOW_FRAME_CORRECTION_INITIAL);
     for (int i = 0; i < array_count(frame_correction_retry_delay_ms); ++i) {
         managed_window_correction_time = window.frame_correction_started_at +
             frame_correction_retry_delay_ms[i] * 1000000ULL;
-        managed_window_correction_fire(&g_event_loop, 78);
+        managed_window_correction_fire_test(78);
         TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+        if (i + 1 < array_count(frame_correction_retry_delay_ms)) {
+            TEST_CHECK(managed_window_correction_scheduled_delay,
+                       frame_correction_retry_delay_ms[i + 1] - frame_correction_retry_delay_ms[i]);
+        }
     }
     TEST_CHECK(window.frame_correction_pending, true);
     TEST_CHECK(window.frame_correction_retry_active, false);
+    TEST_CHECK(window.frame_correction_retry_index, FRAME_CORRECTION_RETRY_WRITE_COUNT);
+    TEST_CHECK(window.frame_correction_hint_rearms, 0);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
+
+    other_window.frame_correction_pending = true;
+    other_window.frame_correction_retry_active = false;
+    managed_window_correction_schedule_application_hint(&application);
+    TEST_CHECK(application.frame_recovery_hint_pending, 1U);
+    TEST_CHECK(other_application.frame_recovery_hint_pending, 0U);
+    managed_window_correction_time += 50ULL * 1000000ULL;
+    managed_window_correction_fire_test(78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_retry_active, true);
+    TEST_CHECK(window.frame_correction_hint_rearms, 1);
+    TEST_CHECK(other_window.frame_correction_retry_active, false);
+    TEST_CHECK(application.frame_recovery_hint_active, false);
+    TEST_CHECK(other_application.frame_recovery_hint_active, false);
+
+    for (int i = 0; i < array_count(frame_correction_retry_delay_ms); ++i) {
+        managed_window_correction_time = window.frame_correction_started_at +
+            frame_correction_retry_delay_ms[i] * 1000000ULL;
+        managed_window_correction_fire_test(78);
+        TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    }
+    TEST_CHECK(window.frame_correction_retry_active, false);
+    TEST_CHECK(window.frame_correction_hint_rearms, FRAME_CORRECTION_HINT_REARM_LIMIT);
+    managed_window_correction_schedule_application_hint(&application);
+    managed_window_correction_time += 50ULL * 1000000ULL;
+    managed_window_correction_fire_test(78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_retry_active, false);
+    TEST_CHECK(window.frame_correction_hint_rearms, FRAME_CORRECTION_HINT_REARM_LIMIT);
+    TEST_CHECK(other_window.frame_correction_retry_active, false);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
+    managed_window_correction_clear(&other_window);
 
     window_manager_remove_managed_window(&g_window_manager, window.id);
     TEST_CHECK(window.frame_correction_pending, false);
@@ -335,20 +452,32 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     window.frame.size.width = 600.0f;
     managed_window_correction_update(&window, &view, &node, true, false);
     window.frame_correction_retry_active = false;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
-    passive_click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                            CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(passive_click != NULL, true);
-    if (passive_click) EVENT_HANDLER_MOUSE_UP(passive_click, 0);
+    int hint_schedule_count = managed_window_correction_schedule_count;
+    managed_window_correction_schedule_application_hint(&application);
+    uint64_t coalesced_hint_token = managed_window_correction_scheduled_token;
+    managed_window_correction_schedule_application_hint(&application);
+    TEST_CHECK(managed_window_correction_schedule_count, hint_schedule_count + 1);
+    TEST_CHECK(managed_window_correction_scheduled_token, coalesced_hint_token);
+    TEST_CHECK(g_event_loop.managed_window_correction_pending, 0U);
+    TEST_CHECK(managed_window_correction_scheduled_delay, 50ULL);
+    managed_window_correction_time += 50ULL * 1000000ULL;
+    managed_window_correction_fire_test(78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_retry_active, true);
     TEST_CHECK(window.frame_correction_retry_index, 0);
-    TEST_CHECK(window.frame_correction_source, WINDOW_FRAME_CORRECTION_INTERACTION);
-    window.frame.size.width = 400.0f;
-    managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
-    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_source, WINDOW_FRAME_CORRECTION_EVENT_HINT);
+    TEST_CHECK(managed_window_correction_scheduled_delay, 50ULL);
+    for (int i = 0; i <= 7; ++i) {
+        managed_window_correction_time = window.frame_correction_started_at +
+            frame_correction_retry_delay_ms[i] * 1000000ULL;
+        if (i == 7) window.frame.size.width = 400.0f;
+        managed_window_correction_fire_test(78);
+        TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+        TEST_CHECK(window.frame_correction_pending, i != 7);
+    }
     TEST_CHECK(window.frame_correction_pending, false);
 
     window.frame.size.width = 600.0f;
@@ -360,7 +489,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     TEST_CHECK((application.notification & AX_APPLICATION_VALUE_CHANGED) == 0, true);
     managed_window_correction_observe_result[1] = kAXErrorSuccess;
     managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, true);
     TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
@@ -368,7 +497,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     managed_window_correction_schedule_application(&application);
     window.frame.size.width = 400.0f;
     managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
 
@@ -379,18 +508,18 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     managed_window_correction_unobserve_result[0] = kAXErrorSuccess;
     managed_window_correction_unobserve_result[1] = kAXErrorCannotComplete;
     managed_window_correction_time += 50ULL * 1000000ULL;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(window.frame_correction_pending, false);
     TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
     TEST_CHECK((application.notification & AX_APPLICATION_VALUE_CHANGED) != 0, true);
     TEST_CHECK(application.frame_recovery_unobserve_retries, 1);
-    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 78ULL);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled != 0, true);
 
     application.frame_recovery_unobserve_retries = FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT;
     application.frame_recovery_cleanup_retry_time = managed_window_correction_time + FRAME_RECOVERY_CLEANUP_COOLDOWN_NS;
     int exhausted_remove_count = managed_window_correction_unobserve_count;
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK(managed_window_correction_unobserve_count, exhausted_remove_count);
     TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
@@ -398,7 +527,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     managed_window_correction_time += FRAME_RECOVERY_CLEANUP_COOLDOWN_NS;
     managed_window_correction_unobserve_result[1] = kAXErrorNotificationNotRegistered;
     managed_window_correction_schedule();
-    managed_window_correction_fire(&g_event_loop, 78);
+    managed_window_correction_fire_test(78);
     TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
     TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == 0, true);
     TEST_CHECK(application.frame_recovery_unobserve_retries, 0);
@@ -409,9 +538,9 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     event_loop_test_managed_window_correction_flush = saved_flush;
     event_loop_test_managed_window_correction_admit = saved_admit;
     event_loop_test_managed_window_correction_leave = saved_leave;
-    event_loop_test_managed_window_at_point = saved_window_at_point;
+    event_loop_test_managed_window_correction_hint_pid = saved_hint_pid;
+    managed_window_correction_hint_during_flush = false;
     event_loop_test_frame_recovery_time = saved_time;
-    managed_window_correction_point_window = NULL;
     application_observer_add_notification = saved_observe;
     application_observer_remove_notification = saved_unobserve;
     g_mouse_state = saved_mouse_state;

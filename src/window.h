@@ -100,6 +100,7 @@ struct window
     bool frame_correction_pending;
     bool frame_correction_retry_active;
     uint8_t frame_correction_retry_index;
+    uint8_t frame_correction_hint_rearms;
     uint8_t frame_correction_source;
     uint8_t notification;
     uint64_t frame_correction_started_at;
@@ -115,8 +116,7 @@ enum window_frame_correction_source
 {
     WINDOW_FRAME_CORRECTION_INITIAL,
     WINDOW_FRAME_CORRECTION_EVENT_HINT,
-    WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE,
-    WINDOW_FRAME_CORRECTION_INTERACTION
+    WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE
 };
 
 enum window_flag

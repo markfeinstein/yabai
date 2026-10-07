@@ -34,7 +34,7 @@ static OBSERVER_CALLBACK(application_notification_handler)
     } else if (CFEqual(notification, kAXMenuClosedNotification)) {
         event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
     } else if (application_notification_is_frame_recovery(notification)) {
-        event_loop_schedule_managed_window_correction();
+        event_loop_post_managed_window_correction_hint(observer, element);
     } else if (CFEqual(notification, kAXWindowMiniaturizedNotification)) {
         event_loop_post(&g_event_loop, WINDOW_MINIMIZED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXWindowDeminiaturizedNotification)) {

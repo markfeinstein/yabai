@@ -38,6 +38,7 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(WINDOW_MINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_DEMINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_TITLE_CHANGED) \
+    EVENT_TYPE_ENTRY(MANAGED_WINDOW_CORRECTION_HINT) \
     EVENT_TYPE_ENTRY(SLS_WINDOW_ORDERED) \
     EVENT_TYPE_ENTRY(SLS_WINDOW_IS_VISIBLE) \
     EVENT_TYPE_ENTRY(SLS_WINDOW_IS_INVISIBLE) \
@@ -154,7 +155,7 @@ bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t gene
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 struct process;
 bool event_loop_post_application_launched(struct process *process);
-void event_loop_schedule_managed_window_correction(void);
+void event_loop_post_managed_window_correction_hint(AXObserverRef observer, AXUIElementRef element);
 struct window;
 void event_loop_cancel_managed_window_correction(struct window *window);
 void event_loop_schedule_application_launch_retry(struct process *process);

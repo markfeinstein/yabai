@@ -218,15 +218,16 @@ static Boolean (*event_loop_test_native_resize_ax_get)(AXValueRef, AXValueType, 
 static void (*event_loop_test_native_resize_ax_release)(CFTypeRef);
 static bool (*event_loop_test_managed_window_correction_space_visible)(uint64_t);
 static void (*event_loop_test_managed_window_correction_schedule)(struct event_loop *, uint64_t, uint64_t);
-static void (*event_loop_test_managed_window_correction_flush)(struct window_node *);
+static void (*event_loop_test_managed_window_correction_flush)(struct window_capture *);
 static bool (*event_loop_test_managed_window_correction_admit)(struct event_loop *);
 static void (*event_loop_test_managed_window_correction_leave)(struct event_loop *);
-static struct window *(*event_loop_test_managed_window_at_point)(CGPoint);
+static AXError (*event_loop_test_managed_window_correction_hint_pid)(AXUIElementRef, pid_t *);
 static uint64_t (*event_loop_test_frame_recovery_time)(void);
 #endif
 
 #define MANAGED_WINDOW_CORRECTION_DELAY_MS 50u
-#define FRAME_CORRECTION_RETRY_WRITE_COUNT 5u
+#define FRAME_CORRECTION_RETRY_WRITE_COUNT 10u
+#define FRAME_CORRECTION_HINT_REARM_LIMIT 1u
 #define FRAME_RECOVERY_UNOBSERVE_RETRY_LIMIT 5u
 #define FRAME_RECOVERY_CLEANUP_COOLDOWN_NS (5ULL * 1000000000ULL)
 #define NATIVE_RESIZE_SETTLED_QUIESCENCE_MS 16u
@@ -242,12 +243,17 @@ static bool native_resize_space_visible(uint64_t sid)
     return space_is_visible(sid);
 }
 
-static const uint64_t frame_correction_retry_delay_ms[] = { 50, 150, 350, 750, 1500, 1650 };
+/* Cumulative deadlines for a bounded lease: ten write/readback attempts followed
+ * by one readback-only probe. The sparse tail covers transient constraints
+ * without continuously polling or depending on unrelated input events. */
+static const uint64_t frame_correction_retry_delay_ms[] = {
+    50, 150, 350, 750, 1500, 3000, 6000, 12000, 24000, 30000, 30150
+};
+static volatile uint64_t managed_window_correction_token_counter;
 static const char *window_frame_correction_source_str[] = {
     [WINDOW_FRAME_CORRECTION_INITIAL] = "initial",
     [WINDOW_FRAME_CORRECTION_EVENT_HINT] = "event-hint",
-    [WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE] = "application-visible",
-    [WINDOW_FRAME_CORRECTION_INTERACTION] = "interaction"
+    [WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE] = "application-visible"
 };
 
 static void managed_window_correction_log(struct window *window, const char *event,
@@ -277,15 +283,36 @@ static bool managed_window_correction_space_visible(uint64_t sid)
     return space_is_visible(sid);
 }
 
-static void managed_window_correction_flush(struct window_node *node)
+static void managed_window_correction_flush(struct window_node *node, struct window *window)
 {
+    struct area area = node->area;
+    if (node->has_window_areas) {
+        bool found = false;
+        for (int i = 0; i < node->window_count; ++i) {
+            if (node->window_list[i] != window->id) continue;
+            area = node->window_area[i];
+            found = true;
+            break;
+        }
+        if (!found) return;
+    } else if (node->zoom) {
+        area = node->zoom->area;
+    }
+
+    struct window_capture capture = {
+        .window = window,
+        .x = area.x,
+        .y = area.y,
+        .w = area.w,
+        .h = area.h
+    };
 #ifdef TESTS
     if (event_loop_test_managed_window_correction_flush) {
-        event_loop_test_managed_window_correction_flush(node);
+        event_loop_test_managed_window_correction_flush(&capture);
         return;
     }
 #endif
-    window_node_flush(node);
+    window_manager_animate_window(capture);
 }
 
 static bool event_loop_admit_producer(struct event_loop *event_loop);
@@ -312,10 +339,10 @@ static void managed_window_correction_leave_producer(struct event_loop *event_lo
     event_loop_leave_producer(event_loop);
 }
 
-static void managed_window_correction_fire(struct event_loop *event_loop, uint64_t generation)
+static void managed_window_correction_fire(struct event_loop *event_loop, uint64_t generation,
+                                           uint64_t schedule_token)
 {
-    uint64_t token = generation;
-    if (!__atomic_compare_exchange_n(&event_loop->managed_window_correction_scheduled, &token, 0, false,
+    if (!__atomic_compare_exchange_n(&event_loop->managed_window_correction_scheduled, &schedule_token, 0, false,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     if (!managed_window_correction_admit_producer(event_loop)) return;
     if (__atomic_load_n(&event_loop->generation, __ATOMIC_ACQUIRE) == generation) {
@@ -325,36 +352,115 @@ static void managed_window_correction_fire(struct event_loop *event_loop, uint64
     managed_window_correction_leave_producer(event_loop);
 }
 
-static void managed_window_correction_schedule(void)
+/* Replaced timers remain queued on the dispatch queue, so each timer gets a
+ * unique token that prevents an older callback from claiming newer work. */
+static uint64_t managed_window_correction_next_token(void)
+{
+    uint64_t token = __atomic_add_fetch(&managed_window_correction_token_counter, 1, __ATOMIC_RELAXED);
+    if (!token) token = __atomic_add_fetch(&managed_window_correction_token_counter, 1, __ATOMIC_RELAXED);
+    return token;
+}
+
+static void managed_window_correction_schedule_after(uint64_t delay_ms, bool supersede)
 {
     if (!managed_window_correction_admit_producer(&g_event_loop)) return;
     uint64_t generation = event_loop_generation_snapshot(&g_event_loop);
     if (!generation) generation = 1;
-    uint64_t expected = 0;
-    if (!__atomic_compare_exchange_n(&g_event_loop.managed_window_correction_scheduled, &expected, generation, false,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        managed_window_correction_leave_producer(&g_event_loop);
-        return;
+    uint64_t token = managed_window_correction_next_token();
+    if (supersede) {
+        __atomic_store_n(&g_event_loop.managed_window_correction_scheduled, token, __ATOMIC_RELEASE);
+    } else {
+        uint64_t expected = 0;
+        if (!__atomic_compare_exchange_n(&g_event_loop.managed_window_correction_scheduled, &expected, token, false,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            managed_window_correction_leave_producer(&g_event_loop);
+            return;
+        }
     }
 #ifdef TESTS
     if (event_loop_test_managed_window_correction_schedule) {
-        event_loop_test_managed_window_correction_schedule(&g_event_loop, generation,
-                                                           MANAGED_WINDOW_CORRECTION_DELAY_MS);
+        event_loop_test_managed_window_correction_schedule(&g_event_loop, generation, delay_ms);
         managed_window_correction_leave_producer(&g_event_loop);
         return;
     }
 #endif
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, MANAGED_WINDOW_CORRECTION_DELAY_MS * NSEC_PER_MSEC),
-                   dispatch_get_main_queue(), ^{
-        managed_window_correction_fire(&g_event_loop, generation);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        managed_window_correction_fire(&g_event_loop, generation, token);
     });
     managed_window_correction_leave_producer(&g_event_loop);
 }
 
-void event_loop_schedule_managed_window_correction(void)
+static void managed_window_correction_schedule(void)
 {
-    __atomic_store_n(&g_event_loop.managed_window_correction_hint_pending, 1, __ATOMIC_RELEASE);
-    managed_window_correction_schedule();
+    managed_window_correction_schedule_after(MANAGED_WINDOW_CORRECTION_DELAY_MS, false);
+}
+
+static void managed_window_correction_schedule_application_hint(struct application *application)
+{
+    if (!application || !(application->notification & AX_APPLICATION_FRAME_RECOVERY)) return;
+    application->frame_recovery_hint_pending = true;
+    uint32_t expected = 0;
+    if (__atomic_compare_exchange_n(&g_event_loop.managed_window_correction_hint_pending, &expected, 1, false,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        managed_window_correction_schedule_after(MANAGED_WINDOW_CORRECTION_DELAY_MS, true);
+    }
+}
+
+struct managed_window_correction_hint_context
+{
+    AXObserverRef observer;
+    AXUIElementRef element;
+};
+
+static struct managed_window_correction_hint_context *managed_window_correction_hint_context_create(AXObserverRef observer,
+                                                                                                      AXUIElementRef element)
+{
+    if (!observer || !element) return NULL;
+    struct managed_window_correction_hint_context *context = malloc(sizeof(*context));
+    if (!context) return NULL;
+    context->observer = (AXObserverRef) CFRetain(observer);
+    context->element = (AXUIElementRef) CFRetain(element);
+    return context;
+}
+
+static void managed_window_correction_hint_context_destroy(struct managed_window_correction_hint_context *context)
+{
+    if (!context) return;
+    CFRelease(context->observer);
+    CFRelease(context->element);
+    free(context);
+}
+
+static AXError managed_window_correction_hint_element_pid(AXUIElementRef element, pid_t *pid)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_hint_pid) {
+        return event_loop_test_managed_window_correction_hint_pid(element, pid);
+    }
+#endif
+    return AXUIElementGetPid(element, pid);
+}
+
+static struct application *managed_window_correction_hint_application(struct managed_window_correction_hint_context *context)
+{
+    pid_t pid = 0;
+    if (!context || managed_window_correction_hint_element_pid(context->element, &pid) != kAXErrorSuccess) return NULL;
+    struct application *application = window_manager_find_application(&g_window_manager, pid);
+    return application && application->observer_ref == context->observer ? application : NULL;
+}
+
+void event_loop_post_managed_window_correction_hint(AXObserverRef observer, AXUIElementRef element)
+{
+    struct managed_window_correction_hint_context *context =
+        managed_window_correction_hint_context_create(observer, element);
+    if (context) (void) event_loop_try_post(&g_event_loop, MANAGED_WINDOW_CORRECTION_HINT, context, 0);
+}
+
+static EVENT_HANDLER(MANAGED_WINDOW_CORRECTION_HINT)
+{
+    struct managed_window_correction_hint_context *hint = context;
+    managed_window_correction_schedule_application_hint(managed_window_correction_hint_application(hint));
+    managed_window_correction_hint_context_destroy(hint);
 }
 
 static void managed_window_correction_clear(struct window *window);
@@ -1702,14 +1808,6 @@ static bool managed_window_frame_differs(struct window_node *node, uint32_t wind
             AX_DIFF(node->zoom->area.h, frame.size.height));
 }
 
-static struct window *managed_window_correction_window_at_point(CGPoint point)
-{
-#ifdef TESTS
-    if (event_loop_test_managed_window_at_point) return event_loop_test_managed_window_at_point(point);
-#endif
-    return window_manager_find_window_at_point(&g_window_manager, point);
-}
-
 static CGRect managed_window_correction_live_frame(struct window *window)
 {
 #ifdef TESTS
@@ -1773,6 +1871,7 @@ static void managed_window_correction_clear(struct window *window)
     window->frame_correction_pending = false;
     window->frame_correction_retry_active = false;
     window->frame_correction_retry_index = 0;
+    window->frame_correction_hint_rearms = 0;
     window->frame_correction_started_at = 0;
     window->frame_correction_retry_at = 0;
     if (!window->application) return;
@@ -1784,6 +1883,8 @@ static void managed_window_correction_clear(struct window *window)
     for (int i = 0; i < window_count; ++i) {
         if (window_list[i]->frame_correction_pending) return;
     }
+    window->application->frame_recovery_hint_pending = false;
+    window->application->frame_recovery_hint_active = false;
     if (!application_unobserve_frame_recovery(window->application)) {
         frame_recovery_record_cleanup_failure(window->application);
     }
@@ -1817,8 +1918,10 @@ static void managed_window_correction_update(struct window *window, struct view 
         window->application->frame_recovery_cleanup_retry_time = 0;
     }
     bool observes_recovery = application_observe_frame_recovery(window->application);
-    if (newly_pending || !observes_recovery) managed_window_correction_schedule();
-    if (managed_window_correction_space_visible(view->sid)) managed_window_correction_flush(node);
+    if (newly_pending || !observes_recovery) {
+        managed_window_correction_schedule_after(MANAGED_WINDOW_CORRECTION_DELAY_MS, newly_pending);
+    }
+    if (managed_window_correction_space_visible(view->sid)) managed_window_correction_flush(node, window);
     else view_set_flag(view, VIEW_IS_DIRTY);
 }
 
@@ -1839,23 +1942,16 @@ static void managed_window_correction_schedule_application(struct application *a
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
     for (int i = 0; i < window_count; ++i) {
         if (!window_list[i]->frame_correction_pending) continue;
+        window_list[i]->frame_correction_hint_rearms = 0;
         managed_window_correction_start_retries(window_list[i], WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE);
         has_pending = true;
     }
     if (has_pending) {
-        managed_window_correction_schedule();
+        managed_window_correction_schedule_after(MANAGED_WINDOW_CORRECTION_DELAY_MS, true);
     } else if (frame_recovery_cleanup_retry_ready(application) &&
                !application_unobserve_frame_recovery(application)) {
         frame_recovery_record_cleanup_failure(application);
     }
-}
-
-static void managed_window_correction_schedule_window_at_point(CGPoint point)
-{
-    struct window *window = managed_window_correction_window_at_point(point);
-    if (!window || !window->frame_correction_pending) return;
-    managed_window_correction_start_retries(window, WINDOW_FRAME_CORRECTION_INTERACTION);
-    managed_window_correction_schedule();
 }
 
 static EVENT_HANDLER(WINDOW_MOVED)
@@ -2035,7 +2131,9 @@ static void managed_window_correction_retry_window(struct window *window, bool h
         managed_window_correction_clear(window);
         return;
     }
-    if (hinted && !window->frame_correction_retry_active) {
+    if (hinted && !window->frame_correction_retry_active &&
+        window->frame_correction_hint_rearms < FRAME_CORRECTION_HINT_REARM_LIMIT) {
+        ++window->frame_correction_hint_rearms;
         managed_window_correction_start_retries(window, WINDOW_FRAME_CORRECTION_EVENT_HINT);
     }
     if (!window->frame_correction_retry_active || window->frame_correction_retry_at > now) return;
@@ -2060,7 +2158,7 @@ static void managed_window_correction_retry_window(struct window *window, bool h
         view_set_flag(view, VIEW_IS_DIRTY);
         window->frame_correction_retry_active = false;
     } else if (window->frame_correction_retry_index < FRAME_CORRECTION_RETRY_WRITE_COUNT) {
-        managed_window_correction_flush(node);
+        managed_window_correction_flush(node, window);
         ++window->frame_correction_retry_index;
         window->frame_correction_retry_at = window->frame_correction_started_at +
             frame_correction_retry_delay_ms[window->frame_correction_retry_index] * 1000000ULL;
@@ -2079,6 +2177,8 @@ static bool managed_window_correction_consume(struct event_loop *event_loop)
     bool hinted = __atomic_exchange_n(&event_loop->managed_window_correction_hint_pending, 0, __ATOMIC_ACQ_REL);
     uint64_t now = frame_recovery_time();
     table_for (struct application *application, g_window_manager.application, {
+        application->frame_recovery_hint_active = hinted && application->frame_recovery_hint_pending;
+        application->frame_recovery_hint_pending = false;
         if ((application->notification & AX_APPLICATION_FRAME_RECOVERY) &&
             !managed_window_correction_application_has_pending(application) &&
             frame_recovery_cleanup_retry_ready(application) &&
@@ -2086,12 +2186,23 @@ static bool managed_window_correction_consume(struct event_loop *event_loop)
             frame_recovery_record_cleanup_failure(application);
         }
     })
-    bool has_active_retry = false;
+    uint64_t next_retry_at = 0;
     table_for (struct window *window, g_window_manager.window, {
-        managed_window_correction_retry_window(window, hinted, now);
-        if (window->frame_correction_pending && window->frame_correction_retry_active) has_active_retry = true;
+        bool window_hint = window->application && window->application->frame_recovery_hint_active;
+        managed_window_correction_retry_window(window, window_hint, now);
+        if (window->frame_correction_pending && window->frame_correction_retry_active &&
+            (!next_retry_at || window->frame_correction_retry_at < next_retry_at)) {
+            next_retry_at = window->frame_correction_retry_at;
+        }
     })
-    if (has_active_retry) managed_window_correction_schedule();
+    table_for (struct application *application, g_window_manager.application, {
+        application->frame_recovery_hint_active = false;
+    })
+    if (next_retry_at) {
+        uint64_t delay_ns = next_retry_at > now ? next_retry_at - now : 0;
+        uint64_t delay_ms = (delay_ns + NSEC_PER_MSEC - 1) / NSEC_PER_MSEC;
+        managed_window_correction_schedule_after(delay_ms ? delay_ms : 1, false);
+    }
     return true;
 }
 
@@ -2705,12 +2816,7 @@ static EVENT_HANDLER(MOUSE_UP)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
     native_resize_mouse_up(button);
-    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) {
-        if (button == kCGMouseButtonLeft) {
-            managed_window_correction_schedule_window_at_point(CGEventGetLocation(context));
-        }
-        goto out;
-    }
+    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
     if (mission_control_is_active())                        goto reset;
     if (!g_mouse_state.window)                             goto reset;
 
@@ -3992,6 +4098,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     case MOUSE_DRAGGED:
     case MOUSE_MOVED: {
         CFRelease(context);
+    } break;
+    case MANAGED_WINDOW_CORRECTION_HINT: {
+        managed_window_correction_hint_context_destroy(context);
     } break;
     case WINDOW_CREATED_RETRY: {
         window_manager_destroy_window_created_retry(context);
