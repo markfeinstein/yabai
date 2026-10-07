@@ -135,6 +135,7 @@ struct event_loop
     volatile uint32_t topology_resync_pending;
     volatile uint64_t topology_resync_retry_scheduled;
     volatile uint32_t managed_window_correction_pending;
+    volatile uint32_t managed_window_correction_hint_pending;
     volatile uint64_t managed_window_correction_scheduled;
 };
 
@@ -154,6 +155,8 @@ void event_loop_post(struct event_loop *event_loop, enum event_type type, void *
 struct process;
 bool event_loop_post_application_launched(struct process *process);
 void event_loop_schedule_managed_window_correction(void);
+struct window;
+void event_loop_cancel_managed_window_correction(struct window *window);
 void event_loop_schedule_application_launch_retry(struct process *process);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);

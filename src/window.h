@@ -98,7 +98,11 @@ struct window
     bool is_root;
     bool is_eligible;
     bool frame_correction_pending;
+    bool frame_correction_retry_active;
+    uint8_t frame_correction_retry_index;
     uint8_t notification;
+    uint64_t frame_correction_started_at;
+    uint64_t frame_correction_retry_at;
     uint8_t rule_flags;
     uint16_t flags;
     float opacity;

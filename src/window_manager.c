@@ -347,6 +347,9 @@ struct view *window_manager_find_managed_window(struct window_manager *wm, struc
 void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wid)
 {
     bool present = table_find(&wm->managed_window, &wid) != NULL;
+    if (present && wm == &g_window_manager) {
+        event_loop_cancel_managed_window_correction(window_manager_find_window(wm, wid));
+    }
     table_remove(&wm->managed_window, &wid);
     if (present && wm == &g_window_manager && declarative_installed_has_scaffold()) {
         declarative_configuration_request_reconcile();
