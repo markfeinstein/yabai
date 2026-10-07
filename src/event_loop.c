@@ -1,4 +1,4 @@
-#include <os/log.h>
+#include <syslog.h>
 
 extern struct event_loop g_event_loop;
 extern struct process_manager g_process_manager;
@@ -263,9 +263,7 @@ static void managed_window_correction_log(struct window *window, const char *eve
              "%s app=%s window=%u source=%s retry_writes=%u elapsed_ms=%.2f",
              event, window->application->name, window->id, source,
              (unsigned int) retry_writes, elapsed_ms);
-    static os_log_t frame_recovery_log;
-    if (!frame_recovery_log) frame_recovery_log = os_log_create("com.asmvik.yabai", "frame-recovery");
-    os_log_with_type(frame_recovery_log, OS_LOG_TYPE_INFO, "%{public}s", payload);
+    syslog(LOG_NOTICE, "frame_correction: %s", payload);
 #endif
 }
 
