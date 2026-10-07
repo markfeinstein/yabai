@@ -2851,7 +2851,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_loop_sync_during_thread_create_interval_completes_on_success_and_failure) \
     TEST_ENTRY(event_loop_sync_submission_concurrent_with_shutdown_completes) \
     TEST_ENTRY(event_loop_bootstrap_failure_drains_queued_daemon_messages) \
-    TEST_ENTRY(managed_window_correction_retries_only_calendar_inbox_close_transition) \
+    TEST_ENTRY(managed_window_correction_retries_pending_frames_after_layout_changes) \
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \

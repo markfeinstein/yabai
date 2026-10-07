@@ -97,6 +97,7 @@ struct window
     CGRect windowed_frame;
     bool is_root;
     bool is_eligible;
+    bool frame_correction_pending;
     uint8_t notification;
     uint8_t rule_flags;
     uint16_t flags;

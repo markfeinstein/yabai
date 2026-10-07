@@ -1,12 +1,46 @@
 static uint32_t native_resize_shutdown_restored_window_id;
 static int native_resize_shutdown_restore_count;
-static uint32_t managed_window_correction_scheduled_window_id;
-static pid_t managed_window_correction_scheduled_application_pid;
+static uint64_t managed_window_correction_scheduled_generation;
 static uint64_t managed_window_correction_scheduled_delay;
 static int managed_window_correction_schedule_count;
 static int managed_window_correction_flush_count;
-static bool managed_window_correction_frontmost_result;
-static bool managed_window_correction_inbox_toggle_result;
+static int managed_window_correction_observe_count;
+static int managed_window_correction_unobserve_count;
+static AXError managed_window_correction_observe_result;
+static AXError managed_window_correction_unobserve_result;
+static bool managed_window_correction_admit_result;
+
+static AXError managed_window_correction_observe(AXObserverRef observer, AXUIElementRef element,
+                                                 CFStringRef notification, void *context)
+{
+    (void) observer;
+    (void) element;
+    (void) notification;
+    (void) context;
+    ++managed_window_correction_observe_count;
+    return managed_window_correction_observe_result;
+}
+
+static AXError managed_window_correction_unobserve(AXObserverRef observer, AXUIElementRef element,
+                                                   CFStringRef notification)
+{
+    (void) observer;
+    (void) element;
+    (void) notification;
+    ++managed_window_correction_unobserve_count;
+    return managed_window_correction_unobserve_result;
+}
+
+static bool managed_window_correction_admit(struct event_loop *event_loop)
+{
+    (void) event_loop;
+    return managed_window_correction_admit_result;
+}
+
+static void managed_window_correction_leave(struct event_loop *event_loop)
+{
+    (void) event_loop;
+}
 
 static bool managed_window_correction_visible(uint64_t sid)
 {
@@ -14,24 +48,11 @@ static bool managed_window_correction_visible(uint64_t sid)
     return true;
 }
 
-static bool managed_window_correction_frontmost(struct application *application)
-{
-    (void) application;
-    return managed_window_correction_frontmost_result;
-}
-
-static bool managed_window_correction_inbox_toggle(struct window *window, CGPoint point)
-{
-    (void) window;
-    (void) point;
-    return managed_window_correction_inbox_toggle_result;
-}
-
-static void managed_window_correction_schedule_test(uint32_t window_id, pid_t application_pid,
+static void managed_window_correction_schedule_test(struct event_loop *event_loop, uint64_t generation,
                                                       uint64_t delay_ms)
 {
-    managed_window_correction_scheduled_window_id = window_id;
-    managed_window_correction_scheduled_application_pid = application_pid;
+    (void) event_loop;
+    managed_window_correction_scheduled_generation = generation;
     managed_window_correction_scheduled_delay = delay_ms;
     ++managed_window_correction_schedule_count;
 }
@@ -105,7 +126,7 @@ static void *concurrent_event_loop_end(void *context)
 }
 
 static AXError application_test_create_result;
-static AXError application_test_notification_results[7];
+static AXError application_test_notification_results[8];
 static int application_test_notification_index;
 static int application_test_source_count;
 
@@ -143,30 +164,37 @@ static void application_test_reset(AXError default_result)
     }
 }
 
-TEST_FUNC(managed_window_correction_retries_only_calendar_inbox_close_transition,
+TEST_FUNC(managed_window_correction_retries_pending_frames_after_layout_changes,
 {
+    struct table saved_applications = g_window_manager.application;
     struct table saved_windows = g_window_manager.window;
     struct table saved_managed = g_window_manager.managed_window;
-    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
     struct mouse_state saved_mouse_state = g_mouse_state;
-    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    bool saved_running = g_event_loop.is_running;
+    uint64_t saved_generation = g_event_loop.generation;
+    uint32_t saved_pending = g_event_loop.managed_window_correction_pending;
+    uint64_t saved_scheduled = g_event_loop.managed_window_correction_scheduled;
     __auto_type saved_visible = event_loop_test_managed_window_correction_space_visible;
-    __auto_type saved_frontmost = event_loop_test_managed_window_correction_frontmost;
-    __auto_type saved_inbox_toggle = event_loop_test_managed_window_correction_inbox_toggle;
     __auto_type saved_schedule = event_loop_test_managed_window_correction_schedule;
     __auto_type saved_flush = event_loop_test_managed_window_correction_flush;
+    __auto_type saved_admit = event_loop_test_managed_window_correction_admit;
+    __auto_type saved_leave = event_loop_test_managed_window_correction_leave;
+    __auto_type saved_observe = application_observer_add_notification;
+    __auto_type saved_unobserve = application_observer_remove_notification;
 
+    table_init(&g_window_manager.application, 1, hash_wm, compare_wm);
     table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
     table_init(&g_window_manager.managed_window, 1, hash_wm, compare_wm);
     struct application application = {
         .pid = 909,
         .psn = { .highLongOfPSN = 1, .lowLongOfPSN = 2 },
-        .name = "Calendar"
+        .name = "Any App",
+        .is_observing = true
     };
     struct window window = {
         .application = &application,
         .id = 808,
-        .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } }
+        .frame = { { 20.0f, 30.0f }, { 600.0f, 300.0f } }
     };
     window.id_ptr = &window.id;
     struct window_node node = {
@@ -176,85 +204,120 @@ TEST_FUNC(managed_window_correction_retries_only_calendar_inbox_close_transition
         .window_order = { 808 }
     };
     struct view view = { .sid = 1, .layout = VIEW_BSP, .root = &node };
+    table_add(&g_window_manager.application, &application.pid, &application);
     table_add(&g_window_manager.window, &window.id, &window);
     table_add(&g_window_manager.managed_window, &window.id, &view);
-    g_window_manager.focused_window_id = window.id;
     g_mouse_state = (struct mouse_state) { .active_button = MOUSE_BUTTON_NONE };
-    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
-    managed_window_correction_scheduled_window_id = 0;
-    managed_window_correction_scheduled_application_pid = 0;
-    managed_window_correction_scheduled_delay = 0;
+    g_event_loop.is_running = true;
+    g_event_loop.generation = 77;
+    g_event_loop.managed_window_correction_pending = 0;
+    g_event_loop.managed_window_correction_scheduled = 0;
     managed_window_correction_schedule_count = 0;
     managed_window_correction_flush_count = 0;
-    managed_window_correction_frontmost_result = true;
-    managed_window_correction_inbox_toggle_result = true;
+    managed_window_correction_observe_count = 0;
+    managed_window_correction_unobserve_count = 0;
+    managed_window_correction_observe_result = kAXErrorSuccess;
+    managed_window_correction_unobserve_result = kAXErrorSuccess;
+    managed_window_correction_admit_result = true;
     event_loop_test_managed_window_correction_space_visible = managed_window_correction_visible;
-    event_loop_test_managed_window_correction_frontmost = managed_window_correction_frontmost;
-    event_loop_test_managed_window_correction_inbox_toggle = managed_window_correction_inbox_toggle;
     event_loop_test_managed_window_correction_schedule = managed_window_correction_schedule_test;
     event_loop_test_managed_window_correction_flush = managed_window_correction_flush_test;
+    event_loop_test_managed_window_correction_admit = managed_window_correction_admit;
+    event_loop_test_managed_window_correction_leave = managed_window_correction_leave;
+    application_observer_add_notification = managed_window_correction_observe;
+    application_observer_remove_notification = managed_window_correction_unobserve;
 
-    CGEventRef click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                               CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(click != NULL, true);
-    if (click) EVENT_HANDLER_MOUSE_UP(click, 0);
+    managed_window_correction_admit_result = false;
+    managed_window_correction_schedule();
     TEST_CHECK(managed_window_correction_schedule_count, 0);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
+    managed_window_correction_admit_result = true;
+
+    managed_window_correction_update(&window, &view, &node, true, false);
+    TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
+    TEST_CHECK(managed_window_correction_observe_count, 1);
+    TEST_CHECK(managed_window_correction_flush_count, 1);
+
+    managed_window_correction_schedule_application(&application);
+    TEST_CHECK(managed_window_correction_schedule_count, 1);
+    TEST_CHECK(managed_window_correction_scheduled_generation, 77ULL);
+    TEST_CHECK(managed_window_correction_scheduled_delay, (uint64_t) MANAGED_WINDOW_CORRECTION_DELAY_MS);
+    managed_window_correction_schedule_application(&application);
+    TEST_CHECK(managed_window_correction_schedule_count, 1);
+
+    g_event_loop.generation = 78;
+    managed_window_correction_fire(&g_event_loop, 77);
+    TEST_CHECK(g_event_loop.managed_window_correction_pending, 0U);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
+    managed_window_correction_schedule_application(&application);
+    TEST_CHECK(managed_window_correction_schedule_count, 2);
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(managed_window_correction_flush_count, 2);
+    TEST_CHECK(window.frame_correction_pending, true);
+
+    managed_window_correction_schedule_application(&application);
+    window.frame.size.width = 400.0f;
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_pending, false);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
+    TEST_CHECK(managed_window_correction_unobserve_count, 1);
 
     window.frame.size.width = 600.0f;
-    managed_window_correction_inbox_toggle_result = false;
-    click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                    CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(click != NULL, true);
-    if (click) EVENT_HANDLER_MOUSE_UP(click, 0);
-    TEST_CHECK(managed_window_correction_schedule_count, 0);
+    managed_window_correction_observe_result = kAXErrorCannotComplete;
+    managed_window_correction_update(&window, &view, &node, true, false);
+    TEST_CHECK(window.frame_correction_pending, true);
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_pending, false);
 
-    managed_window_correction_inbox_toggle_result = true;
-    click = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                    CGPointMake(100.0f, 100.0f), kCGMouseButtonLeft);
-    TEST_CHECK(click != NULL, true);
-    if (click) EVENT_HANDLER_MOUSE_UP(click, 0);
-    TEST_CHECK(managed_window_correction_schedule_count, 1);
-    TEST_CHECK(managed_window_correction_scheduled_window_id, window.id);
-    TEST_CHECK(managed_window_correction_scheduled_application_pid, application.pid);
-    TEST_CHECK(managed_window_correction_scheduled_delay, (uint64_t) MANAGED_WINDOW_CORRECTION_DELAY_MS);
+    managed_window_correction_observe_result = kAXErrorSuccess;
+    managed_window_correction_update(&window, &view, &node, true, false);
+    managed_window_correction_schedule_application(&application);
+    window.frame.size.width = 400.0f;
+    managed_window_correction_unobserve_result = kAXErrorCannotComplete;
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(window.frame_correction_pending, false);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
+    TEST_CHECK(application.layout_unobserve_retries, 1);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 78ULL);
 
-    struct managed_window_correction *correction = malloc(sizeof(*correction));
-    TEST_CHECK(correction != NULL, true);
-    if (correction) {
-        *correction = (struct managed_window_correction) {
-            .window_id = window.id,
-            .application_pid = application.pid,
-            .application_psn = application.psn
-        };
-        EVENT_HANDLER_MANAGED_WINDOW_CORRECTION(correction, 0);
-    }
-    TEST_CHECK(managed_window_correction_flush_count, 1);
+    application.layout_unobserve_retries = LAYOUT_UNOBSERVE_RETRY_LIMIT;
+    int exhausted_remove_count = managed_window_correction_unobserve_count;
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK(managed_window_correction_unobserve_count, exhausted_remove_count);
+    TEST_CHECK(g_event_loop.managed_window_correction_scheduled, 0ULL);
 
-    managed_window_correction_frontmost_result = false;
-    correction = malloc(sizeof(*correction));
-    TEST_CHECK(correction != NULL, true);
-    if (correction) {
-        *correction = (struct managed_window_correction) {
-            .window_id = window.id,
-            .application_pid = application.pid,
-            .application_psn = application.psn
-        };
-        EVENT_HANDLER_MANAGED_WINDOW_CORRECTION(correction, 0);
-    }
-    TEST_CHECK(managed_window_correction_flush_count, 1);
+    application.layout_unobserve_retries = 1;
+    managed_window_correction_unobserve_result = kAXErrorNotificationNotRegistered;
+    managed_window_correction_schedule();
+    managed_window_correction_fire(&g_event_loop, 78);
+    TEST_CHECK(managed_window_correction_consume(&g_event_loop), true);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) == 0, true);
+    TEST_CHECK(application.layout_unobserve_retries, 0);
 
     event_loop_test_managed_window_correction_space_visible = saved_visible;
-    event_loop_test_managed_window_correction_frontmost = saved_frontmost;
-    event_loop_test_managed_window_correction_inbox_toggle = saved_inbox_toggle;
     event_loop_test_managed_window_correction_schedule = saved_schedule;
     event_loop_test_managed_window_correction_flush = saved_flush;
+    event_loop_test_managed_window_correction_admit = saved_admit;
+    event_loop_test_managed_window_correction_leave = saved_leave;
+    application_observer_add_notification = saved_observe;
+    application_observer_remove_notification = saved_unobserve;
     g_mouse_state = saved_mouse_state;
-    g_mission_control_mode = saved_mission_control_mode;
+    g_event_loop.is_running = saved_running;
+    g_event_loop.generation = saved_generation;
+    g_event_loop.managed_window_correction_pending = saved_pending;
+    g_event_loop.managed_window_correction_scheduled = saved_scheduled;
+    table_free(&g_window_manager.application);
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.managed_window);
+    g_window_manager.application = saved_applications;
     g_window_manager.window = saved_windows;
     g_window_manager.managed_window = saved_managed;
-    g_window_manager.focused_window_id = saved_focused_window_id;
 });
 
 TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state,
@@ -363,6 +426,15 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     TEST_CHECK(application_observe(&application), true);
     TEST_CHECK(application.ax_retry, false);
     TEST_CHECK(application_test_source_count, 1);
+    TEST_CHECK(application_test_notification_index, 7);
+    TEST_CHECK(application_observe_layout_changed(&application), true);
+    TEST_CHECK((application.notification & AX_APPLICATION_LAYOUT_CHANGED) != 0, true);
+    TEST_CHECK(application_test_notification_index, 8);
+
+    application = (struct application) { .name = "test", .is_observing = true };
+    application_test_reset(kAXErrorNotificationUnsupported);
+    TEST_CHECK(application_observe_layout_changed(&application), false);
+    TEST_CHECK(application.ax_retry, false);
 
     application = (struct application) { .name = "test" };
     application_test_reset(kAXErrorSuccess);

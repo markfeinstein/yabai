@@ -27,6 +27,8 @@ static OBSERVER_CALLBACK(application_notification_handler)
         event_loop_post(&g_event_loop, MENU_OPENED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXMenuClosedNotification)) {
         event_loop_post(&g_event_loop, MENU_CLOSED, NULL, 0);
+    } else if (CFEqual(notification, kAXLayoutChangedNotification)) {
+        event_loop_schedule_managed_window_correction();
     } else if (CFEqual(notification, kAXWindowMiniaturizedNotification)) {
         event_loop_post(&g_event_loop, WINDOW_MINIMIZED, (void *)(intptr_t) ax_window_id(element), 0);
     } else if (CFEqual(notification, kAXWindowDeminiaturizedNotification)) {
@@ -81,6 +83,40 @@ static void (*application_observer_release)(AXObserverRef);
 #define application_observer_add_run_loop_source application_observer_add_run_loop_source_direct
 #endif
 
+bool application_observe_layout_changed(struct application *application)
+{
+    if (!application || !application->is_observing) return false;
+    if (application->notification & AX_APPLICATION_LAYOUT_CHANGED) return true;
+
+    AXError result = application_observer_add_notification(application->observer_ref, application->ref,
+                                                           kAXLayoutChangedNotification, application);
+    if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
+        application->notification |= AX_APPLICATION_LAYOUT_CHANGED;
+        application->layout_unobserve_retries = 0;
+        return true;
+    }
+
+    debug("%s: error '%s' for application '%s' and notification 'kAXLayoutChangedNotification'\n",
+          __FUNCTION__, ax_error_str[-result], application->name);
+    return false;
+}
+
+bool application_unobserve_layout_changed(struct application *application)
+{
+    if (!application || !(application->notification & AX_APPLICATION_LAYOUT_CHANGED)) return true;
+    AXError result = application_observer_remove_notification(application->observer_ref, application->ref,
+                                                              kAXLayoutChangedNotification);
+    if (result == kAXErrorSuccess || result == kAXErrorNotificationNotRegistered) {
+        application->notification &= ~AX_APPLICATION_LAYOUT_CHANGED;
+        application->layout_unobserve_retries = 0;
+        return true;
+    }
+
+    debug("%s: error '%s' for application '%s' and notification 'kAXLayoutChangedNotification'\n",
+          __FUNCTION__, ax_error_str[-result], application->name);
+    return false;
+}
+
 bool application_observe(struct application *application)
 {
     bool retryable_failure = false;
@@ -90,6 +126,7 @@ bool application_observe(struct application *application)
     AXError create_result = application_observer_create(application->pid, application_notification_handler, &application->observer_ref);
     if (create_result == kAXErrorSuccess) {
         for (int i = 0; i < array_count(ax_application_notification); ++i) {
+            if (i == AX_APPLICATION_LAYOUT_CHANGED_INDEX) continue;
             AXError result = application_observer_add_notification(application->observer_ref, application->ref, ax_application_notification[i], application);
             if (result == kAXErrorSuccess || result == kAXErrorNotificationAlreadyRegistered) {
                 application->notification |= 1 << i;

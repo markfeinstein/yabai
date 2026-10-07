@@ -35,7 +35,6 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(WINDOW_FOCUSED) \
     EVENT_TYPE_ENTRY(WINDOW_MOVED) \
     EVENT_TYPE_ENTRY(WINDOW_RESIZED) \
-    EVENT_TYPE_ENTRY(MANAGED_WINDOW_CORRECTION) \
     EVENT_TYPE_ENTRY(WINDOW_MINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_DEMINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_TITLE_CHANGED) \
@@ -135,6 +134,8 @@ struct event_loop
     struct event_queue queue;
     volatile uint32_t topology_resync_pending;
     volatile uint64_t topology_resync_retry_scheduled;
+    volatile uint32_t managed_window_correction_pending;
+    volatile uint64_t managed_window_correction_scheduled;
 };
 
 typedef bool (*event_loop_bootstrap_callback)(void *context);
@@ -152,6 +153,7 @@ bool event_loop_try_post_generation(struct event_loop *event_loop, uint64_t gene
 void event_loop_post(struct event_loop *event_loop, enum event_type type, void *context, int param1);
 struct process;
 bool event_loop_post_application_launched(struct process *process);
+void event_loop_schedule_managed_window_correction(void);
 void event_loop_schedule_application_launch_retry(struct process *process);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);
