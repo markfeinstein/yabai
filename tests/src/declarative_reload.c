@@ -870,6 +870,13 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
 
 static size_t declarative_reload_match_calls_before_publish;
 static bool declarative_reload_mutate_refresh_cursor;
+
+static bool declarative_reload_drain_bootstrap_correction(void *context)
+{
+    (void) context;
+    (void) managed_window_correction_consume(&g_event_loop);
+    return true;
+}
 static void declarative_reload_refresh_prepublication_hook(void)
 {
     declarative_reload_match_calls_before_publish = rule_test_reservation_match_calls();
@@ -886,6 +893,7 @@ TEST_FUNC(declarative_reload_reserves_fresh_native_one_shots_for_pending_refresh
     struct declarative_reload_saved_state saved;
     TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
     if (!g_event_loop.semaphore) return result;
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_drain_bootstrap_correction, NULL), true);
 
     struct application alpha = { .pid = 501, .name = "Alpha", .launch_refresh = true };
     struct application beta = { .pid = 502, .name = "Beta", .launch_refresh = true };
