@@ -214,8 +214,21 @@ static bool (*event_loop_test_native_resize_live_frame)(struct window *, CGRect 
 static AXError (*event_loop_test_native_resize_ax_copy)(AXUIElementRef, CFStringRef, CFTypeRef *);
 static Boolean (*event_loop_test_native_resize_ax_get)(AXValueRef, AXValueType, void *);
 static void (*event_loop_test_native_resize_ax_release)(CFTypeRef);
+static bool (*event_loop_test_managed_window_correction_space_visible)(uint64_t);
+static bool (*event_loop_test_managed_window_correction_frontmost)(struct application *);
+static bool (*event_loop_test_managed_window_correction_inbox_toggle)(struct window *, CGPoint);
+static void (*event_loop_test_managed_window_correction_schedule)(uint32_t, pid_t, uint64_t);
+static void (*event_loop_test_managed_window_correction_flush)(struct window_node *);
 #endif
 
+struct managed_window_correction
+{
+    uint32_t window_id;
+    pid_t application_pid;
+    ProcessSerialNumber application_psn;
+};
+
+#define MANAGED_WINDOW_CORRECTION_DELAY_MS 100u
 #define NATIVE_RESIZE_SETTLED_QUIESCENCE_MS 16u
 #define NATIVE_RESIZE_TRAILING_GRACE_MS 100u
 #define NATIVE_RESIZE_TIMEOUT_MS 10000u
@@ -227,6 +240,104 @@ static bool native_resize_space_visible(uint64_t sid)
     if (event_loop_test_native_resize_space_visible) return event_loop_test_native_resize_space_visible(sid);
 #endif
     return space_is_visible(sid);
+}
+
+static bool managed_window_correction_space_visible(uint64_t sid)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_space_visible) {
+        return event_loop_test_managed_window_correction_space_visible(sid);
+    }
+#endif
+    return space_is_visible(sid);
+}
+
+static bool managed_window_correction_application_is_frontmost(struct application *application)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_frontmost) {
+        return event_loop_test_managed_window_correction_frontmost(application);
+    }
+#endif
+    return application_is_frontmost(application);
+}
+
+static bool managed_window_correction_element_is_inbox_toggle(AXUIElementRef element, pid_t application_pid)
+{
+    for (int depth = 0; element && depth < 4; ++depth) {
+        pid_t element_pid = 0;
+        CFTypeRef identifier = NULL;
+        bool matches = AXUIElementGetPid(element, &element_pid) == kAXErrorSuccess &&
+                       element_pid == application_pid &&
+                       AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute, &identifier) == kAXErrorSuccess &&
+                       identifier && CFGetTypeID(identifier) == CFStringGetTypeID() &&
+                       CFEqual(identifier, CFSTR("inbox-button"));
+        if (identifier) CFRelease(identifier);
+        if (matches) {
+            CFRelease(element);
+            return true;
+        }
+
+        CFTypeRef parent = NULL;
+        if (AXUIElementCopyAttributeValue(element, kAXParentAttribute, &parent) != kAXErrorSuccess ||
+            !parent || CFGetTypeID(parent) != AXUIElementGetTypeID() || CFEqual(parent, element)) {
+            if (parent) CFRelease(parent);
+            break;
+        }
+        CFRelease(element);
+        element = parent;
+    }
+    if (element) CFRelease(element);
+    return false;
+}
+
+static bool managed_window_correction_is_inbox_toggle(struct window *window, CGPoint point)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_inbox_toggle) {
+        return event_loop_test_managed_window_correction_inbox_toggle(window, point);
+    }
+#endif
+    AXUIElementRef element = NULL;
+    if (AXUIElementCopyElementAtPosition(g_window_manager.system_element, point.x, point.y, &element) != kAXErrorSuccess ||
+        !element) return false;
+    return managed_window_correction_element_is_inbox_toggle(element, window->application->pid);
+}
+
+static void managed_window_correction_flush(struct window_node *node)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_flush) {
+        event_loop_test_managed_window_correction_flush(node);
+        return;
+    }
+#endif
+    window_node_flush(node);
+}
+
+static void managed_window_correction_schedule(struct window *window)
+{
+#ifdef TESTS
+    if (event_loop_test_managed_window_correction_schedule) {
+        event_loop_test_managed_window_correction_schedule(window->id, window->application->pid,
+                                                           MANAGED_WINDOW_CORRECTION_DELAY_MS);
+        return;
+    }
+#endif
+    struct managed_window_correction *correction = malloc(sizeof(*correction));
+    if (!correction) return;
+    *correction = (struct managed_window_correction) {
+        .window_id = window->id,
+        .application_pid = window->application->pid,
+        .application_psn = window->application->psn
+    };
+
+    uint64_t loop_generation = event_loop_generation_snapshot(&g_event_loop);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, MANAGED_WINDOW_CORRECTION_DELAY_MS * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        (void) event_loop_try_post_generation(&g_event_loop, loop_generation,
+                                               MANAGED_WINDOW_CORRECTION, correction, 0);
+    });
 }
 
 static uint32_t native_resize_next_generation(struct native_resize_state *state)
@@ -1544,6 +1655,50 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
     event_loop_window_focus_menu_dirty();
 }
 
+static bool managed_window_frame_differs(struct window_node *node, uint32_t window_id, CGRect frame)
+{
+    struct area *area = &node->area;
+    if (node->has_window_areas) {
+        for (int i = 0; i < node->window_count; ++i) {
+            if (node->window_list[i] == window_id) {
+                area = &node->window_area[i];
+                break;
+            }
+        }
+    }
+
+    bool differs = AX_DIFF(area->x, frame.origin.x) ||
+                   AX_DIFF(area->y, frame.origin.y) ||
+                   AX_DIFF(area->w, frame.size.width) ||
+                   AX_DIFF(area->h, frame.size.height);
+    if (node->has_window_areas || !node->zoom) return differs;
+
+    return differs &&
+           (AX_DIFF(node->zoom->area.x, frame.origin.x) ||
+            AX_DIFF(node->zoom->area.y, frame.origin.y) ||
+            AX_DIFF(node->zoom->area.w, frame.size.width) ||
+            AX_DIFF(node->zoom->area.h, frame.size.height));
+}
+
+static void managed_window_correction_consider(CGPoint point)
+{
+    if (g_mission_control_mode != MISSION_CONTROL_MODE_INACTIVE) return;
+
+    struct window *window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+    if (!window || !window->application || !string_equals(window->application->name, "Calendar") ||
+        !managed_window_correction_application_is_frontmost(window->application) ||
+        !CGRectContainsPoint(window->frame, point) ||
+        window_check_flag(window, WINDOW_FULLSCREEN) ||
+        window_check_flag(window, WINDOW_MINIMIZE) ||
+        !managed_window_correction_is_inbox_toggle(window, point)) return;
+
+    struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+    struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+    if (node && managed_window_frame_differs(node, window->id, window->frame)) {
+        managed_window_correction_schedule(window);
+    }
+}
+
 static EVENT_HANDLER(WINDOW_MOVED)
 {
     uint32_t window_id = (uint32_t)(intptr_t) context;
@@ -1701,6 +1856,33 @@ static EVENT_HANDLER(WINDOW_RESIZED)
                 }
             }
         }
+    }
+}
+
+static EVENT_HANDLER(MANAGED_WINDOW_CORRECTION)
+{
+    (void) param1;
+    struct managed_window_correction identity = *(struct managed_window_correction *) context;
+    free(context);
+
+    struct window *window = window_manager_find_window(&g_window_manager, identity.window_id);
+    if (!window || !window->application ||
+        window->application->pid != identity.application_pid ||
+        !psn_equals(&window->application->psn, &identity.application_psn) ||
+        !managed_window_correction_application_is_frontmost(window->application) ||
+        !__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id) ||
+        window->application->is_hidden || window_check_flag(window, WINDOW_FULLSCREEN) ||
+        window_check_flag(window, WINDOW_MINIMIZE) || g_mouse_state.window == window ||
+        g_mouse_state.native_resize.window_id == window->id) return;
+
+    struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+    struct window_node *node = view ? view_find_window_node(view, window->id) : NULL;
+    if (!node || !managed_window_frame_differs(node, window->id, window->frame)) return;
+
+    if (managed_window_correction_space_visible(view->sid)) {
+        managed_window_correction_flush(node);
+    } else {
+        view_set_flag(view, VIEW_IS_DIRTY);
     }
 }
 
@@ -2313,7 +2495,12 @@ static EVENT_HANDLER(MOUSE_UP)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
     native_resize_mouse_up(button);
-    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
+    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) {
+        if (button == kCGMouseButtonLeft) {
+            managed_window_correction_consider(CGEventGetLocation(context));
+        }
+        goto out;
+    }
     if (mission_control_is_active())                        goto reset;
     if (!g_mouse_state.window)                             goto reset;
 
@@ -3596,6 +3783,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     } break;
     case WINDOW_CREATED_RETRY: {
         window_manager_destroy_window_created_retry(context);
+    } break;
+    case MANAGED_WINDOW_CORRECTION: {
+        free(context);
     } break;
     case MENU_BAR_ACTION: {
         menu_bar_manager_release_action(context);
