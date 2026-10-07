@@ -260,6 +260,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
 
     managed_window_correction_update(&window, &view, &node, true, false);
     TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK(window.frame_correction_source, WINDOW_FRAME_CORRECTION_INITIAL);
     TEST_CHECK((application.notification & AX_APPLICATION_FRAME_RECOVERY) == AX_APPLICATION_FRAME_RECOVERY, true);
     TEST_CHECK(managed_window_correction_observe_count, 2);
     TEST_CHECK(managed_window_correction_flush_count, 1);
@@ -314,7 +315,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     managed_window_correction_retry_window(&window, false, managed_window_correction_time);
     TEST_CHECK(window.frame_correction_retry_active, false);
     application.is_hidden = false;
-    managed_window_correction_start_retries(&window);
+    managed_window_correction_start_retries(&window, WINDOW_FRAME_CORRECTION_INITIAL);
     for (int i = 0; i < array_count(frame_correction_retry_delay_ms); ++i) {
         managed_window_correction_time = window.frame_correction_started_at +
             frame_correction_retry_delay_ms[i] * 1000000ULL;
@@ -343,6 +344,7 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals_and_i
     if (passive_click) EVENT_HANDLER_MOUSE_UP(passive_click, 0);
     TEST_CHECK(window.frame_correction_retry_active, true);
     TEST_CHECK(window.frame_correction_retry_index, 0);
+    TEST_CHECK(window.frame_correction_source, WINDOW_FRAME_CORRECTION_INTERACTION);
     window.frame.size.width = 400.0f;
     managed_window_correction_time += 50ULL * 1000000ULL;
     managed_window_correction_fire(&g_event_loop, 78);

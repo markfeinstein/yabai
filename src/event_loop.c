@@ -1,3 +1,5 @@
+#include <os/log.h>
+
 extern struct event_loop g_event_loop;
 extern struct process_manager g_process_manager;
 extern struct display_manager g_display_manager;
@@ -241,6 +243,29 @@ static bool native_resize_space_visible(uint64_t sid)
 }
 
 static const uint64_t frame_correction_retry_delay_ms[] = { 50, 150, 350, 750, 1500, 1650 };
+static const char *window_frame_correction_source_str[] = {
+    [WINDOW_FRAME_CORRECTION_INITIAL] = "initial",
+    [WINDOW_FRAME_CORRECTION_EVENT_HINT] = "event-hint",
+    [WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE] = "application-visible",
+    [WINDOW_FRAME_CORRECTION_INTERACTION] = "interaction"
+};
+
+static void managed_window_correction_log(struct window *window, const char *event,
+                                          uint8_t retry_writes, double elapsed_ms)
+{
+    const char *source = window_frame_correction_source_str[window->frame_correction_source];
+    debug("frame_correction: %s %s %d source=%s retry_writes=%u elapsed_ms=%.2f\n",
+          event, window->application->name, window->id, source,
+          (unsigned int) retry_writes, elapsed_ms);
+#ifndef TESTS
+    static os_log_t frame_recovery_log;
+    if (!frame_recovery_log) frame_recovery_log = os_log_create("com.asmvik.yabai", "frame-recovery");
+    os_log_with_type(frame_recovery_log, OS_LOG_TYPE_INFO,
+                     "%{public}s app=%{public}s window=%u source=%{public}s retry_writes=%u elapsed_ms=%.2f",
+                     event, window->application->name, window->id, source,
+                     (unsigned int) retry_writes, elapsed_ms);
+#endif
+}
 
 static bool managed_window_correction_space_visible(uint64_t sid)
 {
@@ -1724,13 +1749,22 @@ static void frame_recovery_record_cleanup_failure(struct application *applicatio
     }
 }
 
-static void managed_window_correction_start_retries(struct window *window)
+static void managed_window_correction_start_retries(struct window *window,
+                                                    enum window_frame_correction_source source)
 {
     uint64_t now = frame_recovery_time();
     window->frame_correction_retry_active = true;
     window->frame_correction_retry_index = 0;
+    window->frame_correction_source = source;
     window->frame_correction_started_at = now;
     window->frame_correction_retry_at = now + frame_correction_retry_delay_ms[0] * 1000000ULL;
+    managed_window_correction_log(window, "start", 0, 0.0);
+}
+
+static void managed_window_correction_log_converged(struct window *window, uint64_t now)
+{
+    managed_window_correction_log(window, "converged", window->frame_correction_retry_index,
+                                  os_timer_elapsed_milliseconds(window->frame_correction_started_at, now));
 }
 
 static void managed_window_correction_clear(struct window *window)
@@ -1763,7 +1797,14 @@ void event_loop_cancel_managed_window_correction(struct window *window)
 static void managed_window_correction_update(struct window *window, struct view *view,
                                              struct window_node *node, bool differs, bool native_owned)
 {
-    if (!node || native_owned || !differs) {
+    if (!node || native_owned) {
+        managed_window_correction_clear(window);
+        return;
+    }
+    if (!differs) {
+        if (window->frame_correction_pending) {
+            managed_window_correction_log_converged(window, frame_recovery_time());
+        }
         managed_window_correction_clear(window);
         return;
     }
@@ -1771,7 +1812,7 @@ static void managed_window_correction_update(struct window *window, struct view 
     bool newly_pending = !window->frame_correction_pending;
     if (newly_pending) {
         window->frame_correction_pending = true;
-        managed_window_correction_start_retries(window);
+        managed_window_correction_start_retries(window, WINDOW_FRAME_CORRECTION_INITIAL);
         window->application->frame_recovery_unobserve_retries = 0;
         window->application->frame_recovery_cleanup_retry_time = 0;
     }
@@ -1798,7 +1839,7 @@ static void managed_window_correction_schedule_application(struct application *a
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
     for (int i = 0; i < window_count; ++i) {
         if (!window_list[i]->frame_correction_pending) continue;
-        managed_window_correction_start_retries(window_list[i]);
+        managed_window_correction_start_retries(window_list[i], WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE);
         has_pending = true;
     }
     if (has_pending) {
@@ -1813,7 +1854,7 @@ static void managed_window_correction_schedule_window_at_point(CGPoint point)
 {
     struct window *window = managed_window_correction_window_at_point(point);
     if (!window || !window->frame_correction_pending) return;
-    managed_window_correction_start_retries(window);
+    managed_window_correction_start_retries(window, WINDOW_FRAME_CORRECTION_INTERACTION);
     managed_window_correction_schedule();
 }
 
@@ -1994,7 +2035,9 @@ static void managed_window_correction_retry_window(struct window *window, bool h
         managed_window_correction_clear(window);
         return;
     }
-    if (hinted && !window->frame_correction_retry_active) managed_window_correction_start_retries(window);
+    if (hinted && !window->frame_correction_retry_active) {
+        managed_window_correction_start_retries(window, WINDOW_FRAME_CORRECTION_EVENT_HINT);
+    }
     if (!window->frame_correction_retry_active || window->frame_correction_retry_at > now) return;
 
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
@@ -2007,6 +2050,7 @@ static void managed_window_correction_retry_window(struct window *window, bool h
     CGRect live_frame = managed_window_correction_live_frame(window);
     window->frame = live_frame;
     if (!managed_window_frame_differs(node, window->id, live_frame)) {
+        managed_window_correction_log_converged(window, now);
         managed_window_correction_clear(window);
         return;
     }
@@ -2022,6 +2066,8 @@ static void managed_window_correction_retry_window(struct window *window, bool h
             frame_correction_retry_delay_ms[window->frame_correction_retry_index] * 1000000ULL;
     } else {
         window->frame_correction_retry_active = false;
+        managed_window_correction_log(window, "exhausted", window->frame_correction_retry_index,
+                                      os_timer_elapsed_milliseconds(window->frame_correction_started_at, now));
     }
     if (!observes_recovery) managed_window_correction_clear(window);
 }
