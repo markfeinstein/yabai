@@ -2224,6 +2224,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot focus space due to an error with the scripting-addition.\n");
+                } else if (result == SPACE_OP_ERROR_MISSING_SRC || result == SPACE_OP_ERROR_MISSING_DST) {
+                    daemon_fail(rsp, "cannot switch spaces because a managed view is unavailable.\n");
+                } else if (result == SPACE_OP_ERROR_WINDOW_SERVER) {
+                    daemon_fail(rsp, "cannot switch spaces because WindowServer returned an incomplete window inventory.\n");
                 } else {
                     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
                 }
@@ -2259,6 +2263,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot swap space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot swap space due to an error with the scripting-addition.\n");
+                } else if (result == SPACE_OP_ERROR_MISSING_SRC || result == SPACE_OP_ERROR_MISSING_DST) {
+                    daemon_fail(rsp, "cannot swap spaces because a managed view is unavailable.\n");
+                } else if (result == SPACE_OP_ERROR_WINDOW_SERVER) {
+                    daemon_fail(rsp, "cannot swap spaces because WindowServer returned an incomplete window inventory.\n");
                 } else {
                     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
                     declarative_configuration_request_reconcile();

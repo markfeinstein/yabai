@@ -46,6 +46,7 @@ enum space_op_error
     SPACE_OP_ERROR_IN_MISSION_CONTROL   = 9,
     SPACE_OP_ERROR_SCRIPTING_ADDITION   = 10,
     SPACE_OP_ERROR_GESTURE              = 11,
+    SPACE_OP_ERROR_WINDOW_SERVER        = 12,
 };
 
 bool space_manager_query_space(FILE *rsp, uint64_t sid, uint64_t flags);

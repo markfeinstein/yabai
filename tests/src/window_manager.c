@@ -66,6 +66,111 @@ static uint64_t window_manager_test_warp_space(uint32_t wid)
     return wid < 20 ? 1 : 2;
 }
 
+static int space_swap_test_inventory_calls;
+static int space_swap_test_inventory_failure;
+
+static uint32_t *space_swap_test_inventory(uint64_t *space_list, int space_count, int cid,
+                                           int *count, bool include_minimized, bool *success)
+{
+    (void) space_list;
+    (void) space_count;
+    (void) cid;
+    (void) include_minimized;
+    static uint32_t partial_window_list[] = { 42 };
+    ++space_swap_test_inventory_calls;
+    if (space_swap_test_inventory_calls == space_swap_test_inventory_failure) {
+        *count = 1;
+        *success = false;
+        return partial_window_list;
+    }
+    *count = 0;
+    *success = true;
+    return NULL;
+}
+
+static bool space_swap_test_space_is_visible(uint64_t sid, void *context)
+{
+    (void) sid;
+    (void) context;
+    return false;
+}
+
+static void space_swap_test_update(struct view *view, void *context)
+{
+    (void) view;
+    (void) context;
+}
+
+TEST_FUNC(cross_display_space_swap_is_transactional,
+{
+    struct table saved_views = g_space_manager.view;
+    float saved_animation_duration = g_window_manager.window_animation_duration;
+    struct view_test_platform_ops ops = {
+        .space_is_visible = space_swap_test_space_is_visible,
+        .update_windows = space_swap_test_update
+    };
+    view_test_set_platform_ops(&ops);
+    space_manager_test_swap_window_list = space_swap_test_inventory;
+
+    TEST_CHECK(space_window_inventory_is_complete(0, 0, 0), true);
+    TEST_CHECK(space_window_inventory_is_complete(2, 1, 1), false);
+    TEST_CHECK(space_window_inventory_is_complete(2, 2, 1), false);
+    TEST_CHECK(space_window_inventory_is_complete(2, 2, 2), true);
+
+    for (int failed_inventory = 1; failed_inventory <= 2; ++failed_inventory) {
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+        table_init(&g_space_manager.view, 4, hash_view, compare_view);
+        struct window_node a_root = {0};
+        struct window_node b_root = {0};
+        struct view a_view = { .sid = 101, .layout = VIEW_BSP, .root = &a_root };
+        struct view b_view = { .sid = 202, .layout = VIEW_BSP, .root = &b_root };
+        table_add(&g_space_manager.view, &a_view.sid, &a_view);
+        table_add(&g_space_manager.view, &b_view.sid, &b_view);
+        g_window_manager.window_animation_duration = 0.25f;
+        space_swap_test_inventory_calls = 0;
+        space_swap_test_inventory_failure = failed_inventory;
+
+        TEST_CHECK(space_manager_swap_space_with_space_on_display(1, 101, 2, 202), SPACE_OP_ERROR_WINDOW_SERVER);
+        TEST_CHECK(space_swap_test_inventory_calls, 2);
+        TEST_CHECK(a_view.sid, 101ULL);
+        TEST_CHECK(b_view.sid, 202ULL);
+        TEST_CHECK(table_find(&g_space_manager.view, &a_view.sid), &a_view);
+        TEST_CHECK(table_find(&g_space_manager.view, &b_view.sid), &b_view);
+        TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+        table_free(&g_space_manager.view);
+    }
+
+    memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    table_init(&g_space_manager.view, 4, hash_view, compare_view);
+    struct window_node a_root = {0};
+    struct window_node b_root = {0};
+    struct view a_view = { .sid = 101, .layout = VIEW_BSP, .root = &a_root };
+    struct view b_view = { .sid = 202, .layout = VIEW_BSP, .root = &b_root };
+    uint64_t a_sid = a_view.sid;
+    uint64_t b_sid = b_view.sid;
+    table_add(&g_space_manager.view, &a_sid, &a_view);
+    table_add(&g_space_manager.view, &b_sid, &b_view);
+    g_window_manager.window_animation_duration = 0.25f;
+    space_swap_test_inventory_calls = 0;
+    space_swap_test_inventory_failure = 0;
+    table_test_fail_allocation_after(0);
+
+    TEST_CHECK(space_manager_swap_space_with_space_on_display(1, a_sid, 2, b_sid), SPACE_OP_ERROR_SUCCESS);
+    TEST_CHECK(space_swap_test_inventory_calls, 2);
+    TEST_CHECK(a_view.sid, b_sid);
+    TEST_CHECK(b_view.sid, a_sid);
+    TEST_CHECK(table_find(&g_space_manager.view, &a_sid), &b_view);
+    TEST_CHECK(table_find(&g_space_manager.view, &b_sid), &a_view);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+
+    table_test_fail_allocation_after(-1);
+    table_free(&g_space_manager.view);
+    space_manager_test_swap_window_list = NULL;
+    view_test_set_platform_ops(NULL);
+    g_space_manager.view = saved_views;
+    g_window_manager.window_animation_duration = saved_animation_duration;
+});
+
 TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
 {
     struct space_manager sm = {0};

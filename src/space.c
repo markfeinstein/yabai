@@ -1,5 +1,10 @@
 extern int g_connection;
 
+static bool space_window_inventory_is_complete(int expected_count, int iterator_count, int advanced_count)
+{
+    return expected_count >= 0 && iterator_count == expected_count && advanced_count == expected_count;
+}
+
 inline uint32_t space_display_id(uint64_t sid)
 {
     CFStringRef uuid_string = SLSCopyManagedDisplayForSpace(g_connection, sid);
@@ -49,10 +54,15 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
     if (!iterator) goto iterator_failed;
 
+    int iterator_count = SLSWindowIteratorGetCount(iterator);
+    if (iterator_count != *count) goto incomplete_iterator;
+
+    int advanced_count = 0;
     int window_count = 0;
     window_list = ts_alloc_list(uint32_t, *count);
 
     while (SLSWindowIteratorAdvance(iterator)) {
+        ++advanced_count;
         uint64_t tags = SLSWindowIteratorGetTags(iterator);
         uint64_t attributes = SLSWindowIteratorGetAttributes(iterator);
         uint32_t parent_wid = SLSWindowIteratorGetParentID(iterator);
@@ -86,6 +96,8 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
         }
     }
 
+    if (!space_window_inventory_is_complete(*count, iterator_count, advanced_count)) goto incomplete_iterator;
+
     window_list = ts_resize(window_list, sizeof(uint32_t) * *count, sizeof(uint32_t) * window_count);
     *count = window_count;
     if (success) *success = true;
@@ -93,6 +105,9 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
     CFRelease(iterator);
     CFRelease(query);
     goto out;
+incomplete_iterator:
+    window_list = NULL;
+    CFRelease(iterator);
 iterator_failed:
     CFRelease(query);
 query_failed:

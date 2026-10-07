@@ -2871,6 +2871,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(view_insertion_preparation_enforces_single_root_capacity_and_layout) \
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(cross_display_space_swap_is_transactional) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(mouse_no_target_cross_space_transfer_prepares_before_source_mutation) \
     TEST_ENTRY(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits) \

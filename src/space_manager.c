@@ -5,6 +5,7 @@ extern int g_connection;
 static uint32_t *(*space_manager_test_active_display_list)(int *count);
 static uint64_t *(*space_manager_test_display_space_list)(uint32_t did, int *count);
 static uint32_t *(*space_manager_test_layout_window_list)(uint64_t *, int, int, int *, bool, bool *);
+static uint32_t *(*space_manager_test_swap_window_list)(uint64_t *, int, int, int *, bool, bool *);
 static bool (*space_manager_test_layout_space_is_user)(uint64_t);
 static size_t space_manager_test_lookup_count;
 static size_t space_manager_layout_allocation_ordinal;
@@ -977,29 +978,54 @@ static enum space_op_error space_manager_swap_space_with_space_on_display(uint32
     if (display_manager_display_is_animating(a_did)) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
     if (display_manager_display_is_animating(b_did)) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
 
+    int a_window_list_count = 0;
+    bool a_inventory_succeeded = false;
+#ifdef TESTS
+    uint32_t *(*inventory)(uint64_t *, int, int, int *, bool, bool *) =
+        space_manager_test_swap_window_list ? space_manager_test_swap_window_list
+                                            : space_window_list_for_connection_with_status;
+    uint32_t *a_window_list = inventory(&a_sid, 1, 0, &a_window_list_count, true, &a_inventory_succeeded);
+#else
+    uint32_t *a_window_list = space_window_list_for_connection_with_status(&a_sid, 1, 0,
+                                                                           &a_window_list_count, true,
+                                                                           &a_inventory_succeeded);
+#endif
+
+    int b_window_list_count = 0;
+    bool b_inventory_succeeded = false;
+#ifdef TESTS
+    uint32_t *b_window_list = inventory(&b_sid, 1, 0, &b_window_list_count, true, &b_inventory_succeeded);
+#else
+    uint32_t *b_window_list = space_window_list_for_connection_with_status(&b_sid, 1, 0,
+                                                                           &b_window_list_count, true,
+                                                                           &b_inventory_succeeded);
+#endif
+
+    if (!a_inventory_succeeded || !b_inventory_succeeded ||
+        a_window_list_count < 0 || b_window_list_count < 0 ||
+        (a_window_list_count && !a_window_list) ||
+        (b_window_list_count && !b_window_list)) {
+        return SPACE_OP_ERROR_WINDOW_SERVER;
+    }
+
+    struct view *a_view = table_find(&g_space_manager.view, &a_sid);
+    if (!a_view) return SPACE_OP_ERROR_MISSING_SRC;
+    struct view *b_view = table_find(&g_space_manager.view, &b_sid);
+    if (!b_view) return SPACE_OP_ERROR_MISSING_DST;
+
     float window_animation_duration = g_window_manager.window_animation_duration;
     g_window_manager.window_animation_duration = 0.0f;
     __asm__ __volatile__ ("" ::: "memory");
 
-    int a_window_list_count = 0;
-    uint32_t *a_window_list = space_window_list(a_sid, &a_window_list_count, true);
-
-    int b_window_list_count = 0;
-    uint32_t *b_window_list = space_window_list(b_sid, &b_window_list_count, true);
-
-    struct view *a_view = table_find(&g_space_manager.view, &a_sid);
-    struct view *b_view = table_find(&g_space_manager.view, &b_sid);
-
-    table_remove(&g_space_manager.view, &a_sid);
-    table_remove(&g_space_manager.view, &b_sid);
+    /* Both keys were resolved above; replacement cannot allocate or fail recoverably. */
+    if (!table_replace(&g_space_manager.view, &a_sid, b_view) ||
+        !table_replace(&g_space_manager.view, &b_sid, a_view)) {
+        abort();
+    }
 
     a_view->sid = b_sid;
     b_view->sid = a_sid;
-
     space_manager_swap_view_identity(a_view, b_view);
-
-    table_add(&g_space_manager.view, &a_sid, b_view);
-    table_add(&g_space_manager.view, &b_sid, a_view);
 
     if (a_window_list_count) {
         space_manager_move_window_list_to_space(b_sid, a_window_list, a_window_list_count);
@@ -1261,7 +1287,8 @@ enum space_op_error space_manager_switch_space(uint64_t sid)
     if (is_dst_animating) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
 
     if (cur_did != did) {
-        space_manager_swap_space_with_space_on_display(cur_did, cur_sid, did, sid);
+        enum space_op_error result = space_manager_swap_space_with_space_on_display(cur_did, cur_sid, did, sid);
+        if (result != SPACE_OP_ERROR_SUCCESS) return result;
         display_manager_focus_display(cur_did, cur_sid);
         return SPACE_OP_ERROR_SUCCESS;
     }
