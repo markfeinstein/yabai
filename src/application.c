@@ -80,6 +80,7 @@ static void (*application_observer_release)(AXObserverRef);
 #else
 #define application_observer_create AXObserverCreate
 #define application_observer_add_notification AXObserverAddNotification
+#define application_observer_remove_notification AXObserverRemoveNotification
 #define application_observer_add_run_loop_source application_observer_add_run_loop_source_direct
 #endif
 
