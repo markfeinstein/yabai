@@ -1577,6 +1577,7 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context mode = { .name = mutable_name, .activate = true };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     mutable_name[0] = 'X';
     TEST_CHECK(strcmp(mode.selected, "work"), 0);
     TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
@@ -1585,7 +1586,6 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
     TEST_CHECK(rule_native_prefix_length(), native_count);
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(fixture.topology_calls, topology_before + 4);
 
     struct window_node *root_before = view ? view->root : NULL;
@@ -1607,19 +1607,19 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context committed = { .name = "home", .activate = true };
     TEST_CHECK(declarative_mode_run(&committed), true);
     TEST_CHECK(committed.result, true);
-    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
-    TEST_CHECK(fixture.postcommit_failures > 0, true);
     fixture.postcommit_fail = false;
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
+    TEST_CHECK(fixture.postcommit_failures > 0, true);
 
     struct declarative_mode_worker_context deactivate = { .activate = false };
     TEST_CHECK(declarative_mode_run(&deactivate), true);
     TEST_CHECK(deactivate.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
     TEST_CHECK(view ? view->window_gap : 0, 77);
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
 
     struct declarative_modes_error worker_error = {0};
     TEST_CHECK(declarative_mode_activate("work", &worker_error), false);
@@ -1633,12 +1633,12 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context stale = { .name = "work", .activate = true };
     TEST_CHECK(declarative_mode_run(&stale), true);
     TEST_CHECK(stale.result, false);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(stale.error.code, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED);
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
     TEST_CHECK(view ? view->root : NULL, root_before);
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(declarative_installed_selected_mode(), NULL);
     TEST_CHECK(view ? view->root : NULL, root_before);
 

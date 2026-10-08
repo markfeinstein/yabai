@@ -38,6 +38,7 @@ STAT           ?= /usr/bin/stat
 ACL_LIST       ?= /bin/ls
 TAR            ?= /usr/bin/tar
 ASCIIDOCTOR    ?= asciidoctor
+MAN_DATE_SETUP = date=$$(awk '$$1 == ":revdate:" { count++; if (NF == 2) value = $$2; else invalid = 1 } END { if (count != 1 || invalid) exit 1; print value }' '$(DOC_PATH)/yabai.asciidoc') || { echo "doc/yabai.asciidoc must contain exactly one YYYY-MM-DD revdate" >&2; exit 1; }; case "$$date" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "doc/yabai.asciidoc must contain exactly one YYYY-MM-DD revdate" >&2; exit 1 ;; esac
 PYTHON         ?= python3
 SUDO           ?= /usr/bin/sudo
 ROOT_SHELL     ?= /bin/sh
@@ -143,13 +144,13 @@ $(TSAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/tsan/osax/generated.c $(TSAN_MODEL)
 	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/tsan/osax/generated.c' $(TSAN_MODEL) $(TSAN_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 man:
-	$(ASCIIDOCTOR) -b manpage '$(DOC_PATH)/yabai.asciidoc' -o '$(DOC_PATH)/yabai.1'
+	@set -eu; $(MAN_DATE_SETUP); '$(ASCIIDOCTOR)' -a "docdate=$$date" -b manpage '$(DOC_PATH)/yabai.asciidoc' -o '$(DOC_PATH)/yabai.1'
 
 man-contract:
 	./tests/doc_contract.sh --self-test
 
 man-check: man-contract
-	@set -eu; command -v '$(ASCIIDOCTOR)' >/dev/null 2>&1 || { echo "asciidoctor is required for man-check" >&2; exit 127; }; tmp=$$(mktemp "$${TMPDIR:-/tmp}/yabai-man.XXXXXX"); trap 'rm -f "$$tmp"' 0 HUP INT TERM; '$(ASCIIDOCTOR)' -b manpage '$(DOC_PATH)/yabai.asciidoc' -o "$$tmp"; cmp "$$tmp" '$(DOC_PATH)/yabai.1'
+	@set -eu; command -v '$(ASCIIDOCTOR)' >/dev/null 2>&1 || { echo "asciidoctor is required for man-check" >&2; exit 127; }; $(MAN_DATE_SETUP); tmp=$$(mktemp "$${TMPDIR:-/tmp}/yabai-man.XXXXXX"); trap 'rm -f "$$tmp"' 0 HUP INT TERM; '$(ASCIIDOCTOR)' -a "docdate=$$date" -b manpage '$(DOC_PATH)/yabai.asciidoc' -o "$$tmp"; cmp "$$tmp" '$(DOC_PATH)/yabai.1'
 
 icon: release
 	$(PYTHON) '$(SCRIPT_PATH)/seticon.py' '$(ASSET_PATH)/icon/2x/icon-512px@2x.png' '$(RELEASE_BIN)'
