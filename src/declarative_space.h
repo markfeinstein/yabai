@@ -125,6 +125,8 @@ struct declarative_space_capture_ops
     /* Optional typed replacement; appended to preserve positional initializers. */
     enum declarative_space_query_result (*query_sid_result)(uint64_t sid, const uint32_t **wids,
                                                             size_t *count, void *context);
+    /* Reconciliation may observe SkyLight windows before AX discovery owns them. */
+    bool allow_unresolved_windows;
 };
 
 struct declarative_space_root_before_image

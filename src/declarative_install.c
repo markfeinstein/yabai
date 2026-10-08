@@ -1209,7 +1209,8 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
         .query_sid_result = ops->query_sid_result,
         .find_window = ops->find_window,
         .is_eligible = ops->is_eligible,
-        .context = ops->context
+        .context = ops->context,
+        .allow_unresolved_windows = true
     };
     /* Defaults, targets, contracts, and capture inputs are now fixed. Re-observe
      * immediately before inventory so index policies can never cross a settling turn. */

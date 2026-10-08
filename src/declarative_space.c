@@ -494,6 +494,7 @@ enum declarative_space_apply_result declarative_space_capture_inventory_result(
             /* SkyLight can publish a new window before its AX discovery event reaches
              * the worker. That disagreement is retryable; an aliased id is not. */
             if (!window) {
+                if (ops->allow_unresolved_windows) continue;
                 failure = DECLARATIVE_SPACE_APPLY_TRANSIENT;
                 goto fail;
             }

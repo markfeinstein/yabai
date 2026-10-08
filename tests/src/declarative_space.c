@@ -201,6 +201,13 @@ TEST_FUNC(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates
     TEST_CHECK(capture.finds, 3);
     TEST_CHECK(capture.eligibility, 2);
     TEST_CHECK(inventory.entries == NULL, true);
+    ops.allow_unresolved_windows = true;
+    TEST_CHECK(declarative_space_capture_inventory_result(targets, 2, &ops, &inventory),
+               DECLARATIVE_SPACE_APPLY_OK);
+    TEST_CHECK(inventory.count, 3UL);
+    TEST_CHECK(declarative_space_inventory_find(&inventory, 99), NULL);
+    declarative_space_inventory_destroy(&inventory);
+    ops.allow_unresolved_windows = false;
     capture.wids[0][2] = 6;
     TEST_CHECK(declarative_space_capture_inventory(targets, 2, &ops, &inventory), true);
     TEST_CHECK(inventory.count, 4UL);
