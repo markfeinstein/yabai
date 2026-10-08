@@ -52,7 +52,7 @@ DEPLOY_REQUIREMENT ?=
 .PHONY: all debug release asan tsan install man man-check man-contract icon archive publish sign deploy \
         test test-asan test-tsan test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
-        clean-debug clean-release clean-asan clean-tsan clean distclean FORCE
+        clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
 
 all: debug
@@ -93,13 +93,12 @@ integration-hide-on-close: debug
 
 integration: integration-hide-on-close
 
-FORCE:
-
 # Generate both native scripting-addition artifacts as private temporaries,
-# then publish only one combined compiler input. cmp preserves its mtime when
-# bytes are unchanged.
+# then publish only one combined compiler input. Explicit source and makefile
+# dependencies keep unchanged builds incremental; a dependency change advances
+# the generated source mtime so the embedding binary rebuilds exactly once.
 define OSAX_RULE
-$(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS) FORCE
+$(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS)
 	@set -eu; \
 	dir='$(BUILD_PATH)/$(1)/osax'; mkdir -p "$$$$dir"; \
 	payload=$$$$(mktemp "$$$$dir/.payload.XXXXXX"); loader=$$$$(mktemp "$$$$dir/.loader.XXXXXX"); generated=$$$$(mktemp "$$$$dir/.generated.c.XXXXXX"); \
@@ -108,7 +107,7 @@ $(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS) FORCE
 	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
 	$(XXD) -i -n __src_osax_payload "$$$$payload" > "$$$$generated"; \
 	$(XXD) -i -n __src_osax_loader "$$$$loader" >> "$$$$generated"; \
-	if [ -f "$$$$dir/generated.c" ] && cmp -s "$$$$generated" "$$$$dir/generated.c"; then rm -f "$$$$generated"; else mv -f "$$$$generated" "$$$$dir/generated.c"; fi; \
+	if [ -f "$$$$dir/generated.c" ] && cmp -s "$$$$generated" "$$$$dir/generated.c"; then touch "$$$$dir/generated.c"; rm -f "$$$$generated"; else mv -f "$$$$generated" "$$$$dir/generated.c"; fi; \
 	rm -f "$$$$payload" "$$$$loader"; \
 	trap - 0 HUP INT TERM
 endef

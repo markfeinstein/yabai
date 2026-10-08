@@ -222,6 +222,20 @@ for config in debug release asan tsan; do
     test ! -e "$WORK/bin/$config/osax/payload"
     test ! -e "$WORK/bin/$config/osax/loader"
 done
+
+# An unchanged configuration is a true no-op, while an OSAX source change
+# regenerates the embedded artifacts and rebuilds the dependent binary once.
+: > "$XCRUN_LOG"
+run_make release >/dev/null
+test ! -s "$XCRUN_LOG"
+touch src/osax/payload.m
+run_make release >/dev/null
+grep -F 'xcrun-arg:./src/osax/payload.m' "$XCRUN_LOG" >/dev/null
+grep -F 'xcrun-arg:./src/manifest.m' "$XCRUN_LOG" >/dev/null
+: > "$XCRUN_LOG"
+run_make release >/dev/null
+test ! -s "$XCRUN_LOG"
+
 printf 'archive\n' > "$WORK/release/keep.tar.gz"
 run_make clean-debug
 test ! -e "$WORK/bin/debug"

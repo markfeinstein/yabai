@@ -193,6 +193,48 @@ MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_filter_focus_identity_and_failure_metad
     menu_bar_model_snapshot_destroy(snapshot);
 MENU_BAR_MODEL_TEST_END
 
+MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_refocused_clone_preserves_inventory)
+    struct menu_bar_snapshot *snapshot = test_create_two_display_snapshot(7, 10, "display-a", 99, "focus failed");
+    struct menu_bar_snapshot *refocused = menu_bar_model_snapshot_refocused_clone(snapshot, 8, true, 20, "display-b");
+    TEST_CHECK_NOT_NULL(snapshot);
+    TEST_CHECK_NOT_NULL(refocused);
+    if (snapshot && refocused) {
+        TEST_CHECK(snapshot->generation, 7);
+        TEST_CHECK(snapshot->focused_display_id, 10);
+        TEST_CHECK(snapshot->displays[0].has_focus, true);
+        TEST_CHECK(snapshot->displays[1].has_focus, false);
+
+        TEST_CHECK(refocused->generation, 8);
+        TEST_CHECK(refocused->focused_display_id, 20);
+        TEST_CHECK_STRING(refocused->focused_display_uuid, "display-b");
+        TEST_CHECK(refocused->displays[0].has_focus, false);
+        TEST_CHECK(refocused->displays[1].has_focus, true);
+        TEST_CHECK(refocused->action_failure_generation, 99);
+        TEST_CHECK_STRING(refocused->action_failure_text, "focus failed");
+        TEST_CHECK(refocused->display_count, snapshot->display_count);
+        TEST_CHECK(refocused->displays[0].spaces[2].space_id, 102);
+        TEST_CHECK(refocused->displays[0].spaces[2].app_count, 2);
+        TEST_CHECK_STRING(refocused->displays[0].spaces[2].apps[0].name, "Terminal");
+        TEST_CHECK(refocused->displays != snapshot->displays, true);
+    }
+
+    struct menu_bar_snapshot *unresolved = menu_bar_model_snapshot_refocused_clone(snapshot, 9, true, 99, "absent");
+    TEST_CHECK_NOT_NULL(unresolved);
+    if (unresolved) {
+        TEST_CHECK(unresolved->generation, 9);
+        TEST_CHECK(unresolved->has_focused_display, false);
+        TEST_CHECK(unresolved->focused_display_id, 0);
+        TEST_CHECK(unresolved->focused_display_uuid == NULL, true);
+        TEST_CHECK(unresolved->displays[0].has_focus, false);
+        TEST_CHECK(unresolved->displays[1].has_focus, false);
+    }
+    TEST_CHECK_NULL(menu_bar_model_snapshot_refocused_clone(NULL, 10, false, 0, NULL));
+
+    menu_bar_model_snapshot_destroy(unresolved);
+    menu_bar_model_snapshot_destroy(refocused);
+    menu_bar_model_snapshot_destroy(snapshot);
+MENU_BAR_MODEL_TEST_END
+
 MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels)
     char display_uuid[32] = "deep-copy-display";
     char display_label[32] = "Original Display";
@@ -355,6 +397,7 @@ static struct {
     TEST_ENTRY(menu_bar_model_defaults_and_zero_counts),
     TEST_ENTRY(menu_bar_model_classification_cases),
     TEST_ENTRY(menu_bar_model_filter_focus_identity_and_failure_metadata),
+    TEST_ENTRY(menu_bar_model_refocused_clone_preserves_inventory),
     TEST_ENTRY(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels),
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality),
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes)

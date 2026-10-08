@@ -152,6 +152,13 @@ struct menu_bar_snapshot *menu_bar_model_snapshot_create(uint64_t generation,
                                                          const char *action_failure_text);
 struct menu_bar_snapshot *menu_bar_model_snapshot_clone(const struct menu_bar_snapshot *snapshot);
 
+/* Returns an owned clone with unchanged inventory and newly resolved focus metadata. */
+struct menu_bar_snapshot *menu_bar_model_snapshot_refocused_clone(const struct menu_bar_snapshot *snapshot,
+                                                                   uint64_t generation,
+                                                                   bool has_focused_display,
+                                                                   uint32_t focused_display_id,
+                                                                   const char *focused_display_uuid);
+
 /* Returns an owned clone with settings.space_filter set to filter and non-matching spaces removed. */
 struct menu_bar_snapshot *menu_bar_model_snapshot_filtered_clone(const struct menu_bar_snapshot *snapshot,
                                                                  enum menu_bar_space_filter filter);

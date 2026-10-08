@@ -17,6 +17,7 @@ struct menu_bar_space_builder
     struct menu_bar_window_input *windows;
     size_t window_count;
     size_t window_capacity;
+    size_t app_capacity;
     uint32_t *raw_window_ids;
     size_t raw_window_count;
     bool raw_query_succeeded;
@@ -48,6 +49,7 @@ struct menu_bar_manager_native_seams
 {
     int (*active_display_count)(void);
     uint32_t (*arrangement_display_id)(int arrangement);
+    CFStringRef (*display_uuid)(uint32_t did);
     uint64_t *(*display_space_list)(uint32_t did, int *count);
     uint64_t (*display_space_id)(uint32_t did);
     int (*space_type)(int cid, uint64_t sid);
@@ -143,6 +145,13 @@ static uint32_t menu_bar_manager_native_arrangement_display_id(int arrangement)
         : display_manager_arrangement_display_id(arrangement);
 }
 
+static CFStringRef menu_bar_manager_native_display_uuid(uint32_t did)
+{
+    return g_menu_bar_manager_native.display_uuid
+        ? g_menu_bar_manager_native.display_uuid(did)
+        : display_uuid(did);
+}
+
 static uint64_t *menu_bar_manager_native_display_space_list(uint32_t did, int *count)
 {
     return g_menu_bar_manager_native.display_space_list
@@ -234,10 +243,12 @@ static bool menu_bar_manager_space_add_window(struct menu_bar_space_builder *spa
     return true;
 }
 
-static bool menu_bar_manager_space_add_app(struct menu_bar_space_input *space, const char *name)
+static bool menu_bar_manager_space_add_app(struct menu_bar_space_builder *builder, const char *name)
 {
+    if (!builder || !builder->input) return false;
     if (!name || !name[0]) name = "Unknown";
 
+    struct menu_bar_space_input *space = builder->input;
     struct menu_bar_app_summary_input *apps = (struct menu_bar_app_summary_input *) space->apps;
     for (size_t i = 0; i < space->app_count; ++i) {
         if (strcmp(apps[i].name, name) == 0) {
@@ -246,15 +257,15 @@ static bool menu_bar_manager_space_add_app(struct menu_bar_space_input *space, c
         }
     }
 
-    if (space->app_count == SIZE_MAX) return false;
-    if ((space->app_count + 1) > SIZE_MAX / sizeof(struct menu_bar_app_summary_input)) return false;
+    if (space->app_count == SIZE_MAX ||
+        !menu_bar_manager_resize((void **) &apps,
+                                 sizeof(struct menu_bar_app_summary_input),
+                                 &builder->app_capacity,
+                                 space->app_count + 1)) return false;
 
-    struct menu_bar_app_summary_input *new_apps = realloc(apps, (space->app_count + 1) * sizeof(struct menu_bar_app_summary_input));
-    if (!new_apps) return false;
-
-    new_apps[space->app_count].name = name;
-    new_apps[space->app_count].window_count = 1;
-    space->apps = new_apps;
+    apps[space->app_count].name = name;
+    apps[space->app_count].window_count = 1;
+    space->apps = apps;
     ++space->app_count;
     return true;
 }
@@ -354,7 +365,7 @@ static bool menu_bar_manager_add_window_to_space(struct menu_bar_display_builder
     if (!menu_bar_manager_space_add_window(space, window_input)) return false;
 
     if (occupancy == MENU_BAR_WINDOW_OCCUPANCY_COUNTED) {
-        if (!menu_bar_manager_space_add_app(space_input, window_input.app_name)) return false;
+        if (!menu_bar_manager_space_add_app(space, window_input.app_name)) return false;
     }
 
     return true;
@@ -382,7 +393,7 @@ static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_
     display->input.display_id = did;
     display->input.arrangement_index = arrangement_index;
 
-    CFStringRef uuid = display_uuid(did);
+    CFStringRef uuid = menu_bar_manager_native_display_uuid(did);
     if (uuid) {
         display->input.uuid = menu_bar_manager_copy_cfstring(uuid);
         CFRelease(uuid);
@@ -615,6 +626,42 @@ static uint32_t menu_bar_manager_focused_display_id(void)
     return display_manager_active_display_id();
 }
 
+static uint64_t menu_bar_manager_next_generation(void)
+{
+    ++g_menu_bar_manager.generation;
+    if (g_menu_bar_manager.generation == 0) ++g_menu_bar_manager.generation;
+    return g_menu_bar_manager.generation;
+}
+
+static struct menu_bar_snapshot *menu_bar_manager_create_focus_snapshot(void)
+{
+    if (!g_menu_bar_manager.last_snapshot) return NULL;
+
+    uint32_t focused_did = menu_bar_manager_focused_display_id();
+    char *focused_uuid = NULL;
+    if (focused_did) {
+        CFStringRef uuid = menu_bar_manager_native_display_uuid(focused_did);
+        if (uuid) {
+            focused_uuid = menu_bar_manager_copy_cfstring(uuid);
+            CFRelease(uuid);
+        }
+    }
+
+    struct menu_bar_snapshot *snapshot = menu_bar_model_snapshot_refocused_clone(
+        g_menu_bar_manager.last_snapshot,
+        menu_bar_manager_next_generation(),
+        focused_did != 0,
+        focused_did,
+        focused_uuid);
+    free(focused_uuid);
+
+    if (snapshot && focused_did && !snapshot->has_focused_display) {
+        menu_bar_model_snapshot_destroy(snapshot);
+        return NULL;
+    }
+    return snapshot;
+}
+
 static struct menu_bar_snapshot *menu_bar_manager_create_snapshot(void)
 {
     int active_display_count = menu_bar_manager_native_active_display_count();
@@ -646,7 +693,7 @@ static struct menu_bar_snapshot *menu_bar_manager_create_snapshot(void)
     uint32_t focused_did = menu_bar_manager_focused_display_id();
     char *focused_uuid = NULL;
     if (focused_did) {
-        CFStringRef uuid = display_uuid(focused_did);
+        CFStringRef uuid = menu_bar_manager_native_display_uuid(focused_did);
         if (uuid) {
             focused_uuid = menu_bar_manager_copy_cfstring(uuid);
             CFRelease(uuid);
@@ -667,10 +714,7 @@ static struct menu_bar_snapshot *menu_bar_manager_create_snapshot(void)
         }
     }
 
-    ++g_menu_bar_manager.generation;
-    if (g_menu_bar_manager.generation == 0) ++g_menu_bar_manager.generation;
-
-    struct menu_bar_snapshot *snapshot = menu_bar_model_snapshot_create(g_menu_bar_manager.generation,
+    struct menu_bar_snapshot *snapshot = menu_bar_model_snapshot_create(menu_bar_manager_next_generation(),
                                                                         g_menu_bar_manager.settings,
                                                                         display_inputs,
                                                                         display_count,
@@ -733,10 +777,7 @@ static bool menu_bar_manager_action_in_enabled_lifecycle(const struct menu_bar_a
 
 static struct menu_bar_snapshot *menu_bar_manager_create_disabled_snapshot(void)
 {
-    ++g_menu_bar_manager.generation;
-    if (g_menu_bar_manager.generation == 0) ++g_menu_bar_manager.generation;
-
-    return menu_bar_model_snapshot_create(g_menu_bar_manager.generation,
+    return menu_bar_model_snapshot_create(menu_bar_manager_next_generation(),
                                           g_menu_bar_manager.settings,
                                           NULL,
                                           0,
@@ -1075,10 +1116,15 @@ void menu_bar_manager_refresh(void)
     g_menu_bar_manager.refresh_pending = false;
     if (menu_bar_manager_startup_staging_is_open) return;
 
+    uint32_t dirty_reasons = g_menu_bar_manager.dirty_reasons;
     g_menu_bar_manager.dirty_reasons = 0;
     if (!g_menu_bar_manager.initialized || g_menu_bar_manager.settings.enabled != MENU_BAR_ENABLED) return;
 
-    struct menu_bar_snapshot *snapshot = menu_bar_manager_create_snapshot();
+    struct menu_bar_snapshot *snapshot = NULL;
+    if (dirty_reasons == MENU_BAR_DIRTY_FOCUS) {
+        snapshot = menu_bar_manager_create_focus_snapshot();
+    }
+    if (!snapshot) snapshot = menu_bar_manager_create_snapshot();
     menu_bar_manager_publish_if_changed(snapshot);
 }
 

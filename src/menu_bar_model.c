@@ -412,6 +412,33 @@ struct menu_bar_snapshot *menu_bar_model_snapshot_clone(const struct menu_bar_sn
     return menu_bar_model_snapshot_copy(snapshot, false, MENU_BAR_SPACE_FILTER_OCCUPIED);
 }
 
+struct menu_bar_snapshot *menu_bar_model_snapshot_refocused_clone(const struct menu_bar_snapshot *snapshot,
+                                                                   uint64_t generation,
+                                                                   bool has_focused_display,
+                                                                   uint32_t focused_display_id,
+                                                                   const char *focused_display_uuid)
+{
+    struct menu_bar_snapshot *copy = menu_bar_model_snapshot_clone(snapshot);
+    if (!copy) return NULL;
+
+    struct menu_bar_display *displays = (struct menu_bar_display *) copy->displays;
+    for (size_t display_index = 0; display_index < copy->display_count; ++display_index) {
+        displays[display_index].has_focus = false;
+    }
+    free((void *) copy->focused_display_uuid);
+    copy->generation = generation;
+    copy->has_focused_display = false;
+    copy->focused_display_id = 0;
+    copy->focused_display_uuid = NULL;
+
+    if (!menu_bar_model_resolve_focus(copy, has_focused_display,
+                                      focused_display_id, focused_display_uuid)) {
+        menu_bar_model_snapshot_destroy(copy);
+        return NULL;
+    }
+    return copy;
+}
+
 struct menu_bar_snapshot *menu_bar_model_snapshot_filtered_clone(const struct menu_bar_snapshot *snapshot,
                                                                  enum menu_bar_space_filter filter)
 {

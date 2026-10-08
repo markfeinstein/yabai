@@ -3030,11 +3030,14 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_model_defaults_and_zero_counts)          \
     TEST_ENTRY(menu_bar_model_classification_cases)              \
     TEST_ENTRY(menu_bar_model_filter_focus_identity_and_failure_metadata) \
+    TEST_ENTRY(menu_bar_model_refocused_clone_preserves_inventory) \
     TEST_ENTRY(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels) \
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
     TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
     TEST_ENTRY(menu_bar_manager_samples_each_space_type_once)          \
+    TEST_ENTRY(menu_bar_manager_app_summary_growth_is_geometric)       \
+    TEST_ENTRY(menu_bar_manager_focus_only_refresh_reuses_inventory)   \
     TEST_ENTRY(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh) \
     TEST_ENTRY(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers) \
     TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
