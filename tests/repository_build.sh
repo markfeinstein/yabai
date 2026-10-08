@@ -102,8 +102,22 @@ cat > "$TOOL_ROOT/tools/sudo" <<'TOOL'
 set -eu
 printf 'sudo\n' >> "$DEPLOY_LOG"
 # The privileged invocation intentionally receives no user-controlled source path.
+if [ "${MUTATE_SOURCE:-0}" = 1 ]; then
+    [ -n "${SOURCE_TO_MUTATE:-}" ]
+    printf '#!/bin/sh\nexit 98\n' > "$SOURCE_TO_MUTATE"
+    chmod +x "$SOURCE_TO_MUTATE"
+fi
 if [ -n "${ATTACKER_PATH:-}" ]; then PATH="$ATTACKER_PATH:$PATH"; export PATH; fi
 exec "$@"
+TOOL
+cat > "$TOOL_ROOT/tools/security" <<'TOOL'
+#!/bin/sh
+set -eu
+printf '%s\n' \
+    '  1) AAAA "Apple Development: Alice (TEAM1)"' \
+    '  2) BBBB "Developer ID Application: Alice (TEAM1)"' \
+    '  3) CCCC "Alice\tBob"' \
+    '     3 valid identities found'
 TOOL
 cat > "$TOOL_ROOT/tools/stat" <<'TOOL'
 #!/bin/sh
@@ -184,6 +198,13 @@ prepare_signed()
     run_make sign >/dev/null
 }
 cd "$WORK"
+
+# Certificate names are matched literally, including regex metacharacters and backslashes.
+: > "$LOG"
+PATH="$TOOL_ROOT/tools:/usr/bin:/bin" TERM=dumb "$WORK/scripts/codesign" /bin/sh 'Apple Development: Alice (TEAM1)'
+PATH="$TOOL_ROOT/tools:/usr/bin:/bin" TERM=dumb "$WORK/scripts/codesign" /bin/sh 'Alice\tBob'
+grep -Fq 'codesign:--deep --force --verbose --sign AAAA /bin/sh' "$LOG"
+grep -Fq 'codesign:--deep --force --verbose --sign CCCC /bin/sh' "$LOG"
 
 # Configuration products coexist; generated.c is the sole published OSAX input.
 run_make debug release asan tsan >/dev/null
@@ -287,8 +308,11 @@ test -z "$(find "$WORK/deploy" \( -name '.yabai.deploy.*' -o -name '.yabai.backu
 
 # The privileged phase receives only staged bytes and no source pathname.
 reset_verify
-MUTATE_SOURCE=1 DEPLOY_REQUIREMENT="$TRUSTED" run_deploy deploy >/dev/null
-unset MUTATE_SOURCE
+staged_hash=$(/usr/bin/shasum -a 256 "$WORK/bin/release/yabai" | cut -d ' ' -f 1)
+MUTATE_SOURCE=1 SOURCE_TO_MUTATE="$WORK/bin/release/yabai" DEPLOY_REQUIREMENT="$TRUSTED" run_deploy deploy >/dev/null
+unset MUTATE_SOURCE SOURCE_TO_MUTATE
+test "$staged_hash" != "$(/usr/bin/shasum -a 256 "$WORK/bin/release/yabai" | cut -d ' ' -f 1)"
+test "$staged_hash" = "$(/usr/bin/shasum -a 256 "$WORK/deploy/yabai" | cut -d ' ' -f 1)"
 grep -q 'binary:--uninstall-sa' "$LOG"
 prepare_signed
 

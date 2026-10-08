@@ -151,6 +151,7 @@ static inline void window_set_rule_flag(struct window *w, enum window_rule_flag 
 CFStringRef window_display_uuid(uint32_t wid);
 uint32_t window_display_id(uint32_t wid);
 uint64_t window_space(uint32_t wid);
+uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
 void window_serialize(FILE *rsp, struct window *window, uint64_t flags);

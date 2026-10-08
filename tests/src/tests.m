@@ -59,6 +59,8 @@ typedef TEST_SIG(function);
     } \
 } while (0)
 
+static bool test_temp_storage_ensure(uint64_t size);
+
 #include "area.c"
 #include "display.c"
 #include "window.c"
@@ -3019,6 +3021,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
     TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
     TEST_ENTRY(message_utf8_ingress_validation)                            \
+    TEST_ENTRY(message_query_backend_failures_are_reported)                \
+    TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
     TEST_ENTRY(message_space_create_destroy_success_requests_one_reconcile) \

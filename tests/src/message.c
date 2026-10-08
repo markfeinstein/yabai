@@ -627,6 +627,129 @@ TEST_FUNC(message_window_float_commands_are_strict,
     }
 });
 
+static CGError message_query_active_display_failure(uint32_t capacity, CGDirectDisplayID *displays, uint32_t *count)
+{
+    (void) capacity;
+    (void) displays;
+    *count = 0;
+    return kCGErrorFailure;
+}
+
+static uint32_t *message_query_window_inventory_failure(uint64_t *space_list, int space_count, int cid,
+                                                        int *count, bool include_minimized, bool *success)
+{
+    (void) space_list;
+    (void) space_count;
+    (void) cid;
+    (void) include_minimized;
+    *count = 0;
+    *success = false;
+    return NULL;
+}
+
+static uint64_t *message_query_window_spaces_empty(uint32_t wid, int *count, bool *success)
+{
+    (void) wid;
+    *count = 0;
+    *success = true;
+    return NULL;
+}
+
+static uint64_t *message_query_window_spaces_failure(uint32_t wid, int *count, bool *success)
+{
+    (void) wid;
+    *count = 0;
+    *success = false;
+    return NULL;
+}
+
+TEST_FUNC(message_query_backend_failures_are_reported,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    display_manager_test_set_active_display_list_fn(message_query_active_display_failure);
+    char *queries[] = { "--displays", "--spaces", "--windows" };
+    for (size_t i = 0; i < array_count(queries); ++i) {
+        char message[32] = {0};
+        size_t length = strlen(queries[i]);
+        memcpy(message, queries[i], length);
+        FILE *response = tmpfile();
+        TEST_CHECK(response != NULL, true);
+        if (!response) continue;
+        handle_domain_query(response, message_test_token("query"), message);
+        rewind(response);
+        unsigned char marker = 0;
+        TEST_CHECK(fread(&marker, 1, 1, response), 1UL);
+        TEST_CHECK(marker, (unsigned char) FAILURE_MESSAGE[0]);
+        fclose(response);
+        ts_reset();
+    }
+    display_manager_test_set_active_display_list_fn(NULL);
+
+    __auto_type saved_query_window_list = window_manager_query_window_list;
+    window_manager_query_window_list = message_query_window_inventory_failure;
+    uint64_t sid = 1;
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, 0), false);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    window_manager_query_window_list = saved_query_window_list;
+
+    __auto_type saved_window_space_list = space_manager_test_query_window_space_list;
+    struct window window = { .id = 42 };
+    space_manager_test_query_window_space_list = message_query_window_spaces_empty;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(space_manager_query_spaces_for_window(response, &window, 0), true);
+        rewind(response);
+        char output[8] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strcmp(output, "[]\n"), 0);
+        fclose(response);
+    }
+
+    space_manager_test_query_window_space_list = message_query_window_spaces_failure;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(space_manager_query_spaces_for_window(response, &window, 0), false);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    space_manager_test_query_window_space_list = saved_window_space_list;
+});
+
+TEST_FUNC(message_rule_filter_diagnostic_lists_all_matchers,
+{
+    char missing_filter[] = "manage=off\0\0";
+    char *message = missing_filter + strlen(missing_filter) + 1;
+    struct rule rule = {0};
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(parse_rule(response, &message, &rule, message_test_token(missing_filter)), false);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "'app[!]=..', 'title[!]=..', 'role[!]=..', or 'subrole[!]=..'") != NULL, true);
+        fclose(response);
+    }
+    rule_destroy(&rule);
+
+    char role_filter[] = "role=^AXWindow$\0manage=off\0\0";
+    message = role_filter + strlen(role_filter) + 1;
+    memset(&rule, 0, sizeof(rule));
+    TEST_CHECK(parse_rule(NULL, &message, &rule, message_test_token(role_filter)), true);
+    rule_destroy(&rule);
+});
+
 static size_t message_mode_test_activate_calls;
 static size_t message_mode_test_deactivate_calls;
 static enum declarative_modes_error_code message_mode_test_error;

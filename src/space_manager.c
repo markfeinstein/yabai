@@ -4,6 +4,8 @@ extern int g_connection;
 #ifdef TESTS
 static uint32_t *(*space_manager_test_active_display_list)(int *count);
 static uint64_t *(*space_manager_test_display_space_list)(uint32_t did, int *count);
+static uint64_t *(*space_manager_test_query_window_space_list)(uint32_t wid, int *count, bool *success) =
+    window_space_list_with_status;
 static uint32_t *(*space_manager_test_layout_window_list)(uint64_t *, int, int, int *, bool, bool *);
 static uint32_t *(*space_manager_test_swap_window_list)(uint64_t *, int, int, int *, bool, bool *);
 static bool (*space_manager_test_layout_space_is_user)(uint64_t);
@@ -64,8 +66,13 @@ bool space_manager_query_spaces_for_window(FILE *rsp, struct window *window, uin
     TIME_FUNCTION;
 
     int space_count;
-    uint64_t *space_list = window_space_list(window->id, &space_count);
-    if (!space_list) return false;
+    bool query_succeeded = false;
+#ifdef TESTS
+    uint64_t *space_list = space_manager_test_query_window_space_list(window->id, &space_count, &query_succeeded);
+#else
+    uint64_t *space_list = window_space_list_with_status(window->id, &space_count, &query_succeeded);
+#endif
+    if (!query_succeeded) return false;
 
     fprintf(rsp, "[");
     bool first = true;
@@ -113,21 +120,25 @@ bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
     uint32_t *display_list = display_manager_active_display_list(&display_count);
     if (!display_list) return false;
 
-    fprintf(rsp, "[");
-    bool first = true;
+    int total_space_count = 0;
+    uint64_t *all_spaces = NULL;
     for (int i = 0; i < display_count; ++i) {
         int space_count;
         uint64_t *space_list = display_space_list(display_list[i], &space_count);
-        if (!space_list) continue;
+        if (!space_list) return false;
+        if (!all_spaces) all_spaces = space_list;
+        total_space_count += space_count;
+    }
 
-        for (int j = 0; j < space_count; ++j) {
-            struct view *view = space_manager_query_view(&g_space_manager, space_list[j]);
-            if (!view) continue;
+    fprintf(rsp, "[");
+    bool first = true;
+    for (int i = 0; i < total_space_count; ++i) {
+        struct view *view = space_manager_query_view(&g_space_manager, all_spaces[i]);
+        if (!view) continue;
 
-            if (!first) fprintf(rsp, ",");
-            view_serialize(rsp, view, flags);
-            first = false;
-        }
+        if (!first) fprintf(rsp, ",");
+        view_serialize(rsp, view, flags);
+        first = false;
     }
     fprintf(rsp, "]\n");
 

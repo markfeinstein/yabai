@@ -39,12 +39,22 @@ void window_manager_query_window_rules(FILE *rsp)
     fprintf(rsp, "]\n");
 }
 
-void window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags)
+#ifdef TESTS
+static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *) =
+    space_window_list_for_connection_with_status;
+#else
+#define window_manager_query_window_list space_window_list_for_connection_with_status
+#endif
+
+bool window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags)
 {
     TIME_FUNCTION;
 
     int window_count = 0;
-    uint32_t *window_list = space_window_list_for_connection(space_list, space_count, 0, &window_count, true);
+    bool inventory_succeeded = false;
+    uint32_t *window_list = window_manager_query_window_list(space_list, space_count, 0, &window_count,
+                                                             true, &inventory_succeeded);
+    if (!inventory_succeeded) return false;
 
     fprintf(rsp, "[");
     for (int i = 0; i < window_count; ++i) {
@@ -53,23 +63,26 @@ void window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, in
         if (i < window_count - 1) fprintf(rsp, ",");
     }
     fprintf(rsp, "]\n");
+    return true;
 }
 
-void window_manager_query_windows_for_display(FILE *rsp, uint32_t did, uint64_t flags)
+bool window_manager_query_windows_for_display(FILE *rsp, uint32_t did, uint64_t flags)
 {
     TIME_FUNCTION;
 
     int space_count = 0;
     uint64_t *space_list = display_space_list(did, &space_count);
-    window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
+    if (!space_list) return false;
+    return window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
 }
 
-void window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
+bool window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
 {
     TIME_FUNCTION;
 
     int display_count = 0;
     uint32_t *display_list = display_manager_active_display_list(&display_count);
+    if (!display_list) return false;
 
     int space_count = 0;
     uint64_t *space_list = NULL;
@@ -77,7 +90,7 @@ void window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
     for (int i = 0; i < display_count; ++i) {
         int count;
         uint64_t *list = display_space_list(display_list[i], &count);
-        if (!list) continue;
+        if (!list) return false;
 
         //
         // NOTE(asmvik): display_space_list(..) uses a linear allocator,
@@ -89,7 +102,7 @@ void window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
         space_count += count;
     }
 
-    window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
+    return window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
 }
 
 bool window_manager_rule_matches_window(struct rule *rule, struct window *window, char *window_title, char *window_role, char *window_subrole)

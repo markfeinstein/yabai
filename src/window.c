@@ -118,28 +118,55 @@ err:
     return sid ? sid : window_display_space(wid);
 }
 
-uint64_t *window_space_list(uint32_t wid, int *count)
+uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success)
 {
+    if (count) *count = 0;
+    if (success) *success = false;
+    if (!count) return NULL;
+
     uint64_t *space_list = NULL;
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return NULL;
+
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
-    if (!space_list_ref) goto err;
+    if (!cf_is_type(space_list_ref, CFArrayGetTypeID())) {
+        if (space_list_ref) CFRelease(space_list_ref);
+        goto err;
+    }
 
-    *count = CFArrayGetCount(space_list_ref);
-    if (!*count) goto out;
+    if (!cfindex_to_int(CFArrayGetCount(space_list_ref), count)) goto out;
+    if (!*count) {
+        if (success) *success = true;
+        goto out;
+    }
 
-    space_list = ts_alloc_list(uint64_t, *count);
+    space_list = ts_alloc_list_checked(uint64_t, *count);
+    if (!space_list) {
+        *count = 0;
+        goto out;
+    }
 
     for (int i = 0; i < *count; ++i) {
         CFNumberRef id_ref = CFArrayGetValueAtIndex(space_list_ref, i);
-        CFNumberGetValue(id_ref, CFNumberGetType(id_ref), space_list + i);
+        if (!cf_is_type(id_ref, CFNumberGetTypeID()) ||
+            !CFNumberGetValue(id_ref, kCFNumberSInt64Type, space_list + i)) {
+            space_list = NULL;
+            *count = 0;
+            goto out;
+        }
     }
+    if (success) *success = true;
 
 out:
     CFRelease(space_list_ref);
 err:
     CFRelease(window_list_ref);
     return space_list;
+}
+
+uint64_t *window_space_list(uint32_t wid, int *count)
+{
+    return window_space_list_with_status(wid, count, NULL);
 }
 
 static inline const char *window_layer(int level)
