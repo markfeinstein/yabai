@@ -3202,7 +3202,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
     TEST_ENTRY(message_numeric_token_boundaries)                          \
     TEST_ENTRY(event_signal_pool_drops_records_when_full_without_overwriting) \
-    TEST_ENTRY(event_signal_dispatch_closes_inherited_descriptors)        \
+    TEST_ENTRY(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors) \
     TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \

@@ -57,13 +57,32 @@ static bool event_signal_filter(struct event_signal *es, struct signal *signal)
     }
 }
 
-static bool event_signal_spawn_command(const char *command, pid_t *child)
+static bool event_signal_spawn_command(const char *command, const struct event_signal *event, pid_t *child)
 {
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attributes;
     bool actions_initialized = false;
     bool attributes_initialized = false;
     bool result = false;
+    char assignments[4][256];
+    char *arguments[9];
+    int argument_count = 0;
+
+    arguments[argument_count++] = "/usr/bin/env";
+    if (event) {
+        for (int i = 0; i < 4; ++i) {
+            if (!event->arg_name[i]) continue;
+            if (!event->arg_value[i]) goto out;
+            int length = snprintf(assignments[i], sizeof(assignments[i]), "%s=%s",
+                                  event->arg_name[i], event->arg_value[i]);
+            if (length < 0 || length >= (int) sizeof(assignments[i])) goto out;
+            arguments[argument_count++] = assignments[i];
+        }
+    }
+    arguments[argument_count++] = "sh";
+    arguments[argument_count++] = "-c";
+    arguments[argument_count++] = (char *) command;
+    arguments[argument_count] = NULL;
 
     if (posix_spawn_file_actions_init(&actions) != 0) goto out;
     actions_initialized = true;
@@ -75,7 +94,6 @@ static bool event_signal_spawn_command(const char *command, pid_t *child)
         posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT) != 0) goto out;
 
     extern char **environ;
-    char *arguments[] = { "/usr/bin/env", "sh", "-c", (char *) command, NULL };
     result = posix_spawn(child, arguments[0], &actions, &attributes, arguments, environ) == 0;
 
 out:
@@ -87,12 +105,6 @@ out:
 void event_signal_flush(void)
 {
     if (!g_signal_storage.used) return;
-
-    pid_t pid = fork();
-    if (pid != 0) {
-        if (pid > 0) g_signal_storage.used = 0;
-        return;
-    }
 
     int size  = sizeof(struct event_signal);
     int count = g_signal_storage.used / size;
@@ -107,20 +119,12 @@ void event_signal_flush(void)
             struct signal *signal = &g_signal_event[es->type][j];
             if (event_signal_filter(es, signal)) continue;
 
-            int pid = fork();
-            if (pid) continue;
-
-            if (es->arg_name[0]) setenv(es->arg_name[0], es->arg_value[0], 1);
-            if (es->arg_name[1]) setenv(es->arg_name[1], es->arg_value[1], 1);
-            if (es->arg_name[2]) setenv(es->arg_name[2], es->arg_value[2], 1);
-            if (es->arg_name[3]) setenv(es->arg_name[3], es->arg_value[3], 1);
-
             pid_t command_pid;
-            _exit(event_signal_spawn_command(signal->command, &command_pid) ? EXIT_SUCCESS : EXIT_FAILURE);
+            event_signal_spawn_command(signal->command, es, &command_pid);
         }
     }
 
-    exit(EXIT_SUCCESS);
+    g_signal_storage.used = 0;
 }
 
 static bool event_signal_application_is_processed_front(struct application *application, bool recent)

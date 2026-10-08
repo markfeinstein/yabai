@@ -347,22 +347,35 @@ TEST_FUNC(event_signal_pool_drops_records_when_full_without_overwriting,
     }
 });
 
-TEST_FUNC(event_signal_dispatch_closes_inherited_descriptors,
+TEST_FUNC(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors,
 {
     int descriptor = open("/dev/null", O_RDONLY);
     TEST_CHECK(descriptor >= 0, true);
     if (descriptor < 0) return result;
 
-    char command[128];
-    snprintf(command, sizeof(command), "[ -e /dev/fd/1 ] && [ -e /dev/fd/2 ] && [ ! -e /dev/fd/%d ]", descriptor);
+    TEST_CHECK(setenv("YABAI_TEST_SIGNAL_VALUE", "parent", 1), 0);
+    struct event_signal event = {0};
+    event.arg_name[0] = "YABAI_TEST_SIGNAL_VALUE";
+    event.arg_value[0] = "event value";
+    event.arg_name[1] = "YABAI_TEST_SIGNAL_EQUALS";
+    event.arg_value[1] = "left=right";
+
+    char command[256];
+    snprintf(command, sizeof(command),
+             "[ \"$YABAI_TEST_SIGNAL_VALUE\" = 'event value' ] && "
+             "[ \"$YABAI_TEST_SIGNAL_EQUALS\" = 'left=right' ] && "
+             "[ -e /dev/fd/1 ] && [ -e /dev/fd/2 ] && [ ! -e /dev/fd/%d ]",
+             descriptor);
     pid_t child = -1;
-    TEST_CHECK(event_signal_spawn_command(command, &child), true);
+    TEST_CHECK(event_signal_spawn_command(command, &event, &child), true);
     if (child > 0) {
         int status = 0;
         while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}
         TEST_CHECK(WIFEXITED(status), true);
         TEST_CHECK(WEXITSTATUS(status), 0);
     }
+    TEST_CHECK(strcmp(getenv("YABAI_TEST_SIGNAL_VALUE"), "parent"), 0);
+    unsetenv("YABAI_TEST_SIGNAL_VALUE");
     close(descriptor);
 });
 
