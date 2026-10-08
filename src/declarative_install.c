@@ -1474,9 +1474,11 @@ static bool declarative_config_reload_with_ops(FILE *response,
     };
     struct declarative_space_capture_ops capture = {
         .query_sid = ops->query_sid,
+        .query_sid_result = ops->query_sid_result,
         .find_window = ops->find_window,
         .is_eligible = ops->is_eligible,
-        .context = ops->context
+        .context = ops->context,
+        .allow_unresolved_windows = true
     };
     bool result = false;
 #ifdef TESTS
@@ -1713,7 +1715,8 @@ static bool declarative_mode_select(const char *name, bool active,
         .query_sid = declarative_reload_query_sid,
         .query_sid_result = declarative_reload_query_sid_result,
         .find_window = declarative_reload_find_window,
-        .is_eligible = declarative_reload_window_is_eligible
+        .is_eligible = declarative_reload_window_is_eligible,
+        .allow_unresolved_windows = true
     };
     const struct declarative_space_postcommit_ops *postcommit_ops = NULL;
 #ifdef TESTS

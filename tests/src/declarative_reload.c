@@ -22,6 +22,7 @@ struct declarative_reload_fixture
     uint32_t wids[4];
     struct window windows[4];
     size_t window_count;
+    uint32_t missing_wid;
     bool query_fail;
     bool postcommit_fail;
     bool probe_committed;
@@ -129,6 +130,7 @@ static int declarative_reload_test_query_sid_result(uint64_t sid, const uint32_t
 static struct window *declarative_reload_test_find_window(uint32_t wid, void *context)
 {
     struct declarative_reload_fixture *fixture = context;
+    if (wid == fixture->missing_wid) return NULL;
     for (size_t i = 0; i < fixture->window_count; ++i) {
         if (fixture->wids[i] == wid) return &fixture->windows[i];
     }
@@ -536,6 +538,26 @@ TEST_FUNC(declarative_reconcile_omits_floating_windows_from_published_management
     TEST_CHECK(table_find(&g_window_manager.managed_window, &fixture.wids[0]) == NULL, true);
     TEST_CHECK(table_find(&g_window_manager.managed_window, &fixture.wids[1]), view);
     TEST_CHECK(g_window_manager.managed_window.count, 1);
+
+    declarative_reload_test_teardown(&fixture, &saved);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+});
+
+TEST_FUNC(declarative_reload_omits_skylight_only_windows_until_discovery,
+{
+    static const char candidate_json[] =
+        "{\"version\":1,\"config\":{\"window_gap\":17},\"rules\":[]}";
+    struct declarative_reload_fixture fixture = {
+        .json = candidate_json, .path = "/tmp/reload-untracked-window.jsonc",
+        .wids = { 99 }, .windows = { { .id = 99 } }, .window_count = 1, .missing_wid = 99
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(g_window_manager.managed_window.count, 0);
 
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);

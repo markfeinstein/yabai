@@ -3187,6 +3187,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
     TEST_ENTRY(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable) \
     TEST_ENTRY(declarative_reconcile_omits_floating_windows_from_published_management) \
+    TEST_ENTRY(declarative_reload_omits_skylight_only_windows_until_discovery) \
     TEST_ENTRY(declarative_native_edge_resize_reload_defaults_and_failures_are_transactional) \
     TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
     TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
