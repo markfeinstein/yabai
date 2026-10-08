@@ -491,8 +491,13 @@ enum declarative_space_apply_result declarative_space_capture_inventory_result(
             if (!wids[j] || !declarative_space_grow((void **) &out->entries, &capacity, out->count + 1,
                                                      sizeof(*out->entries))) goto fail;
             struct window *window = ops->find_window(wids[j], ops->context);
-            /* A captured window id must resolve for this synchronous event turn. */
-            if (!window || window->id != wids[j]) goto fail;
+            /* SkyLight can publish a new window before its AX discovery event reaches
+             * the worker. That disagreement is retryable; an aliased id is not. */
+            if (!window) {
+                failure = DECLARATIVE_SPACE_APPLY_TRANSIENT;
+                goto fail;
+            }
+            if (window->id != wids[j]) goto fail;
             out->entries[out->count++] = (struct declarative_space_inventory_entry) {
                 .wid = wids[j], .sid = targets[i].sid, .window = window,
                 .eligible = ops->is_eligible(window, ops->context)

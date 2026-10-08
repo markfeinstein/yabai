@@ -194,7 +194,8 @@ TEST_FUNC(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates
                                                       .counts = { 3, 1 }, .missing_window_id = 99 };
     struct declarative_space_capture_ops ops = { declarative_space_test_query, declarative_space_test_find, declarative_space_test_eligible, &capture };
     struct declarative_space_inventory inventory;
-    TEST_CHECK(declarative_space_capture_inventory(targets, 2, &ops, &inventory), false);
+    TEST_CHECK(declarative_space_capture_inventory_result(targets, 2, &ops, &inventory),
+               DECLARATIVE_SPACE_APPLY_TRANSIENT);
     TEST_CHECK(capture.queries[0], 1);
     TEST_CHECK(capture.queries[1], 0);
     TEST_CHECK(capture.finds, 3);

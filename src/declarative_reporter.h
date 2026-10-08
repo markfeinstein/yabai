@@ -23,7 +23,8 @@ void declarative_report_stale_rule(void);
 #ifdef TESTS
 struct declarative_reporter_test_sinks
 {
-    bool (*notification)(const char *title, const char *subtitle, const char *payload, void *context);
+    bool (*notification)(const char *identifier, const char *title, const char *subtitle,
+                         const char *payload, void *context);
     bool (*unified_log)(const char *format, const char *payload, void *context);
     void *context;
 };

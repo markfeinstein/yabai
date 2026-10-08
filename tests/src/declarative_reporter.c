@@ -6,6 +6,7 @@ struct declarative_reporter_test_state
     bool fail_log;
     bool throw_notification;
     bool throw_log;
+    char identifier[64];
     char title[32];
     char subtitle[32];
     char notification[DECLARATIVE_REPORT_PRIMARY_MAX + 1];
@@ -13,12 +14,14 @@ struct declarative_reporter_test_state
     char format[64];
 };
 
-static bool declarative_reporter_test_notification(const char *title, const char *subtitle,
-                                                   const char *payload, void *context)
+static bool declarative_reporter_test_notification(const char *identifier, const char *title,
+                                                   const char *subtitle, const char *payload,
+                                                   void *context)
 {
     struct declarative_reporter_test_state *state = context;
     ++state->notifications;
     if (state->throw_notification) @throw [NSException exceptionWithName:@"ReporterTest" reason:@"injected" userInfo:nil];
+    snprintf(state->identifier, sizeof(state->identifier), "%s", identifier);
     snprintf(state->title, sizeof(state->title), "%s", title);
     snprintf(state->subtitle, sizeof(state->subtitle), "%s", subtitle);
     snprintf(state->notification, sizeof(state->notification), "%s", payload);
@@ -108,6 +111,7 @@ TEST_FUNC(declarative_reporter_isolates_sinks_and_uses_literal_bounded_payloads,
     TEST_CHECK(primary[primary_length - 1], '\n');
     TEST_CHECK(state.notifications, 1);
     TEST_CHECK(state.logs, 1);
+    TEST_CHECK(strcmp(state.identifier, "com.asmvik.yabai.configuration"), 0);
     TEST_CHECK(strcmp(state.title, "yabai"), 0);
     TEST_CHECK(strcmp(state.subtitle, "configuration"), 0);
     TEST_CHECK(strlen(state.notification), (size_t) DECLARATIVE_REPORT_PRIMARY_MAX);

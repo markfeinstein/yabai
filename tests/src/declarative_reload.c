@@ -119,6 +119,13 @@ static bool declarative_reload_test_query_sid(uint64_t sid, const uint32_t **wid
     return true;
 }
 
+static int declarative_reload_test_query_sid_result(uint64_t sid, const uint32_t **wids,
+                                                    size_t *count, void *context)
+{
+    return declarative_reload_test_query_sid(sid, wids, count, context)
+        ? DECLARATIVE_SPACE_QUERY_OK : DECLARATIVE_SPACE_QUERY_RESOURCE;
+}
+
 static struct window *declarative_reload_test_find_window(uint32_t wid, void *context)
 {
     struct declarative_reload_fixture *fixture = context;
@@ -188,6 +195,7 @@ static struct declarative_reload_test_ops declarative_reload_test_ops(struct dec
         .select = declarative_reload_test_select,
         .capture_topology = declarative_reload_test_capture_topology,
         .query_sid = declarative_reload_test_query_sid,
+        .query_sid_result = declarative_reload_test_query_sid_result,
         .find_window = declarative_reload_test_find_window,
         .is_eligible = declarative_reload_test_is_eligible,
         .postcommit_ops = &fixture->postcommit_ops,
@@ -1880,7 +1888,7 @@ TEST_FUNC(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact,
     fixture.query_fail = true;
     TEST_CHECK(declarative_reconcile_diagnostic_run(&check), true);
     TEST_CHECK(check.outcome, DECLARATIVE_RECONCILE_TRANSIENT_FAILURE);
-    TEST_CHECK(strcmp(check.diagnostic, "inventory capture or Space preparation failed"), 0);
+    TEST_CHECK(strcmp(check.diagnostic, "Space reconciliation resource is temporarily unavailable"), 0);
     fixture.query_fail = false;
 
     uint64_t missing_sid = 21;
@@ -2041,7 +2049,7 @@ TEST_FUNC(declarative_reconcile_retry_backoff_terminal_and_recovery,
     TEST_CHECK(capture.delays[0], 50ULL);
     char diagnostic[160];
     declarative_reload_test_reconcile_diagnostic(diagnostic, sizeof(diagnostic));
-    TEST_CHECK(strcmp(diagnostic, "inventory capture or Space preparation failed"), 0);
+    TEST_CHECK(strcmp(diagnostic, "Space reconciliation resource is temporarily unavailable"), 0);
     /* Off-worker helpers reject without consuming the event-owned reservation. */
     TEST_CHECK(declarative_configuration_reconcile(), false);
     TEST_CHECK(declarative_configuration_reconcile_event(declarative_reload_test_reconcile_token()), false);
@@ -2060,19 +2068,22 @@ TEST_FUNC(declarative_reconcile_retry_backoff_terminal_and_recovery,
     capture.count = 0;
     declarative_configuration_request_reconcile();
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
-    for (int retry = 0; retry < 4; ++retry) {
+    for (int retry = 0; retry < 7; ++retry) {
         TEST_CHECK(declarative_reload_test_fire_reconcile_retry(), true);
         TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
-    TEST_CHECK(capture.count, 4U);
+    TEST_CHECK(capture.count, 7U);
     TEST_CHECK(capture.delays[0], 50ULL);
     TEST_CHECK(capture.delays[1], 100ULL);
     TEST_CHECK(capture.delays[2], 200ULL);
     TEST_CHECK(capture.delays[3], 400ULL);
+    TEST_CHECK(capture.delays[4], 800ULL);
+    TEST_CHECK(capture.delays[5], 1600ULL);
+    TEST_CHECK(capture.delays[6], 3200ULL);
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
     TEST_CHECK(capture.reports > 0, true);
     TEST_CHECK(strstr(capture.payload,
-                      "reconciliation retry/backoff exhausted: inventory capture or Space preparation failed") != NULL, true);
+                      "reconciliation retry/backoff exhausted: Space reconciliation resource is temporarily unavailable") != NULL, true);
 
     /* Invalid installed selection is terminal and reported without retry. */
     fixture.query_fail = false;
@@ -2098,7 +2109,7 @@ TEST_FUNC(declarative_reconcile_retry_backoff_terminal_and_recovery,
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
     TEST_CHECK(declarative_reload_test_reconcile_retry_waiting(), false);
     TEST_CHECK(strstr(capture.payload,
-                      "reconciliation retry/backoff scheduling rejected: inventory capture or Space preparation failed") != NULL, true);
+                      "reconciliation retry/backoff scheduling rejected: Space reconciliation resource is temporarily unavailable") != NULL, true);
 
     declarative_reporter_test_reset();
     declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);

@@ -1,6 +1,7 @@
 #include <os/log.h>
 
 static const char declarative_report_log_format[] = "%{public}s";
+static NSString *const declarative_report_notification_identifier = @"com.asmvik.yabai.configuration";
 
 #ifdef TESTS
 static const struct declarative_reporter_test_sinks *declarative_reporter_test_sinks;
@@ -177,8 +178,9 @@ static bool declarative_report_notification(const char *payload)
 #ifdef TESTS
     if (declarative_reporter_test_sinks && declarative_reporter_test_sinks->notification) {
         @try {
-            return declarative_reporter_test_sinks->notification("yabai", "configuration", payload,
-                                                                declarative_reporter_test_sinks->context);
+            return declarative_reporter_test_sinks->notification(
+                [declarative_report_notification_identifier UTF8String], "yabai", "configuration", payload,
+                declarative_reporter_test_sinks->context);
         } @catch (NSException *exception) {
             (void) exception;
             return false;
@@ -191,6 +193,7 @@ static bool declarative_report_notification(const char *payload)
     @try {
         @autoreleasepool {
             NSUserNotification *notification = [[[NSUserNotification alloc] init] autorelease];
+            notification.identifier = declarative_report_notification_identifier;
             notification.title = @"yabai";
             notification.subtitle = @"configuration";
             notification.informativeText = [NSString stringWithUTF8String:payload];

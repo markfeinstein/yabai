@@ -561,6 +561,8 @@ struct declarative_reload_ops
     bool (*capture_topology)(const struct declarative_topology_bounds_config *bounds,
                              struct declarative_topology *topology, void *context);
     bool (*query_sid)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
+    enum declarative_space_query_result (*query_sid_result)(uint64_t sid, const uint32_t **wids,
+                                                            size_t *count, void *context);
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     const struct declarative_space_postcommit_ops *postcommit_ops;
@@ -1022,7 +1024,10 @@ static uint64_t declarative_reconcile_active_token;
 static uint32_t declarative_reconcile_retry_attempt;
 static bool declarative_reconcile_retry_waiting;
 static char declarative_reconcile_last_diagnostic[160];
-#define DECLARATIVE_RECONCILE_MAX_RETRIES 4U
+/* Startup and application AX discovery can trail SkyLight inventory by several
+ * seconds. Keep one bounded reservation alive long enough for those streams to
+ * converge instead of turning an ordinary launch race into a user alert. */
+#define DECLARATIVE_RECONCILE_MAX_RETRIES 7U
 
 #ifdef TESTS
 static uint64_t declarative_reconcile_test_reservation_count;
@@ -1115,7 +1120,7 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
     declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity, "reconciliation preparation failed");
     if (!event_loop_is_worker_thread(&g_event_loop) || !declarative_installed.generation ||
         !declarative_installed.model || !ops || !ops->capture_topology ||
-        !ops->query_sid || !ops->find_window || !ops->is_eligible) {
+        (!ops->query_sid && !ops->query_sid_result) || !ops->find_window || !ops->is_eligible) {
         declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity, "reconciliation invariant rejected");
         return DECLARATIVE_RECONCILE_TERMINAL_FAILURE;
     }
@@ -1201,6 +1206,7 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
     };
     struct declarative_space_capture_ops capture = {
         .query_sid = ops->query_sid,
+        .query_sid_result = ops->query_sid_result,
         .find_window = ops->find_window,
         .is_eligible = ops->is_eligible,
         .context = ops->context
@@ -1230,18 +1236,26 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
                                          "UUID-less Space identity changed; stale rule targets suppressed");
         goto out;
     }
-    result = declarative_space_apply_with_effective_publication(targets, count, entries, count,
-                                                      &g_space_manager.view,
-                                                      &view_contract, &managed_contract, declarative_installed.model,
-                                                      composition.spaces, composition.space_count,
-                                                      declarative_installed.generation,
-                                                      &g_declarative_runtime_state, &defaults,
-                                                      DECLARATIVE_SPACE_PRESERVE_RUNTIME, &capture,
-                                                      ops->postcommit_ops, NULL,
-                                                      declarative_reconcile_publish, &publication);
-    if (!result) {
+    enum declarative_space_apply_result space_result =
+        declarative_space_apply_with_effective_publication_result(
+            targets, count, entries, count, &g_space_manager.view,
+            &view_contract, &managed_contract, declarative_installed.model,
+            composition.spaces, composition.space_count,
+            declarative_installed.generation, &g_declarative_runtime_state, &defaults,
+            DECLARATIVE_SPACE_PRESERVE_RUNTIME, &capture,
+            ops->postcommit_ops, NULL, declarative_reconcile_publish, &publication);
+    result = space_result == DECLARATIVE_SPACE_APPLY_OK;
+    if (space_result == DECLARATIVE_SPACE_APPLY_TRANSIENT) {
         declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity,
-                                         "inventory capture or Space preparation failed");
+                                         "window inventory is still settling");
+    } else if (space_result == DECLARATIVE_SPACE_APPLY_RESOURCE) {
+        declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity,
+                                         "Space reconciliation resource is temporarily unavailable");
+    } else if (space_result == DECLARATIVE_SPACE_APPLY_TERMINAL) {
+        /* A strict preparation guard can reject a snapshot that became stale
+         * after capture; retry the whole transaction from fresh topology. */
+        declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity,
+                                         "Space preparation snapshot was rejected");
     }
 out:
     declarative_modes_composition_destroy(&composition);
@@ -1272,6 +1286,7 @@ static struct declarative_reload_ops declarative_reconcile_ops(void)
     return (struct declarative_reload_ops) {
         .capture_topology = declarative_reload_capture_topology_system,
         .query_sid = declarative_reload_query_sid,
+        .query_sid_result = declarative_reload_query_sid_result,
         .find_window = declarative_reload_find_window,
         .is_eligible = declarative_reload_window_is_eligible
     };
@@ -1365,7 +1380,8 @@ bool declarative_configuration_reconcile_event(uint64_t reservation_token)
     if (!owned) return false;
 
     struct declarative_reload_ops ops = declarative_reconcile_ops();
-    if (!ops.capture_topology || !ops.query_sid || !ops.find_window || !ops.is_eligible) {
+    if (!ops.capture_topology || (!ops.query_sid && !ops.query_sid_result) ||
+        !ops.find_window || !ops.is_eligible) {
         declarative_reconcile_report_with_cause("terminal reconciliation failure",
                                                 "reconciliation operation invariant rejected");
         declarative_configuration_reconcile_cancel(reservation_token);
@@ -1745,10 +1761,18 @@ static bool declarative_mode_select(const char *name, bool active,
             declarative_mode_publish, &publication);
     result = space_result == DECLARATIVE_SPACE_APPLY_OK;
     if (!result) {
-        declarative_mode_runtime_error(error,
-            space_result == DECLARATIVE_SPACE_APPLY_RESOURCE
-                ? DECLARATIVE_MODES_ERROR_RESOURCE : DECLARATIVE_MODES_ERROR_TERMINAL,
-            "mode Space transaction failed");
+        enum declarative_modes_error_code code =
+            space_result == DECLARATIVE_SPACE_APPLY_TRANSIENT
+                ? DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED
+                : space_result == DECLARATIVE_SPACE_APPLY_RESOURCE
+                ? DECLARATIVE_MODES_ERROR_RESOURCE : DECLARATIVE_MODES_ERROR_TERMINAL;
+        if (code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED) {
+            declarative_configuration_request_reconcile();
+        }
+        declarative_mode_runtime_error(error, code,
+            code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED
+                ? "window inventory is still settling; reconciliation is required before retry"
+                : "mode Space transaction failed");
     } else {
         declarative_configuration_request_reconcile();
     }
@@ -1820,6 +1844,8 @@ static struct declarative_reload_ops declarative_reload_ops_from_test(
         .select = test_ops->select,
         .capture_topology = test_ops->capture_topology,
         .query_sid = test_ops->query_sid,
+        .query_sid_result = (enum declarative_space_query_result (*)(uint64_t, const uint32_t **, size_t *, void *))
+            test_ops->query_sid_result,
         .find_window = test_ops->find_window,
         .is_eligible = test_ops->is_eligible,
         .postcommit_ops = test_ops->postcommit_ops,
