@@ -347,6 +347,25 @@ TEST_FUNC(event_signal_pool_drops_records_when_full_without_overwriting,
     }
 });
 
+TEST_FUNC(event_signal_dispatch_closes_inherited_descriptors,
+{
+    int descriptor = open("/dev/null", O_RDONLY);
+    TEST_CHECK(descriptor >= 0, true);
+    if (descriptor < 0) return result;
+
+    char command[128];
+    snprintf(command, sizeof(command), "[ -e /dev/fd/1 ] && [ -e /dev/fd/2 ] && [ ! -e /dev/fd/%d ]", descriptor);
+    pid_t child = -1;
+    TEST_CHECK(event_signal_spawn_command(command, &child), true);
+    if (child > 0) {
+        int status = 0;
+        while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}
+        TEST_CHECK(WIFEXITED(status), true);
+        TEST_CHECK(WEXITSTATUS(status), 0);
+    }
+    close(descriptor);
+});
+
 TEST_FUNC(message_hexadecimal_token_boundaries,
 {
     uint32_t u32_value;

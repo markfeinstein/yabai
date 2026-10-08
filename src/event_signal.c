@@ -57,13 +57,40 @@ static bool event_signal_filter(struct event_signal *es, struct signal *signal)
     }
 }
 
+static bool event_signal_spawn_command(const char *command, pid_t *child)
+{
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    bool actions_initialized = false;
+    bool attributes_initialized = false;
+    bool result = false;
+
+    if (posix_spawn_file_actions_init(&actions) != 0) goto out;
+    actions_initialized = true;
+    if (posix_spawnattr_init(&attributes) != 0) goto out;
+    attributes_initialized = true;
+    if (posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDIN_FILENO) != 0 ||
+        posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDOUT_FILENO) != 0 ||
+        posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDERR_FILENO) != 0 ||
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT) != 0) goto out;
+
+    extern char **environ;
+    char *arguments[] = { "/usr/bin/env", "sh", "-c", (char *) command, NULL };
+    result = posix_spawn(child, arguments[0], &actions, &attributes, arguments, environ) == 0;
+
+out:
+    if (attributes_initialized) posix_spawnattr_destroy(&attributes);
+    if (actions_initialized) posix_spawn_file_actions_destroy(&actions);
+    return result;
+}
+
 void event_signal_flush(void)
 {
     if (!g_signal_storage.used) return;
 
     pid_t pid = fork();
-    if (pid) {
-        g_signal_storage.used = 0;
+    if (pid != 0) {
+        if (pid > 0) g_signal_storage.used = 0;
         return;
     }
 
@@ -88,8 +115,8 @@ void event_signal_flush(void)
             if (es->arg_name[2]) setenv(es->arg_name[2], es->arg_value[2], 1);
             if (es->arg_name[3]) setenv(es->arg_name[3], es->arg_value[3], 1);
 
-            char *exec[] = { "/usr/bin/env", "sh", "-c", signal->command, NULL};
-            exit(execvp(exec[0], exec));
+            pid_t command_pid;
+            _exit(event_signal_spawn_command(signal->command, &command_pid) ? EXIT_SUCCESS : EXIT_FAILURE);
         }
     }
 

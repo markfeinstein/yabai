@@ -19,6 +19,8 @@ touch "$MAN_MARKER"
 EOF
 chmod +x "$root/asciidoctor"
 make -C "$root" man-contract >/dev/null
+DOC_CONTRACT_SOURCE="$root/doc/yabai.asciidoc" DOC_CONTRACT_MAN="$root/doc/yabai.1" \
+    TMPDIR="$root" /bin/sh -c 'mkdir "$TMPDIR/yabai-doc-contract.$$"; exec "$1" --self-test' sh "$root/tests/doc_contract.sh" >/dev/null
 if make -C "$root" ASCIIDOCTOR="$root/missing-asciidoctor" man-check >/dev/null 2>&1; then
     echo 'man-check accepted a missing generator' >&2
     exit 1

@@ -43,6 +43,7 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include <pwd.h>
+#include <grp.h>
 #include <spawn.h>
 #include <libproc.h>
 

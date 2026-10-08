@@ -54,9 +54,9 @@ check_contract() {
 check_contract
 
 if [ "${1:-}" = --self-test ]; then
-    temp=${TMPDIR:-/tmp}/yabai-doc-contract.$$
-    mkdir "$temp"
-    trap 'rm -f "$temp/source" "$temp/man"; rmdir "$temp"' 0 HUP INT TERM
+    temp=$(mktemp -d "${TMPDIR:-/tmp}/yabai-doc-contract.XXXXXX")
+    cleanup() { find "$temp" -mindepth 1 -delete; rmdir "$temp"; }
+    trap cleanup 0 HUP INT TERM
     cp "$source_doc" "$temp/source"
     cp "$generated_doc" "$temp/man"
     sed 's/menubar_opacity\* \['"'"'<UNIT_SEL>'"'"'\]/menubar_opacity* ['"'"'<POSITIVE_UNIT_SEL>'"'"']/' "$temp/source" > "$temp/source.swap"

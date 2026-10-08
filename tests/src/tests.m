@@ -2785,6 +2785,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
     TEST_ENTRY(doctor_service_requires_canonical_fields_mode_and_executable) \
     TEST_ENTRY(doctor_root_permission_checks_use_resolved_supplementary_groups) \
+    TEST_ENTRY(doctor_root_permission_checks_use_effective_target_access) \
+    TEST_ENTRY(doctor_effective_access_observes_acl_denies) \
     TEST_ENTRY(doctor_runtime_orchestration_and_exact_cli_are_injectable) \
     TEST_ENTRY(doctor_sa_bundle_absence_and_nested_metadata_are_distinct) \
     TEST_ENTRY(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded) \
@@ -2873,6 +2875,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
+    TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
     TEST_ENTRY(mouse_no_target_cross_space_transfer_prepares_before_source_mutation) \
     TEST_ENTRY(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits) \
     TEST_ENTRY(window_manager_warp_preparation_failure_preserves_trees) \
@@ -3199,6 +3202,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
     TEST_ENTRY(message_numeric_token_boundaries)                          \
     TEST_ENTRY(event_signal_pool_drops_records_when_full_without_overwriting) \
+    TEST_ENTRY(event_signal_dispatch_closes_inherited_descriptors)        \
     TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \

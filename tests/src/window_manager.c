@@ -205,6 +205,68 @@ TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
     table_free(&wm.managed_window); table_free(&sm.view);
 });
 
+TEST_FUNC(window_reconciliation_prepares_destination_before_detaching_source,
+{
+    struct window_manager wm = { .purify_mode = PURIFY_DISABLED };
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+    table_init(&wm.managed_window, 4, hash_wm, compare_wm);
+
+    struct application application = {0};
+    struct window window = {
+        .application = &application, .id = 42, .is_root = true,
+        .rule_flags = WINDOW_RULE_MANAGED, .layer = LAYER_NORMAL
+    };
+    struct window_node src_root = {
+        .window_list = {42}, .window_order = {42}, .window_count = 1,
+        .ratio = 0.37f, .split = SPLIT_X, .child = CHILD_FIRST,
+        .area = {3, 4, 500, 300}
+    };
+    struct window_node dst_root = {
+        .window_list = {77}, .window_order = {77}, .window_count = 1,
+        .ratio = 0.63f, .split = SPLIT_Y, .child = CHILD_SECOND,
+        .area = {8, 9, 700, 400}
+    };
+    struct view src = { .sid = 101, .layout = VIEW_BSP, .root = &src_root, .insertion_point = 42 };
+    struct view dst = { .sid = 202, .layout = VIEW_BSP, .root = &dst_root, .insertion_point = 77 };
+    table_add(&wm.window, &window.id, &window);
+    table_add(&wm.managed_window, &window.id, &src);
+
+    struct window_node src_before = src_root, dst_before = dst_root;
+    struct view src_view_before = src, dst_view_before = dst;
+    uint32_t window_list[] = {42};
+    struct view *mutated_views[2];
+    struct view_test_platform_ops ops = {
+        .space_is_visible = space_swap_test_space_is_visible,
+        .update_windows = space_swap_test_update
+    };
+    view_test_set_platform_ops(&ops);
+
+    for (size_t ordinal = 1; ordinal <= 2; ++ordinal) {
+        legacy_allocation_test_fail_at(ordinal);
+        TEST_CHECK(window_manager_reconcile_windows_on_space_with_storage(&wm, &dst, window_list, 1, true,
+                                                                          mutated_views, 2), false);
+        TEST_CHECK(memcmp(&src_root, &src_before, sizeof(src_root)), 0);
+        TEST_CHECK(memcmp(&dst_root, &dst_before, sizeof(dst_root)), 0);
+        TEST_CHECK(memcmp(&src, &src_view_before, sizeof(src)), 0);
+        TEST_CHECK(memcmp(&dst, &dst_view_before, sizeof(dst)), 0);
+        TEST_CHECK(window_manager_find_managed_window(&wm, &window) == &src, true);
+        TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+    }
+
+    legacy_allocation_test_reset();
+    TEST_CHECK(window_manager_reconcile_windows_on_space_with_storage(&wm, &dst, window_list, 1, true,
+                                                                      mutated_views, 2), true);
+    TEST_CHECK(view_find_window_node(&src, window.id) == NULL, true);
+    TEST_CHECK(view_find_window_node(&dst, window.id) != NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&wm, &window) == &dst, true);
+    view_remove_window_node(&dst, &window);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+
+    view_test_set_platform_ops(NULL);
+    table_free(&wm.managed_window);
+    table_free(&wm.window);
+});
+
 TEST_FUNC(mouse_no_target_cross_space_transfer_prepares_before_source_mutation,
 {
     struct space_manager sm = {0};

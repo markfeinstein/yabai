@@ -201,6 +201,7 @@ struct doctor_collect_ops {
     int (*stat_fn)(const char *, struct stat *);
     int (*lstat_fn)(const char *, struct stat *);
     int (*access_fn)(const char *, int);
+    enum doctor_probe (*target_access_fn)(const struct doctor_identity *, const char *, int);
     int (*getgrouplist_fn)(const char *, int, int *, int *);
     char *(*realpath_fn)(const char *, char *);
     int (*open_fn)(const char *, int);
@@ -211,9 +212,41 @@ struct doctor_collect_ops {
 
 static int doctor_open_readonly(const char *path, int flags) { return open(path, flags); }
 
+static enum doctor_probe doctor_access_as_identity(const struct doctor_identity *identity,
+                                                    const char *path, int mode)
+{
+    if (getuid() == identity->uid) {
+        errno = 0;
+        if (access(path, mode) == 0) return DOCTOR_PROBE_YES;
+        return errno == EACCES || errno == EPERM ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
+    }
+    if (getuid() != 0) return DOCTOR_PROBE_UNKNOWN;
+
+    pid_t child = fork();
+    if (child == -1) return DOCTOR_PROBE_UNKNOWN;
+    if (child == 0) {
+        if (initgroups(identity->name, identity->gid) != 0 ||
+            setgid(identity->gid) != 0 || setuid(identity->uid) != 0) _exit(2);
+        if (access(path, mode) == 0) _exit(0);
+        _exit(errno == EACCES || errno == EPERM ? 1 : 2);
+    }
+
+    int status;
+    while (waitpid(child, &status, 0) == -1) {
+        if (errno != EINTR) return DOCTOR_PROBE_UNKNOWN;
+    }
+    if (!WIFEXITED(status)) return DOCTOR_PROBE_UNKNOWN;
+    switch (WEXITSTATUS(status)) {
+    case 0: return DOCTOR_PROBE_YES;
+    case 1: return DOCTOR_PROBE_NO;
+    default: return DOCTOR_PROBE_UNKNOWN;
+    }
+}
+
 static struct doctor_collect_ops doctor_production_ops = {
     .getuid_fn = getuid, .getpwuid_fn = getpwuid, .getenv_fn = getenv,
     .stat_fn = stat, .lstat_fn = lstat, .access_fn = access,
+    .target_access_fn = doctor_access_as_identity,
     .getgrouplist_fn = getgrouplist, .realpath_fn = realpath,
     .open_fn = doctor_open_readonly, .fstat_fn = fstat, .read_fn = read, .close_fn = close
 };
@@ -263,6 +296,7 @@ static enum doctor_probe doctor_target_permission(const struct doctor_collect_op
                                                    const char *path, const struct stat *st, int mode)
 {
     if (!identity->elevated) return doctor_access_probe(ops, path, mode);
+    if (ops->target_access_fn) return ops->target_access_fn(identity, path, mode);
     mode_t required = 0;
     if (mode & R_OK) required |= 04;
     if (mode & W_OK) required |= 02;

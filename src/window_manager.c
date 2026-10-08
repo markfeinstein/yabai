@@ -370,9 +370,9 @@ bool window_manager_add_managed_window(struct window_manager *wm, struct window 
     return true;
 }
 
-bool window_manager_transfer_managed_window(struct window_manager *wm, struct window *window,
-                                            struct view *src_view, struct view *dst_view,
-                                            uint32_t insertion_point)
+static bool window_manager_transfer_managed_window_internal(struct window_manager *wm, struct window *window,
+                                                             struct view *src_view, struct view *dst_view,
+                                                             uint32_t insertion_point, bool flush)
 {
     if (!wm || !window || !src_view || !dst_view || src_view == dst_view) return false;
     if (src_view->layout == VIEW_FLOAT || dst_view->layout == VIEW_FLOAT) return false;
@@ -396,11 +396,21 @@ bool window_manager_transfer_managed_window(struct window_manager *wm, struct wi
     }
     window_manager_adjust_layer(window, LAYER_BELOW);
 
-    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
-    if (view_space_is_visible(src_view->sid)) view_flush(src_view);
-    else view_set_flag(src_view, VIEW_IS_DIRTY);
-    space_manager_flush_tiled_window(dst_view, window);
+    if (flush) {
+        if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+        if (view_space_is_visible(src_view->sid)) view_flush(src_view);
+        else view_set_flag(src_view, VIEW_IS_DIRTY);
+        space_manager_flush_tiled_window(dst_view, window);
+    }
     return true;
+}
+
+bool window_manager_transfer_managed_window(struct window_manager *wm, struct window *window,
+                                            struct view *src_view, struct view *dst_view,
+                                            uint32_t insertion_point)
+{
+    return window_manager_transfer_managed_window_internal(wm, window, src_view, dst_view,
+                                                           insertion_point, true);
 }
 
 enum managed_window_result window_manager_tile_window_on_space(struct space_manager *sm, struct window_manager *wm,
@@ -3732,7 +3742,7 @@ static void window_manager_validate_windows_on_space(struct window_manager *wm, 
     }
 }
 
-static void window_manager_check_for_windows_on_space(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, struct view **mutated_views, int *mutated_count, int mutated_capacity)
+static bool window_manager_check_for_windows_on_space(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, struct view **mutated_views, int *mutated_count, int mutated_capacity)
 {
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_manager_find_window(wm, window_list[i]);
@@ -3740,26 +3750,14 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
 
         struct view *existing_view = window_manager_find_managed_window(wm, window);
         if (existing_view && existing_view->layout != VIEW_FLOAT && existing_view != view) {
-
-            //
-            // @cleanup
-            //
-            // :AXBatching
-            //
-            // NOTE(asmvik): Batch all operations and mark the view as dirty so that we can perform a single flush,
-            // making sure that each window is only moved and resized a single time, when the final layout has been computed.
-            // This is necessary to make sure that we do not call the AX API for each modification to the tree.
-            //
-
-            view_remove_window_node(existing_view, window);
-            window_manager_adjust_layer(window, LAYER_NORMAL);
-            window_manager_remove_managed_window(wm, window->id);
-            window_manager_purify_window(wm, window);
+            if (!window_manager_transfer_managed_window_internal(wm, window, existing_view, view, 0, false)) {
+                return false;
+            }
             view_set_flag(existing_view, VIEW_IS_DIRTY);
             window_manager_record_mutated_view(mutated_views, mutated_count, mutated_capacity, existing_view);
         }
 
-        if (!existing_view || (existing_view->layout != VIEW_FLOAT && existing_view != view)) {
+        if (!existing_view) {
 
             //
             // @cleanup
@@ -3773,11 +3771,12 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
 
             enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, wm,
                                                                                              window, view->sid, 0, false);
-            if (managed_result == MANAGED_WINDOW_FAILED) return;
+            if (managed_result == MANAGED_WINDOW_FAILED) return false;
             view_set_flag(view, VIEW_IS_DIRTY);
             window_manager_record_mutated_view(mutated_views, mutated_count, mutated_capacity, view);
         }
     }
+    return true;
 }
 
 static void window_manager_finalize_mutated_views(struct view **mutated_views, int mutated_count)
@@ -3800,7 +3799,11 @@ bool window_manager_reconcile_windows_on_space_with_storage(struct window_manage
     int mutated_count = 0;
     window_manager_record_mutated_view(mutated_views, &mutated_count, mutated_capacity, view);
     window_manager_validate_windows_on_space(wm, view, window_list, window_count, mutated_views, &mutated_count, mutated_capacity);
-    window_manager_check_for_windows_on_space(wm, view, window_list, window_count, mutated_views, &mutated_count, mutated_capacity);
+    if (!window_manager_check_for_windows_on_space(wm, view, window_list, window_count,
+                                                   mutated_views, &mutated_count, mutated_capacity)) {
+        window_manager_finalize_mutated_views(mutated_views, mutated_count);
+        return false;
+    }
 
     window_manager_finalize_mutated_views(mutated_views, mutated_count);
     return true;

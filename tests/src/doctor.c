@@ -317,7 +317,9 @@ TEST_FUNC(doctor_service_requires_canonical_fields_mode_and_executable,
     doctor_test_retarget_path = lexical_link; doctor_test_retarget_destination = retarget_executable; doctor_test_retarget_count = 0;
     TEST_CHECK(doctor_inspect_service(&retarget_ops, &identity, plist_path, canonical_executable), DOCTOR_SERVICE_UNKNOWN);
     doctor_test_retarget_path = NULL;
-    struct doctor_collect_ops path_ops = doctor_production_ops; path_ops.stat_fn = doctor_test_stat_override;
+    struct doctor_collect_ops path_ops = doctor_production_ops;
+    path_ops.stat_fn = doctor_test_stat_override;
+    path_ops.target_access_fn = NULL;
     doctor_test_denied_directory = lexical_dir;
     TEST_CHECK(doctor_inspect_service(&path_ops, &identity, plist_path, canonical_executable), DOCTOR_SERVICE_INVALID);
     char resolved_canonical_dir[PATH_MAX];
@@ -369,6 +371,7 @@ static int doctor_test_getgrouplist(const char *name, int base, int *groups, int
 TEST_FUNC(doctor_root_permission_checks_use_resolved_supplementary_groups,
 {
     struct doctor_collect_ops ops = doctor_production_ops;
+    ops.target_access_fn = NULL;
     ops.getgrouplist_fn = doctor_test_getgrouplist;
     struct doctor_identity identity = { .uid = 501, .gid = 20, .elevated = true, .name = "fixture" };
     struct stat st = { .st_uid = 501, .st_gid = 20, .st_mode = S_IFREG | 0000 };
@@ -384,6 +387,81 @@ TEST_FUNC(doctor_root_permission_checks_use_resolved_supplementary_groups,
     TEST_CHECK(doctor_target_permission(&ops, &identity, "/dev/null", &st, R_OK), DOCTOR_PROBE_YES);
     doctor_test_groups_mode = -1;
     TEST_CHECK(doctor_target_permission(&ops, &identity, "/dev/null", &st, R_OK), DOCTOR_PROBE_UNKNOWN);
+});
+
+static enum doctor_probe doctor_test_target_access_result;
+static int doctor_test_target_access_calls;
+
+static enum doctor_probe doctor_test_target_access(const struct doctor_identity *identity,
+                                                    const char *path, int mode)
+{
+    (void) identity; (void) path; (void) mode;
+    ++doctor_test_target_access_calls;
+    return doctor_test_target_access_result;
+}
+
+TEST_FUNC(doctor_root_permission_checks_use_effective_target_access,
+{
+    struct doctor_collect_ops ops = doctor_production_ops;
+    ops.target_access_fn = doctor_test_target_access;
+    struct doctor_identity identity = { .uid = 501, .gid = 20, .elevated = true, .name = "fixture" };
+    struct stat st = { .st_uid = 501, .st_gid = 20, .st_mode = S_IFREG | 0000 };
+
+    doctor_test_target_access_calls = 0;
+    doctor_test_target_access_result = DOCTOR_PROBE_YES;
+    TEST_CHECK(doctor_target_permission(&ops, &identity, "/fixture", &st, R_OK), DOCTOR_PROBE_YES);
+    TEST_CHECK(doctor_test_target_access_calls, 1);
+
+    st.st_mode = S_IFREG | 0777;
+    doctor_test_target_access_result = DOCTOR_PROBE_NO;
+    TEST_CHECK(doctor_target_permission(&ops, &identity, "/fixture", &st, X_OK), DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_target_access_calls, 2);
+
+    identity.elevated = false;
+    ops.access_fn = doctor_test_access_failure;
+    doctor_test_access_error = EACCES;
+    TEST_CHECK(doctor_target_permission(&ops, &identity, "/fixture", &st, R_OK), DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_target_access_calls, 2);
+});
+
+TEST_FUNC(doctor_effective_access_observes_acl_denies,
+{
+    char path[] = "/private/tmp/yabai-doctor-acl.XXXXXX";
+    int fd = mkstemp(path);
+    TEST_CHECK(fd >= 0, true);
+    if (fd < 0) return result;
+    TEST_CHECK(fchmod(fd, 0644) == 0, true);
+
+    struct passwd *pw = getpwuid(getuid());
+    TEST_CHECK(pw != NULL && pw->pw_name != NULL, true);
+    struct stat st;
+    TEST_CHECK(fstat(fd, &st) == 0, true);
+    close(fd);
+    if (!pw || !pw->pw_name) { unlink(path); return result; }
+
+    struct doctor_identity identity = {
+        .uid = getuid(), .gid = getgid(), .elevated = true,
+        .name = pw->pw_name, .home = "/private/tmp"
+    };
+    TEST_CHECK(doctor_target_permission(&doctor_production_ops, &identity, path, &st, R_OK), DOCTOR_PROBE_YES);
+
+    char acl[256];
+    int acl_length = snprintf(acl, sizeof(acl), "user:%s deny read", pw->pw_name);
+    TEST_CHECK(acl_length > 0 && acl_length < (int) sizeof(acl), true);
+    pid_t child = fork();
+    TEST_CHECK(child >= 0, true);
+    if (child == 0) {
+        execl("/bin/chmod", "chmod", "+a", acl, path, (char *) NULL);
+        _exit(127);
+    }
+    if (child > 0) {
+        int status = 0;
+        while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}
+        TEST_CHECK(WIFEXITED(status), true);
+        TEST_CHECK(WEXITSTATUS(status), 0);
+        TEST_CHECK(doctor_target_permission(&doctor_production_ops, &identity, path, &st, R_OK), DOCTOR_PROBE_NO);
+    }
+    unlink(path);
 });
 
 static int doctor_test_collect_count;
