@@ -57,6 +57,20 @@ TEST_FUNC(declarative_reporter_bounds_redacts_and_escapes_structural_fields,
     TEST_CHECK(strstr(output, "...<truncated>\n") != NULL, true);
     TEST_CHECK(declarative_reporter_test_utf8_valid(output, length), true);
 
+    const char *canonical_paths[] = {
+        "$.modes[0].name",
+        "$.modes[0].spaces[0].scaffold[0].pattern",
+        "$.active_mode",
+        "$.selected_mode"
+    };
+    for (size_t i = 0; i < array_count(canonical_paths); ++i) {
+        length = declarative_reporter_test_render(output, sizeof(output), DECLARATIVE_REPORT_PRIMARY_MAX,
+                                                  "schema", "/tmp/config", canonical_paths[i],
+                                                  1, 2, "invalid value", true);
+        TEST_CHECK(strstr(output, canonical_paths[i]) != NULL, true);
+        TEST_CHECK(strstr(output, "$." "<unknown>") == NULL, true);
+    }
+
     memset(long_message, 0, sizeof(long_message));
     size_t cursor = 0;
     while (cursor + 4 < sizeof(long_message)) {
@@ -100,6 +114,18 @@ TEST_FUNC(declarative_reporter_isolates_sinks_and_uses_literal_bounded_payloads,
     TEST_CHECK(strlen(state.log), (size_t) DECLARATIVE_REPORT_LOG_MAX);
     TEST_CHECK(strcmp(state.format, "%{public}s"), 0);
     TEST_CHECK(strstr(primary, "%") != NULL, true);
+
+    char utf8_path[3000];
+    size_t utf8_length = 0;
+    while (utf8_length + 4 < sizeof(utf8_path)) {
+        memcpy(utf8_path + utf8_length, "😀", 4);
+        utf8_length += 4;
+    }
+    utf8_path[utf8_length] = '\0';
+    declarative_report_runtime(NULL, "runtime", utf8_path, "$.config.layout", 0, 0, "invalid");
+    TEST_CHECK(declarative_reporter_test_utf8_valid(state.notification, strlen(state.notification)), true);
+    TEST_CHECK(declarative_reporter_test_utf8_valid(state.log, strlen(state.log)), true);
+
     free(primary);
 
     state.throw_notification = true;

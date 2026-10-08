@@ -87,7 +87,13 @@ TEST_FUNC(daemon_io_queue_growth_rejection_finalizes_once,
     TEST_CHECK(__atomic_load_n(&daemon_io_test_finalizer_count, __ATOMIC_RELAXED), 1U);
     TEST_CHECK(__atomic_load_n(&daemon_io_test_close_count, __ATOMIC_RELAXED), 1U);
     TEST_CHECK(__atomic_load_n(&daemon_io_test_admission_release_count, __ATOMIC_RELAXED), 1U);
-    TEST_CHECK(__atomic_load_n(&daemon_io_test_reservation_cancel_count, __ATOMIC_RELAXED), 1U);
+    TEST_CHECK(__atomic_load_n(&daemon_io_test_reservation_cancel_count, __ATOMIC_RELAXED), 0U);
+    char response[64] = {0};
+    size_t response_length = 0;
+    bool failed = false;
+    TEST_CHECK(daemon_test_read_response(pair[1], response, sizeof(response), &response_length, &failed), true);
+    TEST_CHECK(failed, true);
+    TEST_CHECK(strstr(response + 1, "not dispatched") != NULL, true);
     close(pair[1]);
     TEST_CHECK(daemon_io_end(), true);
     g_event_queue_test_fail_allocation = false;

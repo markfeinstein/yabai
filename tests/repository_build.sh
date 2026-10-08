@@ -35,7 +35,8 @@ WORK=$TMP/work
 mkdir -p "$WORK" "$TOOL_ROOT/tools" "$TOOL_ROOT/attacker"
 cp "$ROOT/makefile" "$WORK/makefile"
 for tree in src assets examples doc scripts; do cp -R "$ROOT/$tree" "$WORK/$tree"; done
-mkdir -p "$WORK/bin" "$WORK/release" "$WORK/deploy"
+mkdir -p "$WORK/tests" "$WORK/bin" "$WORK/release" "$WORK/deploy"
+cp "$ROOT/tests/doc_contract.sh" "$WORK/tests/doc_contract.sh"
 LOG=$TOOL_ROOT/tools.log
 XCRUN_LOG=$TMP/xcrun.log
 VERIFY_COUNT=$TMP/verify-count
@@ -147,7 +148,14 @@ cat > "$TOOL_ROOT/tools/asciidoctor" <<'TOOL'
 set -eu
 out=; previous=
 for arg in "$@"; do [ "$previous" = -o ] && out=$arg; previous=$arg; done
-printf 'manual\n' > "$out"
+cp doc/yabai.1 "$out"
+TOOL
+cat > "$TOOL_ROOT/tools/asciidoctor-bad" <<'TOOL'
+#!/bin/sh
+set -eu
+out=; previous=
+for arg in "$@"; do [ "$previous" = -o ] && out=$arg; previous=$arg; done
+printf 'noncanonical manual\n' > "$out"
 TOOL
 cat > "$TOOL_ROOT/tools/python" <<'TOOL'
 #!/bin/sh
@@ -233,7 +241,8 @@ test "$before" = "$after"
 grep -F 'xcrun-arg:./src/manifest.m' "$XCRUN_LOG" >/dev/null
 grep -F 'xcrun-arg:./bin/release/osax/generated.c' "$XCRUN_LOG" >/dev/null
 
-# Real tar layout is installer-compatible; failed creation preserves the old final.
+# Real tar layout is installer-compatible; canonical man parity is required and failed creation preserves the old final.
+if run_make "ASCIIDOCTOR=$TOOL_ROOT/tools/asciidoctor-bad" "TAR=/usr/bin/tar" archive >/dev/null 2>&1; then exit 1; fi
 run_make "TAR=/usr/bin/tar" archive >/dev/null
 ARCHIVE=$WORK/release/yabai-v-test.tar.gz
 /usr/bin/tar -tzf "$ARCHIVE" | grep -qx 'archive/bin/yabai'

@@ -52,8 +52,8 @@ CFStringRef window_display_uuid(uint32_t wid)
 {
     CFStringRef uuid = SLSCopyManagedDisplayForWindow(g_connection, wid);
     if (!uuid) {
-        CGRect frame;
-        SLSGetWindowBounds(g_connection, wid, &frame);
+        CGRect frame = CGRectZero;
+        if (SLSGetWindowBounds(g_connection, wid, &frame) != kCGErrorSuccess) return NULL;
         uuid = SLSCopyBestManagedDisplayForRect(g_connection, frame);
     }
     return uuid;
@@ -183,16 +183,19 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
 
     if (flags == 0x0) flags |= ~flags;
 
-    int connection;
-    pid_t pid;
-    uint64_t sid;
-    int level;
-    int sub_level;
+    int connection = 0;
+    pid_t pid = 0;
+    uint64_t sid = 0;
+    int level = 0;
+    int sub_level = 0;
 
     if ((flags & WINDOW_PROPERTY_PID) ||
         (flags & WINDOW_PROPERTY_APP)) {
-        SLSGetWindowOwner(g_connection, wid, &connection);
-        SLSConnectionGetPID(connection, &pid);
+        if (SLSGetWindowOwner(g_connection, wid, &connection) != kCGErrorSuccess ||
+            SLSConnectionGetPID(connection, &pid) != kCGErrorSuccess) {
+            connection = 0;
+            pid = 0;
+        }
     }
 
     if ((flags & WINDOW_PROPERTY_DISPLAY) ||
@@ -230,7 +233,8 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         static char process_name[PROC_PIDPATHINFO_MAXSIZE];
-        proc_name(pid, process_name, sizeof(process_name));
+        process_name[0] = '\0';
+        if (pid > 0) proc_name(pid, process_name, sizeof(process_name));
 
         char *app = process_name;
         char *escaped_app = ts_string_escape(app);
@@ -259,8 +263,8 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_FRAME) {
         if (did_output) fprintf(rsp, ",\n");
 
-        CGRect frame;
-        SLSGetWindowBounds(g_connection, wid, &frame);
+        CGRect frame = CGRectZero;
+        (void) SLSGetWindowBounds(g_connection, wid, &frame);
 
         fprintf(rsp, "\t\"frame\":{\n\t\t\"x\":%.4f,\n\t\t\"y\":%.4f,\n\t\t\"w\":%.4f,\n\t\t\"h\":%.4f\n\t}", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
         did_output = true;

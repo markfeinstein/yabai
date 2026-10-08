@@ -39,6 +39,20 @@ extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
 extern bool g_verbose;
 
+#ifdef TESTS
+static char *(*message_string_copy)(char *) = string_copy;
+#else
+#define message_string_copy string_copy
+#endif
+
+static bool message_assign_string(char **target, char *value)
+{
+    char *copy = message_string_copy(value);
+    if (!copy) return false;
+    *target = copy;
+    return true;
+}
+
 #define DOMAIN_CONFIG  "config"
 #define DOMAIN_DISPLAY "display"
 #define DOMAIN_SPACE   "space"
@@ -2246,6 +2260,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot move space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot move space due to an error with the scripting-addition.\n");
+                } else if (result == SPACE_OP_ERROR_PARTIAL_COMMIT) {
+                    daemon_fail(rsp, "space move partially committed and rollback failed; topology reconciliation was requested.\n");
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
+                    declarative_configuration_request_reconcile();
                 } else {
                     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
                     declarative_configuration_request_reconcile();
@@ -2263,6 +2281,10 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot swap space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
                     daemon_fail(rsp, "cannot swap space due to an error with the scripting-addition.\n");
+                } else if (result == SPACE_OP_ERROR_PARTIAL_COMMIT) {
+                    daemon_fail(rsp, "space swap partially committed and rollback failed; topology reconciliation was requested.\n");
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
+                    declarative_configuration_request_reconcile();
                 } else if (result == SPACE_OP_ERROR_MISSING_SRC || result == SPACE_OP_ERROR_MISSING_DST) {
                     daemon_fail(rsp, "cannot swap spaces because a managed view is unavailable.\n");
                 } else if (result == SPACE_OP_ERROR_WINDOW_SERVER) {
@@ -2504,7 +2526,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             !token_equals(command, COMMAND_WINDOW_CLOSE) &&
             !token_equals(command, COMMAND_WINDOW_MINIMIZE) &&
             !token_equals(command, COMMAND_WINDOW_DEMINIMIZE) &&
-            !token_equals(command, COMMAND_WINDOW_TOGGLE)) {
+            !token_equals(command, COMMAND_WINDOW_TOGGLE) &&
+            !token_equals(command, COMMAND_WINDOW_SCRATCHPAD)) {
             daemon_fail(rsp, "could not locate the window to act on!\n");
             return;
         }
@@ -2766,7 +2789,9 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 }
             } else if (token_equals(value, ARGUMENT_WINDOW_TOGGLE_NATIVE)) {
                 if (acting_window) {
-                    window_manager_toggle_window_native_fullscreen(acting_window);
+                    if (!window_manager_toggle_window_native_fullscreen(acting_window)) {
+                        daemon_fail(rsp, "could not toggle native fullscreen before the transition timeout.\n");
+                    }
                 } else {
                     daemon_fail(rsp, "could not locate the window to act on!\n");
                 }
@@ -2852,10 +2877,15 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             char *label;
             struct token token = get_token(&message);
             if (token_is_valid(token) && token_equals(token, ARGUMENT_WINDOW_SCRATCHPAD_RECOVER)) {
-                window_manager_scratchpad_recover_windows();
+                if (!window_manager_scratchpad_recover_windows()) {
+                    daemon_fail(rsp, "could not recover all scratchpad windows.\n");
+                }
+            } else if (!acting_window) {
+                daemon_fail(rsp, "could not locate the window to act on!\n");
             } else if (parse_label(rsp, token, LABEL_WINDOW, &label)) {
                 if (label) {
                     if (!window_manager_set_scratchpad_for_window(&g_window_manager, acting_window, label)) {
+                        free(label);
                         daemon_fail(rsp, "the given scratchpad is already assigned to a different window!\n");
                     }
                 } else {
@@ -2870,13 +2900,24 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
     }
 }
 
-static void handle_domain_query(FILE *rsp, struct token domain, char *message)
+static bool query_reject_trailing_arguments(FILE *rsp, char **message)
+{
+    struct token trailing = get_token(message);
+    if (!token_is_valid(trailing)) return false;
+    daemon_fail(rsp, "query command does not accept trailing argument '%.*s'.\n",
+                trailing.length, trailing.text);
+    return true;
+}
+
+static void handle_domain_query(FILE *rsp, struct token domain, char *message, size_t message_length)
 {
     TIME_FUNCTION;
 
+    char *wire = message;
     struct token command = get_token(&message);
     if (token_equals(command, COMMAND_QUERY_DAEMON_IDENTITY)) {
-        if (token_is_valid(get_token(&message))) {
+        static const char exact[] = COMMAND_QUERY_DAEMON_IDENTITY "\0";
+        if (message_length != sizeof(exact) || memcmp(wire, exact, sizeof(exact)) != 0) {
             daemon_fail(rsp, "query --daemon-identity does not accept trailing arguments.\n");
             return;
         }
@@ -2902,6 +2943,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             display_serialize(rsp, acting_did, properties.flags);
             fprintf(rsp, "\n");
         } else if (token_equals(option, ARGUMENT_QUERY_SPACE)) {
@@ -2916,6 +2958,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             display_serialize(rsp, space_display_id(acting_sid), properties.flags);
             fprintf(rsp, "\n");
         } else if (token_equals(option, ARGUMENT_QUERY_WINDOW)) {
@@ -2930,6 +2973,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (acting_window) {
                 display_serialize(rsp, window_display_id(acting_window->id), properties.flags);
                 fprintf(rsp, "\n");
@@ -2958,6 +3002,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (!space_manager_query_spaces_for_display(rsp, acting_did, properties.flags)) {
                 daemon_fail(rsp, "could not retrieve spaces for display.\n");
             }
@@ -2973,6 +3018,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (!space_manager_query_space(rsp, acting_sid, properties.flags)) {
                 daemon_fail(rsp, "could not retrieve space details.\n");
             }
@@ -2988,6 +3034,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (!acting_window) {
                 daemon_fail(rsp, "could not find window to retrieve space details.\n");
             } else if (!space_manager_query_spaces_for_window(rsp, acting_window, properties.flags)) {
@@ -3015,6 +3062,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (!window_manager_query_windows_for_display(rsp, acting_did, properties.flags)) {
                 daemon_fail(rsp, "could not retrieve windows for display.\n");
             }
@@ -3030,6 +3078,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (!window_manager_query_windows_for_spaces(rsp, &acting_sid, 1, properties.flags)) {
                 daemon_fail(rsp, "could not retrieve windows for space.\n");
             }
@@ -3045,6 +3094,7 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
                 }
             }
 
+            if (query_reject_trailing_arguments(rsp, &message)) return;
             if (acting_window) {
                 window_serialize(rsp, acting_window, properties.flags);
                 fprintf(rsp, "\n");
@@ -3061,13 +3111,37 @@ static void handle_domain_query(FILE *rsp, struct token domain, char *message)
     }
 }
 
+static bool message_parse_key_once(FILE *rsp, const char *key, uint64_t *seen,
+                                   const char *const *known_keys, size_t known_key_count)
+{
+    for (size_t i = 0; i < known_key_count; ++i) {
+        if (!string_equals(key, known_keys[i])) continue;
+        uint64_t mask = 1ULL << i;
+        if (*seen & mask) {
+            daemon_fail(rsp, "duplicate key '%s'\n", key);
+            return false;
+        }
+        *seen |= mask;
+        break;
+    }
+    return true;
+}
+
 static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct token token)
 {
+    const char *const known_keys[] = {
+        ARGUMENT_RULE_KEY_LABEL, ARGUMENT_RULE_KEY_SCRATCHPAD, ARGUMENT_RULE_KEY_APP,
+        ARGUMENT_RULE_KEY_TITLE, ARGUMENT_RULE_KEY_ROLE, ARGUMENT_RULE_KEY_SUBROLE,
+        ARGUMENT_RULE_KEY_DISPLAY, ARGUMENT_RULE_KEY_SPACE, ARGUMENT_RULE_KEY_GRID,
+        ARGUMENT_RULE_KEY_OPACITY, ARGUMENT_RULE_KEY_MANAGE, ARGUMENT_RULE_KEY_STICKY,
+        ARGUMENT_RULE_KEY_MFF, ARGUMENT_RULE_KEY_SUB_LAYER, ARGUMENT_RULE_KEY_FULLSCR
+    };
     TIME_FUNCTION;
 
     char *unsupported_exclusion = NULL;
     bool did_parse = true;
     bool has_filter = false;
+    uint64_t seen = 0;
 
     for (; token_is_valid(token); token = get_token(message)) {
         char *key = NULL;
@@ -3087,9 +3161,18 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             continue;
         }
 
+        if (!message_parse_key_once(rsp, key, &seen, known_keys, array_count(known_keys))) {
+            did_parse = false;
+            continue;
+        }
+
         if (string_equals(key, ARGUMENT_RULE_KEY_LABEL)) {
             if (exclusion) unsupported_exclusion = key;
-            rule->label = string_copy(value);
+            if (!message_assign_string(&rule->label, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
         } else if (string_equals(key, ARGUMENT_RULE_KEY_SCRATCHPAD)) {
             if (exclusion) unsupported_exclusion = key;
 
@@ -3101,16 +3184,22 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
                 }
             }
 
-            if (valid) {
-                rule->effects.scratchpad = string_copy(value);
+            if (valid && message_assign_string(&rule->effects.scratchpad, value)) {
                 rule->effects.manage = RULE_PROP_OFF;
+            } else if (valid) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
             } else {
                 daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);
                 did_parse = false;
             }
         } else if (string_equals(key, ARGUMENT_RULE_KEY_APP)) {
             has_filter = true;
-            rule->app = string_copy(value);
+            if (!message_assign_string(&rule->app, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
             if (exclusion) rule_set_flag(rule, RULE_APP_EXCLUDE);
             if (regcomp(&rule->app_regex, value, REG_EXTENDED) == 0) {
                 rule_set_flag(rule, RULE_APP_VALID);
@@ -3120,7 +3209,11 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             }
         } else if (string_equals(key, ARGUMENT_RULE_KEY_TITLE)) {
             has_filter = true;
-            rule->title = string_copy(value);
+            if (!message_assign_string(&rule->title, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
             if (exclusion) rule_set_flag(rule, RULE_TITLE_EXCLUDE);
             if (regcomp(&rule->title_regex, value, REG_EXTENDED) == 0) {
                 rule_set_flag(rule, RULE_TITLE_VALID);
@@ -3130,7 +3223,11 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             }
         } else if (string_equals(key, ARGUMENT_RULE_KEY_ROLE)) {
             has_filter = true;
-            rule->role = string_copy(value);
+            if (!message_assign_string(&rule->role, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
             if (exclusion) rule_set_flag(rule, RULE_ROLE_EXCLUDE);
             if (regcomp(&rule->role_regex, value, REG_EXTENDED) == 0) {
                 rule_set_flag(rule, RULE_ROLE_VALID);
@@ -3140,7 +3237,11 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             }
         } else if (string_equals(key, ARGUMENT_RULE_KEY_SUBROLE)) {
             has_filter = true;
-            rule->subrole = string_copy(value);
+            if (!message_assign_string(&rule->subrole, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
             if (exclusion) rule_set_flag(rule, RULE_SUBROLE_EXCLUDE);
             if (regcomp(&rule->subrole_regex, value, REG_EXTENDED) == 0) {
                 rule_set_flag(rule, RULE_SUBROLE_VALID);
@@ -3350,8 +3451,13 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
 
     struct token command = get_token(&message);
     if (token_equals(command, COMMAND_SIGNAL_ADD)) {
+        const char *const known_keys[] = {
+            ARGUMENT_SIGNAL_KEY_LABEL, ARGUMENT_SIGNAL_KEY_APP, ARGUMENT_SIGNAL_KEY_TITLE,
+            ARGUMENT_SIGNAL_KEY_ACTIVE, ARGUMENT_SIGNAL_KEY_ACTION, ARGUMENT_SIGNAL_KEY_EVENT
+        };
         char *unsupported_exclusion = NULL;
         bool did_parse = true;
+        uint64_t seen = 0;
         bool has_command = false;
         bool has_signal_type = false;
         enum signal_type signal_type = SIGNAL_TYPE_UNKNOWN;
@@ -3375,11 +3481,24 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
                 continue;
             }
 
+            if (!message_parse_key_once(rsp, key, &seen, known_keys, array_count(known_keys))) {
+                did_parse = false;
+                continue;
+            }
+
             if (string_equals(key, ARGUMENT_SIGNAL_KEY_LABEL)) {
                 if (exclusion) unsupported_exclusion = key;
-                signal.label = string_copy(value);
+                if (!message_assign_string(&signal.label, value)) {
+                    daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                    did_parse = false;
+                    continue;
+                }
             } else if (string_equals(key, ARGUMENT_SIGNAL_KEY_APP)) {
-                signal.app = string_copy(value);
+                if (!message_assign_string(&signal.app, value)) {
+                    daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                    did_parse = false;
+                    continue;
+                }
                 signal.app_regex_exclude = exclusion;
                 signal.app_regex_valid = regcomp(&signal.app_regex, value, REG_EXTENDED) == 0;
                 if (!signal.app_regex_valid) {
@@ -3387,7 +3506,11 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
                     did_parse = false;
                 }
             } else if (string_equals(key, ARGUMENT_SIGNAL_KEY_TITLE)) {
-                signal.title = string_copy(value);
+                if (!message_assign_string(&signal.title, value)) {
+                    daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                    did_parse = false;
+                    continue;
+                }
                 signal.title_regex_exclude = exclusion;
                 signal.title_regex_valid = regcomp(&signal.title_regex, value, REG_EXTENDED) == 0;
                 if (!signal.title_regex_valid) {
@@ -3409,7 +3532,11 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
                 if (exclusion) unsupported_exclusion = key;
 
                 has_command = true;
-                signal.command = string_copy(value);
+                if (!message_assign_string(&signal.command, value)) {
+                    daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                    did_parse = false;
+                    continue;
+                }
             } else if (string_equals(key, ARGUMENT_SIGNAL_KEY_EVENT)) {
                 if (exclusion) unsupported_exclusion = key;
 
@@ -3653,7 +3780,8 @@ void handle_message(FILE *rsp, char *message, size_t message_length)
     } else if (token_equals(domain, DOMAIN_WINDOW)) {
         handle_domain_window(rsp, domain, message);
     } else if (token_equals(domain, DOMAIN_QUERY)) {
-        handle_domain_query(rsp, domain, message);
+        handle_domain_query(rsp, domain, message,
+                            message_length - (size_t) (message - wire));
     } else if (token_equals(domain, DOMAIN_RULE)) {
         handle_domain_rule(rsp, domain, message);
     } else if (token_equals(domain, DOMAIN_SIGNAL)) {
@@ -3673,8 +3801,8 @@ static void message_loop_send_overloaded(int fd)
 {
     static const char overloaded[] = { DAEMON_MESSAGE_FAILURE_MARKER,
                                        't','o','o',' ','m','a','n','y',' ','p','e','n','d','i','n','g',' ','m','e','s','s','a','g','e','s','.','\n' };
-    (void) socket_io_write_all_until(fd, overloaded, sizeof(overloaded),
-                                     socket_io_deadline_after_ms(DAEMON_IO_WRITE_TIMEOUT_MS));
+    (void) daemon_response_write_frame_until(fd, overloaded, sizeof(overloaded), true,
+                                              socket_io_deadline_after_ms(DAEMON_IO_WRITE_TIMEOUT_MS));
 }
 
 #pragma clang diagnostic push

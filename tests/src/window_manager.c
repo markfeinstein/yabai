@@ -37,6 +37,74 @@ TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
     window_manager_window_is_ordered_in = saved_query;
 });
 
+static char *window_manager_test_string_copy_failure(char *value)
+{
+    (void) value;
+    return NULL;
+}
+
+TEST_FUNC(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot,
+{
+    __auto_type saved_copy = rule_effects_string_copy;
+    rule_effects_string_copy = window_manager_test_string_copy_failure;
+
+    struct rule_effects effects = { .manage = RULE_PROP_ON, .scratchpad = "next" };
+    struct rule_effects aggregate = { .manage = RULE_PROP_OFF, .scratchpad = string_copy("prior") };
+    char *prior = aggregate.scratchpad;
+    struct rule rule = {
+        .effects = effects, .flags = RULE_ONE_SHOT, .owner = RULE_OWNER_RUNTIME
+    };
+    TEST_CHECK(rule_combine_rule_effects(&rule, &aggregate, NULL), RULE_FOLD_RESOURCE);
+    TEST_CHECK(aggregate.manage, RULE_PROP_OFF);
+    TEST_CHECK(aggregate.scratchpad, prior);
+    TEST_CHECK(strcmp(aggregate.scratchpad, "prior"), 0);
+
+    struct window_manager wm = {0};
+    struct application application = { .name = "App" };
+    struct window window = { .id = 42, .is_root = true, .application = &application };
+    buf_push(wm.rules, rule);
+    window_manager_apply_manage_rules_to_window(&g_space_manager, &wm, &window,
+                                                 "title", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(rule_check_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE), false);
+    window_manager_apply_rules_to_window(&g_space_manager, &wm, &window,
+                                          "title", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(rule_check_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE), false);
+
+    wm.rules[0].owner = RULE_OWNER_NATIVE;
+    window_manager_apply_rules_to_window(&g_space_manager, &wm, &window,
+                                          "title", "AXWindow", "AXStandardWindow", true, 0);
+    TEST_CHECK(rule_check_flag(&wm.rules[0], RULE_ONE_SHOT_REMOVE), false);
+
+    free(prior);
+    buf_free(wm.rules);
+    rule_effects_string_copy = saved_copy;
+});
+
+TEST_FUNC(rule_scratchpad_application_copy_failure_is_atomic,
+{
+    __auto_type saved_copy = window_manager_rule_scratchpad_copy;
+    struct window_manager wm = {0};
+    struct window window = { .id = 51, .scratchpad = NULL };
+    char *label = string_copy("prior");
+    buf_push(wm.scratchpad_window, ((struct scratchpad) { .label = label, .window = &window }));
+    window.scratchpad = label;
+    struct rule_effects effects = { .scratchpad = "next", .mff = RULE_PROP_ON };
+
+    window_manager_rule_scratchpad_copy = window_manager_test_string_copy_failure;
+    window_manager_apply_rule_effects_to_window(&g_space_manager, &wm, &window, &effects);
+    TEST_CHECK(window.scratchpad, label);
+    TEST_CHECK(buf_len(wm.scratchpad_window), 1);
+    TEST_CHECK(wm.scratchpad_window[0].label, label);
+    TEST_CHECK(window_check_rule_flag(&window, WINDOW_RULE_MFF), false);
+    TEST_CHECK(window_manager_set_scratchpad_for_window(&wm, &window, NULL), false);
+    TEST_CHECK(window.scratchpad, label);
+    TEST_CHECK(buf_len(wm.scratchpad_window), 1);
+
+    window_manager_rule_scratchpad_copy = saved_copy;
+    free(label);
+    buf_free(wm.scratchpad_window);
+});
+
 TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
 {
     struct window_manager wm = {0};
@@ -59,6 +127,98 @@ TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
     TEST_CHECK(table_find(&wm.window, &window.id), &window);
     table_free(&wm.application);
     table_free(&wm.window);
+});
+
+TEST_FUNC(window_selector_area_comparison_preserves_fractional_and_zero_geometry,
+{
+    struct space_manager sm = {0};
+    struct window_manager wm = {0};
+    space_manager_test_active_space_id = 91;
+    table_init(&sm.view, 4, hash_view, compare_view);
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+
+    struct window first_window = { .id = 41 };
+    struct window second_window = { .id = 42 };
+    struct window_node first = {
+        .window_list = {41}, .window_order = {41}, .window_count = 1,
+        .area = {0, 0, 0.5f, 0.5f}
+    };
+    struct window_node second = {
+        .window_list = {42}, .window_order = {42}, .window_count = 1,
+        .area = {0, 0, 0.75f, 0.75f}
+    };
+    struct window_node root = { .left = &first, .right = &second };
+    first.parent = &root;
+    second.parent = &root;
+    struct view view = { .sid = 91, .layout = VIEW_BSP, .root = &root };
+
+    table_add(&sm.view, &view.sid, &view);
+    table_add(&wm.window, &first_window.id, &first_window);
+    table_add(&wm.window, &second_window.id, &second_window);
+
+    TEST_CHECK(window_manager_find_largest_managed_window(&sm, &wm), &second_window);
+    TEST_CHECK(window_manager_find_smallest_managed_window(&sm, &wm), &first_window);
+
+    first.area.w = first.area.h = 0.0f;
+    second.area.w = second.area.h = 0.0f;
+    TEST_CHECK(window_manager_find_largest_managed_window(&sm, &wm), &first_window);
+    TEST_CHECK(window_manager_find_smallest_managed_window(&sm, &wm), &second_window);
+
+    first.area.w = first.area.h = 1000000.5f;
+    second.area.w = second.area.h = 999999.5f;
+    TEST_CHECK(window_manager_find_largest_managed_window(&sm, &wm), &first_window);
+    TEST_CHECK(window_manager_find_smallest_managed_window(&sm, &wm), &second_window);
+
+    table_free(&wm.window);
+    table_free(&sm.view);
+    space_manager_test_active_space_id = 0;
+});
+
+static int space_move_pair_test_calls;
+static bool space_move_pair_test_results[3];
+static bool space_move_pair_test_send(uint64_t sid, uint64_t after_sid, bool focus)
+{
+    (void) sid;
+    (void) after_sid;
+    (void) focus;
+    return space_move_pair_test_results[space_move_pair_test_calls++];
+}
+
+TEST_FUNC(space_move_pair_stops_rolls_back_and_reports_partial_commit,
+{
+    space_manager_test_move_space_after_space = space_move_pair_test_send;
+    bool partial_commit = false;
+
+    space_move_pair_test_calls = 0;
+    space_move_pair_test_results[0] = false;
+    TEST_CHECK(space_manager_move_space_pair(1, 2, false, 3, 4, true, 5, &partial_commit), false);
+    TEST_CHECK(space_move_pair_test_calls, 1);
+    TEST_CHECK(partial_commit, false);
+
+    space_move_pair_test_calls = 0;
+    space_move_pair_test_results[0] = true;
+    space_move_pair_test_results[1] = false;
+    space_move_pair_test_results[2] = true;
+    TEST_CHECK(space_manager_move_space_pair(1, 2, false, 3, 4, true, 5, &partial_commit), false);
+    TEST_CHECK(space_move_pair_test_calls, 3);
+    TEST_CHECK(partial_commit, false);
+
+    space_move_pair_test_calls = 0;
+    space_move_pair_test_results[0] = true;
+    space_move_pair_test_results[1] = false;
+    space_move_pair_test_results[2] = false;
+    TEST_CHECK(space_manager_move_space_pair(1, 2, false, 3, 4, true, 5, &partial_commit), false);
+    TEST_CHECK(space_move_pair_test_calls, 3);
+    TEST_CHECK(partial_commit, true);
+
+    space_move_pair_test_calls = 0;
+    space_move_pair_test_results[0] = true;
+    space_move_pair_test_results[1] = true;
+    TEST_CHECK(space_manager_move_space_pair(1, 2, false, 3, 4, true, 5, &partial_commit), true);
+    TEST_CHECK(space_move_pair_test_calls, 2);
+    TEST_CHECK(partial_commit, false);
+
+    space_manager_test_move_space_after_space = NULL;
 });
 
 static uint64_t window_manager_test_warp_space(uint32_t wid)
@@ -764,7 +924,7 @@ TEST_FUNC(window_manager_warp_success_state_and_reconcile_matrix,
     TEST_CHECK(general_view.insertion_point, 13U);
     TEST_CHECK(general_root->split, SPLIT_Y);
     TEST_CHECK(general_root->child, CHILD_FIRST);
-    TEST_CHECK(general_root->ratio == 0.4f, true);
+    TEST_CHECK(general_root->ratio == 0.5f, true);
     TEST_CHECK(memcmp(&general_root->area, &(struct area) { 0, 0, 800, 300 }, sizeof(struct area)), 0);
     TEST_CHECK(general_root->left != NULL && general_root->right != NULL, true);
     TEST_CHECK(general_root->left->parent, general_root);

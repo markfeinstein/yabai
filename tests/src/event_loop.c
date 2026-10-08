@@ -802,6 +802,15 @@ static bool launch_path_empty_inventory(struct application *application, uint32_
     return true;
 }
 
+static int launch_path_replay_count;
+static bool launch_path_post_replay(struct process *process, uint64_t generation)
+{
+    (void) process;
+    (void) generation;
+    ++launch_path_replay_count;
+    return true;
+}
+
 static void launch_path_reset_counts(void)
 {
     launch_path_create_count = launch_path_destroy_count = 0;
@@ -824,8 +833,10 @@ static void launch_path_cleanup_application(struct window_manager *wm, pid_t pid
 TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_through_callers,
 {
     struct table saved_applications = g_window_manager.application;
+    struct table saved_lost_front = g_window_manager.application_lost_front_switched_event;
     struct table saved_processes = g_process_manager.process;
     struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    uint64_t saved_front_generation = g_process_manager.front_switch_generation;
     __auto_type saved_ax_create = application_create_ax_element;
     __auto_type saved_hidden = application_create_is_hidden;
     __auto_type saved_connection = application_create_connection;
@@ -840,11 +851,13 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     __auto_type saved_observable = event_loop_test_application_observable;
     __auto_type saved_retry = event_loop_test_application_retry_scheduler;
     __auto_type saved_signal = event_signal_test_push_observer;
+    __auto_type saved_replay = event_loop_test_post_replayed_front_switched;
     __auto_type saved_list = window_manager_test_application_window_list;
     __auto_type saved_inventory = window_manager_test_existing_application_window_list;
     __auto_type saved_startup_observable = window_manager_test_application_is_observable;
 
     g_window_manager.application = (struct table) {0};
+    g_window_manager.application_lost_front_switched_event = (struct table) {0};
     g_process_manager.process = (struct table) {0};
     g_window_manager.applications_to_refresh = NULL;
     application_create_ax_element = launch_path_create_element;
@@ -861,6 +874,7 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     event_loop_test_application_observable = launch_path_true;
     event_loop_test_application_retry_scheduler = launch_path_retry;
     event_signal_test_push_observer = launch_path_signal;
+    event_loop_test_post_replayed_front_switched = launch_path_post_replay;
     window_manager_test_application_window_list = launch_path_empty_window_list;
     window_manager_test_existing_application_window_list = launch_path_empty_inventory;
     window_manager_test_application_is_observable = launch_path_true;
@@ -868,6 +882,8 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
 
     struct process process = { .pid = 5151, .psn = { .highLongOfPSN = 51, .lowLongOfPSN = 52 },
                                .name = "launch-path", .ns_application = (void *) 1 };
+    table_init(&g_window_manager.application_lost_front_switched_event, 4, hash_psn, compare_psn);
+    __atomic_store_n(&g_process_manager.front_switch_generation, 77, __ATOMIC_RELEASE);
 
     for (int rehash = 0; rehash <= 1; ++rehash) {
         table_init(&g_window_manager.application, rehash ? 2 : 4, hash_wm, compare_wm);
@@ -876,6 +892,8 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
         launch_path_reset_counts();
         application_test_reset(kAXErrorSuccess);
         process.launch_retries = 0;
+        launch_path_replay_count = 0;
+        window_manager_add_lost_front_switched_event(&g_window_manager, &process.psn, 77);
         table_test_fail_allocation_after(rehash ? 2 : 0);
         event_loop_dispatch_event((struct event) { .type = APPLICATION_LAUNCHED, .context = &process });
         table_test_fail_allocation_after(-1);
@@ -889,12 +907,16 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
         TEST_CHECK(launch_path_observer_release_count, 1);
         TEST_CHECK(launch_path_retry_count, 1);
         TEST_CHECK(launch_path_signal_count, 0);
+        TEST_CHECK(launch_path_replay_count, 0);
+        TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &process.psn), 77U);
 
         application_test_reset(kAXErrorSuccess);
         event_loop_dispatch_event((struct event) { .type = APPLICATION_LAUNCHED, .context = &process });
         TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) != NULL, true);
         TEST_CHECK(process.launch_retries, 0U);
         TEST_CHECK(launch_path_signal_count, 1);
+        TEST_CHECK(launch_path_replay_count, 1);
+        TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &process.psn), 0U);
         launch_path_cleanup_application(&g_window_manager, process.pid);
         TEST_CHECK(launch_path_create_count, 2);
         TEST_CHECK(launch_path_destroy_count, 2);
@@ -986,9 +1008,12 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     TEST_CHECK(launch_path_retry_count, 1);
 
     table_free(&g_process_manager.process);
+    table_free(&g_window_manager.application_lost_front_switched_event);
     buf_free(g_window_manager.applications_to_refresh);
     g_window_manager.application = saved_applications;
+    g_window_manager.application_lost_front_switched_event = saved_lost_front;
     g_process_manager.process = saved_processes;
+    g_process_manager.front_switch_generation = saved_front_generation;
     g_window_manager.applications_to_refresh = saved_refresh;
     application_create_ax_element = saved_ax_create;
     application_create_is_hidden = saved_hidden;
@@ -1004,6 +1029,7 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     event_loop_test_application_observable = saved_observable;
     event_loop_test_application_retry_scheduler = saved_retry;
     event_signal_test_push_observer = saved_signal;
+    event_loop_test_post_replayed_front_switched = saved_replay;
     window_manager_test_application_window_list = saved_list;
     window_manager_test_existing_application_window_list = saved_inventory;
     window_manager_test_application_is_observable = saved_startup_observable;
@@ -1408,6 +1434,7 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     ProcessSerialNumber saved_processed_front_psn = g_process_manager.front_psn;
     ProcessSerialNumber saved_processed_last_front_psn = g_process_manager.last_front_psn;
     uint64_t saved_generation = g_process_manager.front_switch_generation;
+    uint64_t saved_committed_generation = g_process_manager.committed_front_switch_generation;
     uint64_t saved_front_psn = g_process_manager.front_switch_psn;
     g_window_manager.application = (struct table) {0};
     g_window_manager.application_lost_front_switched_event = (struct table) {0};
@@ -1417,6 +1444,7 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     ProcessSerialNumber psn_a = { .highLongOfPSN = 1, .lowLongOfPSN = 2 };
     ProcessSerialNumber psn_b = { .highLongOfPSN = 9, .lowLongOfPSN = 10 };
     __atomic_store_n(&g_process_manager.front_switch_generation, 10, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_process_manager.committed_front_switch_generation, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, 0, __ATOMIC_RELEASE);
     g_process_manager.front_pid = 777;
 
@@ -1572,10 +1600,31 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     TEST_CHECK(event_loop_post_tracked_application_front_switched(&rejected_process, rejected_generation), false);
     TEST_CHECK(g_process_manager.front_switch_generation, generation_before_rejection + 1);
     TEST_CHECK(g_process_manager.front_switch_psn, process_manager_pack_psn(psn_a));
+    TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &psn_a), rejected_generation);
+    TEST_CHECK(rejected_process.launch_retries, 1U);
+    event_loop_replay_lost_front_switched(&rejected_process);
+    TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &psn_a), rejected_generation);
+    TEST_CHECK(rejected_process.launch_retries, 2U);
+    (void) process_manager_publish_front_switch(&g_process_manager, psn_b);
+    event_loop_replay_lost_front_switched(&rejected_process);
+    TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &psn_a), 0U);
     event_loop_replay_lost_front_switched(&replay_process);
     g_event_queue_test_fail_allocation = false;
     TEST_CHECK(g_event_loop.queue.count, 1U);
     TEST_CHECK(window_manager_find_lost_front_switched_event(&g_window_manager, &psn_b), 0U);
+    struct event blocker_event;
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &blocker_event), true);
+    event_loop_release_event_context(blocker_event.type, blocker_event.context);
+    table_test_fail_allocation_after(0);
+    TEST_CHECK(window_manager_add_lost_front_switched_event(&g_window_manager, &psn_b,
+                                                            g_process_manager.front_switch_generation), false);
+    table_test_fail_allocation_after(-1);
+    event_loop_converge_tracked_front_switched(&replay_process);
+    TEST_CHECK(g_event_loop.queue.count, 1U);
+    struct event fallback_event;
+    TEST_CHECK(event_queue_pop(&g_event_loop.queue, &fallback_event), true);
+    TEST_CHECK(fallback_event.type, APPLICATION_FRONT_SWITCHED);
+    event_loop_release_event_context(fallback_event.type, fallback_event.context);
     TEST_CHECK(pthread_mutex_trylock(&g_process_manager_front_switch_lock), 0);
     pthread_mutex_unlock(&g_process_manager_front_switch_lock);
 
@@ -1593,6 +1642,7 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     g_process_manager.front_psn = saved_processed_front_psn;
     g_process_manager.last_front_psn = saved_processed_last_front_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_process_manager.committed_front_switch_generation, saved_committed_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_psn, __ATOMIC_RELEASE);
 });
 

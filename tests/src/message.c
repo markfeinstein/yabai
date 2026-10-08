@@ -111,6 +111,121 @@ TEST_FUNC(message_utf8_ingress_validation,
     }
 });
 
+static bool message_test_empty_scratchpad_inventory(struct application *application,
+                                                     uint32_t **window_list, int *window_count)
+{
+    (void) application;
+    *window_list = NULL;
+    *window_count = 0;
+    return true;
+}
+
+TEST_FUNC(message_scratchpad_recover_requires_no_window,
+{
+    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    __auto_type saved_inventory = window_manager_scratchpad_existing_application_window_list;
+    window_manager_scratchpad_existing_application_window_list = message_test_empty_scratchpad_inventory;
+    g_window_manager.focused_window_id = 0;
+    char message[] = "--scratchpad\0recover\0";
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        handle_domain_window(response, message_test_token("window"), message);
+        TEST_CHECK(fseek(response, 0, SEEK_END), 0);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    window_manager_scratchpad_existing_application_window_list = saved_inventory;
+    g_window_manager.focused_window_id = saved_focused_window_id;
+});
+
+static char *message_test_string_copy_failure(char *value)
+{
+    (void) value;
+    return NULL;
+}
+
+TEST_FUNC(message_rule_and_signal_allocation_failures_are_atomic,
+{
+    __auto_type saved_copy = message_string_copy;
+    message_string_copy = message_test_string_copy_failure;
+
+    char rule_wire[] = "app=^App$\0\0";
+    char *rule_message = rule_wire + strlen(rule_wire) + 1;
+    struct rule rule = {0};
+    FILE *rule_response = tmpfile();
+    TEST_CHECK(rule_response != NULL, true);
+    if (rule_response) {
+        TEST_CHECK(parse_rule(rule_response, &rule_message, &rule, message_test_token(rule_wire)), false);
+        rewind(rule_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, rule_response);
+        TEST_CHECK(strstr(output, "could not allocate value for key 'app'") != NULL, true);
+        fclose(rule_response);
+    }
+    TEST_CHECK(rule.app == NULL, true);
+    TEST_CHECK(rule_check_flag(&rule, RULE_APP_VALID), false);
+    rule_destroy(&rule);
+
+    struct signal *original_signal_buffer = g_signal_event[SIGNAL_APPLICATION_LAUNCHED];
+    int original_signal_count = buf_len(original_signal_buffer);
+    char signal_wire[] = "--add\0event=application_launched\0action=echo test\0";
+    FILE *signal_response = tmpfile();
+    TEST_CHECK(signal_response != NULL, true);
+    if (signal_response) {
+        handle_domain_signal(signal_response, message_test_token("signal"), signal_wire);
+        rewind(signal_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, signal_response);
+        TEST_CHECK(strstr(output, "could not allocate value for key 'action'") != NULL, true);
+        fclose(signal_response);
+    }
+    TEST_CHECK(buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]), original_signal_count);
+    if (!original_signal_buffer) {
+        buf_free(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]);
+        g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = NULL;
+    }
+
+    message_string_copy = saved_copy;
+});
+
+TEST_FUNC(message_rule_and_signal_reject_duplicate_fields,
+{
+    char duplicate_rule[] = "app=first\0app=second\0";
+    char *rule_message = duplicate_rule + strlen(duplicate_rule) + 1;
+    struct rule rule = {0};
+    FILE *rule_response = tmpfile();
+    TEST_CHECK(rule_response != NULL, true);
+    if (rule_response) {
+        TEST_CHECK(parse_rule(rule_response, &rule_message, &rule, message_test_token(duplicate_rule)), false);
+        rewind(rule_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, rule_response);
+        TEST_CHECK(strstr(output, "duplicate key 'app'") != NULL, true);
+        fclose(rule_response);
+    }
+    rule_destroy(&rule);
+
+    struct signal *original_signal_buffer = g_signal_event[SIGNAL_APPLICATION_LAUNCHED];
+    int original_signal_count = buf_len(original_signal_buffer);
+    char duplicate_signal[] = "--add\0event=application_launched\0action=first\0action=second\0";
+    FILE *signal_response = tmpfile();
+    TEST_CHECK(signal_response != NULL, true);
+    if (signal_response) {
+        handle_domain_signal(signal_response, message_test_token("signal"), duplicate_signal);
+        rewind(signal_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, signal_response);
+        TEST_CHECK(strstr(output, "duplicate key 'action'") != NULL, true);
+        fclose(signal_response);
+    }
+    TEST_CHECK(buf_len(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]), original_signal_count);
+    if (!original_signal_buffer) {
+        buf_free(g_signal_event[SIGNAL_APPLICATION_LAUNCHED]);
+        g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = NULL;
+    }
+});
+
 struct message_reload_test_context
 {
     FILE *response;
@@ -663,6 +778,30 @@ static uint64_t *message_query_window_spaces_failure(uint32_t wid, int *count, b
     return NULL;
 }
 
+TEST_FUNC(message_query_rejects_trailing_arguments,
+{
+    char displays[] = "--displays\0--display\0" "1\0extra\0";
+    char spaces[] = "--spaces\0--display\0" "1\0extra\0";
+    char windows[] = "--windows\0--display\0" "1\0extra\0";
+    struct { char *message; size_t length; } cases[] = {
+        { displays, sizeof(displays) },
+        { spaces, sizeof(spaces) },
+        { windows, sizeof(windows) }
+    };
+
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        FILE *response = tmpfile();
+        TEST_CHECK(response != NULL, true);
+        if (!response) continue;
+        handle_domain_query(response, message_test_token("query"), cases[i].message, cases[i].length);
+        rewind(response);
+        unsigned char marker = 0;
+        TEST_CHECK(fread(&marker, 1, 1, response), 1UL);
+        TEST_CHECK(marker, (unsigned char) FAILURE_MESSAGE[0]);
+        fclose(response);
+    }
+});
+
 TEST_FUNC(message_query_backend_failures_are_reported,
 {
     bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
@@ -679,7 +818,7 @@ TEST_FUNC(message_query_backend_failures_are_reported,
         FILE *response = tmpfile();
         TEST_CHECK(response != NULL, true);
         if (!response) continue;
-        handle_domain_query(response, message_test_token("query"), message);
+        handle_domain_query(response, message_test_token("query"), message, length + 2);
         rewind(response);
         unsigned char marker = 0;
         TEST_CHECK(fread(&marker, 1, 1, response), 1UL);

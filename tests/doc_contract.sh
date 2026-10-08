@@ -8,6 +8,9 @@ generated_doc=${DOC_CONTRACT_MAN:-doc/yabai.1}
 require_source() { grep -Fqx "$1" "$source_doc"; }
 require_man() { grep -Fqx "$1" "$generated_doc"; }
 check_contract() {
+    require_source ':revdate: 2026-10-07'
+    require_man '.\" Generator: Asciidoctor 2.0.26'
+    require_man '.\"      Date: 2026-10-07'
     require_source 'UNIT_SEL             := 0.0 <= <value> <= 1.0'
     require_source 'POSITIVE_UNIT_SEL    := 0.0 < <value> <= 1.0'
     require_source 'SPLIT_RATIO_SEL      := 0.1 <= <value> <= 0.9'
@@ -19,6 +22,8 @@ check_contract() {
     require_source "*active_window_opacity* ['<POSITIVE_UNIT_SEL>']::"
     require_source "*normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::"
     require_source "*window_animation_duration* ['<DURATION_SEL>']::"
+    require_source '    If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection. +'
+    require_source '    A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.'
     require_source "*split_ratio* ['<SPLIT_RATIO_SEL>']::"
     require_source "*--opacity* '<UNIT_SEL>'::"
     require_source "*opacity='<UNIT_SEL>'*::"
@@ -32,20 +37,22 @@ check_contract() {
     require_man 'POSITIVE_UNIT_SEL\&    := 0.0 < <value> <= 1.0'
     require_man 'SPLIT_RATIO_SEL\&      := 0.1 <= <value> <= 0.9'
     require_man 'DURATION_SEL\&         := finite <value> >= 0.0'
-    require_man 'OPACITY_DURATION_SEL\& := finite 0.0 <= <value> <= INT_MAX / 1000 seconds'
+    require_man 'OPACITY_DURATION_SEL := finite 0.0 <= <value> <= INT_MAX / 1000 seconds'
     require_man '\fBmenubar_opacity\fP [\fI<UNIT_SEL>\fP]'
     require_man '\fBwindow_opacity_duration\fP [\fI<OPACITY_DURATION_SEL>\fP]'
     require_man '\fBactive_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]'
     require_man '\fBnormal_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]'
     require_man '\fBwindow_animation_duration\fP [\fI<DURATION_SEL>\fP]'
+    require_man 'If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection.'
+    require_man 'A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.'
     require_man '\fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]'
     require_man '\fB\-\-opacity\fP \fI<UNIT_SEL>\fP'
     require_man '\fBopacity=\fI<UNIT_SEL>\fP\fP'
     require_man '\fB\-\-daemon\-identity\fP'
     grep -Fq 'This command accepts no properties or trailing arguments' "$generated_doc"
-    grep -Fq '\f(CWpid\fP' "$generated_doc"
-    grep -Fq '\f(CWarchitecture\fP' "$generated_doc"
-    grep -Fq '\f(CWuuid\fP' "$generated_doc"
+    grep -Fq '\f(CRpid\fP' "$generated_doc"
+    grep -Fq '\f(CRarchitecture\fP' "$generated_doc"
+    grep -Fq '\f(CRuuid\fP' "$generated_doc"
 
     ! grep -Fq 'FLOAT_SEL' "$source_doc"
     ! grep -Fq 'FLOAT_SEL' "$generated_doc"

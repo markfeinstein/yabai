@@ -118,8 +118,17 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
             (uint32_t)(rule->effects.flags << 16) | (uint32_t)rule->flags);
 }
 
-void rule_combine_effects(struct rule_effects *effects, struct rule_effects *result)
+#ifdef TESTS
+static char *(*rule_effects_string_copy)(char *) = string_copy;
+#else
+#define rule_effects_string_copy string_copy
+#endif
+
+bool rule_combine_effects(struct rule_effects *effects, struct rule_effects *result)
 {
+    char *scratchpad = effects->scratchpad ? rule_effects_string_copy(effects->scratchpad) : NULL;
+    if (effects->scratchpad && !scratchpad) return false;
+
     if (effects->did) {
         result->did = effects->did;
         result->sid = 0;
@@ -150,9 +159,9 @@ void rule_combine_effects(struct rule_effects *effects, struct rule_effects *res
         rule_effects_set_flag(result, RULE_LAYER);
     }
 
-    if (effects->scratchpad) {
+    if (scratchpad) {
         if (result->scratchpad) free(result->scratchpad);
-        result->scratchpad = string_copy(effects->scratchpad);
+        result->scratchpad = scratchpad;
     }
 
     if (effects->manage     != RULE_PROP_UD) result->manage     = effects->manage;
@@ -168,14 +177,14 @@ void rule_combine_effects(struct rule_effects *effects, struct rule_effects *res
         result->grid[4] = effects->grid[4];
         result->grid[5] = effects->grid[5];
     }
+    return true;
 }
 
 enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_effects *result, const struct rule_fold_context *context)
 {
     context = rule_installed_fold_context(rule, context);
     if (rule->owner != RULE_OWNER_NATIVE) {
-        rule_combine_effects(&rule->effects, result);
-        return RULE_FOLD_OK;
+        return rule_combine_effects(&rule->effects, result) ? RULE_FOLD_OK : RULE_FOLD_RESOURCE;
     }
 
     bool has_target = rule->target_unavailable || rule->effects.sid || rule->effects.did;
@@ -199,7 +208,7 @@ enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_e
         contribution.sid = 0;
         rule_effects_clear_flag(&contribution, RULE_FOLLOW_SPACE);
     }
-    rule_combine_effects(&contribution, result);
+    if (!rule_combine_effects(&contribution, result)) return RULE_FOLD_RESOURCE;
 
     if (!valid && rule->warning_state) {
         uint64_t emitted = __atomic_load_n(&rule->warning_state->emitted_generation, __ATOMIC_ACQUIRE);
@@ -285,6 +294,10 @@ void rule_apply(struct rule *rule, const struct rule_fold_context *context)
             if (window_manager_rule_matches_window(rule, window, window_title_ts(window), window_role_ts(window), window_subrole_ts(window))) {
                 if (!folded) {
                     enum rule_fold_result fold = rule_combine_rule_effects(rule, &effects, context);
+                    if (fold == RULE_FOLD_RESOURCE) {
+                        rule_free(effects.scratchpad);
+                        return;
+                    }
                     rule_report_fold_warning(rule, fold);
                     folded = true;
                 }

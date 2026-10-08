@@ -831,6 +831,8 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     }
 
     if (window_node_is_intermediate(child) && !window_node_is_leaf(child)) {
+        parent->split         = child->split;
+        parent->ratio         = child->ratio;
         parent->left          = child->left;
         parent->left->parent  = parent;
         parent->left->zoom    = !g_space_manager.window_zoom_persist
@@ -1269,6 +1271,9 @@ void view_update(struct view *view)
             view->root->area.y += view->top_padding;
             view->root->area.h -= view_padding_sum(view->top_padding, view->bottom_padding);
         }
+
+        view->root->area.w = fmaxf(0.0f, view->root->area.w);
+        view->root->area.h = fmaxf(0.0f, view->root->area.h);
 
         if (view_layout_is_accordion(view->layout)) {
             float min_x = frame.origin.x, max_x = CGRectGetMaxX(frame);

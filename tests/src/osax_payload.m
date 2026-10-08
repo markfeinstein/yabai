@@ -29,6 +29,29 @@ struct alpha_control {
 static struct alpha_control alpha_control;
 static int failures;
 
+@interface PayloadOwnedIvarHolder : NSObject {
+    id _currentSpace;
+}
+@end
+@implementation PayloadOwnedIvarHolder
+@end
+
+@interface PayloadTestSpace : NSObject {
+    uint64_t _spaceID;
+}
+- (instancetype)initWithID:(uint64_t)spaceID;
+- (uint64_t)spid;
+@end
+@implementation PayloadTestSpace
+- (instancetype)initWithID:(uint64_t)spaceID
+{
+    self = [super init];
+    if (self) _spaceID = spaceID;
+    return self;
+}
+- (uint64_t)spid { return _spaceID; }
+@end
+
 #if __arm64__
 @interface PayloadResolverCandidate : NSObject {
     id _displaySpaces;
@@ -584,6 +607,19 @@ static void test_resolver_spans_and_classes(void)
     CHECK(dock_spaces == candidate && resolver_retain_calls == 1 && resolver_log_calls == 1);
     dock_spaces = nil;
 
+#if __arm64__
+    resolver_retain_calls = 0;
+    resolver_log_calls = 0;
+    fixture.globals[1] = candidate;
+    CHECK(adopt_dock_spaces_slot((uint64_t) &fixture.globals[1]));
+    CHECK(dock_spaces == candidate && resolver_retain_calls == 1 && resolver_log_calls == 1);
+    dock_spaces = nil;
+    fixture.globals[1] = (id) &fake_candidate;
+    CHECK(!adopt_dock_spaces_slot((uint64_t) &fixture.globals[1]));
+    CHECK(dock_spaces == nil && resolver_retain_calls == 1 && resolver_log_calls == 1);
+    fixture.globals[1] = candidate;
+#endif
+
     resolver_listed_class = [NSObject class];
     CHECK(!dock_spaces_candidate_is_valid(candidate));
     resolver_listed_class = resolver_returned_class;
@@ -649,7 +685,96 @@ static void test_space_postcondition_waits(void)
     payload_test_space_postcondition_sleep = NULL;
 }
 
-int main(void)
+static void test_same_display_move_postcondition_checks_order(void)
+{
+    PayloadTestSpace *first = [[PayloadTestSpace alloc] initWithID:1];
+    PayloadTestSpace *second = [[PayloadTestSpace alloc] initWithID:2];
+    PayloadTestSpace *third = [[PayloadTestSpace alloc] initWithID:3];
+    NSArray *ordered = @[ first, second, third ];
+    NSArray *wrong = @[ second, first, third ];
+
+    CHECK(space_follows_space_in_list(ordered, 2, 1));
+    CHECK(!space_follows_space_in_list(ordered, 1, 2));
+    CHECK(!space_follows_space_in_list(ordered, 3, 1));
+    CHECK(space_follows_space_in_list(wrong, 1, 2));
+
+    [first release];
+    [second release];
+    [third release];
+}
+
+static int move_postcondition_move_result;
+static int move_postcondition_focus_result;
+static int move_postcondition_move_calls;
+static int move_postcondition_focus_calls;
+static int test_move_postcondition(enum space_postcondition_operation operation, uint64_t space_id,
+                                   CFStringRef source_display, CFStringRef destination_display,
+                                   NSUInteger context_value)
+{
+    (void) space_id;
+    (void) source_display;
+    (void) destination_display;
+    (void) context_value;
+    if (operation == SPACE_POSTCONDITION_MOVE) {
+        ++move_postcondition_move_calls;
+        return move_postcondition_move_result;
+    }
+    if (operation == SPACE_POSTCONDITION_FOCUS) {
+        ++move_postcondition_focus_calls;
+        return move_postcondition_focus_result;
+    }
+    return 0;
+}
+
+static void test_focused_move_requires_order_and_focus_postconditions(void)
+{
+    payload_test_space_postcondition = test_move_postcondition;
+    payload_test_space_postcondition_sleep = test_space_postcondition_sleep;
+
+    move_postcondition_move_calls = move_postcondition_focus_calls = 0;
+    move_postcondition_move_result = 1;
+    move_postcondition_focus_result = 0;
+    CHECK(!wait_for_space_move_postconditions(1, 2, CFSTR("display"), CFSTR("display"), true));
+    CHECK(move_postcondition_move_calls == 1);
+    CHECK(move_postcondition_focus_calls == 50);
+
+    move_postcondition_move_calls = move_postcondition_focus_calls = 0;
+    move_postcondition_focus_result = 1;
+    CHECK(wait_for_space_move_postconditions(1, 2, CFSTR("display"), CFSTR("display"), true));
+    CHECK(move_postcondition_move_calls == 1);
+    CHECK(move_postcondition_focus_calls == 1);
+
+    move_postcondition_move_calls = move_postcondition_focus_calls = 0;
+    CHECK(wait_for_space_move_postconditions(1, 2, CFSTR("source"), CFSTR("destination"), false));
+    CHECK(move_postcondition_move_calls == 1);
+    CHECK(move_postcondition_focus_calls == 0);
+
+    payload_test_space_postcondition = NULL;
+    payload_test_space_postcondition_sleep = NULL;
+}
+
+static void test_owned_ivar_replacement_balances_retain_counts(void)
+{
+    PayloadOwnedIvarHolder *holder = [[PayloadOwnedIvarHolder alloc] init];
+    NSObject *first = [[NSObject alloc] init];
+    NSObject *second = [[NSObject alloc] init];
+
+    CHECK([first retainCount] == 1);
+    CHECK([second retainCount] == 1);
+    replace_owned_ivar_value(holder, "_currentSpace", first);
+    CHECK([first retainCount] == 2);
+    replace_owned_ivar_value(holder, "_currentSpace", second);
+    CHECK([first retainCount] == 1);
+    CHECK([second retainCount] == 2);
+    replace_owned_ivar_value(holder, "_currentSpace", nil);
+    CHECK([second retainCount] == 1);
+
+    [first release];
+    [second release];
+    [holder release];
+}
+
+static int osax_payload_test_main(void)
 {
 #if __arm64__
     test_resolver_scan_bounds();
@@ -657,6 +782,9 @@ int main(void)
     test_resolver_spans_and_classes();
 #endif
     test_space_postcondition_waits();
+    test_same_display_move_postcondition_checks_order();
+    test_focused_move_requires_order_and_focus_postconditions();
+    test_owned_ivar_replacement_balances_retain_counts();
     test_retarget_during_blocked_getter_failure();
     test_retarget_during_blocked_setter_failure();
     test_retarget_after_final_frame_restarts();
@@ -667,4 +795,11 @@ int main(void)
     }
     puts("OSAX payload tests passed (resolver bounds, Space postconditions, fade worker races, and status deadlines)");
     return 0;
+}
+
+int main(void)
+{
+    @autoreleasepool {
+        return osax_payload_test_main();
+    }
 }

@@ -295,9 +295,21 @@ void daemon_io_job_destroy(struct daemon_io_job *job)
 
 static void daemon_io_fail_and_destroy(struct daemon_io_job *job, const char *bytes, size_t length)
 {
-    (void) socket_io_write_all_until(job->fd, bytes, length,
-                                     socket_io_deadline_after_ms(DAEMON_IO_WRITE_DEADLINE_MS));
+    (void) daemon_response_write_frame_until(job->fd, bytes, length, true,
+                                              socket_io_deadline_after_ms(DAEMON_IO_WRITE_DEADLINE_MS));
     daemon_io_job_destroy(job);
+}
+
+void daemon_io_reject(struct daemon_io_job *job)
+{
+    static char rejected[] = { DAEMON_MESSAGE_FAILURE_MARKER,
+                               'm','e','s','s','a','g','e',' ','w','a','s',' ','n','o','t',' ','d','i','s','p','a','t','c','h','e','d','.','\n' };
+    if (!job) return;
+    job->response.bytes = rejected;
+    job->response.length = sizeof(rejected);
+    job->owner = DAEMON_IO_OWNER_WRITER;
+    job->writer_reserved = false;
+    if (!daemon_io_queue_submit_reserved(&g_daemon_io.writers, job)) daemon_io_job_destroy(job);
 }
 
 static void *daemon_io_reader(void *context)
@@ -343,7 +355,9 @@ static void *daemon_io_reader(void *context)
             continue;
         }
         if (!daemon_io_queue_reserve(&g_daemon_io.writers)) {
-            daemon_io_job_destroy(job);
+            static const char unavailable[] = { DAEMON_MESSAGE_FAILURE_MARKER,
+                                                'r','e','s','p','o','n','s','e',' ','w','o','r','k','e','r',' ','u','n','a','v','a','i','l','a','b','l','e','.','\n' };
+            daemon_io_fail_and_destroy(job, unavailable, sizeof(unavailable));
             continue;
         }
         job->writer_reserved = true;
@@ -366,9 +380,10 @@ static void *daemon_io_writer(void *context)
 #ifdef TESTS
         if (daemon_io_writer_worker_test_hook) daemon_io_writer_worker_test_hook();
 #endif
-        if (job->response.bytes && job->response.length) {
-            (void) socket_io_write_all_until(job->fd, job->response.bytes, job->response.length,
-                                             socket_io_deadline_after_ms(DAEMON_IO_WRITE_DEADLINE_MS));
+        if (job->response.bytes) {
+            bool failed = job->response.length && job->response.bytes[0] == DAEMON_MESSAGE_FAILURE_MARKER;
+            (void) daemon_response_write_frame_until(job->fd, job->response.bytes, job->response.length,
+                                                      failed, socket_io_deadline_after_ms(DAEMON_IO_WRITE_DEADLINE_MS));
         }
         daemon_io_job_destroy(job);
     }

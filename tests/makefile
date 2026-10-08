@@ -11,7 +11,7 @@ FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Co
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
-CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m)
+CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h)
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
 SANITIZERS_tsan = -fsanitize=thread,undefined

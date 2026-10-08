@@ -1092,6 +1092,18 @@ static bool declarative_mode_topology_matches(const struct declarative_space_top
                                                const struct declarative_space_topology_entry *current,
                                                size_t current_count);
 
+static bool declarative_reconcile_has_uuidless_identity_drift(
+    const struct declarative_space_target *targets,
+    const struct declarative_space_topology_entry *entries, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        const struct declarative_space_identity *installed = &targets[i].view->declarative_identity;
+        if (declarative_space_identity_valid(installed) && !installed->has_uuid &&
+            !declarative_space_identity_equal(installed, &entries[i].identity)) return true;
+    }
+    return false;
+}
+
 static void declarative_reconcile_diagnostic(char *diagnostic, size_t capacity, const char *message)
 {
     if (diagnostic && capacity) snprintf(diagnostic, capacity, "%s", message ? message : "reconciliation failure");
@@ -1210,6 +1222,14 @@ static enum declarative_reconcile_result declarative_configuration_reconcile_wit
                                          "topology changed during reconciliation");
         goto out;
     }
+    if (declarative_reconcile_has_uuidless_identity_drift(targets, entries, count)) {
+        /* The current topology is safe to publish for native-rule validation,
+         * but the old Space forest cannot be transferred across fallback identities. */
+        declarative_reconcile_publish(&publication);
+        declarative_reconcile_diagnostic(diagnostic, diagnostic_capacity,
+                                         "UUID-less Space identity changed; stale rule targets suppressed");
+        goto out;
+    }
     result = declarative_space_apply_with_effective_publication(targets, count, entries, count,
                                                       &g_space_manager.view,
                                                       &view_contract, &managed_contract, declarative_installed.model,
@@ -1229,7 +1249,8 @@ out:
     declarative_install_free(targets);
     declarative_topology_space_snapshot_destroy(entries);
     declarative_topology_space_snapshot_destroy(verification_entries);
-    /* Topology and rule validation publish only with the successful Space commit. */
+    /* Publication either accompanied a successful Space commit or deliberately
+     * advanced only topology/rule validation after UUID-less identity drift. */
     declarative_rule_fold_context_destroy(fold_context);
     declarative_topology_destroy(&topology);
     declarative_topology_destroy(&verification_topology);

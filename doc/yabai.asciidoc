@@ -10,6 +10,7 @@ endif::[]
 
 yabai(1)
 ========
+:revdate: 2026-10-07
 
 ifdef::env-github[]
 toc::[]
@@ -88,7 +89,7 @@ outside this isolation boundary.
     Success prints `configuration is valid; runtime preparation was not checked`. It checks file input, JSONC syntax, schema, limits and regular expressions, but not display or Space targets, permissions, event resources, runtime labels or other runtime preparation.
 
 *--doctor*::
-    Run bounded, read-only installation diagnostics and exit. Each diagnostic is classified as `PASS`, `WARN`, `FAIL`, or `UNKNOWN`, names the inspection mechanism, and gives a next action. The checks cover the running binary, version, native slices and translation; Accessibility trust; core and optional scripting-addition SIP requirements; the Apple Silicon arm64e boot argument, including when the x86_64 slice runs under Rosetta (omitted only on native Intel); canonical launch agent plist fields read from one no-follow descriptor snapshot, CFBoolean types, safe type, ownership and mode, and a program that resolves to the running yabai executable (a matching path-component symlink warns rather than passes, after both lexical and canonical parent chains are checked and the original path is re-resolved with final identity, owner, group, mode and execute permission revalidated); the known `com.koekeishiya.yabai.plist` and `homebrew.mxcl.yabai.plist` collisions; selected native and legacy configuration readability; and descriptor-snapshot running-binary and scripting-addition bundle/socket metadata. Scripting-addition absence is determined from the top-level `yabai.osax` bundle; once that bundle is observed, missing or raced nested metadata is `UNKNOWN`, not absent. User paths and the socket name are derived from the real uid, or from a valid nonroot `SUDO_UID` when invoked as root, using the passwd database rather than `HOME` or `USER`. During an elevated inspection, permissions are evaluated with POSIX owner/group/other selection using the target uid, primary and resolved supplementary groups, and mode bits; unavailable or unrepresentable group membership remains `UNKNOWN` rather than using root's `access` result. Legacy configuration directories, including symlinks to directories, are skipped according to runtime precedence, while a selected non-regular file fails. launchd loaded/running state and scripting-addition responsiveness remain `UNKNOWN` because doctor does not contact either service. It does not prompt for permissions, contact or load the scripting addition, invoke `sudo`, change launchd services, or inspect skhd. Unavailable privileged information and transient inspection errors are `UNKNOWN`; only permission denial or a contractually absent/invalid state is definitive. Optional prerequisites are warnings. The exit status is zero when there are no `FAIL` results and nonzero otherwise. Output is deliberately limited and does not dump paths, the environment, plist contents, or configuration contents.
+    Run bounded, read-only installation diagnostics and exit. Each diagnostic is classified as `PASS`, `WARN`, `FAIL`, or `UNKNOWN`, names the inspection mechanism, and gives a next action. The checks cover the running binary, version, native slices and translation; Accessibility trust; core and optional scripting-addition SIP requirements; the Apple Silicon arm64e boot argument, including when the x86_64 slice runs under Rosetta (omitted only on native Intel); canonical launch agent plist fields read from one no-follow descriptor snapshot, CFBoolean types, safe type, ownership and mode, and a program that resolves to the running yabai executable (a matching path-component symlink warns rather than passes, after both lexical and canonical parent chains are checked and the original path is re-resolved with final identity, owner, group, mode and execute permission revalidated); the known `com.koekeishiya.yabai.plist` and `homebrew.mxcl.yabai.plist` collisions; selected native and legacy configuration readability; and descriptor-snapshot running-binary and scripting-addition bundle/socket metadata. Scripting-addition absence is determined from the top-level `yabai.osax` bundle; once that bundle is observed, missing or raced nested metadata is `UNKNOWN`, not absent. User paths and the socket name are derived from the real uid, or from a valid nonroot `SUDO_UID` when invoked as root, using the passwd database rather than `HOME` or `USER`. During an elevated inspection, permissions are evaluated by forking a bounded probe, initializing the target user's supplementary groups, dropping to the target uid/gid, and calling `access(2)`, so effective ACL and mode-bit policy is honored. If that target-identity probe is unavailable, a conservative owner/group/other mode-bit fallback uses the target uid plus primary and resolved supplementary groups; unavailable or unrepresentable group membership remains `UNKNOWN` rather than using root's own access result. Legacy configuration directories, including symlinks to directories, are skipped according to runtime precedence, while a selected non-regular file fails. launchd loaded/running state and scripting-addition responsiveness remain `UNKNOWN` because doctor does not contact either service. It does not prompt for permissions, contact or load the scripting addition, invoke `sudo`, change launchd services, or inspect skhd. Unavailable privileged information and transient inspection errors are `UNKNOWN`; only permission denial or a contractually absent/invalid state is definitive. Optional prerequisites are warnings. The exit status is zero when there are no `FAIL` results and nonzero otherwise. Output is deliberately limited and does not dump paths, the environment, plist contents, or configuration contents.
 
 *--verbose*, *-V*::
     Output debug information to stdout.
@@ -457,7 +458,7 @@ Global Settings
 *menubar_style* ['compact|expanded']::
     Set the menu bar status item layout. Default is 'expanded'. +
     'compact': Show one screen outline for the keyboard-focused display's visible space. +
-    'expanded': Show one screen outline for every filtered space, grouped by display, in the menu bar.
+    'expanded': Show a bounded display-grouped interval of filtered spaces around the focused space in the menu bar; when every outline does not fit within the 520-point strip, an `…+N` control represents the omitted spaces.
 
 *menubar_space_filter* ['occupied|all']::
     Select which spaces are shown by the menu bar item and its menu. Default is 'occupied'. +
@@ -529,9 +530,8 @@ Global Settings
 
 *window_animation_duration* ['<DURATION_SEL>']::
     Duration of window frame animation. +
-    If 0.0, the change in dimension is not animated. +
-    Requires Screen Recording permissions. +
-    System Integrity Protection must be partially disabled.
+    If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection. +
+    A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.
 
 *window_animation_easing* ['<EASING>']::
     Easing function to use for window animations. +

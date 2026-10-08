@@ -75,7 +75,8 @@ struct rule_warning_state
 enum rule_fold_result
 {
     RULE_FOLD_OK,
-    RULE_FOLD_WARNING_NEWLY_REQUIRED
+    RULE_FOLD_WARNING_NEWLY_REQUIRED,
+    RULE_FOLD_RESOURCE
 };
 
 struct rule_effects
@@ -130,7 +131,7 @@ static inline void rule_effects_clear_flag(struct rule_effects *e, enum rule_eff
 static inline void rule_effects_set_flag(struct rule_effects *e, enum rule_effects_flag x) { e->flags |= x; }
 
 void rule_serialize(FILE *rsp, struct rule *rule, int index);
-void rule_combine_effects(struct rule_effects *rule_effects, struct rule_effects *result);
+bool rule_combine_effects(struct rule_effects *rule_effects, struct rule_effects *result);
 enum rule_fold_result rule_combine_rule_effects(struct rule *rule, struct rule_effects *result, const struct rule_fold_context *context);
 bool rule_acknowledge_stale_warning(struct rule *rule);
 void rule_report_fold_warning(struct rule *rule, enum rule_fold_result result);

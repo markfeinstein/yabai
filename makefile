@@ -157,7 +157,7 @@ icon: release
 sign: release
 	$(CODESIGN) -fs "$(SIGN_IDENTITY)" '$(RELEASE_BIN)'
 
-archive: man release sign icon
+archive: man-check release sign icon
 	@set -eu; \
 	mkdir -p '$(RELEASE_PATH)'; \
 	stage=$$(mktemp -d '$(RELEASE_PATH)/.archive-stage.XXXXXX'); tmp=; \

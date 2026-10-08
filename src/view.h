@@ -151,11 +151,12 @@ static inline void area_split_pair(enum window_node_split split, int gap, float 
     *left_area = *parent_area;
     *right_area = *parent_area;
 
-    float parent_extent = split == SPLIT_Y ? parent_area->w : parent_area->h;
-    float available_extent = parent_extent - (float) gap;
+    float parent_extent = fmaxf(0.0f, split == SPLIT_Y ? parent_area->w : parent_area->h);
+    float effective_gap = gap > 0 ? fminf((float) gap, parent_extent) : (float) gap;
+    float available_extent = fmaxf(0.0f, parent_extent - effective_gap);
     float left_extent = available_extent * ratio;
     float right_extent = available_extent * (1.0f - ratio);
-    float right_offset = truncf(left_extent + 0.5f) + (float) gap;
+    float right_offset = truncf(left_extent + 0.5f) + effective_gap;
 
     if (split == SPLIT_Y) {
         left_area->w = truncf(left_extent);

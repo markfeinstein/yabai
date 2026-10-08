@@ -747,14 +747,27 @@ static inline float clampf_range(float value, float min, float max)
 
 static CGImageRef cgimage_restore_alpha(CGImageRef image)
 {
-    int width     = CGImageGetWidth(image);
-    int height    = CGImageGetHeight(image);
-    int pitch     = width * 4;
-    uint8_t *data = (uint8_t *) calloc(height * pitch, 1);
+    size_t width = CGImageGetWidth(image);
+    size_t height = CGImageGetHeight(image);
+    if (!width || !height || width > SIZE_MAX / 4) return NULL;
+
+    size_t pitch = width * 4;
+    if (height > SIZE_MAX / pitch) return NULL;
+    uint8_t *data = (uint8_t *) calloc(height, pitch);
+    if (!data) return NULL;
 
     CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    if (!color_space) {
+        free(data);
+        return NULL;
+    }
+
     CGContextRef context = CGBitmapContextCreate(data, width, height, 8, pitch, color_space, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
     CGColorSpaceRelease(color_space);
+    if (!context) {
+        free(data);
+        return NULL;
+    }
     CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
 
 #ifdef __x86_64__
@@ -769,8 +782,10 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
     int32x4_t  mask_ff = vdupq_n_s32(0xff);
 #endif
 
+    size_t pixel_count = height * width;
+    size_t simd_count = pixel_count & ~(size_t) 3;
     uint32_t *pixel = (uint32_t *) data;
-    for (int i = 0; i < height*width; i += 4) {
+    for (size_t i = 0; i < simd_count; i += 4) {
 #ifdef __x86_64__
         __m128i source = _mm_loadu_si128((__m128i *) pixel);
         __m128 r = _mm_cvtepi32_ps(_mm_and_si128(source, mask_ff));
@@ -789,10 +804,11 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
         g = _mm_mul_ps(inv255, _mm_mul_ps(g, a));
         b = _mm_mul_ps(inv255, _mm_mul_ps(b, a));
 
-        __m128i sr = _mm_cvtps_epi32(r);
-        __m128i sg = _mm_slli_epi32(_mm_cvtps_epi32(g),  8);
-        __m128i sb = _mm_slli_epi32(_mm_cvtps_epi32(b), 16);
-        __m128i sa = _mm_slli_epi32(_mm_cvtps_epi32(a), 24);
+        __m128 half = _mm_set1_ps(0.5f);
+        __m128i sr = _mm_cvttps_epi32(_mm_add_ps(r, half));
+        __m128i sg = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(g, half)),  8);
+        __m128i sb = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(b, half)), 16);
+        __m128i sa = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(a, half)), 24);
 
         __m128i color = _mm_or_si128(_mm_or_si128(_mm_or_si128(sr, sg), sb), sa);
         __m128i masked_color = _mm_or_si128(_mm_and_si128(mask, color), _mm_andnot_si128(mask, source));
@@ -815,16 +831,32 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
         g = vmulq_f32(inv255, vmulq_f32(g, a));
         b = vmulq_f32(inv255, vmulq_f32(b, a));
 
-        int32x4_t sr = vcvtnq_s32_f32(r);
-        int32x4_t sg = vshlq_s32(vcvtnq_s32_f32(g), vdupq_n_s32(8));
-        int32x4_t sb = vshlq_s32(vcvtnq_s32_f32(b), vdupq_n_s32(16));
-        int32x4_t sa = vshlq_s32(vcvtnq_s32_f32(a), vdupq_n_s32(24));
+        float32x4_t half = vdupq_n_f32(0.5f);
+        int32x4_t sr = vcvtq_s32_f32(vaddq_f32(r, half));
+        int32x4_t sg = vshlq_s32(vcvtq_s32_f32(vaddq_f32(g, half)), vdupq_n_s32(8));
+        int32x4_t sb = vshlq_s32(vcvtq_s32_f32(vaddq_f32(b, half)), vdupq_n_s32(16));
+        int32x4_t sa = vshlq_s32(vcvtq_s32_f32(vaddq_f32(a, half)), vdupq_n_s32(24));
 
         int32x4_t color = vorrq_s32(vorrq_s32(vorrq_s32(sr, sg), sb), sa);
         int32x4_t masked_color = vorrq_s32(vandq_s32(color, mask), vbicq_s32(source, mask));
         vst1q_s32((int32_t *) pixel, masked_color);
 #endif
         pixel += 4;
+    }
+
+    for (size_t i = simd_count; i < pixel_count; ++i) {
+        uint32_t source = ((uint32_t *) data)[i];
+        uint32_t alpha = (source >> 24) & 0xff;
+        if (!alpha) continue;
+
+        uint32_t red = source & 0xff;
+        uint32_t green = (source >> 8) & 0xff;
+        uint32_t blue = (source >> 16) & 0xff;
+        red = (uint32_t) lroundf(255.0f * (float) red / (float) alpha);
+        green = (uint32_t) lroundf(255.0f * (float) green / (float) alpha);
+        blue = (uint32_t) lroundf(255.0f * (float) blue / (float) alpha);
+        ((uint32_t *) data)[i] = (red & 0xff) | ((green & 0xff) << 8) |
+                                 ((blue & 0xff) << 16) | 0xff000000;
     }
 
     CGImageRef result = CGBitmapContextCreateImage(context);

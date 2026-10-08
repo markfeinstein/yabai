@@ -17,6 +17,9 @@ struct menu_bar_space_builder
     struct menu_bar_window_input *windows;
     size_t window_count;
     size_t window_capacity;
+    uint32_t *raw_window_ids;
+    size_t raw_window_count;
+    bool raw_query_succeeded;
 };
 
 struct menu_bar_display_builder
@@ -49,7 +52,7 @@ struct menu_bar_manager_native_seams
     uint64_t (*display_space_id)(uint32_t did);
     int (*space_type)(int cid, uint64_t sid);
     int (*mission_control_index)(uint64_t sid);
-    uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized);
+    uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized, bool *success);
     uint64_t *(*window_space_list)(uint32_t wid, int *count);
     bool (*window_is_sticky)(uint32_t wid);
     bool (*space_is_fullscreen)(uint64_t sid);
@@ -168,11 +171,13 @@ static int menu_bar_manager_native_mission_control_index(uint64_t sid)
         : space_manager_mission_control_index(sid);
 }
 
-static uint32_t *menu_bar_manager_native_space_window_list(uint64_t sid, int *count, bool include_minimized)
+static uint32_t *menu_bar_manager_native_space_window_list(uint64_t sid, int *count,
+                                                           bool include_minimized, bool *success)
 {
-    return g_menu_bar_manager_native.space_window_list
-        ? g_menu_bar_manager_native.space_window_list(sid, count, include_minimized)
-        : space_window_list(sid, count, include_minimized);
+    if (g_menu_bar_manager_native.space_window_list) {
+        return g_menu_bar_manager_native.space_window_list(sid, count, include_minimized, success);
+    }
+    return space_window_list_for_connection_with_status(&sid, 1, 0, count, include_minimized, success);
 }
 
 static uint64_t *menu_bar_manager_native_window_space_list(uint32_t wid, int *count)
@@ -285,6 +290,7 @@ static void menu_bar_manager_destroy_builders(struct menu_bar_display_builder *d
             struct menu_bar_space_builder *space = &display->space_builders[space_index];
             struct menu_bar_space_input *input = &display->space_inputs[space_index];
             free(space->windows);
+            free(space->raw_window_ids);
             free((void *) input->apps);
         }
 
@@ -388,16 +394,9 @@ static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_
 
     if (!native_spaces || native_space_count <= 0) return true;
 
-    size_t user_space_count = 0;
-    for (int i = 0; i < native_space_count; ++i) {
-        int type = menu_bar_manager_native_space_type(native_spaces[i]);
-        if (type == 0 || type == 4) ++user_space_count;
-    }
-
-    if (!user_space_count) return true;
-
-    display->space_inputs = calloc(user_space_count, sizeof(struct menu_bar_space_input));
-    display->space_builders = calloc(user_space_count, sizeof(struct menu_bar_space_builder));
+    size_t space_capacity = (size_t) native_space_count;
+    display->space_inputs = calloc(space_capacity, sizeof(struct menu_bar_space_input));
+    display->space_builders = calloc(space_capacity, sizeof(struct menu_bar_space_builder));
     if (!display->space_inputs || !display->space_builders) {
         free(display->space_inputs);
         free(display->space_builders);
@@ -407,7 +406,6 @@ static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_
     }
 
     display->input.spaces = display->space_inputs;
-    display->input.space_count = user_space_count;
 
     size_t output_index = 0;
     for (int i = 0; i < native_space_count; ++i) {
@@ -430,6 +428,7 @@ static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_
         ++output_index;
     }
 
+    display->input.space_count = output_index;
     qsort(display->space_inputs, display->input.space_count, sizeof(struct menu_bar_space_input), menu_bar_manager_space_compare);
 
     for (size_t i = 0; i < display->input.space_count; ++i) {
@@ -449,19 +448,28 @@ static bool menu_bar_manager_collect_raw_untracked(struct menu_bar_display_build
             struct menu_bar_space_builder *space = &display->space_builders[space_index];
 
             int raw_window_count = 0;
-            uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(space_input->space_id, &raw_window_count, true);
-            if (!raw_window_list || raw_window_count <= 0) continue;
+            bool query_succeeded = false;
+            uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(
+                space_input->space_id, &raw_window_count, true, &query_succeeded);
+            space->raw_query_succeeded = query_succeeded && raw_window_count >= 0 &&
+                                         (raw_window_count == 0 || raw_window_list);
+            if (!space->raw_query_succeeded) {
+                if (!menu_bar_manager_mark_space_unknown(space, space_input->space_id)) return false;
+                continue;
+            }
+            if (raw_window_count == 0) continue;
 
-            bool has_untracked_candidate = false;
-            for (int i = 0; i < raw_window_count; ++i) {
-                if (!window_manager_find_window(&g_window_manager, raw_window_list[i])) {
-                    has_untracked_candidate = true;
+            space->raw_window_ids = malloc((size_t) raw_window_count * sizeof(uint32_t));
+            if (!space->raw_window_ids) return false;
+            memcpy(space->raw_window_ids, raw_window_list,
+                   (size_t) raw_window_count * sizeof(uint32_t));
+            space->raw_window_count = (size_t) raw_window_count;
+
+            for (size_t i = 0; i < space->raw_window_count; ++i) {
+                if (!window_manager_find_window(&g_window_manager, space->raw_window_ids[i])) {
+                    if (!menu_bar_manager_mark_space_unknown(space, space_input->space_id)) return false;
                     break;
                 }
-            }
-
-            if (has_untracked_candidate && !menu_bar_manager_mark_space_unknown(space, space_input->space_id)) {
-                return false;
             }
         }
     }
@@ -492,20 +500,19 @@ static bool menu_bar_manager_add_tracked_window_from_raw_membership(struct menu_
                                                                     struct window *window)
 {
     bool found_raw_membership = false;
-    bool raw_query_succeeded = false;
 
     for (size_t display_index = 0; display_index < display_count; ++display_index) {
         struct menu_bar_display_builder *display = &displays[display_index];
         for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
             uint64_t sid = display->space_inputs[space_index].space_id;
-            int raw_window_count = 0;
-            uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(sid, &raw_window_count, true);
-            if (!raw_window_list || raw_window_count <= 0) continue;
+            struct menu_bar_space_builder *space = &display->space_builders[space_index];
+            if (!space->raw_query_succeeded) {
+                if (!menu_bar_manager_mark_space_unknown(space, sid)) return false;
+                continue;
+            }
 
-            raw_query_succeeded = true;
-            for (int i = 0; i < raw_window_count; ++i) {
-                if (raw_window_list[i] != window->id) continue;
-
+            for (size_t i = 0; i < space->raw_window_count; ++i) {
+                if (space->raw_window_ids[i] != window->id) continue;
                 found_raw_membership = true;
                 if (!menu_bar_manager_add_window_to_space(displays, display_count, window, sid)) return false;
                 break;
@@ -515,14 +522,35 @@ static bool menu_bar_manager_add_tracked_window_from_raw_membership(struct menu_
 
     if (found_raw_membership) return true;
 
-    /*
-     * The window is still tracked and otherwise countable, but its authoritative
-     * space list is unresolved. Avoid inventing a space with window_space() or
-     * marking every space unknown; retain bounded uncertainty only on visible
-     * spaces until the next real membership/closure event resolves it.
-     */
-    (void) raw_query_succeeded;
+    /* The tracked window remains unresolved despite one coherent raw snapshot.
+     * Keep uncertainty bounded to visible Spaces until another event refreshes it. */
     return menu_bar_manager_mark_visible_spaces_unknown(displays, display_count);
+}
+
+static bool menu_bar_manager_reconcile_raw_membership(struct menu_bar_display_builder *displays,
+                                                       size_t display_count, struct window *window,
+                                                       uint64_t *space_list, int space_count)
+{
+    for (size_t display_index = 0; display_index < display_count; ++display_index) {
+        struct menu_bar_display_builder *display = &displays[display_index];
+        for (size_t space_index = 0; space_index < display->input.space_count; ++space_index) {
+            struct menu_bar_space_builder *space = &display->space_builders[space_index];
+            if (!space->raw_query_succeeded) continue;
+
+            uint64_t sid = display->space_inputs[space_index].space_id;
+            bool raw_contains = false;
+            bool window_contains = false;
+            for (size_t i = 0; i < space->raw_window_count; ++i) {
+                if (space->raw_window_ids[i] == window->id) { raw_contains = true; break; }
+            }
+            for (int i = 0; i < space_count; ++i) {
+                if (space_list[i] == sid) { window_contains = true; break; }
+            }
+            if (raw_contains != window_contains &&
+                !menu_bar_manager_mark_space_unknown(space, sid)) return false;
+        }
+    }
+    return true;
 }
 
 static bool menu_bar_manager_collect_tracked_windows(struct menu_bar_display_builder *displays,
@@ -548,6 +576,8 @@ static bool menu_bar_manager_collect_tracked_windows(struct menu_bar_display_bui
             continue;
         }
 
+        if (!menu_bar_manager_reconcile_raw_membership(displays, display_count, window,
+                                                        space_list, space_count)) return false;
         for (int i = 0; i < space_count; ++i) {
             if (!menu_bar_manager_add_window_to_space(displays, display_count, window, space_list[i])) {
                 return false;

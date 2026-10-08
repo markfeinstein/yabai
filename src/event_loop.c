@@ -1022,6 +1022,10 @@ static struct application_front_switched_event *event_loop_create_application_fr
     return event;
 }
 
+#ifdef TESTS
+static bool (*event_loop_test_post_replayed_front_switched)(struct process *, uint64_t);
+#endif
+
 static bool event_loop_post_application_front_switched(struct process *process, uint64_t generation, bool replay)
 {
     struct application_front_switched_event *event = event_loop_create_application_front_switched(process, generation, replay);
@@ -1031,15 +1035,27 @@ static bool event_loop_post_application_front_switched(struct process *process, 
 
 static bool event_loop_post_tracked_application_front_switched(struct process *process, uint64_t generation)
 {
-    return event_loop_post_application_front_switched(process, generation, false);
+    if (event_loop_post_application_front_switched(process, generation, false)) return true;
+
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    uint64_t current_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
+    if (!__atomic_load_n(&process->terminated, __ATOMIC_RELAXED) && generation == current_generation) {
+        window_manager_add_lost_front_switched_event(&g_window_manager, &process->psn, generation);
+    }
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    event_loop_post_application_launched(process);
+    return false;
 }
 
-static void event_loop_replay_lost_front_switched(struct process *process)
+static bool event_loop_replay_lost_front_switched(struct process *process)
 {
+    bool had_record = false;
+    bool retry = false;
     pthread_mutex_lock(&g_process_manager_front_switch_lock);
 
     uint64_t generation = window_manager_find_lost_front_switched_event(&g_window_manager, &process->psn);
     if (!generation) goto out;
+    had_record = true;
 
     uint64_t current_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
     if (__atomic_load_n(&process->terminated, __ATOMIC_RELAXED) || generation != current_generation) {
@@ -1047,12 +1063,34 @@ static void event_loop_replay_lost_front_switched(struct process *process)
         goto out;
     }
 
-    if (event_loop_post_application_front_switched(process, generation, true)) {
-        window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
-    }
+#ifdef TESTS
+    bool posted = event_loop_test_post_replayed_front_switched
+                ? event_loop_test_post_replayed_front_switched(process, generation)
+                : event_loop_post_application_front_switched(process, generation, true);
+#else
+    bool posted = event_loop_post_application_front_switched(process, generation, true);
+#endif
+    if (posted) window_manager_remove_lost_front_switched_event(&g_window_manager, &process->psn);
+    else retry = true;
 
 out:
     pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    if (retry) event_loop_post_application_launched(process);
+    return had_record;
+}
+
+static void event_loop_converge_tracked_front_switched(struct process *process)
+{
+    if (event_loop_replay_lost_front_switched(process)) return;
+
+    uint64_t identity = ((uint64_t) (uint32_t) process->psn.highLongOfPSN << 32) |
+                        (uint32_t) process->psn.lowLongOfPSN;
+    pthread_mutex_lock(&g_process_manager_front_switch_lock);
+    uint64_t generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
+    bool is_current = !process_is_terminated(process) &&
+                      __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE) == identity;
+    pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+    if (is_current) event_loop_post_tracked_application_front_switched(process, generation);
 }
 
 #pragma clang diagnostic push
@@ -1205,7 +1243,12 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
     //
 
     struct application *application = window_manager_find_application(&g_window_manager, process->pid);
-    if (application) { return; } else { application = application_create(process); }
+    if (application) {
+        event_loop_converge_tracked_front_switched(process);
+        return;
+    } else {
+        application = application_create(process);
+    }
     if (!application) {
         event_loop_schedule_application_launch_retry(process);
         return;
@@ -1223,8 +1266,6 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         return;
     }
 
-    event_loop_replay_lost_front_switched(process);
-
     debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
     if (!window_manager_add_application(&g_window_manager, application)) {
         application_unobserve(application);
@@ -1232,7 +1273,8 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         event_loop_schedule_application_launch_retry(process);
         return;
     }
-    process->launch_retries = 0;
+    event_loop_converge_tracked_front_switched(process);
+    process_launch_retries_reset(process);
     event_signal_push(SIGNAL_APPLICATION_LAUNCHED, application);
 
     int previous_window_count = g_window_manager.window.count;
@@ -1422,7 +1464,8 @@ static bool event_loop_commit_application_front_switched(struct application_fron
 
     pthread_mutex_lock(&g_process_manager_front_switch_lock);
     uint64_t current_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
-    if (event->generation != current_generation) goto fail;
+    if (event->generation != current_generation ||
+        event->generation == __atomic_load_n(&g_process_manager.committed_front_switch_generation, __ATOMIC_ACQUIRE)) goto fail;
 
     *application = window_manager_find_application(&g_window_manager, event->pid);
     if (!*application) {
@@ -1432,6 +1475,7 @@ static bool event_loop_commit_application_front_switched(struct application_fron
     if (!psn_equals(&(*application)->psn, &event->psn)) goto fail;
 
     window_manager_remove_lost_front_switched_event(&g_window_manager, &event->psn);
+    __atomic_store_n(&g_process_manager.committed_front_switch_generation, event->generation, __ATOMIC_RELEASE);
     *deactivated_application = event_loop_find_processed_front_application();
     g_process_manager.switch_event_time = GetCurrentEventTime();
     g_process_manager.last_front_pid = g_process_manager.front_pid;
@@ -2076,7 +2120,11 @@ static EVENT_HANDLER(WINDOW_RESIZED)
             window_manager_purify_window(&g_window_manager, window);
         }
     } else if (was_fullscreen && !is_fullscreen) {
-        window_manager_wait_for_native_fullscreen_transition(window);
+        if (!window_manager_wait_for_native_fullscreen_transition(window, false)) {
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
+            declarative_configuration_request_reconcile();
+            return;
+        }
 
         if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
             enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, &g_window_manager,
@@ -2969,7 +3017,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
     if (info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
-        if (!dst_view) return;
+        if (!dst_view) goto out;
 
         struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, g_mouse_state.window->id);
         if (!window) window = window_manager_find_window_at_point(&g_window_manager, point);
@@ -4141,7 +4189,7 @@ static void event_loop_discard_event(enum event_type type, void *context, int pa
     switch (type) {
     case DAEMON_MESSAGE: {
         if (context) {
-            daemon_io_job_destroy(context);
+            daemon_io_reject(context);
         } else {
             /* Compatibility for events queued before the transport handoff. */
             daemon_message_admission_release(&g_daemon_message_admission);
@@ -4300,12 +4348,11 @@ static void (*event_loop_test_application_retry_scheduler)(struct process *);
 void event_loop_schedule_application_launch_retry(struct process *process)
 {
     if (!process) return;
-    if (process->launch_retries >= APPLICATION_LAUNCH_RETRY_LIMIT) {
+    if (!process_launch_retry_reserve(process, APPLICATION_LAUNCH_RETRY_LIMIT)) {
         debug("%s: exhausted application launch retry for pid %d; a later front/process event may restart recovery\n",
               __FUNCTION__, process->pid);
         return;
     }
-    ++process->launch_retries;
 #ifdef TESTS
     if (event_loop_test_application_retry_scheduler) {
         event_loop_test_application_retry_scheduler(process);

@@ -1305,8 +1305,8 @@ TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_
     fixture.topology.query_count = 0;
     TEST_CHECK(declarative_reconcile_run(&ops), false);
     TEST_CHECK(declarative_installed.generation, generation);
-    TEST_CHECK(declarative_installed.fold_context, context);
-    TEST_CHECK(declarative_installed.topology.fingerprint, topology_fingerprint);
+    TEST_CHECK(declarative_installed.fold_context != context, true);
+    TEST_CHECK(declarative_installed.topology.fingerprint != topology_fingerprint, true);
     TEST_CHECK(view ? view->root : NULL, root);
     TEST_CHECK(g_window_manager.managed_window.buckets, managed_buckets);
     TEST_CHECK(g_window_manager.managed_window.count, managed_count);
@@ -1316,9 +1316,9 @@ TEST_FUNC(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_
     TEST_CHECK(native->space_identity.mission_control_ordinal, 0);
 
     struct rule_effects effects = {0};
-    TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_OK);
-    TEST_CHECK(effects.sid, 11ULL);
-    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), true);
+    TEST_CHECK(rule_combine_rule_effects(native, &effects, NULL), RULE_FOLD_WARNING_NEWLY_REQUIRED);
+    TEST_CHECK(effects.sid, 0ULL);
+    TEST_CHECK(rule_effects_check_flag(&effects, RULE_FOLLOW_SPACE), false);
     TEST_CHECK(effects.manage, RULE_PROP_ON);
 
     uint64_t missing[] = { 12, 99 };

@@ -55,8 +55,10 @@ static void *ts_buf__grow_f(const void *buf, int new_len, int elem_size)
     int new_size = offsetof(struct ts_buf_hdr, buf) + new_cap*elem_size;
 
     if (buf) {
-        __sync_fetch_and_add(&g_temp_storage.used, new_size);
         new_hdr = ts_buf__hdr(buf);
+        uint64_t old_size = offsetof(struct ts_buf_hdr, buf) +
+                            (uint64_t) new_hdr->cap * (uint64_t) elem_size;
+        ts_expand(new_hdr, old_size, (uint64_t) new_size - old_size);
     } else {
         new_hdr = ts_alloc_aligned(8, new_size);
     }

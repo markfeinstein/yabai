@@ -26,8 +26,8 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.native_arch }}"
       - name: Install pinned documentation generator
         run: |
-          gem install --no-document asciidoctor --version 2.0.23
-          test "$(asciidoctor --version | awk 'NR == 1 { print $2 }')" = 2.0.23
+          gem install --no-document asciidoctor --version 2.0.26
+          test "$(asciidoctor --version | awk 'NR == 1 { print $2 }')" = 2.0.26
       - name: Syntax, generated documentation contract, and diff hygiene
         run: |
           make syntax

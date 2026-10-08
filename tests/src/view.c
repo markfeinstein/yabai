@@ -86,6 +86,12 @@ TEST_FUNC(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry,
         TEST_CHECK(repeated_right.w, view_right.w);
         TEST_CHECK(repeated_right.h, view_right.h);
     }
+
+    parent = (struct area) { .x = 0, .y = 0, .w = 100, .h = 80 };
+    area_make_pair(SPLIT_Y, 1000, 0.5f, &parent, &view_left, &view_right);
+    TEST_CHECK(view_left.w, 0.0f);
+    TEST_CHECK(view_right.w, 0.0f);
+    TEST_CHECK(view_left.w >= 0.0f && view_right.w >= 0.0f, true);
 });
 
 static size_t insert_feedback_refresh_test_calls;
@@ -358,4 +364,57 @@ TEST_FUNC(view_find_min_depth_leaf_node_handles_complete_tree_boundary,
 
     TEST_CHECK(view_find_min_depth_leaf_node(NULL) == NULL, true);
     TEST_CHECK(view_find_min_depth_leaf_node(nodes) == &nodes[128], true);
+});
+
+TEST_FUNC(view_remove_promotes_internal_sibling_geometry,
+{
+    size_t outstanding_before = legacy_allocation_test_outstanding();
+    struct window_node root = {
+        .split = SPLIT_X,
+        .ratio = 0.25f,
+        .area = {0, 0, 1000, 800}
+    };
+    struct window_node *removed = legacy_allocation_calloc(1, sizeof(*removed));
+    struct window_node *sibling = legacy_allocation_calloc(1, sizeof(*sibling));
+    struct window_node *first = legacy_allocation_calloc(1, sizeof(*first));
+    struct window_node *second = legacy_allocation_calloc(1, sizeof(*second));
+    TEST_CHECK(removed != NULL && sibling != NULL && first != NULL && second != NULL, true);
+    if (!removed || !sibling || !first || !second) {
+        legacy_allocation_free(removed);
+        legacy_allocation_free(sibling);
+        legacy_allocation_free(first);
+        legacy_allocation_free(second);
+        return result;
+    }
+
+    root.left = removed;
+    root.right = sibling;
+    removed->parent = &root;
+    sibling->parent = &root;
+    removed->window_list[0] = removed->window_order[0] = 41;
+    removed->window_count = 1;
+    sibling->split = SPLIT_Y;
+    sibling->ratio = 0.7f;
+    sibling->left = first;
+    sibling->right = second;
+    first->parent = sibling;
+    second->parent = sibling;
+    first->window_list[0] = first->window_order[0] = 42;
+    first->window_count = 1;
+    second->window_list[0] = second->window_order[0] = 43;
+    second->window_count = 1;
+
+    struct view view = { .layout = VIEW_BSP, .root = &root };
+    struct window window = { .id = 41 };
+    TEST_CHECK(view_remove_window_node(&view, &window), &root);
+    TEST_CHECK(root.split, SPLIT_Y);
+    TEST_CHECK(root.ratio, 0.7f);
+    TEST_CHECK(root.left, first);
+    TEST_CHECK(root.right, second);
+    TEST_CHECK(first->parent, &root);
+    TEST_CHECK(second->parent, &root);
+
+    legacy_allocation_free(first);
+    legacy_allocation_free(second);
+    TEST_CHECK(legacy_allocation_test_outstanding(), outstanding_before);
 });

@@ -106,10 +106,10 @@ bool workspace_application_is_observable(struct process *process)
 {
     NSRunningApplication *application = __atomic_load_n(&process->ns_application, __ATOMIC_RELAXED);
     if (application) {
-        process->policy = [application activationPolicy];
-        return process->policy == NSApplicationActivationPolicyRegular;
+        process_policy_store(process, [application activationPolicy]);
+        return process_policy_load(process) == NSApplicationActivationPolicyRegular;
     } else {
-        process->policy = NSApplicationActivationPolicyProhibited;
+        process_policy_store(process, NSApplicationActivationPolicyProhibited);
         return false;
     }
 }
@@ -239,10 +239,10 @@ extern struct event_loop g_event_loop;
 {
     if ([keyPath isEqualToString:@"activationPolicy"]) {
         struct process *process = context;
-        if (process->terminated) return;
+        if (process_is_terminated(process)) return;
 
         id result = [change objectForKey:NSKeyValueChangeNewKey];
-        if ([result intValue] != process->policy) {
+        if ([result intValue] != process_policy_load(process)) {
             //
             // :WorstApiEverMade
             //
@@ -256,15 +256,15 @@ extern struct event_loop g_event_loop;
                 [object removeObserver:self forKeyPath:@"activationPolicy" context:process];
             } @catch (NSException * __unused exception) {}
 
-            process->policy = [result intValue];
+            process_policy_store(process, [result intValue]);
             debug("%s: activation policy changed for %s (%d)\n", __FUNCTION__, process->name, process->pid);
-            event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, process, 0);
+            event_loop_post_application_launched(process);
         }
     }
 
     if ([keyPath isEqualToString:@"finishedLaunching"]) {
         struct process *process = context;
-        if (process->terminated) return;
+        if (process_is_terminated(process)) return;
 
         id result = [change objectForKey:NSKeyValueChangeNewKey];
         if ([result intValue] == 1) {
@@ -282,7 +282,7 @@ extern struct event_loop g_event_loop;
             } @catch (NSException * __unused exception) {}
 
             debug("%s: %s (%d) finished launching\n", __FUNCTION__, process->name, process->pid);
-            event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, process, 0);
+            event_loop_post_application_launched(process);
         }
     }
 }

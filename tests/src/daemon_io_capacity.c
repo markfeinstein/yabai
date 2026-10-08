@@ -25,7 +25,11 @@ TEST_FUNC(message_loop_admission_caps_at_32_and_excess_gets_overload_wire,
     clients[DAEMON_MESSAGE_ADMISSION_MAX] = socket(AF_UNIX, SOCK_STREAM, 0);
     TEST_CHECK(connect(clients[DAEMON_MESSAGE_ADMISSION_MAX], (struct sockaddr *) &address, sizeof(address)), 0);
     char response[128] = {0};
-    ssize_t count = read(clients[DAEMON_MESSAGE_ADMISSION_MAX], response, sizeof(response));
+    size_t count = 0;
+    bool failed = false;
+    TEST_CHECK(daemon_test_read_response(clients[DAEMON_MESSAGE_ADMISSION_MAX], response,
+                                         sizeof(response), &count, &failed), true);
+    TEST_CHECK(failed, true);
     TEST_CHECK(count > 1, true);
     TEST_CHECK(response[0], DAEMON_MESSAGE_FAILURE_MARKER);
     TEST_CHECK(strstr(response + 1, "too many pending messages") != NULL, true);

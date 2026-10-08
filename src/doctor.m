@@ -420,6 +420,25 @@ static bool doctor_format(char *buffer, size_t size, const char *format, ...)
     return length >= 0 && (size_t) length < size;
 }
 
+static int doctor_fstat_retry(const struct doctor_collect_ops *ops, int fd, struct stat *st)
+{
+    int result;
+    do
+        result = ops->fstat_fn(fd, st);
+    while (result != 0 && errno == EINTR);
+    return result;
+}
+
+static bool doctor_same_stat(const struct stat *a, const struct stat *b)
+{
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
+           (a->st_mode & S_IFMT) == (b->st_mode & S_IFMT) && a->st_size == b->st_size &&
+           a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec &&
+           a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec &&
+           a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec &&
+           a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
+}
+
 static enum doctor_probe doctor_read_regular_snapshot(const struct doctor_collect_ops *ops,
                                                         const char *path, const struct stat *expected,
                                                         size_t maximum, NSData **data,
@@ -428,10 +447,9 @@ static enum doctor_probe doctor_read_regular_snapshot(const struct doctor_collec
     int fd = ops->open_fn(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return DOCTOR_PROBE_UNKNOWN;
     struct stat st;
-    if (ops->fstat_fn(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+    if (doctor_fstat_retry(ops, fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t) st.st_size > maximum ||
-        (expected && (st.st_dev != expected->st_dev || st.st_ino != expected->st_ino ||
-                      !S_ISREG(expected->st_mode)))) {
+        (expected && (!S_ISREG(expected->st_mode) || !doctor_same_stat(&st, expected)))) {
         ops->close_fn(fd);
         return DOCTOR_PROBE_UNKNOWN;
     }
@@ -444,8 +462,13 @@ static enum doctor_probe doctor_read_regular_snapshot(const struct doctor_collec
         else if (bytes < 0 && errno == EINTR) continue;
         else { ops->close_fn(fd); return DOCTOR_PROBE_UNKNOWN; }
     }
+    struct stat after;
+    if (doctor_fstat_retry(ops, fd, &after) != 0 || !doctor_same_stat(&st, &after)) {
+        ops->close_fn(fd);
+        return DOCTOR_PROBE_UNKNOWN;
+    }
     if (ops->close_fn(fd) != 0) return DOCTOR_PROBE_UNKNOWN;
-    if (observed) *observed = st;
+    if (observed) *observed = after;
     *data = snapshot;
     return DOCTOR_PROBE_YES;
 }
@@ -477,7 +500,7 @@ static enum doctor_service_plist doctor_inspect_service(const struct doctor_coll
     int plist_fd = ops->open_fn(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
     if (plist_fd < 0) return DOCTOR_SERVICE_UNKNOWN;
     struct stat descriptor_stat;
-    if (ops->fstat_fn(plist_fd, &descriptor_stat) != 0 ||
+    if (doctor_fstat_retry(ops, plist_fd, &descriptor_stat) != 0 ||
         descriptor_stat.st_dev != st.st_dev || descriptor_stat.st_ino != st.st_ino ||
         !S_ISREG(descriptor_stat.st_mode)) {
         ops->close_fn(plist_fd);
@@ -507,6 +530,12 @@ static enum doctor_service_plist doctor_inspect_service(const struct doctor_coll
             ops->close_fn(plist_fd);
             return DOCTOR_SERVICE_UNKNOWN;
         }
+    }
+    struct stat descriptor_after;
+    if (doctor_fstat_retry(ops, plist_fd, &descriptor_after) != 0 ||
+        !doctor_same_stat(&descriptor_stat, &descriptor_after)) {
+        ops->close_fn(plist_fd);
+        return DOCTOR_SERVICE_UNKNOWN;
     }
     if (ops->close_fn(plist_fd) != 0) return DOCTOR_SERVICE_UNKNOWN;
     NSError *parse_error = nil;

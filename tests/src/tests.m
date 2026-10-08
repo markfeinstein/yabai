@@ -410,6 +410,23 @@ TEST_FUNC(temporary_storage_checked_allocation_is_fallible_and_atomic,
     if (aligned) TEST_CHECK((uintptr_t) aligned % __alignof__(uint64_t), 0ULL);
 });
 
+TEST_FUNC(temporary_stretch_buffer_growth_charges_only_capacity,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    uint32_t *values = NULL;
+    for (uint32_t i = 0; i < 100; ++i) {
+        ts_buf_push(values, i);
+        uint64_t expected = offsetof(struct ts_buf_hdr, buf) +
+                            (uint64_t) ts_buf_cap(values) * sizeof(*values);
+        TEST_CHECK(g_temp_storage.used, expected);
+        TEST_CHECK(values[i], i);
+    }
+});
+
 TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
 {
     TEST_CHECK(display_manager_display_id_for_uuid(NULL), 0U);
@@ -2872,9 +2889,14 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
     TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
+    TEST_ENTRY(view_remove_promotes_internal_sibling_geometry)             \
     TEST_ENTRY(view_insertion_preparation_enforces_single_root_capacity_and_layout) \
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
+    TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
+    TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
+    TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
@@ -2966,6 +2988,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
     TEST_ENTRY(active_display_enumeration_rejects_errors_and_unstable_samples) \
     TEST_ENTRY(temporary_storage_checked_allocation_is_fallible_and_atomic) \
+    TEST_ENTRY(temporary_stretch_buffer_growth_charges_only_capacity)       \
     TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
     TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
     TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
@@ -2996,6 +3019,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(jankyborders_generations_supersede_stale_retries) \
     TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
     TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
+    TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
     TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
     TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
     TEST_ENTRY(animation_context_setup_allocation_and_connection_failures_cleanup) \
@@ -3010,6 +3034,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
     TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
+    TEST_ENTRY(menu_bar_manager_samples_each_space_type_once)          \
     TEST_ENTRY(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh) \
     TEST_ENTRY(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers) \
     TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
@@ -3019,8 +3044,14 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
     TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \
     TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
+    TEST_ENTRY(menu_bar_manager_raw_membership_is_captured_once_per_space) \
+    TEST_ENTRY(menu_bar_manager_raw_and_window_membership_disagreement_is_unknown) \
     TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
     TEST_ENTRY(message_utf8_ingress_validation)                            \
+    TEST_ENTRY(message_scratchpad_recover_requires_no_window)             \
+    TEST_ENTRY(message_rule_and_signal_allocation_failures_are_atomic)    \
+    TEST_ENTRY(message_rule_and_signal_reject_duplicate_fields)           \
+    TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
@@ -3257,7 +3288,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(client_response_fragmented_stream_refreshes_inactivity_deadline) \
     TEST_ENTRY(client_response_fragmented_failure_routes_everything_to_stderr) \
     TEST_ENTRY(client_response_later_failure_marker_and_embedded_nul_remain_stdout) \
-    TEST_ENTRY(client_response_eof_completes_successfully)                \
+    TEST_ENTRY(client_response_requires_complete_frame_and_payload)       \
     TEST_ENTRY(sa_handshake_accepts_fragmented_version_and_attributes)    \
     TEST_ENTRY(sa_handshake_accepts_empty_version)                        \
     TEST_ENTRY(sa_handshake_rejects_missing_terminator_at_capacity)       \
@@ -3304,7 +3335,10 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < total; ++i) {
         uint64_t tsc = read_cpu_timer();
-        bool result = tests[i].func();
+        bool result;
+        @autoreleasepool {
+            result = tests[i].func();
+        }
         double ms_elapsed = 1000.0 * (double)(read_cpu_timer() - tsc) / (double)cpu_freq;
 
         printf("(%0.4fms) %s \e[1;33m%s\e[m\n", ms_elapsed, result ? "\e[1;32msuccess\e[m" : " \e[1;31mfailed\e[m", tests[i].name);

@@ -168,6 +168,59 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     if (color_space) CGColorSpaceRelease(color_space);
 });
 
+TEST_FUNC(animation_alpha_restoration_handles_partial_simd_tail,
+{
+    const size_t widths[] = { 1, 3, 5 };
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); ++i) {
+        size_t width = widths[i];
+        CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+        CGContextRef bitmap = color_space
+                            ? CGBitmapContextCreate(NULL, width, 1, 8, width * 4, color_space,
+                                                   kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast)
+                            : NULL;
+        if (!bitmap) {
+            result = false;
+            if (color_space) CGColorSpaceRelease(color_space);
+            continue;
+        }
+
+        CGContextSetRGBFillColor(bitmap, 0.25, 0.5, 0.75, 0.5);
+        CGContextFillRect(bitmap, CGRectMake(0, 0, width, 1));
+        if (width == 5) {
+            UInt8 *pixels = CGBitmapContextGetData(bitmap);
+            for (size_t pixel = 0; pixel < width; ++pixel) {
+                pixels[pixel * 4 + 0] = 3;
+                pixels[pixel * 4 + 1] = 0;
+                pixels[pixel * 4 + 2] = 0;
+                pixels[pixel * 4 + 3] = 10;
+            }
+        }
+        CGImageRef image = CGBitmapContextCreateImage(bitmap);
+        CGImageRef restored = image ? cgimage_restore_alpha(image) : NULL;
+        TEST_CHECK(restored != NULL, true);
+
+        CFDataRef restored_data = restored
+                                ? CGDataProviderCopyData(CGImageGetDataProvider(restored))
+                                : NULL;
+        TEST_CHECK(restored_data != NULL, true);
+        if (restored_data && CFDataGetLength(restored_data) >= (CFIndex) (width * 4)) {
+            const UInt8 *bytes = CFDataGetBytePtr(restored_data);
+            TEST_CHECK(bytes[3], 255);
+            if (width == 5) TEST_CHECK(bytes[0], 77);
+            for (size_t pixel = 1; pixel < width; ++pixel) {
+                TEST_CHECK(memcmp(bytes, bytes + pixel * 4, 4), 0);
+                TEST_CHECK(bytes[pixel * 4 + 3], 255);
+                if (width == 5) TEST_CHECK(bytes[pixel * 4], 77);
+            }
+        }
+        if (restored_data) CFRelease(restored_data);
+        if (restored) CGImageRelease(restored);
+        if (image) CGImageRelease(image);
+        CGContextRelease(bitmap);
+        CGColorSpaceRelease(color_space);
+    }
+});
+
 static int animation_test_display_stage;
 static int animation_test_display_create_calls;
 static int animation_test_display_callback_calls;

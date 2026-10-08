@@ -32,9 +32,13 @@ TEST_FUNC(daemon_io_post_rejection_consumes_owned_job_once,
     TEST_CHECK(__atomic_load_n(&daemon_io_test_request_free_count, __ATOMIC_RELAXED), 1U);
     TEST_CHECK(__atomic_load_n(&daemon_io_test_close_count, __ATOMIC_RELAXED), 1U);
     TEST_CHECK(__atomic_load_n(&daemon_io_test_admission_release_count, __ATOMIC_RELAXED), 1U);
-    TEST_CHECK(__atomic_load_n(&daemon_io_test_reservation_cancel_count, __ATOMIC_RELAXED), 1U);
-    char byte;
-    TEST_CHECK(read(pair[1], &byte, 1), 0);
+    TEST_CHECK(__atomic_load_n(&daemon_io_test_reservation_cancel_count, __ATOMIC_RELAXED), 0U);
+    char response[64] = {0};
+    size_t response_length = 0;
+    bool failed = false;
+    TEST_CHECK(daemon_test_read_response(pair[1], response, sizeof(response), &response_length, &failed), true);
+    TEST_CHECK(failed, true);
+    TEST_CHECK(strstr(response + 1, "not dispatched") != NULL, true);
     close(pair[1]);
     TEST_CHECK(daemon_io_end(), true);
     g_daemon_message_admission = saved_admission;
@@ -167,7 +171,10 @@ TEST_FUNC(daemon_io_response_failures_skip_or_preserve_handler_and_static_fallba
         write(pair[1], &length, sizeof(length));
         write(pair[1], body, sizeof(body));
         char response[64] = {0};
-        ssize_t count = read(pair[1], response, sizeof(response));
+        size_t count = 0;
+        bool failed = false;
+        TEST_CHECK(daemon_test_read_response(pair[1], response, sizeof(response), &count, &failed), true);
+        TEST_CHECK(failed, true);
         TEST_CHECK(count > 1, true);
         TEST_CHECK(response[0], DAEMON_MESSAGE_FAILURE_MARKER);
         TEST_CHECK(daemon_io_test_wait_for_admission(0, 1000), true);

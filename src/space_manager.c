@@ -9,6 +9,7 @@ static uint64_t *(*space_manager_test_query_window_space_list)(uint32_t wid, int
 static uint32_t *(*space_manager_test_layout_window_list)(uint64_t *, int, int, int *, bool, bool *);
 static uint32_t *(*space_manager_test_swap_window_list)(uint64_t *, int, int, int *, bool, bool *);
 static bool (*space_manager_test_layout_space_is_user)(uint64_t);
+static uint64_t space_manager_test_active_space_id;
 static size_t space_manager_test_lookup_count;
 static size_t space_manager_layout_allocation_ordinal;
 static size_t space_manager_layout_fail_ordinal;
@@ -873,6 +874,9 @@ uint64_t space_manager_last_space(void)
 
 uint64_t space_manager_active_space(void)
 {
+#ifdef TESTS
+    if (space_manager_test_active_space_id) return space_manager_test_active_space_id;
+#endif
     uint32_t did = 0;
     struct window *window = window_manager_focused_window(&g_window_manager);
 
@@ -1063,6 +1067,33 @@ static enum space_op_error space_manager_swap_space_with_space_on_display(uint32
     return SPACE_OP_ERROR_SUCCESS;
 }
 
+#ifdef TESTS
+static bool (*space_manager_test_move_space_after_space)(uint64_t, uint64_t, bool);
+#endif
+
+static bool space_manager_move_space_after(uint64_t sid, uint64_t after_sid, bool focus)
+{
+#ifdef TESTS
+    if (space_manager_test_move_space_after_space) {
+        return space_manager_test_move_space_after_space(sid, after_sid, focus);
+    }
+#endif
+    return scripting_addition_move_space_after_space(sid, after_sid, focus);
+}
+
+static bool space_manager_move_space_pair(uint64_t first_sid, uint64_t first_after_sid, bool first_focus,
+                                          uint64_t second_sid, uint64_t second_after_sid, bool second_focus,
+                                          uint64_t rollback_after_sid, bool *partial_commit)
+{
+    if (partial_commit) *partial_commit = false;
+    if (!space_manager_move_space_after(first_sid, first_after_sid, first_focus)) return false;
+    if (space_manager_move_space_after(second_sid, second_after_sid, second_focus)) return true;
+    if (!space_manager_move_space_after(first_sid, rollback_after_sid, first_focus) && partial_commit) {
+        *partial_commit = true;
+    }
+    return false;
+}
+
 enum space_op_error space_manager_swap_space_with_space(uint64_t acting_sid, uint64_t selector_sid)
 {
     bool is_in_mc = mission_control_is_active();
@@ -1089,28 +1120,34 @@ enum space_op_error space_manager_swap_space_with_space(uint64_t acting_sid, uin
     int acting_mci = space_manager_mission_control_index(acting_sid);
     int selector_mci = space_manager_mission_control_index(selector_sid);
     bool success = true;
+    bool partial_commit = false;
 
     if (acting_sid_is_first && !selector_sid_is_first && selector_mci - acting_mci == 1) {
         success = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
     } else if (!acting_sid_is_first && selector_sid_is_first && acting_mci - selector_mci == 1) {
         success = scripting_addition_move_space_after_space(selector_sid, acting_sid, selector_sid == space_manager_active_space());
     } else if (acting_sid_is_first && !selector_sid_is_first) {
-        success  = scripting_addition_move_space_after_space(selector_sid, acting_sid, false);
-        success &= scripting_addition_move_space_after_space(acting_sid, selector_prev_sid, acting_sid == space_manager_active_space());
+        success = space_manager_move_space_pair(selector_sid, acting_sid, false,
+                                                acting_sid, selector_prev_sid, acting_sid == space_manager_active_space(),
+                                                selector_prev_sid, &partial_commit);
     } else if (!acting_sid_is_first && selector_sid_is_first) {
-        success  = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
-        success &= scripting_addition_move_space_after_space(selector_sid, acting_prev_sid, false);
+        success = space_manager_move_space_pair(acting_sid, selector_sid, acting_sid == space_manager_active_space(),
+                                                selector_sid, acting_prev_sid, false,
+                                                acting_prev_sid, &partial_commit);
     } else if (!acting_sid_is_first && !selector_sid_is_first) {
         if (acting_mci > selector_mci) {
-            success  = scripting_addition_move_space_after_space(selector_sid, acting_sid, false);
-            success &= scripting_addition_move_space_after_space(acting_sid, selector_prev_sid, acting_sid == space_manager_active_space());
+            success = space_manager_move_space_pair(selector_sid, acting_sid, false,
+                                                    acting_sid, selector_prev_sid, acting_sid == space_manager_active_space(),
+                                                    selector_prev_sid, &partial_commit);
         } else {
-            success  = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
-            success &= scripting_addition_move_space_after_space(selector_sid, acting_prev_sid, false);
+            success = space_manager_move_space_pair(acting_sid, selector_sid, acting_sid == space_manager_active_space(),
+                                                    selector_sid, acting_prev_sid, false,
+                                                    acting_prev_sid, &partial_commit);
         }
     }
 
-    return success ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
+    return success ? SPACE_OP_ERROR_SUCCESS
+                   : partial_commit ? SPACE_OP_ERROR_PARTIAL_COMMIT : SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
 enum space_op_error space_manager_move_space_to_space(uint64_t acting_sid, uint64_t selector_sid)
@@ -1136,12 +1173,14 @@ enum space_op_error space_manager_move_space_to_space(uint64_t acting_sid, uint6
     bool acting_sid_is_first = !acting_prev_sid || acting_prev_did != acting_did;
     bool selector_sid_is_first = !selector_prev_sid || selector_prev_did != selector_did;
     bool success = true;
+    bool partial_commit = false;
 
     if (acting_sid_is_first && !selector_sid_is_first) {
         success = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
     } else if (!acting_sid_is_first && selector_sid_is_first) {
-        success  = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
-        success &= scripting_addition_move_space_after_space(selector_sid, acting_sid, false);
+        success = space_manager_move_space_pair(acting_sid, selector_sid, acting_sid == space_manager_active_space(),
+                                                selector_sid, acting_sid, false,
+                                                acting_prev_sid, &partial_commit);
     } else if (!acting_sid_is_first && !selector_sid_is_first) {
         if (space_manager_mission_control_index(acting_sid) > space_manager_mission_control_index(selector_sid)) {
             success = scripting_addition_move_space_after_space(acting_sid, selector_prev_sid, acting_sid == space_manager_active_space());
@@ -1150,7 +1189,8 @@ enum space_op_error space_manager_move_space_to_space(uint64_t acting_sid, uint6
         }
     }
 
-    return success ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
+    return success ? SPACE_OP_ERROR_SUCCESS
+                   : partial_commit ? SPACE_OP_ERROR_PARTIAL_COMMIT : SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
 enum space_op_error space_manager_move_space_to_display(struct space_manager *sm, uint64_t sid, uint32_t did)
@@ -1187,6 +1227,16 @@ enum space_op_error space_manager_move_space_to_display(struct space_manager *sm
     return SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
+#ifdef TESTS
+static CGEventRef (*space_manager_test_event_create)(CGEventSourceRef) = CGEventCreate;
+static CGError (*space_manager_test_warp_cursor)(CGPoint) = CGWarpMouseCursorPosition;
+static bool (*space_manager_test_perform_gesture)(int, int) = space_gesture_perform;
+#else
+#define space_manager_test_event_create CGEventCreate
+#define space_manager_test_warp_cursor CGWarpMouseCursorPosition
+#define space_manager_test_perform_gesture space_gesture_perform
+#endif
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
@@ -1202,13 +1252,20 @@ bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
     }
 
     CGPoint point = display_center(new_did);
+    CGPoint original_point = point;
     uint32_t cur_did = display_manager_cursor_display_id();
 
     bool focus_display = cur_did != new_did;
-    if (focus_display) CGWarpMouseCursorPosition(point);
+    if (focus_display) {
+        CGEventRef cursor_event = space_manager_test_event_create(NULL);
+        if (!cursor_event) return false;
+        original_point = CGEventGetLocation(cursor_event);
+        CFRelease(cursor_event);
+        if (space_manager_test_warp_cursor(point) != kCGErrorSuccess) return false;
+    }
 
     if (space_gesture_requires_payload()) {
-        if (!space_gesture_perform(new_index > cur_index ? 1 : -1, count)) return false;
+        if (!space_manager_test_perform_gesture(new_index > cur_index ? 1 : -1, count)) goto restore_cursor;
         goto focused;
     }
 
@@ -1223,8 +1280,8 @@ bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
     // Technique first observed in practice, and reverse-engineered from, BetterTouchTool.
     //
 
-    CGEventRef event_dock_control = CGEventCreate(NULL);
-    if (!event_dock_control) return false;
+    CGEventRef event_dock_control = space_manager_test_event_create(NULL);
+    if (!event_dock_control) goto restore_cursor;
 
     float sign = (new_index - cur_index) > 0 ? 1.0 : -1.0;
     CGEventSetIntegerValueField(event_dock_control, /* kCGSEventTypeField            */  55, /* kCGSEventDockControl       */ 30);
@@ -1251,6 +1308,10 @@ focused:
     }
 
     return true;
+
+restore_cursor:
+    if (focus_display) (void) space_manager_test_warp_cursor(original_point);
+    return false;
 }
 #pragma clang diagnostic pop
 

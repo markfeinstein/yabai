@@ -57,6 +57,7 @@ bool daemon_io_end(void);
 bool daemon_io_enqueue_fd(int fd);
 void daemon_io_execute(struct daemon_io_job *job);
 void daemon_io_job_destroy(struct daemon_io_job *job);
+void daemon_io_reject(struct daemon_io_job *job);
 
 #ifdef TESTS
 uint32_t daemon_io_test_reader_thread_count(void);

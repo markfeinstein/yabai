@@ -198,7 +198,15 @@ static void process_manager_run_discovery_retry(unsigned index, uint64_t token)
 #endif
     if (process && table_try_add(&retry->manager->process, &process->psn, process)) {
         process_manager_cancel_discovery_retry(retry);
-        event_loop_post_application_launched(process);
+        pthread_mutex_lock(&g_process_manager_front_switch_lock);
+        uint64_t front_generation = __atomic_load_n(&retry->manager->front_switch_generation, __ATOMIC_ACQUIRE);
+        bool is_tracked_front = __atomic_load_n(&retry->manager->front_switch_psn, __ATOMIC_ACQUIRE) ==
+                                process_manager_pack_psn(process->psn);
+        pthread_mutex_unlock(&g_process_manager_front_switch_lock);
+        bool launch_posted = event_loop_post_application_launched(process);
+        if (is_tracked_front && !launch_posted) {
+            event_loop_post_tracked_application_front_switched(process, front_generation);
+        }
         return;
     }
     if (process) process_destroy(process);
@@ -343,11 +351,13 @@ static PROCESS_EVENT_HANDLER(process_handler)
             return noErr;
         }
 
-        if (process->launch_retries >= 5) {
-            process->launch_retries = 0;
-            event_loop_post_application_launched(process);
+        bool launch_owns_convergence = false;
+        if (process_launch_retries_reset_if_at_least(process, 5)) {
+            launch_owns_convergence = event_loop_post_application_launched(process);
         }
-        event_loop_post_tracked_application_front_switched(process, generation);
+        if (!launch_owns_convergence) {
+            event_loop_post_tracked_application_front_switched(process, generation);
+        }
     } break;
     }
 

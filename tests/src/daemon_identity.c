@@ -59,7 +59,7 @@ TEST_FUNC(daemon_identity_json_contains_protocol_identity,
 
     char query[] = "--daemon-identity\0";
     output = NULL; output_length = 0; stream = open_memstream(&output, &output_length);
-    handle_domain_query(stream, message_test_token("query"), query);
+    handle_domain_query(stream, message_test_token("query"), query, sizeof(query));
     fclose(stream);
     TEST_CHECK(strstr(output, "\"pid\":") != NULL, true);
     TEST_CHECK(strstr(output, "\"architecture\":\"") != NULL, true);
@@ -68,7 +68,14 @@ TEST_FUNC(daemon_identity_json_contains_protocol_identity,
 
     char trailing[] = "--daemon-identity\0extra\0";
     output = NULL; output_length = 0; stream = open_memstream(&output, &output_length);
-    handle_domain_query(stream, message_test_token("query"), trailing);
+    handle_domain_query(stream, message_test_token("query"), trailing, sizeof(trailing));
+    fclose(stream);
+    TEST_CHECK(output[0], FAILURE_MESSAGE[0]);
+    free(output);
+
+    char empty_trailing[] = "--daemon-identity\0\0";
+    output = NULL; output_length = 0; stream = open_memstream(&output, &output_length);
+    handle_domain_query(stream, message_test_token("query"), empty_trailing, sizeof(empty_trailing));
     fclose(stream);
     TEST_CHECK(output[0], FAILURE_MESSAGE[0]);
     free(output);

@@ -203,11 +203,14 @@ static ssize_t doctor_test_read_failure(int fd, void *buffer, size_t size)
 }
 
 static int doctor_test_fstat_mode;
+static int doctor_test_fstat_count;
 static int doctor_test_fstat_override(int fd, struct stat *st)
 {
     int result = fstat(fd, st);
+    if (result == 0) ++doctor_test_fstat_count;
     if (result == 0 && doctor_test_fstat_mode == 1) st->st_uid += 1;
     if (result == 0 && doctor_test_fstat_mode == 2) st->st_ino += 1;
+    if (result == 0 && doctor_test_fstat_mode == 3 && doctor_test_fstat_count > 1) st->st_mtimespec.tv_nsec += 1;
     return result;
 }
 
@@ -275,7 +278,9 @@ TEST_FUNC(doctor_service_requires_canonical_fields_mode_and_executable,
     TEST_CHECK(doctor_inspect_service(&descriptor_ops, &identity, plist_path, executable), DOCTOR_SERVICE_INVALID);
     doctor_test_fstat_mode = 2;
     TEST_CHECK(doctor_inspect_service(&descriptor_ops, &identity, plist_path, executable), DOCTOR_SERVICE_UNKNOWN);
-    doctor_test_fstat_mode = 0;
+    doctor_test_fstat_mode = 3; doctor_test_fstat_count = 0;
+    TEST_CHECK(doctor_inspect_service(&descriptor_ops, &identity, plist_path, executable), DOCTOR_SERVICE_UNKNOWN);
+    doctor_test_fstat_mode = 0; doctor_test_fstat_count = 0;
     struct doctor_collect_ops fifo_ops = doctor_production_ops; fifo_ops.open_fn = doctor_test_fifo_replace_open;
     doctor_test_fifo_replace_path = plist_path;
     TEST_CHECK(doctor_inspect_service(&fifo_ops, &identity, plist_path, executable), DOCTOR_SERVICE_UNKNOWN);

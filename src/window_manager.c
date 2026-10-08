@@ -136,8 +136,20 @@ void window_manager_apply_manage_rule_effects_to_window(struct space_manager *sm
     }
 }
 
+#ifdef TESTS
+static char *(*window_manager_rule_scratchpad_copy)(char *) = string_copy;
+#else
+#define window_manager_rule_scratchpad_copy string_copy
+#endif
+
 void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects)
 {
+    char *scratchpad = NULL;
+    if (effects->scratchpad) {
+        scratchpad = window_manager_rule_scratchpad_copy(effects->scratchpad);
+        if (!scratchpad) return;
+    }
+
     if (effects->sid || effects->did) {
         if (!window_is_fullscreen(window) && !space_is_fullscreen(window_space(window->id))) {
             uint64_t sid = effects->sid ? effects->sid : display_space_id(effects->did);
@@ -176,11 +188,8 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
         window_set_rule_flag(window, WINDOW_RULE_FULLSCREEN);
     }
 
-    if (effects->scratchpad) {
-        char *scratchpad = string_copy(effects->scratchpad);
-        if (!window_manager_set_scratchpad_for_window(wm, window, scratchpad)) {
-            free(scratchpad);
-        }
+    if (scratchpad && !window_manager_set_scratchpad_for_window(wm, window, scratchpad)) {
+        free(scratchpad);
     }
 
     if (effects->grid[0] != 0 && effects->grid[1] != 0) {
@@ -216,8 +225,9 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
                     if (!rule_check_flag(&wm->rules[i], RULE_SUBROLE_VALID) && !string_equals(window_subrole, "AXStandardWindow")) continue;
                 }
 
-                match = true;
                 enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
+                if (fold == RULE_FOLD_RESOURCE) continue;
+                match = true;
                 rule_report_fold_warning(&wm->rules[i], fold);
 
                 if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
@@ -246,8 +256,9 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
                     if (!rule_check_flag(&wm->rules[i], RULE_SUBROLE_VALID) && !string_equals(window_subrole, "AXStandardWindow")) continue;
                 }
 
-                match = true;
                 enum rule_fold_result fold = rule_combine_rule_effects(&wm->rules[i], &effects, NULL);
+                if (fold == RULE_FOLD_RESOURCE) continue;
+                match = true;
                 rule_report_fold_warning(&wm->rules[i], fold);
 
                 if (rule_check_flag(&wm->rules[i], RULE_ONE_SHOT)) {
@@ -986,7 +997,10 @@ static void *window_manager_build_window_proxy_thread_proc(void *data)
     SLSGetWindowAlpha(animation->cid, animation->wid, &alpha);
     animation->proxy.level = window_level(animation->wid);
     animation->proxy.sub_level = window_sub_level(animation->wid);
-    SLSGetWindowBounds(animation->cid, animation->wid, &animation->proxy.frame);
+    if (SLSGetWindowBounds(animation->cid, animation->wid, &animation->proxy.frame) != kCGErrorSuccess) {
+        __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
+        return NULL;
+    }
     animation->proxy.tx = animation->proxy.frame.origin.x;
     animation->proxy.ty = animation->proxy.frame.origin.y;
     animation->proxy.tw = animation->proxy.frame.size.width;
@@ -1662,7 +1676,8 @@ static inline bool window_manager_window_connection_is_jankyborders(int window_c
     static char process_name[PROC_PIDPATHINFO_MAXSIZE];
 
     pid_t window_pid = 0;
-    SLSConnectionGetPID(window_cid, &window_pid);
+    process_name[0] = '\0';
+    if (SLSConnectionGetPID(window_cid, &window_pid) != kCGErrorSuccess || window_pid <= 0) return false;
     proc_name(window_pid, process_name, sizeof(process_name));
 
     return strcmp(process_name, "borders") == 0;
@@ -1670,16 +1685,18 @@ static inline bool window_manager_window_connection_is_jankyborders(int window_c
 
 struct window *window_manager_find_window_at_point_filtering_window(struct window_manager *wm, CGPoint point, uint32_t filter_wid)
 {
-    CGPoint window_point;
-    uint32_t window_id;
-    int window_cid;
+    CGPoint window_point = CGPointZero;
+    uint32_t window_id = 0;
+    int window_cid = 0;
 
-    SLSFindWindowAndOwner(g_connection, filter_wid, -1, 0, &point, &window_point, &window_id, &window_cid);
-    if (g_connection == window_cid) SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
+    if (SLSFindWindowAndOwner(g_connection, filter_wid, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+    if (g_connection == window_cid &&
+        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
 
     if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
-        if (g_connection == window_cid) SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
+        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        if (g_connection == window_cid &&
+            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
     }
 
     return window_manager_find_window(wm, window_id);
@@ -1687,16 +1704,18 @@ struct window *window_manager_find_window_at_point_filtering_window(struct windo
 
 struct window *window_manager_find_window_at_point(struct window_manager *wm, CGPoint point)
 {
-    CGPoint window_point;
-    uint32_t window_id;
-    int window_cid;
+    CGPoint window_point = CGPointZero;
+    uint32_t window_id = 0;
+    int window_cid = 0;
 
-    SLSFindWindowAndOwner(g_connection, 0, 1, 0, &point, &window_point, &window_id, &window_cid);
-    if (g_connection == window_cid) SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
+    if (SLSFindWindowAndOwner(g_connection, 0, 1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+    if (g_connection == window_cid &&
+        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
 
     if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
-        if (g_connection == window_cid) SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid);
+        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        if (g_connection == window_cid &&
+            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
     }
 
     return window_manager_find_window(wm, window_id);
@@ -1872,14 +1891,18 @@ struct window *window_manager_find_largest_managed_window(struct space_manager *
     struct view *view = space_manager_find_view(sm, space_manager_active_space());
     if (!view) return NULL;
 
-    uint32_t best_id   = 0;
-    uint32_t best_area = 0;
+    uint32_t best_id = 0;
+    double best_area = 0.0;
+    bool found = false;
 
     for (struct window_node *node = window_node_find_first_leaf(view->root); node != NULL; node = window_node_find_next_leaf(node)) {
-        uint32_t area = node->area.w * node->area.h;
-        if (area > best_area) {
+        double width = node->area.w > 0.0f ? node->area.w : 0.0;
+        double height = node->area.h > 0.0f ? node->area.h : 0.0;
+        double area = width * height;
+        if (!found || area > best_area) {
             best_id   = node->window_order[0];
             best_area = area;
+            found = true;
         }
     }
 
@@ -1891,14 +1914,18 @@ struct window *window_manager_find_smallest_managed_window(struct space_manager 
     struct view *view = space_manager_find_view(sm, space_manager_active_space());
     if (!view) return NULL;
 
-    uint32_t best_id   = 0;
-    uint32_t best_area = UINT32_MAX;
+    uint32_t best_id = 0;
+    double best_area = 0.0;
+    bool found = false;
 
     for (struct window_node *node = window_node_find_first_leaf(view->root); node != NULL; node = window_node_find_next_leaf(node)) {
-        uint32_t area = node->area.w * node->area.h;
-        if (area <= best_area) {
+        double width = node->area.w > 0.0f ? node->area.w : 0.0;
+        double height = node->area.h > 0.0f ? node->area.h : 0.0;
+        double area = width * height;
+        if (!found || area <= best_area) {
             best_id   = node->window_order[0];
             best_area = area;
+            found = true;
         }
     }
 
@@ -2103,10 +2130,10 @@ void window_manager_remove_lost_front_switched_event(struct window_manager *wm, 
     table_remove(&wm->application_lost_front_switched_event, psn);
 }
 
-void window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation)
+bool window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation)
 {
     table_remove(&wm->application_lost_front_switched_event, psn);
-    table_add(&wm->application_lost_front_switched_event, psn, (void *)(uintptr_t) generation);
+    return table_try_add(&wm->application_lost_front_switched_event, psn, (void *)(uintptr_t) generation);
 }
 
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id)
@@ -2541,12 +2568,6 @@ static bool window_manager_existing_application_window_list_with_status(struct a
     *window_list = space_window_list_for_connection_with_status(space_list, space_count, application ? application->connection : 0,
                                                                  window_count, true, &inventory_succeeded);
     return inventory_succeeded;
-}
-
-static uint32_t *window_manager_existing_application_window_list(struct application *application, int *window_count)
-{
-    uint32_t *window_list;
-    return window_manager_existing_application_window_list_with_status(application, &window_list, window_count) ? window_list : NULL;
 }
 
 static bool window_manager_window_list_is_resolved(struct window_manager *wm, uint32_t *window_list, int window_count)
@@ -3310,6 +3331,8 @@ enum window_op_error window_manager_apply_grid(struct space_manager *sm, struct 
         }
     }
 
+    bounds.size.width = fmax(0.0, bounds.size.width);
+    bounds.size.height = fmax(0.0, bounds.size.height);
     float cw = bounds.size.width / c;
     float ch = bounds.size.height / r;
     float fx = bounds.origin.x + bounds.size.width  - cw * (c - x);
@@ -3397,7 +3420,10 @@ void window_manager_toggle_window_shadow(struct window *window)
     }
 }
 
-void window_manager_wait_for_native_fullscreen_transition(struct window *window)
+#define NATIVE_FULLSCREEN_WAIT_ATTEMPTS 100
+#define NATIVE_FULLSCREEN_WAIT_INTERVAL_US 100000
+
+bool window_manager_wait_for_native_fullscreen_transition(struct window *window, bool fullscreen)
 {
     TIME_FUNCTION;
 
@@ -3406,39 +3432,31 @@ void window_manager_wait_for_native_fullscreen_transition(struct window *window)
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
         workspace_is_macos_tahoe()) {
-        while (!space_is_user(space_manager_active_space())) {
-
-            //
-            // NOTE(asmvik): Window has exited native-fullscreen mode.
-            // We need to spin lock until the display is finished animating
-            // because we are not actually able to interact with the window.
-            //
-            // The display_manager API does not work on macOS Monterey.
-            //
-
-            usleep(100000);
+        for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
+            uint64_t sid = window_space(window->id);
+            if (sid && space_is_user(sid) != fullscreen) return true;
+            usleep(NATIVE_FULLSCREEN_WAIT_INTERVAL_US);
         }
-    } else {
-        uint32_t did = window_display_id(window->id);
-
-        do {
-
-            //
-            // NOTE(asmvik): Window has exited native-fullscreen mode.
-            // We need to spin lock until the display is finished animating
-            // because we are not actually able to interact with the window.
-            //
-
-            usleep(100000);
-        } while (display_manager_display_is_animating(did));
+        return false;
     }
+
+    uint32_t did = window_display_id(window->id);
+    if (!did) return false;
+    for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
+        uint64_t sid = window_space(window->id);
+        bool reached_state = sid && space_is_user(sid) != fullscreen;
+        if (reached_state && !display_manager_display_is_animating(did)) return true;
+        usleep(NATIVE_FULLSCREEN_WAIT_INTERVAL_US);
+    }
+    return false;
 }
 
-void window_manager_toggle_window_native_fullscreen(struct window *window)
+bool window_manager_toggle_window_native_fullscreen(struct window *window)
 {
     TIME_FUNCTION;
 
-    uint32_t sid = window_space(window->id);
+    uint64_t sid = window_space(window->id);
+    if (!sid) return false;
 
     //
     // NOTE(asmvik): The window must become the focused window
@@ -3447,21 +3465,27 @@ void window_manager_toggle_window_native_fullscreen(struct window *window)
     //
 
     window_manager_focus_window_with_raise(&window->application->psn, window->id, window->ref);
-    while (sid != space_manager_active_space()) { usleep(100000); }
-
-
-    if (!window_is_fullscreen(window)) {
-        AXUIElementSetAttributeValue(window->ref, kAXFullscreenAttribute, kCFBooleanTrue);
-    } else {
-        AXUIElementSetAttributeValue(window->ref, kAXFullscreenAttribute, kCFBooleanFalse);
+    bool focused = false;
+    for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
+        if (sid == space_manager_active_space()) {
+            focused = true;
+            break;
+        }
+        usleep(NATIVE_FULLSCREEN_WAIT_INTERVAL_US);
     }
+    if (!focused) return false;
+
+    bool fullscreen = !window_is_fullscreen(window);
+    AXError result = AXUIElementSetAttributeValue(window->ref, kAXFullscreenAttribute,
+                                                   fullscreen ? kCFBooleanTrue : kCFBooleanFalse);
+    if (result != kAXErrorSuccess) return false;
 
     //
     // NOTE(asmvik): We toggled the fullscreen attribute and must
     // now spin lock until the post-exit space animation has finished.
     //
 
-    window_manager_wait_for_native_fullscreen_transition(window);
+    return window_manager_wait_for_native_fullscreen_transition(window, fullscreen);
 }
 
 static struct window_node *window_node_toggle_zoom_parent(struct window_node *node)
@@ -3572,6 +3596,8 @@ void window_manager_toggle_window_pip(struct space_manager *sm, struct window *w
         bounds.size.height -= view_padding_sum(dview->top_padding, dview->bottom_padding);
     }
 
+    bounds.size.width = fmax(0.0, bounds.size.width);
+    bounds.size.height = fmax(0.0, bounds.size.height);
     scripting_addition_scale_window(window->id, bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height);
 }
 
@@ -3650,6 +3676,7 @@ mode_3:;
 
 bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct window *window, char *label)
 {
+    if (!label) return false;
     struct window *existing_window = window_manager_find_scratchpad_window(wm, label);
     if (existing_window) return false;
 
@@ -3686,25 +3713,30 @@ bool window_manager_remove_scratchpad_for_window(struct window_manager *wm, stru
 }
 
 #ifdef TESTS
-static uint32_t *(*window_manager_scratchpad_existing_application_window_list)(struct application *, int *) = window_manager_existing_application_window_list;
+static bool (*window_manager_scratchpad_existing_application_window_list)(struct application *, uint32_t **, int *) = window_manager_existing_application_window_list_with_status;
 static bool (*window_manager_scratchpad_order_window_in)(uint32_t *, int) = scripting_addition_order_window_in;
 static bool (*window_manager_scratchpad_refresh_application_windows)(struct space_manager *) = space_manager_refresh_application_windows;
 #else
-#define window_manager_scratchpad_existing_application_window_list window_manager_existing_application_window_list
+#define window_manager_scratchpad_existing_application_window_list window_manager_existing_application_window_list_with_status
 #define window_manager_scratchpad_order_window_in scripting_addition_order_window_in
 #define window_manager_scratchpad_refresh_application_windows space_manager_refresh_application_windows
 #endif
 
-void window_manager_scratchpad_recover_windows(void)
+bool window_manager_scratchpad_recover_windows(void)
 {
-    int window_count;
-    uint32_t *window_list = window_manager_scratchpad_existing_application_window_list(NULL, &window_count);
-    if (!window_list) return;
+    int window_count = 0;
+    uint32_t *window_list = NULL;
+    if (!window_manager_scratchpad_existing_application_window_list(NULL, &window_list, &window_count)) return false;
+    if (!window_count) return true;
+    if (!window_list) return false;
 
-    if (window_manager_scratchpad_order_window_in(window_list, window_count) &&
-        window_manager_scratchpad_refresh_application_windows(&g_space_manager)) {
-        event_loop_window_inventory_did_change();
+    for (int offset = 0; offset < window_count; offset += 1022) {
+        int batch_count = min(1022, window_count - offset);
+        if (!window_manager_scratchpad_order_window_in(window_list + offset, batch_count)) return false;
     }
+    if (!window_manager_scratchpad_refresh_application_windows(&g_space_manager)) return false;
+    event_loop_window_inventory_did_change();
+    return true;
 }
 
 static void window_manager_record_mutated_view(struct view **views, int *count, int capacity, struct view *view)
@@ -3972,7 +4004,7 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
 
             if (application_observe(application)) {
                 if (window_manager_add_application(wm, application)) {
-                    process->launch_retries = 0;
+                    process_launch_retries_reset(process);
                     window_manager_add_existing_application_windows(sm, wm, application, -1, NULL, NULL);
                 } else {
                     application_unobserve(application);

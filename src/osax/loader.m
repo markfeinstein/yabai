@@ -59,7 +59,7 @@ static uint64_t callable_address(void *symbol)
 #endif
 }
 
-int main(int argc, char **argv)
+static int loader_main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
@@ -254,4 +254,11 @@ cleanup:
 
     if (completion_success && reclaim && reclaim_success) result = 0;
     return result;
+}
+
+int main(int argc, char **argv)
+{
+    @autoreleasepool {
+        return loader_main(argc, argv);
+    }
 }

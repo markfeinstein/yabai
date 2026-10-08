@@ -58,37 +58,37 @@ pid_t g_pid;
 static int client_read_response_fd(int sockfd, FILE *standard_output, FILE *standard_error,
                                    uint32_t inactivity_timeout_ms)
 {
-    int result = EXIT_SUCCESS;
-    bool first_byte = true;
-    FILE *output = standard_output;
-    char rsp[BUFSIZ];
+    struct daemon_response_frame frame = {0};
     uint64_t deadline = socket_io_deadline_after_ms(inactivity_timeout_ms);
+    if (!socket_io_read_exact_until(sockfd, &frame, sizeof(frame), deadline) ||
+        !daemon_response_frame_is_valid(&frame)) return EXIT_FAILURE;
 
-    for (;;) {
-        size_t bytes_read;
-        enum socket_io_read_result read_result = socket_io_read_some_until(sockfd, rsp, sizeof(rsp),
-                                                                           deadline, &bytes_read);
-        if (read_result == SOCKET_IO_READ_EOF) return result;
-        if (read_result != SOCKET_IO_READ_DATA) return EXIT_FAILURE;
+    int result = frame.failed ? EXIT_FAILURE : EXIT_SUCCESS;
+    FILE *output = frame.failed ? standard_error : standard_output;
+    size_t remaining = frame.length;
+    bool first_byte = true;
+    char rsp[BUFSIZ];
 
+    while (remaining) {
+        size_t capacity = remaining < sizeof(rsp) ? remaining : sizeof(rsp);
+        size_t bytes_read = 0;
         deadline = socket_io_deadline_after_ms(inactivity_timeout_ms);
+        if (socket_io_read_some_until(sockfd, rsp, capacity, deadline, &bytes_read) != SOCKET_IO_READ_DATA ||
+            !bytes_read || bytes_read > remaining) return EXIT_FAILURE;
 
         size_t offset = 0;
         if (first_byte) {
             first_byte = false;
-            if (rsp[0] == FAILURE_MESSAGE[0]) {
-                result = EXIT_FAILURE;
-                output = standard_error;
-                offset = 1;
-            }
+            if (frame.failed && rsp[0] == FAILURE_MESSAGE[0]) offset = 1;
         }
 
         size_t output_length = bytes_read - offset;
         if ((output_length && fwrite(rsp + offset, 1, output_length, output) != output_length) ||
-            fflush(output) != 0) {
-            return EXIT_FAILURE;
-        }
+            fflush(output) != 0) return EXIT_FAILURE;
+        remaining -= bytes_read;
     }
+
+    return result;
 }
 
 static int client_send_message(int argc, char **argv)
@@ -102,21 +102,28 @@ static int client_send_message(int argc, char **argv)
         error("yabai-msg: could not prepare secure runtime directory! abort..\n");
     }
 
-    int message_length = argc;
-    int argl[argc];
-
+    size_t message_length = (size_t) argc;
+    if (message_length > DAEMON_MESSAGE_MAX_LENGTH) {
+        error("yabai-msg: message exceeds protocol limit! abort..\n");
+    }
     for (int i = 1; i < argc; ++i) {
-        argl[i] = strlen(argv[i]);
-        message_length += argl[i];
+        size_t argument_length = strlen(argv[i]);
+        if (argument_length > DAEMON_MESSAGE_MAX_LENGTH - message_length) {
+            error("yabai-msg: message exceeds protocol limit! abort..\n");
+        }
+        message_length += argument_length;
     }
 
-    char *message = malloc(sizeof(int)+message_length);
-    char *temp = sizeof(int)+message;
+    int wire_message_length = (int) message_length;
+    char *message = malloc(sizeof(wire_message_length) + message_length);
+    if (!message) error("yabai-msg: failed to allocate message buffer! abort..\n");
+    char *temp = sizeof(wire_message_length) + message;
 
-    memcpy(message, &message_length, sizeof(int));
+    memcpy(message, &wire_message_length, sizeof(wire_message_length));
     for (int i = 1; i < argc; ++i) {
-        memcpy(temp, argv[i], argl[i]);
-        temp += argl[i];
+        size_t argument_length = strlen(argv[i]);
+        memcpy(temp, argv[i], argument_length);
+        temp += argument_length;
         *temp++ = '\0';
     }
     *temp++ = '\0';
@@ -132,7 +139,7 @@ static int client_send_message(int argc, char **argv)
     }
 
     uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
-    if (!socket_io_write_all_until(sockfd, message, sizeof(int)+message_length, deadline)) {
+    if (!socket_io_write_all_until(sockfd, message, sizeof(wire_message_length) + message_length, deadline)) {
         error("yabai-msg: failed to send data..\n");
     }
 
@@ -159,8 +166,8 @@ static inline bool configure_settings_and_acquire_lock(void)
 
     NSApplicationLoad();
     g_pid = getpid();
-    g_event_bytes = malloc(0x100);
-    memset(g_event_bytes, 0, 0x100);
+    g_event_bytes = calloc(1, 0x100);
+    if (!g_event_bytes) error("yabai: could not allocate event storage! abort..\n");
     g_connection = SLSMainConnectionID();
     g_cv_host_clock_frequency   = CVGetHostClockFrequency();
     g_layer_normal_window_level = CGWindowLevelForKey(LAYER_NORMAL);

@@ -44,8 +44,9 @@ static void declarative_report_append_number(struct declarative_report_builder *
 static bool declarative_report_path_token_known(const char *token, size_t length)
 {
     static const char *known[] = {
-        "version", "config", "spaces", "rules", "match", "settings", "effects",
-        "label", "one_shot", "app", "title", "role", "subrole", "pattern", "exclude",
+        "version", "config", "spaces", "modes", "active_mode", "selected_mode", "rules",
+        "name", "scaffold", "match", "settings", "effects", "label", "one_shot",
+        "app", "title", "role", "subrole", "pattern", "exclude",
         "display", "space", "follow", "grid", "opacity", "manage", "sticky",
         "mouse_follows_focus", "sub_layer", "native_fullscreen", "scratchpad", "index",
         "uuid", "external_bar", "mode", "top_padding", "bottom_padding", "left_padding",
@@ -117,7 +118,7 @@ static void declarative_report_append_escaped_path(struct declarative_report_bui
 
 static size_t declarative_report_utf8_prefix(const char *bytes, size_t length)
 {
-    while (length && ((unsigned char) bytes[length] & 0xc0) == 0x80) --length;
+    while (length && !utf8_validate_bytes(bytes, length)) --length;
     return length;
 }
 
@@ -126,6 +127,7 @@ static size_t declarative_report_limit(char *output, size_t length, size_t limit
     static const char suffix[] = "...<truncated>";
     size_t newline_bytes = newline ? 1 : 0;
     if (!limit) return 0;
+    length = declarative_report_utf8_prefix(output, length);
     if (length + newline_bytes <= limit) {
         if (newline) output[length++] = '\n';
         output[length] = '\0';

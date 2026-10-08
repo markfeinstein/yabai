@@ -1,7 +1,36 @@
+static size_t daemon_test_make_response(char *wire, size_t capacity, const char *payload,
+                                        size_t payload_length, bool failed)
+{
+    size_t wire_length = sizeof(struct daemon_response_frame) + payload_length;
+    if (!wire || wire_length > capacity || payload_length > DAEMON_RESPONSE_MAX_BYTES) return 0;
+    struct daemon_response_frame frame = {
+        .magic = DAEMON_RESPONSE_FRAME_MAGIC,
+        .length = (uint32_t) payload_length,
+        .failed = failed ? 1 : 0
+    };
+    memcpy(wire, &frame, sizeof(frame));
+    if (payload_length) memcpy(wire + sizeof(frame), payload, payload_length);
+    return wire_length;
+}
+
+static bool daemon_test_read_response(int fd, char *response, size_t capacity,
+                                      size_t *length, bool *failed)
+{
+    struct daemon_response_frame frame = {0};
+    if (!socket_io_read_exact_until(fd, &frame, sizeof(frame), socket_io_deadline_after_ms(1000)) ||
+        !daemon_response_frame_is_valid(&frame) || frame.length > capacity) return false;
+    if (frame.length &&
+        !socket_io_read_exact_until(fd, response, frame.length, socket_io_deadline_after_ms(1000))) return false;
+    if (length) *length = frame.length;
+    if (failed) *failed = frame.failed;
+    return true;
+}
+
 TEST_FUNC(daemon_message_signed_boundaries_and_suffixes,
 {
     char valid[] = { 'x', '\0', '\0' };
     char bad[] = { 'x', '\0', 'x' };
+    char interior_empty[] = { 'x', '\0', '\0', 'y', '\0', '\0' };
     TEST_CHECK(daemon_message_length_is_valid(INT_MIN), false);
     TEST_CHECK(daemon_message_length_is_valid(-1), false);
     TEST_CHECK(daemon_message_length_is_valid(0), false);
@@ -14,6 +43,7 @@ TEST_FUNC(daemon_message_signed_boundaries_and_suffixes,
     TEST_CHECK(daemon_message_body_is_valid(valid, 1), false);
     TEST_CHECK(daemon_message_body_is_valid(valid, sizeof(valid)), true);
     TEST_CHECK(daemon_message_body_is_valid(bad, sizeof(bad)), false);
+    TEST_CHECK(daemon_message_body_is_valid(interior_empty, sizeof(interior_empty)), false);
 });
 
 TEST_FUNC(daemon_message_incomplete_frame_has_failure_response,
@@ -25,9 +55,12 @@ TEST_FUNC(daemon_message_incomplete_frame_has_failure_response,
         static const char expected[] = { DAEMON_MESSAGE_FAILURE_MARKER,
                                          'i','n','c','o','m','p','l','e','t','e',' ','m','e','s','s','a','g','e','.','\n' };
         char response[sizeof(expected)] = { 0 };
+        size_t response_length = 0;
+        bool failed = false;
         daemon_message_send_incomplete_until(fd[0], socket_io_deadline_after_ms(500));
-        TEST_CHECK(socket_io_read_exact_until(fd[1], response, sizeof(response),
-                                              socket_io_deadline_after_ms(500)), true);
+        TEST_CHECK(daemon_test_read_response(fd[1], response, sizeof(response), &response_length, &failed), true);
+        TEST_CHECK(failed, true);
+        TEST_CHECK(response_length, sizeof(expected));
         TEST_CHECK(memcmp(response, expected, sizeof(expected)), 0);
         close(fd[0]);
         close(fd[1]);
@@ -41,8 +74,11 @@ TEST_FUNC(daemon_message_complete_invalid_frames_have_failure_responses,
         result = false;
     } else {
         char response[64] = {};
+        size_t length = 0;
+        bool failed = false;
         daemon_message_send_invalid_length(fd[0]);
-        ssize_t length = recv(fd[1], response, sizeof(response), 0);
+        TEST_CHECK(daemon_test_read_response(fd[1], response, sizeof(response), &length, &failed), true);
+        TEST_CHECK(failed, true);
         TEST_CHECK(length > 1, true);
         TEST_CHECK(response[0], DAEMON_MESSAGE_FAILURE_MARKER);
         TEST_CHECK(strstr(response + 1, "invalid message length") != NULL, true);
@@ -55,8 +91,11 @@ TEST_FUNC(daemon_message_complete_invalid_frames_have_failure_responses,
         result = false;
     } else {
         char response[64] = {};
+        size_t length = 0;
+        bool failed = false;
         daemon_message_send_invalid_body(fd[0]);
-        ssize_t length = recv(fd[1], response, sizeof(response), 0);
+        TEST_CHECK(daemon_test_read_response(fd[1], response, sizeof(response), &length, &failed), true);
+        TEST_CHECK(failed, true);
         TEST_CHECK(length > 1, true);
         TEST_CHECK(response[0], DAEMON_MESSAGE_FAILURE_MARKER);
         TEST_CHECK(strstr(response + 1, "invalid message body") != NULL, true);
@@ -69,8 +108,11 @@ TEST_FUNC(daemon_message_complete_invalid_frames_have_failure_responses,
         result = false;
     } else {
         char response[64] = {};
+        size_t length = 0;
+        bool failed = false;
         daemon_message_send_overloaded(fd[0]);
-        ssize_t length = recv(fd[1], response, sizeof(response), 0);
+        TEST_CHECK(daemon_test_read_response(fd[1], response, sizeof(response), &length, &failed), true);
+        TEST_CHECK(failed, true);
         TEST_CHECK(length > 1, true);
         TEST_CHECK(response[0], DAEMON_MESSAGE_FAILURE_MARKER);
         TEST_CHECK(strstr(response + 1, "too many pending messages") != NULL, true);
@@ -128,6 +170,8 @@ TEST_FUNC(daemon_response_buffer_overflow_selects_failure_response,
         result = false;
     } else {
         char actual[sizeof(expected)] = {};
+        size_t actual_length = 0;
+        bool failed = false;
         TEST_CHECK(fseek(response.stream, (long) DAEMON_RESPONSE_MAX_BYTES, SEEK_SET), 0);
         (void) fputc('x', response.stream);
         TEST_CHECK(fflush(response.stream) != 0, true);
@@ -136,8 +180,9 @@ TEST_FUNC(daemon_response_buffer_overflow_selects_failure_response,
                                                      socket_io_deadline_after_ms(500)), false);
         TEST_CHECK(response.length, 0U);
         TEST_CHECK(shutdown(fd[0], SHUT_WR), 0);
-        TEST_CHECK(socket_io_read_exact_until(fd[1], actual, sizeof(actual),
-                                              socket_io_deadline_after_ms(500)), true);
+        TEST_CHECK(daemon_test_read_response(fd[1], actual, sizeof(actual), &actual_length, &failed), true);
+        TEST_CHECK(failed, true);
+        TEST_CHECK(actual_length, sizeof(expected));
         TEST_CHECK(memcmp(actual, expected, sizeof(expected)), 0);
         TEST_CHECK(recv(fd[1], actual, 1, 0), 0);
     }
@@ -298,8 +343,9 @@ TEST_FUNC(daemon_response_large_buffer_reaches_draining_peer,
 {
     int fd[2] = { -1, -1 };
     const size_t length = 512 * 1024;
+    const size_t wire_length = sizeof(struct daemon_response_frame) + length;
     char *input = malloc(length);
-    char *output = calloc(length, 1);
+    char *output = calloc(wire_length, 1);
     struct daemon_response_buffer response = {};
     if (!input || !output || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0 ||
         !daemon_response_buffer_open(&response)) {
@@ -311,7 +357,7 @@ TEST_FUNC(daemon_response_large_buffer_reaches_draining_peer,
 
         int send_buffer = 1024;
         setsockopt(fd[0], SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer));
-        struct socket_io_test_read context = { fd[1], output, length, 0 };
+        struct socket_io_test_read context = { fd[1], output, wire_length, 0 };
         pthread_t reader;
         if (pthread_create(&reader, NULL, socket_io_test_fragment_reader, &context) != 0) {
             result = false;
@@ -320,8 +366,13 @@ TEST_FUNC(daemon_response_large_buffer_reaches_draining_peer,
                                                           socket_io_deadline_after_ms(5000)), true);
             shutdown(fd[0], SHUT_WR);
             pthread_join(reader, NULL);
-            TEST_CHECK(context.length, length);
-            TEST_CHECK(memcmp(input, output, length), 0);
+            TEST_CHECK(context.length, wire_length);
+            struct daemon_response_frame frame = {0};
+            memcpy(&frame, output, sizeof(frame));
+            TEST_CHECK(daemon_response_frame_is_valid(&frame), true);
+            TEST_CHECK(frame.failed, 0);
+            TEST_CHECK(frame.length, length);
+            TEST_CHECK(memcmp(input, output + sizeof(frame), length), 0);
         }
     }
     if (fd[0] != -1) close(fd[0]);
@@ -450,10 +501,12 @@ TEST_FUNC(client_response_fragmented_stream_refreshes_inactivity_deadline,
     FILE *standard_output = tmpfile();
     FILE *standard_error = tmpfile();
     const char response[] = "streamed response over many fragments";
-    if (!standard_output || !standard_error || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
+    char wire[sizeof(struct daemon_response_frame) + sizeof(response) - 1];
+    size_t wire_length = daemon_test_make_response(wire, sizeof(wire), response, sizeof(response) - 1, false);
+    if (!standard_output || !standard_error || !wire_length || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
         result = false;
     } else {
-        struct socket_io_test_write context = { fd[1], response, strlen(response), 0, 10000, false };
+        struct socket_io_test_write context = { fd[1], wire, wire_length, 0, 10000, false };
         pthread_t writer;
         if (pthread_create(&writer, NULL, socket_io_test_fragment_writer, &context) != 0) {
             result = false;
@@ -481,12 +534,15 @@ TEST_FUNC(client_response_fragmented_failure_routes_everything_to_stderr,
     FILE *standard_output = tmpfile();
     FILE *standard_error = tmpfile();
     const char response[] = "fragmented failure";
-    if (!standard_output || !standard_error || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
-        result = false;
-    } else if (write(fd[1], FAILURE_MESSAGE, 1) != 1) {
+    char payload[1 + sizeof(response) - 1];
+    payload[0] = FAILURE_MESSAGE[0];
+    memcpy(payload + 1, response, sizeof(response) - 1);
+    char wire[sizeof(struct daemon_response_frame) + sizeof(payload)];
+    size_t wire_length = daemon_test_make_response(wire, sizeof(wire), payload, sizeof(payload), true);
+    if (!standard_output || !standard_error || !wire_length || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
         result = false;
     } else {
-        struct socket_io_test_write context = { fd[1], response, strlen(response), 100000, 1000, false };
+        struct socket_io_test_write context = { fd[1], wire, wire_length, 100000, 1000, false };
         pthread_t writer;
         if (pthread_create(&writer, NULL, socket_io_test_fragment_writer, &context) != 0) {
             result = false;
@@ -517,16 +573,14 @@ TEST_FUNC(client_response_later_failure_marker_and_embedded_nul_remain_stdout,
     int fd[2] = { -1, -1 };
     FILE *standard_output = tmpfile();
     FILE *standard_error = tmpfile();
-    const char first[] = "success:";
-    const char second[] = { FAILURE_MESSAGE[0], 'x', '\0', 'y' };
     const char expected[] = { 's', 'u', 'c', 'c', 'e', 's', 's', ':',
                               FAILURE_MESSAGE[0], 'x', '\0', 'y' };
-    if (!standard_output || !standard_error || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
-        result = false;
-    } else if (write(fd[1], first, sizeof(first)-1) != sizeof(first)-1) {
+    char wire[sizeof(struct daemon_response_frame) + sizeof(expected)];
+    size_t wire_length = daemon_test_make_response(wire, sizeof(wire), expected, sizeof(expected), false);
+    if (!standard_output || !standard_error || !wire_length || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
         result = false;
     } else {
-        struct socket_io_test_write context = { fd[1], second, sizeof(second), 100000, 1000, false };
+        struct socket_io_test_write context = { fd[1], wire, wire_length, 0, 1000, false };
         pthread_t writer;
         if (pthread_create(&writer, NULL, socket_io_test_fragment_writer, &context) != 0) {
             result = false;
@@ -552,7 +606,7 @@ TEST_FUNC(client_response_later_failure_marker_and_embedded_nul_remain_stdout,
     if (standard_error) fclose(standard_error);
 });
 
-TEST_FUNC(client_response_eof_completes_successfully,
+TEST_FUNC(client_response_requires_complete_frame_and_payload,
 {
     int fd[2] = { -1, -1 };
     FILE *standard_output = tmpfile();
@@ -562,6 +616,32 @@ TEST_FUNC(client_response_eof_completes_successfully,
     } else {
         close(fd[1]);
         fd[1] = -1;
+        TEST_CHECK(client_read_response_fd(fd[0], standard_output, standard_error, 50), EXIT_FAILURE);
+    }
+    if (fd[0] != -1) close(fd[0]);
+
+    fd[0] = fd[1] = -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
+        result = false;
+    } else {
+        struct daemon_response_frame frame = {
+            .magic = DAEMON_RESPONSE_FRAME_MAGIC,
+            .length = 5
+        };
+        TEST_CHECK(write(fd[1], &frame, sizeof(frame)), (ssize_t) sizeof(frame));
+        TEST_CHECK(write(fd[1], "ab", 2), 2);
+        close(fd[1]);
+        fd[1] = -1;
+        TEST_CHECK(client_read_response_fd(fd[0], standard_output, standard_error, 50), EXIT_FAILURE);
+    }
+    if (fd[0] != -1) close(fd[0]);
+
+    fd[0] = fd[1] = -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
+        result = false;
+    } else {
+        struct daemon_response_frame frame = { .magic = DAEMON_RESPONSE_FRAME_MAGIC };
+        TEST_CHECK(write(fd[1], &frame, sizeof(frame)), (ssize_t) sizeof(frame));
         TEST_CHECK(client_read_response_fd(fd[0], standard_output, standard_error, 50), EXIT_SUCCESS);
     }
     if (fd[0] != -1) close(fd[0]);

@@ -473,8 +473,8 @@ static AXUIElementRef display_manager_find_element_at_point(CGPoint point)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 uint32_t display_manager_focus_display_with_window_at_point(CGPoint point)
 {
-    int element_connection;
-    ProcessSerialNumber element_psn;
+    int element_connection = 0;
+    ProcessSerialNumber element_psn = {0};
 
     AXUIElementRef element_ref = display_manager_find_element_at_point(point);
     if (!element_ref) goto out;
@@ -482,8 +482,8 @@ uint32_t display_manager_focus_display_with_window_at_point(CGPoint point)
     uint32_t element_id = ax_window_id(element_ref);
     if (!element_id) goto err_ref;
 
-    SLSGetWindowOwner(g_connection, element_id, &element_connection);
-    SLSGetConnectionPSN(element_connection, &element_psn);
+    if (SLSGetWindowOwner(g_connection, element_id, &element_connection) != kCGErrorSuccess ||
+        SLSGetConnectionPSN(element_connection, &element_psn) != kCGErrorSuccess) goto err_ref;
     window_manager_focus_window_with_raise(&element_psn, element_id, element_ref);
     CFRelease(element_ref);
     return element_id;

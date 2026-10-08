@@ -440,6 +440,39 @@ static bool adopt_runtime_dock_spaces_candidate(id candidate)
     return true;
 }
 
+#if __arm64__
+static uint64_t hex_find_seq(uint64_t baddr, const char *c_pattern);
+uint64_t decode_adrp_add(uint64_t addr, uint64_t offset);
+
+static bool adopt_dock_spaces_slot(uint64_t slot_address)
+{
+    if (!span_in_region(slot_address, sizeof(id), VM_PROT_READ)) return false;
+    id candidate;
+    memcpy(&candidate, (const void *) slot_address, sizeof(candidate));
+    return adopt_runtime_dock_spaces_candidate(candidate);
+}
+
+static bool adopt_pattern_dock_spaces_candidate(uint64_t baseaddr, uint64_t pattern_address)
+{
+    if (!pattern_address) return false;
+    uint64_t slot_offset = decode_adrp_add(pattern_address, pattern_address - baseaddr);
+    uint64_t slot_address;
+    return checked_add_u64(baseaddr, slot_offset, &slot_address) &&
+           adopt_dock_spaces_slot(slot_address);
+}
+
+static bool adopt_macos27_pattern_dock_spaces(uint64_t baseaddr, NSOperatingSystemVersion os_version)
+{
+    uint64_t address = hex_find_seq(baseaddr + get_dock_spaces_offset(os_version),
+                                    get_dock_spaces_pattern(os_version));
+    if (!address) {
+        address = hex_find_seq(baseaddr + get_dock_spaces_offset(os_version),
+                               get_dock_spaces_fallback_pattern(os_version));
+    }
+    return adopt_pattern_dock_spaces_candidate(baseaddr, address);
+}
+#endif
+
 static id resolve_dock_spaces_from_runtime(void)
 {
     Class tile_class = objc_getClass("Tile");
@@ -593,8 +626,9 @@ static void init_instances()
     bool allow_legacy_dock_spaces = true;
 #if __arm64__
     allow_legacy_dock_spaces = macos27_allows_legacy_dock_spaces(os_version);
-    if (!allow_legacy_dock_spaces) {
-        adopt_runtime_dock_spaces_candidate(resolve_dock_spaces_from_runtime());
+    if (!allow_legacy_dock_spaces &&
+        !adopt_runtime_dock_spaces_candidate(resolve_dock_spaces_from_runtime())) {
+        (void) adopt_macos27_pattern_dock_spaces(baseaddr, os_version);
     }
 #endif
 
@@ -731,9 +765,13 @@ static inline id get_ivar_value(id instance, const char *name)
     return result;
 }
 
-static inline void set_ivar_value(id instance, const char *name, id value)
+static inline void replace_owned_ivar_value(id instance, const char *name, id value)
 {
+    id previous = get_ivar_value(instance, name);
+    if (previous == value) return;
+    [value retain];
     object_setInstanceVariable(instance, name, value);
+    [previous release];
 }
 
 static inline uint64_t get_space_id(id space)
@@ -804,6 +842,19 @@ static int (*payload_test_space_postcondition)(enum space_postcondition_operatio
 static void (*payload_test_space_postcondition_sleep)(useconds_t);
 #endif
 
+static bool space_follows_space_in_list(NSArray *spaces, uint64_t space_id, uint64_t predecessor_id)
+{
+    NSInteger space_index = NSNotFound;
+    NSInteger predecessor_index = NSNotFound;
+    for (NSUInteger i = 0; i < [spaces count]; ++i) {
+        uint64_t candidate = get_space_id(spaces[i]);
+        if (candidate == space_id) space_index = (NSInteger) i;
+        if (candidate == predecessor_id) predecessor_index = (NSInteger) i;
+    }
+    return space_index != NSNotFound && predecessor_index != NSNotFound &&
+           space_index == predecessor_index + 1;
+}
+
 static int query_space_postcondition(enum space_postcondition_operation operation, uint64_t space_id,
                                      CFStringRef source_display, CFStringRef destination_display,
                                      NSUInteger previous_count)
@@ -832,6 +883,9 @@ static int query_space_postcondition(enum space_postcondition_operation operatio
         }
     }
     if (operation == SPACE_POSTCONDITION_DESTROY) return !in_destination;
+    if (operation == SPACE_POSTCONDITION_MOVE && CFEqual(source_display, destination_display)) {
+        return space_follows_space_in_list(destination_spaces, space_id, (uint64_t) previous_count);
+    }
 
     NSArray *source_spaces = ((NSArray *(*)(id, SEL, CFStringRef)) objc_msgSend)(
         dock_spaces, @selector(spacesForDisplay:), source_display);
@@ -861,6 +915,17 @@ static bool wait_for_space_postcondition(enum space_postcondition_operation oper
         usleep(10000);
     }
     return false;
+}
+
+static bool wait_for_space_move_postconditions(uint64_t source_space_id, uint64_t dest_space_id,
+                                               CFStringRef source_display, CFStringRef dest_display,
+                                               bool focus_dest_space)
+{
+    if (!wait_for_space_postcondition(SPACE_POSTCONDITION_MOVE, source_space_id,
+                                      source_display, dest_display, (NSUInteger) dest_space_id)) return false;
+    return !focus_dest_space ||
+           wait_for_space_postcondition(SPACE_POSTCONDITION_FOCUS, source_space_id,
+                                        dest_display, dest_display, 0);
 }
 
 static bool do_space_move(char *message)
@@ -900,9 +965,7 @@ static bool do_space_move(char *message)
         SLSShowSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_dest_space);
         SLSHideSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_source_space);
         SLSManagedDisplaySetCurrentSpace(SLSMainConnectionID(), source_display_uuid, source_prev_space_id);
-        set_ivar_value(source_display_space, "_currentSpace", [source_prev_space retain]);
-        [ns_dest_space release];
-        [ns_source_space release];
+        replace_owned_ivar_value(source_display_space, "_currentSpace", source_prev_space);
     }
 
     asm__call_move_space(source_space, dest_space, dest_display_uuid, dock_spaces, move_space_fp);
@@ -915,18 +978,18 @@ static bool do_space_move(char *message)
         uint64_t new_source_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), source_display_uuid);
         id new_source_space = space_for_display_with_id(source_display_uuid, new_source_space_id);
         if (new_source_space != nil) {
-            set_ivar_value(source_display_space, "_currentSpace", [new_source_space retain]);
+            replace_owned_ivar_value(source_display_space, "_currentSpace", new_source_space);
         }
 
         NSArray *ns_dest_monitor_space = @[ @(dest_space_id) ];
         SLSHideSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_dest_monitor_space);
         SLSManagedDisplaySetCurrentSpace(SLSMainConnectionID(), dest_display_uuid, source_space_id);
-        set_ivar_value(dest_display_space, "_currentSpace", [source_space retain]);
-        [ns_dest_monitor_space release];
+        replace_owned_ivar_value(dest_display_space, "_currentSpace", source_space);
     }
 
-    mutation_completed = wait_for_space_postcondition(SPACE_POSTCONDITION_MOVE, source_space_id,
-                                                       source_display_uuid, dest_display_uuid, 0);
+    mutation_completed = wait_for_space_move_postconditions(source_space_id, dest_space_id,
+                                                             source_display_uuid, dest_display_uuid,
+                                                             focus_dest_space);
 
 cleanup:
     if (source_display_uuid) CFRelease(source_display_uuid);
@@ -961,7 +1024,7 @@ static bool do_space_destroy(char *message)
         uint64_t dest_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), display_uuid);
         id dest_space = space_for_display_with_id(display_uuid, dest_space_id);
         if (dest_space != nil) {
-            set_ivar_value(display_space, "_currentSpace", [dest_space retain]);
+            replace_owned_ivar_value(display_space, "_currentSpace", dest_space);
         }
     }
 
@@ -1073,9 +1136,7 @@ static bool do_space_focus(char *message)
             SLSShowSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_dest_space);
             SLSHideSpaces(SLSMainConnectionID(), (__bridge CFArrayRef) ns_source_space);
             SLSManagedDisplaySetCurrentSpace(SLSMainConnectionID(), dest_display, dest_space_id);
-            set_ivar_value(display_space, "_currentSpace", [dest_space retain]);
-            [ns_dest_space release];
-            [ns_source_space release];
+            replace_owned_ivar_value(display_space, "_currentSpace", dest_space);
         }
 
         bool mutation_completed = wait_for_space_postcondition(SPACE_POSTCONDITION_FOCUS, dest_space_id,
@@ -1627,10 +1688,12 @@ static void *handle_connection(void *unused)
             continue;
         }
 
-        char message[SA_SOCKET_BUFF_LEN];
-        int message_length = read_message(sockfd, message);
-        if (message_length) {
-            handle_message(sockfd, message, (size_t) message_length);
+        @autoreleasepool {
+            char message[SA_SOCKET_BUFF_LEN];
+            int message_length = read_message(sockfd, message);
+            if (message_length) {
+                handle_message(sockfd, message, (size_t) message_length);
+            }
         }
 
         shutdown(sockfd, SHUT_RDWR);
@@ -1696,25 +1759,27 @@ __attribute__((constructor))
 #endif
 void load_payload(void)
 {
-    NSLog(@"[yabai-sa] loaded payload..");
+    @autoreleasepool {
+        NSLog(@"[yabai-sa] loaded payload..");
 
-    struct yabai_runtime_paths runtime_paths;
-    uid_t uid = getuid();
-    if (!yabai_runtime_prepare_for_uid(uid, NULL, true, &runtime_paths)) {
-        NSLog(@"[yabai-sa] could not prepare secure runtime directory! abort..");
-        return;
-    }
-    sa_lock_fd = yabai_runtime_acquire_lock(runtime_paths.sa_lock, uid);
-    if (sa_lock_fd == -1) {
-        NSLog(@"[yabai-sa] could not acquire secure lifecycle lock! abort..");
-        return;
-    }
+        struct yabai_runtime_paths runtime_paths;
+        uid_t uid = getuid();
+        if (!yabai_runtime_prepare_for_uid(uid, NULL, true, &runtime_paths)) {
+            NSLog(@"[yabai-sa] could not prepare secure runtime directory! abort..");
+            return;
+        }
+        sa_lock_fd = yabai_runtime_acquire_lock(runtime_paths.sa_lock, uid);
+        if (sa_lock_fd == -1) {
+            NSLog(@"[yabai-sa] could not acquire secure lifecycle lock! abort..");
+            return;
+        }
 
-    if (start_daemon(runtime_paths.sa_socket, uid)) {
-        NSLog(@"[yabai-sa] now listening..");
-    } else {
-        close(sa_lock_fd);
-        sa_lock_fd = -1;
-        NSLog(@"[yabai-sa] failed to spawn thread..");
+        if (start_daemon(runtime_paths.sa_socket, uid)) {
+            NSLog(@"[yabai-sa] now listening..");
+        } else {
+            close(sa_lock_fd);
+            sa_lock_fd = -1;
+            NSLog(@"[yabai-sa] failed to spawn thread..");
+        }
     }
 }
