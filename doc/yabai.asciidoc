@@ -491,7 +491,7 @@ Global Settings
 
 *window_focus_fallback* ['off|recent']::
     Select the native policy used after `WINDOW_DESTROYED`, `WINDOW_MINIMIZED` and `APPLICATION_HIDDEN`. The default is 'off'. +
-    'recent': After the triggering handler finishes mutating manager state, queue one event-loop follow-up. When that follow-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as `window --focus recent` and focuses it through the normal focus path. Destroyed, minimized, hidden, ineligible, invalid and unavailable recent windows are ignored; no candidate is a no-op. Duplicate triggers coalesce while one follow-up is pending. +
+    'recent': After the triggering handler finishes mutating manager state, queue one event-loop follow-up. When that follow-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as `window --focus recent` and focuses it through the normal focus path only when that window is sticky or belongs to the active Space. Destroyed, minimized, hidden, ineligible, invalid, unavailable and inactive-Space recent windows are ignored; no candidate is a no-op. Duplicate triggers coalesce while one follow-up is pending. +
     This is a typed focus policy. It does not execute generic signals, invoke a shell, spawn a process, or route a synthetic command through the daemon socket. Existing user-configured signals keep their normal behavior and order.
 
 *window_placement* ['first_child|second_child']::

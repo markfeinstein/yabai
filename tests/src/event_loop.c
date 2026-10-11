@@ -2817,6 +2817,7 @@ TEST_FUNC(update_window_notifications_append_grows_past_fixed_boundary,
 static struct window *focus_fallback_test_focused;
 static struct window *focus_fallback_test_recent;
 static int focus_fallback_test_focus_count;
+static bool focus_fallback_test_on_active_space;
 
 static struct window *focus_fallback_test_find_focused(struct window_manager *wm)
 {
@@ -2828,6 +2829,11 @@ static struct window *focus_fallback_test_find_recent(struct window_manager *wm)
 {
     (void) wm;
     return focus_fallback_test_recent && focus_fallback_test_recent->ref ? focus_fallback_test_recent : NULL;
+}
+
+static bool focus_fallback_test_is_on_active_space(struct window *window)
+{
+    return window == focus_fallback_test_recent && focus_fallback_test_on_active_space;
 }
 
 static void focus_fallback_test_focus(struct window *window)
@@ -2880,6 +2886,7 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
     enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
     __auto_type saved_focused = event_loop_focus_fallback_find_focused;
     __auto_type saved_recent = event_loop_focus_fallback_find_recent;
+    __auto_type saved_on_active_space = event_loop_focus_fallback_is_on_active_space;
     __auto_type saved_focus = event_loop_focus_fallback_focus;
     __auto_type saved_hook = event_loop_focus_fallback_entry_test_hook;
     __auto_type saved_rejection_hook = event_loop_focus_fallback_rejection_test_hook;
@@ -2891,6 +2898,7 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
     recent.id_ptr = &recent.id;
     event_loop_focus_fallback_find_focused = focus_fallback_test_find_focused;
     event_loop_focus_fallback_find_recent = focus_fallback_test_find_recent;
+    event_loop_focus_fallback_is_on_active_space = focus_fallback_test_is_on_active_space;
     event_loop_focus_fallback_focus = focus_fallback_test_focus;
     event_loop_focus_fallback_entry_test_hook = NULL;
     event_loop_focus_fallback_rejection_test_hook = NULL;
@@ -2906,6 +2914,7 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
 
     g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_RECENT;
     focus_fallback_test_focus_count = 0;
+    focus_fallback_test_on_active_space = true;
     for (size_t i = 0; i < sizeof(triggers) / sizeof(*triggers); ++i) {
         struct event event;
         focus_fallback_test_focused = &focused;
@@ -2926,6 +2935,13 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
         TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
         EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
         TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+
+        focus_fallback_test_on_active_space = false;
+        event_loop_request_window_focus_fallback_for_event(triggers[i]);
+        TEST_CHECK(event_queue_pop(&g_event_loop.queue, &event), true);
+        EVENT_HANDLER_WINDOW_FOCUS_FALLBACK(event.context, event.param1);
+        TEST_CHECK(focus_fallback_test_focus_count, (int) i + 1);
+        focus_fallback_test_on_active_space = true;
 
         focus_fallback_test_recent = NULL;
         event_loop_request_window_focus_fallback_for_event(triggers[i]);
@@ -2979,6 +2995,7 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
     focus_fallback_test_close_queue();
     event_loop_focus_fallback_find_focused = saved_focused;
     event_loop_focus_fallback_find_recent = saved_recent;
+    event_loop_focus_fallback_is_on_active_space = saved_on_active_space;
     event_loop_focus_fallback_focus = saved_focus;
     event_loop_focus_fallback_entry_test_hook = saved_hook;
     event_loop_focus_fallback_rejection_test_hook = saved_rejection_hook;

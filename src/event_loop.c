@@ -936,6 +936,15 @@ static struct window *event_loop_focus_fallback_recent_window(struct window_mana
     return window_manager_find_recent_managed_window(wm);
 }
 
+static bool event_loop_focus_fallback_window_is_on_active_space(struct window *window)
+{
+    if (window_is_sticky(window->id)) return true;
+
+    uint64_t active_sid = space_manager_active_space();
+    uint64_t window_sid = window_space(window->id);
+    return active_sid && window_sid && active_sid == window_sid;
+}
+
 static void event_loop_focus_fallback_focus_window(struct window *window)
 {
     window_manager_focus_window_with_raise(&window->application->psn, window->id, window->ref);
@@ -944,12 +953,14 @@ static void event_loop_focus_fallback_focus_window(struct window *window)
 #ifdef TESTS
 static struct window *(*event_loop_focus_fallback_find_focused)(struct window_manager *) = event_loop_focus_fallback_focused_window;
 static struct window *(*event_loop_focus_fallback_find_recent)(struct window_manager *) = event_loop_focus_fallback_recent_window;
+static bool (*event_loop_focus_fallback_is_on_active_space)(struct window *) = event_loop_focus_fallback_window_is_on_active_space;
 static void (*event_loop_focus_fallback_focus)(struct window *) = event_loop_focus_fallback_focus_window;
 static void (*event_loop_focus_fallback_entry_test_hook)(void);
 static void (*event_loop_focus_fallback_rejection_test_hook)(void);
 #else
 #define event_loop_focus_fallback_find_focused event_loop_focus_fallback_focused_window
 #define event_loop_focus_fallback_find_recent event_loop_focus_fallback_recent_window
+#define event_loop_focus_fallback_is_on_active_space event_loop_focus_fallback_window_is_on_active_space
 #define event_loop_focus_fallback_focus event_loop_focus_fallback_focus_window
 #endif
 
@@ -3461,6 +3472,7 @@ static EVENT_HANDLER(WINDOW_FOCUS_FALLBACK)
 
     struct window *recent = event_loop_focus_fallback_find_recent(&g_window_manager);
     if (!window_manager_window_is_focus_fallback_eligible(recent)) return;
+    if (!event_loop_focus_fallback_is_on_active_space(recent)) return;
     event_loop_focus_fallback_focus(recent);
 }
 
