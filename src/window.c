@@ -6,8 +6,12 @@ extern int g_connection;
 
 #ifdef TESTS
 static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
+static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
 #else
 #define window_observe_add_notification AXObserverAddNotification
+#define window_test_is_ordered_in SLSWindowIsOrderedIn
+#define window_test_description_from_array CGWindowListCreateDescriptionFromArray
 #endif
 
 bool window_observe(struct window *window, bool *retry)
@@ -177,17 +181,26 @@ static inline const char *window_layer(int level)
     return "unknown";
 }
 
+static uint64_t window_serialization_flags(uint64_t flags)
+{
+    return flags ? flags : ~WINDOW_PROPERTY_DIAGNOSTIC_FLAGS;
+}
+
 void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
 {
     TIME_FUNCTION;
 
-    if (flags == 0x0) flags |= ~flags;
+    flags = window_serialization_flags(flags);
 
     int connection = 0;
     pid_t pid = 0;
     uint64_t sid = 0;
     int level = 0;
     int sub_level = 0;
+    uint32_t parent_wid = 0;
+    uint64_t tags = 0;
+    bool parent_known = false;
+    bool tags_known = false;
 
     if ((flags & WINDOW_PROPERTY_PID) ||
         (flags & WINDOW_PROPERTY_APP)) {
@@ -213,6 +226,13 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
         (flags & WINDOW_PROPERTY_SUB_LAYER)) {
         sub_level = window_sub_level(wid);
     }
+
+    if ((flags & WINDOW_PROPERTY_ROOT_WINDOW) ||
+        (flags & WINDOW_PROPERTY_PARENT)) {
+        parent_known = window_parent_with_status(wid, &parent_wid);
+    }
+
+    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(wid, &tags);
 
     bool did_output = false;
     fprintf(rsp, "{\n");
@@ -287,8 +307,15 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_ROOT_WINDOW) {
         if (did_output) fprintf(rsp, ",\n");
 
-        uint32_t parent_wid = window_parent(wid);
         fprintf(rsp, "\t\"root-window\":%s", json_bool(parent_wid == 0));
+        did_output = true;
+    }
+
+    if (flags & WINDOW_PROPERTY_PARENT) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        if (parent_known) fprintf(rsp, "\t\"parent\":%u", parent_wid);
+        else fprintf(rsp, "\t\"parent\":null");
         did_output = true;
     }
 
@@ -335,6 +362,14 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
 
         const char *sub_layer = window_layer(sub_level);
         fprintf(rsp, "\t\"sub-layer\":\"%s\"", sub_layer);
+        did_output = true;
+    }
+
+    if (flags & WINDOW_PROPERTY_TAGS) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        if (tags_known) fprintf(rsp, "\t\"tags\":\"0x%016llx\"", (unsigned long long) tags);
+        else fprintf(rsp, "\t\"tags\":null");
         did_output = true;
     }
 
@@ -424,6 +459,24 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
         did_output = true;
     }
 
+    if (flags & WINDOW_PROPERTY_IS_ORDERED_IN) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        bool known = false;
+        bool ordered_in = window_is_ordered_in(wid, &known);
+        fprintf(rsp, "\t\"is-ordered-in\":%s", known ? json_bool(ordered_in) : "null");
+        did_output = true;
+    }
+
+    if (flags & WINDOW_PROPERTY_IS_ON_SCREEN) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        bool known = false;
+        bool on_screen = window_is_on_screen(wid, &known);
+        fprintf(rsp, "\t\"is-on-screen\":%s", known ? json_bool(on_screen) : "null");
+        did_output = true;
+    }
+
     if (flags & WINDOW_PROPERTY_IS_VISIBLE) {
         if (did_output) fprintf(rsp, ",\n");
 
@@ -478,11 +531,15 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
 {
     TIME_FUNCTION;
 
-    if (flags == 0x0) flags |= ~flags;
+    flags = window_serialization_flags(flags);
 
     uint64_t sid;
     int level;
     int sub_level;
+    uint32_t parent_wid;
+    uint64_t tags;
+    bool parent_known;
+    bool tags_known;
     struct view *view;
     struct window_node *node;
     bool is_minimized;
@@ -503,6 +560,9 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         (flags & WINDOW_PROPERTY_SUB_LAYER)) {
         sub_level = window_sub_level(window->id);
     }
+
+    if (flags & WINDOW_PROPERTY_PARENT) parent_known = window_parent_with_status(window->id, &parent_wid);
+    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(window->id, &tags);
 
     if ((flags & WINDOW_PROPERTY_SPLIT_TYPE) ||
         (flags & WINDOW_PROPERTY_SPLIT_CHILD) ||
@@ -599,6 +659,14 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         did_output = true;
     }
 
+    if (flags & WINDOW_PROPERTY_PARENT) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        if (parent_known) fprintf(rsp, "\t\"parent\":%u", parent_wid);
+        else fprintf(rsp, "\t\"parent\":null");
+        did_output = true;
+    }
+
     if (flags & WINDOW_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
@@ -642,6 +710,14 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
 
         const char *sub_layer = window_layer(sub_level);
         fprintf(rsp, "\t\"sub-layer\":\"%s\"", sub_layer);
+        did_output = true;
+    }
+
+    if (flags & WINDOW_PROPERTY_TAGS) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        if (tags_known) fprintf(rsp, "\t\"tags\":\"0x%016llx\"", (unsigned long long) tags);
+        else fprintf(rsp, "\t\"tags\":null");
         did_output = true;
     }
 
@@ -733,13 +809,30 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
         did_output = true;
     }
 
+    if (flags & WINDOW_PROPERTY_IS_ORDERED_IN) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        bool known = false;
+        bool ordered_in = window_is_ordered_in(window->id, &known);
+        fprintf(rsp, "\t\"is-ordered-in\":%s", known ? json_bool(ordered_in) : "null");
+        did_output = true;
+    }
+
+    if (flags & WINDOW_PROPERTY_IS_ON_SCREEN) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        bool known = false;
+        bool on_screen = window_is_on_screen(window->id, &known);
+        fprintf(rsp, "\t\"is-on-screen\":%s", known ? json_bool(on_screen) : "null");
+        did_output = true;
+    }
+
     if (flags & WINDOW_PROPERTY_IS_VISIBLE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        uint8_t ordered_in = 0;
-        SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in);
-
-        bool visible = ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || space_is_visible(sid));
+        bool known = false;
+        bool ordered_in = window_is_ordered_in(window->id, &known);
+        bool visible = known && ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || space_is_visible(sid));
         fprintf(rsp, "\t\"is-visible\":%s", json_bool(visible));
         did_output = true;
     }
@@ -941,30 +1034,38 @@ float window_opacity(uint32_t wid)
     return alpha;
 }
 
-uint32_t window_parent(uint32_t wid)
+bool window_parent_with_status(uint32_t wid, uint32_t *parent_wid)
 {
-    uint32_t parent_wid = 0;
+    if (parent_wid) *parent_wid = 0;
+    if (!wid || !parent_wid) return false;
 
+    bool success = false;
     CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_ref) return false;
 
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
-    if (!query) goto err2;
+    if (!query) goto out;
 
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
-    if (!iterator) goto err1;
+    if (!iterator) goto query_out;
 
-    if (SLSWindowIteratorGetCount(iterator) == 1) {
-        if (SLSWindowIteratorAdvance(iterator)) {
-            parent_wid = SLSWindowIteratorGetParentID(iterator);
-        }
+    if (SLSWindowIteratorGetCount(iterator) == 1 && SLSWindowIteratorAdvance(iterator)) {
+        *parent_wid = SLSWindowIteratorGetParentID(iterator);
+        success = true;
     }
 
     CFRelease(iterator);
-err1:
+query_out:
     CFRelease(query);
-err2:
+out:
     CFRelease(window_ref);
+    return success;
+}
 
+uint32_t window_parent(uint32_t wid)
+{
+    uint32_t parent_wid = 0;
+    window_parent_with_status(wid, &parent_wid);
     return parent_wid;
 }
 
@@ -1032,30 +1133,74 @@ int window_sub_level(uint32_t wid)
     }
 }
 
-uint64_t window_tags(uint32_t wid)
+bool window_tags_with_status(uint32_t wid, uint64_t *tags)
 {
-    uint64_t tags = 0;
+    if (tags) *tags = 0;
+    if (!wid || !tags) return false;
+
+    bool success = false;
     CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_ref) return false;
 
     CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
-    if (!query) goto err2;
+    if (!query) goto out;
 
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
-    if (!iterator) goto err1;
+    if (!iterator) goto query_out;
 
-    if (SLSWindowIteratorGetCount(iterator) == 1) {
-        if (SLSWindowIteratorAdvance(iterator)) {
-            tags = SLSWindowIteratorGetTags(iterator);
-        }
+    if (SLSWindowIteratorGetCount(iterator) == 1 && SLSWindowIteratorAdvance(iterator)) {
+        *tags = SLSWindowIteratorGetTags(iterator);
+        success = true;
     }
 
     CFRelease(iterator);
-err1:
+query_out:
     CFRelease(query);
-err2:
+out:
     CFRelease(window_ref);
+    return success;
+}
 
+uint64_t window_tags(uint32_t wid)
+{
+    uint64_t tags = 0;
+    window_tags_with_status(wid, &tags);
     return tags;
+}
+
+bool window_is_ordered_in(uint32_t wid, bool *known)
+{
+    if (known) *known = false;
+    uint8_t ordered_in = 0;
+    if (!wid || window_test_is_ordered_in(g_connection, wid, &ordered_in) != kCGErrorSuccess) return false;
+    if (known) *known = true;
+    return ordered_in != 0;
+}
+
+bool window_is_on_screen(uint32_t wid, bool *known)
+{
+    if (known) *known = false;
+    if (!wid) return false;
+
+    bool on_screen = false;
+    CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_ref) return false;
+
+    CFArrayRef descriptions = window_test_description_from_array(window_ref);
+    if (!cf_is_type(descriptions, CFArrayGetTypeID()) || CFArrayGetCount(descriptions) != 1) goto out;
+
+    CFTypeRef description = CFArrayGetValueAtIndex(descriptions, 0);
+    if (!cf_is_type(description, CFDictionaryGetTypeID())) goto out;
+
+    CFTypeRef value = CFDictionaryGetValue(description, kCGWindowIsOnscreen);
+    if (!cf_is_type(value, CFBooleanGetTypeID())) goto out;
+    on_screen = CFBooleanGetValue(value);
+    if (known) *known = true;
+
+out:
+    if (descriptions) CFRelease(descriptions);
+    CFRelease(window_ref);
+    return on_screen;
 }
 
 CFStringRef window_ax_role(struct window *window)

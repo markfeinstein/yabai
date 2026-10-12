@@ -1670,12 +1670,14 @@ WINDOW
     "role": string,
     "subrole": string,
     "root\-window": bool,
+    "parent": number or null,
     "display": number,
     "space": number,
     "level": number,
     "sub\-level": number,
     "layer": string,
     "sub\-layer": string,
+    "tags": string or null,
     "opacity": number,
     "split\-type": string,
     "split\-child": string,
@@ -1688,6 +1690,8 @@ WINDOW
     "has\-fullscreen\-zoom": bool,
     "has\-ax\-reference": bool,
     "is\-native\-fullscreen": bool,
+    "is\-ordered\-in": bool or null,
+    "is\-on\-screen": bool or null,
     "is\-visible": bool,
     "is\-minimized": bool,
     "is\-hidden": bool,
@@ -1698,6 +1702,9 @@ WINDOW
 .fam
 .fi
 .if n .RE
+.sp
+\f(CRparent\fP is the raw WindowServer parent window id (\f(CR0\fP when no parent is reported), and \f(CRtags\fP is the raw 64\-bit WindowServer tag mask encoded as a hexadecimal string; either is \f(CRnull\fP when its native query fails. \f(CRis\-ordered\-in\fP reports WindowServer ordering state, while \f(CRis\-on\-screen\fP reports CoreGraphics compositor presence; either is also \f(CRnull\fP when its native query fails. These non\-mutating diagnostic fields are omitted from the default window query to avoid extra WindowServer calls; request them explicitly through \f(CRPROPERTIES\fP.
+.br
 .sp
 Some window properties are only accessible when yabai has a valid AX\-reference for that window.
 .br

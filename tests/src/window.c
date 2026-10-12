@@ -55,6 +55,146 @@ TEST_FUNC(window_observe_retries_only_transient_failures,
     window_observe_add_notification = saved_add_notification;
 });
 
+static CGError window_test_ordered_in_success(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    *ordered_in = 1;
+    return kCGErrorSuccess;
+}
+
+static CGError window_test_ordered_in_failure(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    (void) ordered_in;
+    return kCGErrorFailure;
+}
+
+static CFArrayRef window_test_on_screen_description(CFArrayRef windows)
+{
+    (void) windows;
+    const void *keys[] = { kCGWindowIsOnscreen };
+    const void *values[] = { kCFBooleanTrue };
+    CFDictionaryRef description = CFDictionaryCreate(NULL, keys, values, 1,
+                                                       &kCFTypeDictionaryKeyCallBacks,
+                                                       &kCFTypeDictionaryValueCallBacks);
+    const void *descriptions[] = { description };
+    CFArrayRef result = CFArrayCreate(NULL, descriptions, 1, &kCFTypeArrayCallBacks);
+    CFRelease(description);
+    return result;
+}
+
+static CFArrayRef window_test_off_screen_description(CFArrayRef windows)
+{
+    (void) windows;
+    const void *keys[] = { kCGWindowIsOnscreen };
+    const void *values[] = { kCFBooleanFalse };
+    CFDictionaryRef description = CFDictionaryCreate(NULL, keys, values, 1,
+                                                       &kCFTypeDictionaryKeyCallBacks,
+                                                       &kCFTypeDictionaryValueCallBacks);
+    const void *descriptions[] = { description };
+    CFArrayRef result = CFArrayCreate(NULL, descriptions, 1, &kCFTypeArrayCallBacks);
+    CFRelease(description);
+    return result;
+}
+
+static CFArrayRef window_test_missing_screen_description(CFArrayRef windows)
+{
+    (void) windows;
+    CFDictionaryRef description = CFDictionaryCreate(NULL, NULL, NULL, 0,
+                                                       &kCFTypeDictionaryKeyCallBacks,
+                                                       &kCFTypeDictionaryValueCallBacks);
+    const void *descriptions[] = { description };
+    CFArrayRef result = CFArrayCreate(NULL, descriptions, 1, &kCFTypeArrayCallBacks);
+    CFRelease(description);
+    return result;
+}
+
+static CFArrayRef window_test_invalid_screen_description(CFArrayRef windows)
+{
+    (void) windows;
+    const void *keys[] = { kCGWindowIsOnscreen };
+    const void *values[] = { CFSTR("invalid") };
+    CFDictionaryRef description = CFDictionaryCreate(NULL, keys, values, 1,
+                                                       &kCFTypeDictionaryKeyCallBacks,
+                                                       &kCFTypeDictionaryValueCallBacks);
+    const void *descriptions[] = { description };
+    CFArrayRef result = CFArrayCreate(NULL, descriptions, 1, &kCFTypeArrayCallBacks);
+    CFRelease(description);
+    return result;
+}
+
+TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
+{
+    __auto_type saved_ordered = window_test_is_ordered_in;
+    __auto_type saved_descriptions = window_test_description_from_array;
+    TEST_CHECK(window_serialization_flags(0) & WINDOW_PROPERTY_ID, WINDOW_PROPERTY_ID);
+    TEST_CHECK(window_serialization_flags(0) & WINDOW_PROPERTY_DIAGNOSTIC_FLAGS, 0ULL);
+    TEST_CHECK(window_serialization_flags(WINDOW_PROPERTY_TAGS), WINDOW_PROPERTY_TAGS);
+    bool known = true;
+
+    window_test_is_ordered_in = window_test_ordered_in_success;
+    TEST_CHECK(window_is_ordered_in(77, &known), true);
+    TEST_CHECK(known, true);
+
+    window_test_is_ordered_in = window_test_ordered_in_failure;
+    known = true;
+    TEST_CHECK(window_is_ordered_in(77, &known), false);
+    TEST_CHECK(known, false);
+    known = true;
+    TEST_CHECK(window_is_ordered_in(0, &known), false);
+    TEST_CHECK(known, false);
+
+    window_test_description_from_array = window_test_on_screen_description;
+    TEST_CHECK(window_is_on_screen(77, &known), true);
+    TEST_CHECK(known, true);
+
+    window_test_description_from_array = window_test_off_screen_description;
+    known = false;
+    TEST_CHECK(window_is_on_screen(77, &known), false);
+    TEST_CHECK(known, true);
+
+    window_test_description_from_array = window_test_missing_screen_description;
+    known = true;
+    TEST_CHECK(window_is_on_screen(77, &known), false);
+    TEST_CHECK(known, false);
+    struct window missing = { .id = 77 };
+    FILE *missing_file = tmpfile();
+    TEST_CHECK(missing_file != NULL, true);
+    if (missing_file) {
+        window_serialize(missing_file, &missing, WINDOW_PROPERTY_IS_ON_SCREEN);
+        rewind(missing_file);
+        char missing_buffer[128] = {0};
+        fread(missing_buffer, 1, sizeof(missing_buffer) - 1, missing_file);
+        fclose(missing_file);
+        TEST_CHECK(strstr(missing_buffer, "\"is-on-screen\":null") != NULL, true);
+    }
+
+    window_test_description_from_array = window_test_invalid_screen_description;
+    known = true;
+    TEST_CHECK(window_is_on_screen(77, &known), false);
+    TEST_CHECK(known, false);
+
+    window_test_is_ordered_in = window_test_ordered_in_success;
+    window_test_description_from_array = window_test_on_screen_description;
+    struct window window = { .id = UINT32_C(0x7fffffff), .is_root = true };
+    FILE *file = tmpfile();
+    TEST_CHECK(file != NULL, true);
+    if (file) {
+        window_serialize(file, &window, WINDOW_PROPERTY_IS_ORDERED_IN | WINDOW_PROPERTY_IS_ON_SCREEN);
+        rewind(file);
+        char buffer[512] = {0};
+        fread(buffer, 1, sizeof(buffer) - 1, file);
+        fclose(file);
+        TEST_CHECK(strstr(buffer, "\"is-ordered-in\":true") != NULL, true);
+        TEST_CHECK(strstr(buffer, "\"is-on-screen\":true") != NULL, true);
+    }
+
+    window_test_is_ordered_in = saved_ordered;
+    window_test_description_from_array = saved_descriptions;
+});
+
 static char *lifecycle_test_cfstring_copy_failure(CFStringRef value)
 {
     (void) value;

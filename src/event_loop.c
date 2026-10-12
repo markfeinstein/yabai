@@ -2412,6 +2412,41 @@ static CGError (*event_loop_window_is_ordered_in)(int, uint32_t, uint8_t *) = SL
 #define event_loop_window_is_ordered_in SLSWindowIsOrderedIn
 #endif
 
+static void event_loop_debug_window_visibility(const char *event_name, uint32_t wid,
+                                               bool ordered_known, bool ordered_in)
+{
+    if (!g_verbose) return;
+
+    int space_count = 0;
+    bool spaces_known = false;
+    uint64_t *space_list = window_space_list_with_status(wid, &space_count, &spaces_known);
+    bool on_screen_known = false;
+    bool on_screen = window_is_on_screen(wid, &on_screen_known);
+    uint32_t parent_wid = 0;
+    bool parent_known = window_parent_with_status(wid, &parent_wid);
+    uint64_t tags = 0;
+    bool tags_known = window_tags_with_status(wid, &tags);
+
+    fprintf(stdout,
+            "%s: wid=%u ordered-in=%s on-screen=%s level=%d sub-level=%d parent=",
+            event_name, wid,
+            ordered_known ? json_bool(ordered_in) : "unknown",
+            on_screen_known ? json_bool(on_screen) : "unknown",
+            window_level(wid), window_sub_level(wid));
+    if (parent_known) fprintf(stdout, "%u", parent_wid); else fputs("unknown", stdout);
+    fputs(" tags=", stdout);
+    if (tags_known) fprintf(stdout, "0x%016llx", (unsigned long long) tags); else fputs("unknown", stdout);
+    fprintf(stdout, " active-space=%llu spaces-known=%s spaces=[",
+            (unsigned long long) space_manager_active_space(), json_bool(spaces_known));
+    if (spaces_known) {
+        for (int i = 0; i < space_count; ++i) {
+            if (i) fputc(',', stdout);
+            fprintf(stdout, "%llu", (unsigned long long) space_list[i]);
+        }
+    }
+    fputs("]\n", stdout);
+}
+
 // NOTE: Apps that hide a window on close (e.g. Electron) order it out without minimizing it or
 // hiding the app, so none of those events arrives to untile it; the window server's own visibility
 // notifications do. The ordered-in state must be checked: switching spaces sends 816 for every window
@@ -2431,7 +2466,10 @@ static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
     }
 
     uint8_t ordered_in = 0;
-    if (event_loop_window_is_ordered_in(g_connection, wid, &ordered_in) != kCGErrorSuccess) return;
+    CGError ordered_result = event_loop_window_is_ordered_in(g_connection, wid, &ordered_in);
+    event_loop_debug_window_visibility("SLS_WINDOW_IS_INVISIBLE", wid,
+                                       ordered_result == kCGErrorSuccess, ordered_in != 0);
+    if (ordered_result != kCGErrorSuccess) return;
     if (ordered_in) return;
 
     window_manager_window_did_order_out(&g_window_manager, window);
@@ -2444,7 +2482,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
     debug("%s: %d\n", __FUNCTION__, wid);
 
     struct window *window = window_manager_find_window(&g_window_manager, wid);
-    if (!window || !window_check_flag(window, WINDOW_ORDERED_OUT)) return;
+    if (!window || (!g_verbose && !window_check_flag(window, WINDOW_ORDERED_OUT))) return;
 
     if (!__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, wid);
@@ -2452,8 +2490,11 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
     }
 
     uint8_t ordered_in = 0;
-    if (event_loop_window_is_ordered_in(g_connection, wid, &ordered_in) != kCGErrorSuccess) return;
-    if (!ordered_in) return;
+    CGError ordered_result = event_loop_window_is_ordered_in(g_connection, wid, &ordered_in);
+    event_loop_debug_window_visibility("SLS_WINDOW_IS_VISIBLE", wid,
+                                       ordered_result == kCGErrorSuccess, ordered_in != 0);
+    if (ordered_result != kCGErrorSuccess) return;
+    if (!ordered_in || !window_check_flag(window, WINDOW_ORDERED_OUT)) return;
 
     uint64_t sid = space_manager_active_space();
     window_manager_window_did_order_in(&g_window_manager, window, space_manager_is_window_on_space(sid, window) ? sid : 0);

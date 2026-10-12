@@ -1331,10 +1331,14 @@ enum space_op_error space_manager_focus_space(uint64_t sid)
     if (is_animating) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
 
     if (scripting_addition_focus_space(sid)) {
+        debug("%s: source-space=%llu target-space=%llu path=scripting-addition\n",
+              __FUNCTION__, (unsigned long long) cur_sid, (unsigned long long) sid);
         if (focus_display) {
             display_manager_focus_display(new_did, sid);
         }
     } else {
+        debug("%s: source-space=%llu target-space=%llu path=gesture-fallback\n",
+              __FUNCTION__, (unsigned long long) cur_sid, (unsigned long long) sid);
         if (!space_manager_focus_space_using_gesture(new_did, sid)) return SPACE_OP_ERROR_GESTURE;
     }
 
@@ -1365,7 +1369,10 @@ enum space_op_error space_manager_switch_space(uint64_t sid)
         return SPACE_OP_ERROR_SUCCESS;
     }
 
-    return scripting_addition_focus_space(sid) ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
+    bool focused = scripting_addition_focus_space(sid);
+    debug("%s: source-space=%llu target-space=%llu path=scripting-addition result=%s\n",
+          __FUNCTION__, (unsigned long long) cur_sid, (unsigned long long) sid, json_bool(focused));
+    return focused ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
 enum space_op_error space_manager_destroy_space(uint64_t sid)

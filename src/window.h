@@ -38,12 +38,14 @@ static CFStringRef ax_window_notification[] =
     WINDOW_PROPERTY_ENTRY("role",                 WINDOW_PROPERTY_ROLE,                0x000000040) \
     WINDOW_PROPERTY_ENTRY("subrole",              WINDOW_PROPERTY_SUBROLE,             0x000000080) \
     WINDOW_PROPERTY_ENTRY("root-window",          WINDOW_PROPERTY_ROOT_WINDOW,         0x000000100) \
+    WINDOW_PROPERTY_ENTRY("parent",               WINDOW_PROPERTY_PARENT,              0x200000000) \
     WINDOW_PROPERTY_ENTRY("display",              WINDOW_PROPERTY_DISPLAY,             0x000000200) \
     WINDOW_PROPERTY_ENTRY("space",                WINDOW_PROPERTY_SPACE,               0x000000400) \
     WINDOW_PROPERTY_ENTRY("level",                WINDOW_PROPERTY_LEVEL,               0x000000800) \
     WINDOW_PROPERTY_ENTRY("sub-level",            WINDOW_PROPERTY_SUB_LEVEL,           0x000001000) \
     WINDOW_PROPERTY_ENTRY("layer",                WINDOW_PROPERTY_LAYER,               0x000002000) \
     WINDOW_PROPERTY_ENTRY("sub-layer",            WINDOW_PROPERTY_SUB_LAYER,           0x000004000) \
+    WINDOW_PROPERTY_ENTRY("tags",                 WINDOW_PROPERTY_TAGS,                0x400000000) \
     WINDOW_PROPERTY_ENTRY("opacity",              WINDOW_PROPERTY_OPACITY,             0x000008000) \
     WINDOW_PROPERTY_ENTRY("split-type",           WINDOW_PROPERTY_SPLIT_TYPE,          0x000010000) \
     WINDOW_PROPERTY_ENTRY("split-child",          WINDOW_PROPERTY_SPLIT_CHILD,         0x000020000) \
@@ -56,6 +58,8 @@ static CFStringRef ax_window_notification[] =
     WINDOW_PROPERTY_ENTRY("has-fullscreen-zoom",  WINDOW_PROPERTY_HAS_FULLSCREEN_ZOOM, 0x001000000) \
     WINDOW_PROPERTY_ENTRY("has-ax-reference",     WINDOW_PROPERTY_HAS_AX_REFERENCE,    0x002000000) \
     WINDOW_PROPERTY_ENTRY("is-native-fullscreen", WINDOW_PROPERTY_IS_FULLSCREEN,       0x004000000) \
+    WINDOW_PROPERTY_ENTRY("is-ordered-in",        WINDOW_PROPERTY_IS_ORDERED_IN,       0x800000000) \
+    WINDOW_PROPERTY_ENTRY("is-on-screen",         WINDOW_PROPERTY_IS_ON_SCREEN,        0x1000000000) \
     WINDOW_PROPERTY_ENTRY("is-visible",           WINDOW_PROPERTY_IS_VISIBLE,          0x008000000) \
     WINDOW_PROPERTY_ENTRY("is-minimized",         WINDOW_PROPERTY_IS_MINIMIZED,        0x010000000) \
     WINDOW_PROPERTY_ENTRY("is-hidden",            WINDOW_PROPERTY_IS_HIDDEN,           0x020000000) \
@@ -69,6 +73,9 @@ enum window_property
     WINDOW_PROPERTY_LIST
 #undef WINDOW_PROPERTY_ENTRY
 };
+
+#define WINDOW_PROPERTY_DIAGNOSTIC_FLAGS (WINDOW_PROPERTY_PARENT | WINDOW_PROPERTY_TAGS | \
+                                          WINDOW_PROPERTY_IS_ORDERED_IN | WINDOW_PROPERTY_IS_ON_SCREEN)
 
 static uint64_t window_property_val[] =
 {
@@ -160,10 +167,14 @@ char *window_title_ts(struct window *window);
 CFStringRef window_title(struct window *window);
 bool window_shadow(uint32_t wid);
 float window_opacity(uint32_t wid);
+bool window_parent_with_status(uint32_t wid, uint32_t *parent_wid);
 uint32_t window_parent(uint32_t wid);
 int window_level(uint32_t wid);
 int window_sub_level(uint32_t wid);
+bool window_tags_with_status(uint32_t wid, uint64_t *tags);
 uint64_t window_tags(uint32_t wid);
+bool window_is_ordered_in(uint32_t wid, bool *known);
+bool window_is_on_screen(uint32_t wid, bool *known);
 bool window_is_sticky(uint32_t wid);
 CGPoint window_ax_origin(struct window *window);
 CGRect window_ax_frame(struct window *window);

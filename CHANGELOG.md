@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Add non-mutating window diagnostics for raw parent id, WindowServer tags,
+  ordered-in state, and CoreGraphics on-screen presence, plus verbose visibility-event
+  and Space-focus-path tracing for cross-Space compositor investigations.
 - Remove the automatic synthetic Space transition from ordinary passive application
   and window activation. Explicit Space commands and explicitly configured
   Space-follow or fullscreen rules retain their intentional Space operations.

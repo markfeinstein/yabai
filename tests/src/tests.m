@@ -2832,6 +2832,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
+    TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
     TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
     TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
