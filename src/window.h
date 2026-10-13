@@ -94,7 +94,9 @@ static char *window_property_str[] =
 struct window_serialization_context
 {
     CFArrayRef managed_display_spaces;
+    CFArrayRef ordered_display_uuids;
     bool has_managed_display_spaces_snapshot;
+    bool has_ordered_display_uuids_snapshot;
 };
 
 struct window

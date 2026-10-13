@@ -763,6 +763,8 @@ static uint32_t *message_query_window_inventory_failure(uint64_t *space_list, in
 }
 
 static int message_query_topology_call_count;
+static int message_query_ordered_display_call_count;
+static int message_query_display_fallback_call_count;
 static int message_query_display_space_list_call_count;
 static uint32_t message_query_display_space_list_failure_did;
 static bool message_query_topology_fails;
@@ -771,9 +773,36 @@ static CFArrayRef message_query_managed_display_spaces(int cid)
 {
     (void) cid;
     ++message_query_topology_call_count;
-    return message_query_topology_fails
-        ? NULL
-        : CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
+    if (message_query_topology_fails) return NULL;
+
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"display-one", @"Spaces": @[ @{ @"id64": @41 } ] },
+        @{ @"Display Identifier": @"display-two", @"Spaces": @[ @{ @"id64": @42 } ] }
+    ];
+    return CFRetain((CFArrayRef) topology);
+}
+
+static uint64_t message_query_window_serialization_space(uint32_t wid)
+{
+    return wid == UINT32_C(0x7ffffffd) ? 41 : 42;
+}
+
+static uint32_t message_query_space_display_id(uint64_t sid)
+{
+    return sid == 42 ? 99 : 0;
+}
+
+static int message_query_display_id_arrangement(uint32_t did)
+{
+    ++message_query_display_fallback_call_count;
+    return did == 99 ? 7 : 0;
+}
+
+static CFArrayRef message_query_ordered_display_uuids(void)
+{
+    ++message_query_ordered_display_call_count;
+    const void *values[] = { CFSTR("display-one"), CFSTR("display-two") };
+    return CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
 }
 
 static CGError message_query_active_displays(uint32_t capacity, CGDirectDisplayID *displays,
@@ -927,7 +956,11 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
 
     __auto_type saved_window_list = window_manager_query_window_list;
     __auto_type saved_topology = window_manager_query_managed_display_spaces;
+    __auto_type saved_ordered_displays = window_manager_query_ordered_display_uuids;
     __auto_type saved_display_spaces = window_manager_query_display_space_list;
+    __auto_type saved_serialization_space = window_test_serialization_space;
+    __auto_type saved_space_display_id = window_test_space_display_id;
+    __auto_type saved_display_id_arrangement = window_test_display_id_arrangement;
     struct table saved_windows = g_window_manager.window;
     g_window_manager.window = (struct table) {0};
     table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
@@ -935,8 +968,35 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
     table_add(&g_window_manager.window, &tracked.id, &tracked);
     window_manager_query_window_list = message_query_window_inventory_success;
     window_manager_query_managed_display_spaces = message_query_managed_display_spaces;
+    window_manager_query_ordered_display_uuids = message_query_ordered_display_uuids;
     window_manager_query_display_space_list = message_query_display_spaces;
+    window_test_serialization_space = message_query_window_serialization_space;
+    window_test_space_display_id = message_query_space_display_id;
+    window_test_display_id_arrangement = message_query_display_id_arrangement;
     uint64_t sid = 1;
+
+    NSArray *display_topology = @[
+        @{ @"Display Identifier": @"display-one", @"Spaces": @[ @{ @"id64": @42 } ] }
+    ];
+    NSArray *ordered_displays = @[ @"display-two", @"display-one" ];
+    struct window_serialization_context display_context = {
+        .managed_display_spaces = (CFArrayRef) display_topology,
+        .ordered_display_uuids = (CFArrayRef) ordered_displays,
+        .has_managed_display_spaces_snapshot = true,
+        .has_ordered_display_uuids_snapshot = true
+    };
+    message_query_display_fallback_call_count = 0;
+    TEST_CHECK(window_serialization_display_index(&display_context, 42), 2);
+    TEST_CHECK(message_query_display_fallback_call_count, 0);
+
+    display_context.managed_display_spaces = NULL;
+    TEST_CHECK(window_serialization_display_index(&display_context, 42), 7);
+    TEST_CHECK(message_query_display_fallback_call_count, 1);
+    display_context.managed_display_spaces = (CFArrayRef) display_topology;
+    display_context.ordered_display_uuids = (CFArrayRef) CFSTR("invalid");
+    TEST_CHECK(window_serialization_display_index(&display_context, 42), 7);
+    TEST_CHECK(message_query_display_fallback_call_count, 2);
+    display_context.ordered_display_uuids = (CFArrayRef) ordered_displays;
 
     message_query_topology_call_count = 0;
     message_query_topology_fails = false;
@@ -949,16 +1009,35 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
         rewind(response);
         char output[256] = {0};
         fread(output, 1, sizeof(output) - 1, response);
-        TEST_CHECK(strstr(output, "\"space\":0") != NULL, true);
+        TEST_CHECK(strstr(output, "\"space\":1") != NULL, true);
+        TEST_CHECK(strstr(output, "\"space\":2") != NULL, true);
         fclose(response);
     }
 
     message_query_topology_call_count = 0;
+    message_query_ordered_display_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, WINDOW_PROPERTY_DISPLAY), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_ordered_display_call_count, 1);
+        rewind(response);
+        char output[192] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "\"display\":2") != NULL, true);
+        TEST_CHECK(strstr(output, "\"display\":1") != NULL, true);
+        fclose(response);
+    }
+
+    message_query_topology_call_count = 0;
+    message_query_ordered_display_call_count = 0;
     response = tmpfile();
     TEST_CHECK(response != NULL, true);
     if (response) {
         TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, WINDOW_PROPERTY_ID), true);
         TEST_CHECK(message_query_topology_call_count, 0);
+        TEST_CHECK(message_query_ordered_display_call_count, 0);
         fclose(response);
     }
 
@@ -1002,23 +1081,27 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
 
     display_manager_test_set_active_display_list_fn(message_query_active_displays);
     message_query_topology_call_count = 0;
+    message_query_ordered_display_call_count = 0;
     message_query_display_space_list_call_count = 0;
     response = tmpfile();
     TEST_CHECK(response != NULL, true);
     if (response) {
-        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_SPACE), true);
+        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_DISPLAY), true);
         TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_ordered_display_call_count, 1);
         TEST_CHECK(message_query_display_space_list_call_count, 2);
         fclose(response);
     }
 
     message_query_topology_call_count = 0;
+    message_query_ordered_display_call_count = 0;
     message_query_display_space_list_call_count = 0;
     response = tmpfile();
     TEST_CHECK(response != NULL, true);
     if (response) {
         TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_ID), true);
         TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_ordered_display_call_count, 0);
         TEST_CHECK(message_query_display_space_list_call_count, 2);
         fclose(response);
     }
@@ -1053,7 +1136,11 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
 
     window_manager_query_window_list = saved_window_list;
     window_manager_query_managed_display_spaces = saved_topology;
+    window_manager_query_ordered_display_uuids = saved_ordered_displays;
     window_manager_query_display_space_list = saved_display_spaces;
+    window_test_serialization_space = saved_serialization_space;
+    window_test_space_display_id = saved_space_display_id;
+    window_test_display_id_arrangement = saved_display_id_arrangement;
     table_free(&g_window_manager.window);
     g_window_manager.window = saved_windows;
     message_query_topology_fails = false;

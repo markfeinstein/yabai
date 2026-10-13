@@ -67,6 +67,28 @@ static inline int managed_space_copy_valid(CFArrayRef spaces, uint64_t *list)
     return result;
 }
 
+static inline CFStringRef managed_space_display_identifier_for_space(CFTypeRef topology, uint64_t requested_sid)
+{
+    if (!requested_sid || !cf_is_type(topology, CFArrayGetTypeID())) return NULL;
+
+    CFArrayRef displays = (CFArrayRef) topology;
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
+        CFTypeRef display = CFArrayGetValueAtIndex(displays, i);
+        CFArrayRef spaces = managed_space_display_spaces(display);
+        if (!spaces) continue;
+
+        for (CFIndex j = 0; j < CFArrayGetCount(spaces); ++j) {
+            uint64_t sid;
+            if (managed_space_id(CFArrayGetValueAtIndex(spaces, j), &sid) && sid == requested_sid) {
+                CFTypeRef identifier = CFDictionaryGetValue((CFDictionaryRef) display,
+                                                             CFSTR("Display Identifier"));
+                return cf_is_type(identifier, CFStringGetTypeID()) ? (CFStringRef) identifier : NULL;
+            }
+        }
+    }
+    return NULL;
+}
+
 static inline CFArrayRef managed_space_spaces_for_display(CFTypeRef topology, CFStringRef identifier)
 {
     if (!identifier || !cf_is_type(identifier, CFStringGetTypeID()) ||

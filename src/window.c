@@ -8,10 +8,16 @@ extern int g_connection;
 static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
 static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
+static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
+static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
+static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 #else
 #define window_observe_add_notification AXObserverAddNotification
 #define window_test_is_ordered_in SLSWindowIsOrderedIn
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
+#define window_test_serialization_space window_space
+#define window_test_space_display_id space_display_id
+#define window_test_display_id_arrangement display_manager_display_id_arrangement
 #endif
 
 bool window_observe(struct window *window, bool *retry)
@@ -195,6 +201,20 @@ static int window_serialization_space_index(const struct window_serialization_co
     return space_manager_mission_control_index(sid);
 }
 
+static int window_serialization_display_index(const struct window_serialization_context *context,
+                                              uint64_t sid)
+{
+    if (context && context->has_managed_display_spaces_snapshot &&
+        context->has_ordered_display_uuids_snapshot &&
+        cf_is_type(context->managed_display_spaces, CFArrayGetTypeID()) &&
+        cf_is_type(context->ordered_display_uuids, CFArrayGetTypeID())) {
+        CFStringRef uuid = managed_space_display_identifier_for_space(context->managed_display_spaces, sid);
+        int arrangement = display_manager_display_uuid_arrangement(context->ordered_display_uuids, uuid);
+        if (arrangement) return arrangement;
+    }
+    return window_test_display_id_arrangement(window_test_space_display_id(sid));
+}
+
 void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
                                          const struct window_serialization_context *context)
 {
@@ -224,7 +244,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     if ((flags & WINDOW_PROPERTY_DISPLAY) ||
         (flags & WINDOW_PROPERTY_SPACE) ||
         (flags & WINDOW_PROPERTY_IS_FULLSCREEN)) {
-        sid = window_space(wid);
+        sid = window_test_serialization_space(wid);
     }
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
@@ -332,7 +352,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     if (flags & WINDOW_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int display = display_manager_display_id_arrangement(space_display_id(sid));
+        int display = window_serialization_display_index(context, sid);
         fprintf(rsp, "\t\"display\":%d", display);
         did_output = true;
     }
@@ -564,7 +584,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if ((flags & WINDOW_PROPERTY_DISPLAY) ||
         (flags & WINDOW_PROPERTY_SPACE) ||
         (flags & WINDOW_PROPERTY_IS_VISIBLE)) {
-        sid = window_space(window->id);
+        sid = window_test_serialization_space(window->id);
     }
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
@@ -686,7 +706,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int display = display_manager_display_id_arrangement(space_display_id(sid));
+        int display = window_serialization_display_index(context, sid);
         fprintf(rsp, "\t\"display\":%d", display);
         did_output = true;
     }
