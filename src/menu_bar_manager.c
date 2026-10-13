@@ -56,8 +56,6 @@ struct menu_bar_manager_native_seams
     int (*mission_control_index)(uint64_t sid);
     uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized, bool *success);
     uint64_t *(*window_space_list)(uint32_t wid, int *count);
-    bool (*window_is_sticky)(uint32_t wid);
-    bool (*space_is_fullscreen)(uint64_t sid);
 };
 
 static struct menu_bar_manager_state g_menu_bar_manager;
@@ -196,20 +194,6 @@ static uint64_t *menu_bar_manager_native_window_space_list(uint32_t wid, int *co
         : window_space_list(wid, count);
 }
 
-static bool menu_bar_manager_native_window_is_sticky(uint32_t wid)
-{
-    return g_menu_bar_manager_native.window_is_sticky
-        ? g_menu_bar_manager_native.window_is_sticky(wid)
-        : window_is_sticky(wid);
-}
-
-static bool menu_bar_manager_native_space_is_fullscreen(uint64_t sid)
-{
-    return g_menu_bar_manager_native.space_is_fullscreen
-        ? g_menu_bar_manager_native.space_is_fullscreen(sid)
-        : space_is_fullscreen(sid);
-}
-
 static bool menu_bar_manager_resize(void **items, size_t item_size, size_t *capacity, size_t needed)
 {
     if (needed <= *capacity) return true;
@@ -331,7 +315,7 @@ static struct menu_bar_space_builder *menu_bar_manager_find_space_builder(struct
     return NULL;
 }
 
-static uint32_t menu_bar_manager_window_flags_for_space(struct window *window, uint64_t sid)
+static uint32_t menu_bar_manager_window_flags(struct window *window)
 {
     uint32_t flags = 0;
 
@@ -339,17 +323,23 @@ static uint32_t menu_bar_manager_window_flags_for_space(struct window *window, u
     if (!window_manager_find_managed_window(&g_window_manager, window)) flags |= MENU_BAR_WINDOW_UNMANAGED;
     if (window->application && window->application->is_hidden) flags |= MENU_BAR_WINDOW_HIDDEN;
     if (window_check_flag(window, WINDOW_MINIMIZE)) flags |= MENU_BAR_WINDOW_MINIMIZED;
-    if (window_check_flag(window, WINDOW_STICKY) || menu_bar_manager_native_window_is_sticky(window->id)) flags |= MENU_BAR_WINDOW_STICKY;
-    if (window_check_flag(window, WINDOW_FULLSCREEN) || menu_bar_manager_native_space_is_fullscreen(sid)) flags |= MENU_BAR_WINDOW_NATIVE_FULLSCREEN;
+    if (window_check_flag(window, WINDOW_STICKY)) flags |= MENU_BAR_WINDOW_STICKY;
+    if (window_check_flag(window, WINDOW_FULLSCREEN)) flags |= MENU_BAR_WINDOW_NATIVE_FULLSCREEN;
     if (!window_is_real(window)) flags |= MENU_BAR_WINDOW_TRANSIENT;
 
     return flags;
 }
 
+static uint32_t menu_bar_manager_window_flags_for_space(uint32_t window_flags, bool is_native_fullscreen)
+{
+    return is_native_fullscreen ? window_flags | MENU_BAR_WINDOW_NATIVE_FULLSCREEN : window_flags;
+}
+
 static bool menu_bar_manager_add_window_to_space(struct menu_bar_display_builder *displays,
                                                  size_t display_count,
                                                  struct window *window,
-                                                 uint64_t sid)
+                                                 uint64_t sid,
+                                                 uint32_t window_flags)
 {
     struct menu_bar_space_input *space_input = NULL;
     struct menu_bar_space_builder *space = menu_bar_manager_find_space_builder(displays, display_count, sid, &space_input);
@@ -358,7 +348,7 @@ static bool menu_bar_manager_add_window_to_space(struct menu_bar_display_builder
     struct menu_bar_window_input window_input = {
         .space_id = sid,
         .app_name = window->application ? window->application->name : NULL,
-        .flags = menu_bar_manager_window_flags_for_space(window, sid)
+        .flags = menu_bar_manager_window_flags_for_space(window_flags, space_input->is_native_fullscreen)
     };
 
     enum menu_bar_window_occupancy occupancy = menu_bar_model_classify_window(&window_input);
@@ -508,7 +498,8 @@ static bool menu_bar_manager_mark_visible_spaces_unknown(struct menu_bar_display
 
 static bool menu_bar_manager_add_tracked_window_from_raw_membership(struct menu_bar_display_builder *displays,
                                                                     size_t display_count,
-                                                                    struct window *window)
+                                                                    struct window *window,
+                                                                    uint32_t window_flags)
 {
     bool found_raw_membership = false;
 
@@ -525,7 +516,7 @@ static bool menu_bar_manager_add_tracked_window_from_raw_membership(struct menu_
             for (size_t i = 0; i < space->raw_window_count; ++i) {
                 if (space->raw_window_ids[i] != window->id) continue;
                 found_raw_membership = true;
-                if (!menu_bar_manager_add_window_to_space(displays, display_count, window, sid)) return false;
+                if (!menu_bar_manager_add_window_to_space(displays, display_count, window, sid, window_flags)) return false;
                 break;
             }
         }
@@ -570,18 +561,17 @@ static bool menu_bar_manager_collect_tracked_windows(struct menu_bar_display_bui
     table_for (struct window *window, g_window_manager.window, {
         if (!window || !window->id) continue;
 
-        uint32_t base_flags = 0;
-        if (window_check_flag(window, WINDOW_STICKY) || menu_bar_manager_native_window_is_sticky(window->id)) base_flags |= MENU_BAR_WINDOW_STICKY;
-        if (!window_is_real(window)) base_flags |= MENU_BAR_WINDOW_TRANSIENT;
-
-        if (base_flags & (MENU_BAR_WINDOW_STICKY | MENU_BAR_WINDOW_TRANSIENT)) {
-            continue;
-        }
+        uint32_t window_flags = menu_bar_manager_window_flags(window);
+        if (window_flags & (MENU_BAR_WINDOW_STICKY | MENU_BAR_WINDOW_TRANSIENT)) continue;
 
         int space_count = 0;
         uint64_t *space_list = menu_bar_manager_native_window_space_list(window->id, &space_count);
+
+        // A sticky window is defined by membership in multiple Spaces. Reuse this
+        // list instead of issuing the same SLSCopySpacesForWindows query twice.
+        if (space_list && space_count > 1) continue;
         if (!space_list || space_count <= 0) {
-            if (!menu_bar_manager_add_tracked_window_from_raw_membership(displays, display_count, window)) {
+            if (!menu_bar_manager_add_tracked_window_from_raw_membership(displays, display_count, window, window_flags)) {
                 return false;
             }
             continue;
@@ -590,7 +580,7 @@ static bool menu_bar_manager_collect_tracked_windows(struct menu_bar_display_bui
         if (!menu_bar_manager_reconcile_raw_membership(displays, display_count, window,
                                                         space_list, space_count)) return false;
         for (int i = 0; i < space_count; ++i) {
-            if (!menu_bar_manager_add_window_to_space(displays, display_count, window, space_list[i])) {
+            if (!menu_bar_manager_add_window_to_space(displays, display_count, window, space_list[i], window_flags)) {
                 return false;
             }
         }

@@ -1,4 +1,5 @@
 static void menu_bar_manager_test_reset(void);
+static void menu_bar_manager_test_install_native_seams(void);
 
 TEST_FUNC(menu_bar_manager_config_value_parsing, {
     menu_bar_manager_test_reset();
@@ -43,7 +44,10 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
 static sem_t g_menu_bar_manager_test_sem;
 static bool g_menu_bar_manager_test_raw_contains_window;
 static bool g_menu_bar_manager_test_raw_queries_fail;
+static bool g_menu_bar_manager_test_native_fullscreen_space;
+static bool g_menu_bar_manager_test_native_sticky_window;
 static int g_menu_bar_manager_test_inventory_call_count;
+static int g_menu_bar_manager_test_snapshot_space_type_calls;
 
 static int menu_bar_manager_test_active_display_count(void)
 {
@@ -86,7 +90,8 @@ static int menu_bar_manager_test_space_type(int cid, uint64_t sid)
 {
     (void) cid;
     ++g_menu_bar_manager_test_inventory_call_count;
-    return sid == 42 ? 0 : 1;
+    ++g_menu_bar_manager_test_snapshot_space_type_calls;
+    return sid == 42 ? (g_menu_bar_manager_test_native_fullscreen_space ? 4 : 0) : 1;
 }
 
 static int menu_bar_manager_test_mission_control_index(uint64_t sid)
@@ -96,14 +101,14 @@ static int menu_bar_manager_test_mission_control_index(uint64_t sid)
 
 static uint64_t *menu_bar_manager_test_window_space_list(uint32_t wid, int *count)
 {
-    static uint64_t spaces[] = { 42 };
+    static uint64_t spaces[] = { 42, 84 };
     ++g_menu_bar_manager_test_inventory_call_count;
     if (wid != 1001) {
         if (count) *count = 0;
         return NULL;
     }
 
-    if (count) *count = 1;
+    if (count) *count = g_menu_bar_manager_test_native_sticky_window ? 2 : 1;
     return spaces;
 }
 
@@ -128,18 +133,6 @@ static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *coun
 
     if (count) *count = 1;
     return windows;
-}
-
-static bool menu_bar_manager_test_window_is_sticky(uint32_t wid)
-{
-    (void) wid;
-    return false;
-}
-
-static bool menu_bar_manager_test_space_is_fullscreen(uint64_t sid)
-{
-    (void) sid;
-    return false;
 }
 
 static struct menu_bar_snapshot *menu_bar_manager_test_snapshot(uint64_t generation,
@@ -209,6 +202,74 @@ static int menu_bar_manager_test_unstable_space_type(int cid, uint64_t sid)
     return sid == 42 ? 0 : 1;
 }
 
+TEST_FUNC(menu_bar_manager_reuses_collected_window_and_space_state,
+{
+    uint32_t window_flags = MENU_BAR_WINDOW_FLOATING | MENU_BAR_WINDOW_UNMANAGED;
+    TEST_CHECK(menu_bar_manager_window_flags_for_space(window_flags, false), window_flags);
+    TEST_CHECK(menu_bar_manager_window_flags_for_space(window_flags, true),
+               window_flags | MENU_BAR_WINDOW_NATIVE_FULLSCREEN);
+});
+
+TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
+{
+    struct display_manager saved_display_manager = g_display_manager;
+    struct table saved_windows = g_window_manager.window;
+    struct table saved_managed_windows = g_window_manager.managed_window;
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_install_native_seams();
+    g_menu_bar_manager.settings = (struct menu_bar_settings) {
+        .enabled = MENU_BAR_ENABLED,
+        .style = MENU_BAR_STYLE_EXPANDED,
+        .space_filter = MENU_BAR_SPACE_FILTER_ALL
+    };
+    g_display_manager.current_display_id = 1;
+    g_menu_bar_manager_test_raw_contains_window = true;
+    g_menu_bar_manager_test_native_fullscreen_space = true;
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.managed_window = (struct table) {0};
+    table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+    table_init(&g_window_manager.managed_window, 8, hash_wm, compare_wm);
+
+    struct application application = { .name = "Editor" };
+    struct window window = {
+        .application = &application,
+        .id = 1001,
+        .role = kAXWindowRole,
+        .subrole = kAXStandardWindowSubrole
+    };
+    table_add(&g_window_manager.window, &window.id, &window);
+
+    struct menu_bar_snapshot *snapshot = menu_bar_manager_create_snapshot();
+    TEST_CHECK(snapshot != NULL, true);
+    TEST_CHECK(g_menu_bar_manager_test_snapshot_space_type_calls, 1);
+    if (snapshot) {
+        TEST_CHECK(snapshot->display_count, 1U);
+        TEST_CHECK(snapshot->displays[0].space_count, 1U);
+        TEST_CHECK(snapshot->displays[0].spaces[0].is_native_fullscreen, true);
+        TEST_CHECK(snapshot->displays[0].spaces[0].membership, MENU_BAR_SPACE_MEMBERSHIP_OCCUPIED);
+    }
+    menu_bar_model_snapshot_destroy(snapshot);
+
+    g_menu_bar_manager_test_native_fullscreen_space = false;
+    g_menu_bar_manager_test_native_sticky_window = true;
+    g_menu_bar_manager_test_snapshot_space_type_calls = 0;
+    snapshot = menu_bar_manager_create_snapshot();
+    TEST_CHECK(snapshot != NULL, true);
+    TEST_CHECK(g_menu_bar_manager_test_snapshot_space_type_calls, 1);
+    if (snapshot) {
+        TEST_CHECK(snapshot->displays[0].spaces[0].is_native_fullscreen, false);
+        TEST_CHECK(snapshot->displays[0].spaces[0].membership, MENU_BAR_SPACE_MEMBERSHIP_EMPTY);
+    }
+    menu_bar_model_snapshot_destroy(snapshot);
+
+    table_free(&g_window_manager.managed_window);
+    table_free(&g_window_manager.window);
+    g_window_manager.managed_window = saved_managed_windows;
+    g_window_manager.window = saved_windows;
+    g_display_manager = saved_display_manager;
+    menu_bar_manager_test_reset();
+});
+
 TEST_FUNC(menu_bar_manager_samples_each_space_type_once,
 {
     menu_bar_manager_test_reset();
@@ -240,7 +301,10 @@ static void menu_bar_manager_test_reset(void)
 
     g_menu_bar_manager_test_raw_contains_window = false;
     g_menu_bar_manager_test_raw_queries_fail = false;
+    g_menu_bar_manager_test_native_fullscreen_space = false;
+    g_menu_bar_manager_test_native_sticky_window = false;
     g_menu_bar_manager_test_inventory_call_count = 0;
+    g_menu_bar_manager_test_snapshot_space_type_calls = 0;
 }
 
 static void menu_bar_manager_test_install_native_seams(void)
@@ -254,8 +318,6 @@ static void menu_bar_manager_test_install_native_seams(void)
     g_menu_bar_manager_native.mission_control_index = menu_bar_manager_test_mission_control_index;
     g_menu_bar_manager_native.space_window_list = menu_bar_manager_test_space_window_list;
     g_menu_bar_manager_native.window_space_list = menu_bar_manager_test_window_space_list;
-    g_menu_bar_manager_native.window_is_sticky = menu_bar_manager_test_window_is_sticky;
-    g_menu_bar_manager_native.space_is_fullscreen = menu_bar_manager_test_space_is_fullscreen;
 }
 
 static void menu_bar_manager_test_begin_queue(void)
@@ -865,8 +927,9 @@ TEST_FUNC(menu_bar_manager_raw_membership_is_captured_once_per_space,
 
     menu_bar_manager_test_raw_capture_calls = 0;
     TEST_CHECK(menu_bar_manager_collect_raw_untracked(&display, 1), true);
-    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &first), true);
-    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &second), true);
+    uint32_t transient_flags = MENU_BAR_WINDOW_UNMANAGED | MENU_BAR_WINDOW_TRANSIENT;
+    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &first, transient_flags), true);
+    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &second, transient_flags), true);
     TEST_CHECK(menu_bar_manager_test_raw_capture_calls, 1);
     TEST_CHECK(builder.raw_window_count, 2U);
 
@@ -955,7 +1018,8 @@ TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
     builders[0].raw_window_ids = raw_window_ids;
     builders[0].raw_window_count = 1;
     builders[1].raw_query_succeeded = true;
-    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(displays, 1, &window), true);
+    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(displays, 1, &window,
+                                                                        MENU_BAR_WINDOW_UNMANAGED), true);
     menu_bar_manager_finalize_membership(displays, 1);
     TEST_CHECK(spaces[0].membership, MENU_BAR_SPACE_MEMBERSHIP_OCCUPIED);
     TEST_CHECK(spaces[0].app_count, 1);
@@ -974,7 +1038,8 @@ TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
     builders[0].raw_query_succeeded = false;
     builders[1].raw_query_succeeded = true;
 
-    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(displays, 1, &window), true);
+    TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(displays, 1, &window,
+                                                                        MENU_BAR_WINDOW_UNMANAGED), true);
     menu_bar_manager_finalize_membership(displays, 1);
     TEST_CHECK(spaces[0].membership, MENU_BAR_SPACE_MEMBERSHIP_UNKNOWN);
     TEST_CHECK(spaces[1].membership, MENU_BAR_SPACE_MEMBERSHIP_EMPTY);

@@ -3036,6 +3036,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
     TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
+    TEST_ENTRY(menu_bar_manager_reuses_collected_window_and_space_state) \
+    TEST_ENTRY(menu_bar_manager_snapshot_reuses_native_metadata_per_window) \
     TEST_ENTRY(menu_bar_manager_samples_each_space_type_once)          \
     TEST_ENTRY(menu_bar_manager_app_summary_growth_is_geometric)       \
     TEST_ENTRY(menu_bar_manager_focus_only_refresh_reuses_inventory)   \

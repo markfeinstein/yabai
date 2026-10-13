@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Reuse window and native Space metadata within each integrated menu-bar snapshot,
+  avoiding redundant synchronous WindowServer queries per window membership.
 - Add non-mutating window diagnostics for raw parent id, WindowServer tags,
   ordered-in state, and CoreGraphics on-screen presence, plus verbose visibility-event
   and Space-focus-path tracing for cross-Space compositor investigations.
