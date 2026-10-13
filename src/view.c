@@ -82,7 +82,8 @@ void insert_feedback_show(struct window_node *node)
         SLSNewWindowWithOpaqueShapeAndContext(g_connection, 2, frame_region, empty_region, 13, &tags, 0, 0, 64, &node->feedback_window.id, NULL);
         CFRelease(empty_region);
 
-        sls_window_disable_shadow(node->feedback_window.id);
+        // Shadow suppression is cosmetic; keep insertion feedback usable if it fails.
+        (void) sls_window_disable_shadow(node->feedback_window.id);
         SLSSetWindowResolution(g_connection, node->feedback_window.id, 1.0f);
         SLSSetWindowOpacity(g_connection, node->feedback_window.id, 0);
         SLSSetWindowLevel(g_connection, node->feedback_window.id, window_level(node->window_order[0]));

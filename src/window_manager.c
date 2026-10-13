@@ -1017,7 +1017,8 @@ static bool window_manager_create_window_proxy(int animation_connection, float a
                                         &tags, 0, 0, 64, &proxy->id, NULL) != kCGErrorSuccess || !proxy->id) goto fail;
     proxy->context = window_manager_proxy_new_context(animation_connection, proxy->id, 0);
     if (!proxy->context) goto fail;
-    sls_window_disable_shadow(proxy->id);
+    // Shadow suppression is cosmetic; keep the animation proxy usable if it fails.
+    (void) sls_window_disable_shadow(proxy->id);
     SLSSetWindowOpacity(animation_connection, proxy->id, 0);
     SLSSetWindowResolution(animation_connection, proxy->id, 2.0f);
     SLSSetWindowAlpha(animation_connection, proxy->id, alpha);

@@ -170,7 +170,10 @@ static CFMutableArrayRef display_manager_copy_valid_display_uuids(CFTypeRef valu
     if (!cf_is_type(value, CFArrayGetTypeID())) return NULL;
 
     CFArrayRef displays = (CFArrayRef) value;
-    CFMutableArrayRef result = CFArrayCreateMutable(NULL, CFArrayGetCount(displays), &kCFTypeArrayCallBacks);
+    CFMutableArrayRef result = YABAI_CFARRAY_CREATE_MUTABLE(NULL, CFArrayGetCount(displays),
+                                                            &kCFTypeArrayCallBacks);
+    if (!result) return NULL;
+
     for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
         CFTypeRef uuid = CFArrayGetValueAtIndex(displays, i);
         if (cf_is_type(uuid, CFStringGetTypeID())) CFArrayAppendValue(result, uuid);

@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Fail conservatively when Core Foundation allocation fails during display ordering,
+  accessibility checks, shadow configuration, or window/Space list construction.
 - Reuse one WindowServer Space-membership result when window queries serialize both
   Space-dependent fields and sticky state, avoiding a duplicate native request per window.
 - Deduplicate large application-lifecycle view batches in linear time while preserving

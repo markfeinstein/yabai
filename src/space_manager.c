@@ -891,6 +891,7 @@ void space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list
 {
     if (SLSPerformAsynchronousBridgedWindowManagementOperation) {
         CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
+        if (!window_list_ref) return;
         Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
         SEL sel = sel_registerName("initWithWindows:spaceID:");
         id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
@@ -899,6 +900,7 @@ void space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list
         CFRelease(window_list_ref);
     } else if (!workspace_use_macos_space_workaround()) {
         CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
+        if (!window_list_ref) return;
         SLSMoveWindowsToManagedSpace(g_connection, window_list_ref, sid);
         CFRelease(window_list_ref);
     } else if (!scripting_addition_move_window_list_to_space(sid, window_list, window_count)) {
@@ -922,6 +924,7 @@ void space_manager_move_window_to_space(uint64_t sid, struct window *window)
 #endif
     if (SLSPerformAsynchronousBridgedWindowManagementOperation) {
         CFArrayRef window_list_ref = cfarray_of_cfnumbers(&window->id, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+        if (!window_list_ref) return;
         Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
         SEL sel = sel_registerName("initWithWindows:spaceID:");
         id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
@@ -930,6 +933,7 @@ void space_manager_move_window_to_space(uint64_t sid, struct window *window)
         CFRelease(window_list_ref);
     } else if (!workspace_use_macos_space_workaround()) {
         CFArrayRef window_list_ref = cfarray_of_cfnumbers(&window->id, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+        if (!window_list_ref) return;
         SLSMoveWindowsToManagedSpace(g_connection, window_list_ref, sid);
         CFRelease(window_list_ref);
     } else if (!scripting_addition_move_window_to_space(sid, window->id)) {

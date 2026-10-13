@@ -113,6 +113,8 @@ uint64_t window_space(uint32_t wid)
     uint64_t sid = 0;
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return window_display_space(wid);
+
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
     if (!space_list_ref) goto err;
 
@@ -1102,6 +1104,8 @@ bool window_is_sticky(uint32_t wid)
     bool result = false;
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return false;
+
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
     if (!space_list_ref) goto err;
 
@@ -1167,6 +1171,7 @@ int window_level(uint32_t wid)
 
     if (workspace_is_macos_ventura() || workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+        if (!window_ref) return 0;
 
         CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
         if (!query) goto err2;
