@@ -2840,6 +2840,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(native_resize_shutdown_serializes_final_cancellation_and_restart_state) \
+    TEST_ENTRY(event_loop_batched_views_deduplicate_in_first_seen_order) \
     TEST_ENTRY(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
     TEST_ENTRY(application_launch_and_startup_table_failures_retry_and_recover_through_callers) \

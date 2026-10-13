@@ -591,6 +591,114 @@ TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state
     g_event_loop = saved_event_loop;
 });
 
+static struct view *event_loop_batched_view_updates[4];
+static struct view *event_loop_batched_view_flushes[4];
+static struct { char operation; struct view *view; } event_loop_batched_view_operations[8];
+static int event_loop_batched_view_update_count;
+static int event_loop_batched_view_flush_count;
+static int event_loop_batched_view_operation_count;
+
+static void event_loop_batched_view_record_update(struct view *view)
+{
+    event_loop_batched_view_updates[event_loop_batched_view_update_count++] = view;
+    event_loop_batched_view_operations[event_loop_batched_view_operation_count].operation = 'U';
+    event_loop_batched_view_operations[event_loop_batched_view_operation_count++].view = view;
+}
+
+static void event_loop_batched_view_record_flush(struct view *view)
+{
+    event_loop_batched_view_flushes[event_loop_batched_view_flush_count++] = view;
+    event_loop_batched_view_operations[event_loop_batched_view_operation_count].operation = 'F';
+    event_loop_batched_view_operations[event_loop_batched_view_operation_count++].view = view;
+}
+
+static void *event_loop_batched_view_fail_calloc(size_t count, size_t size)
+{
+    (void) count;
+    (void) size;
+    return NULL;
+}
+
+static void event_loop_batched_view_fill_large(struct view **views, int count,
+                                               struct view *first, struct view *second,
+                                               struct view *third)
+{
+    for (int i = 0; i < count; ++i) {
+        switch (i % 4) {
+        case 0: views[i] = second; break;
+        case 1: views[i] = first; break;
+        case 2: views[i] = third; break;
+        default: views[i] = second; break;
+        }
+    }
+}
+
+TEST_FUNC(event_loop_batched_views_deduplicate_in_first_seen_order,
+{
+    __auto_type saved_calloc = event_loop_batched_view_calloc;
+    __auto_type saved_update = event_loop_batched_view_update;
+    __auto_type saved_flush = event_loop_batched_view_flush;
+    struct view first = { .layout = VIEW_ACCORDION_HORIZONTAL, .flags = VIEW_IS_DIRTY };
+    struct view second = { .layout = VIEW_BSP, .flags = VIEW_IS_DIRTY };
+    struct view third = { .layout = VIEW_BSP };
+    struct view *small[] = { &first, &first, &second, &first, &third, &second };
+
+    TEST_CHECK(event_loop_compact_unique_views(small, array_count(small)), 3);
+    TEST_CHECK(small[0], &first);
+    TEST_CHECK(small[1], &second);
+    TEST_CHECK(small[2], &third);
+
+    struct view *large[256];
+    event_loop_batched_view_fill_large(large, array_count(large), &first, &second, &third);
+    TEST_CHECK(event_loop_compact_unique_views(large, array_count(large)), 3);
+    TEST_CHECK(large[0], &second);
+    TEST_CHECK(large[1], &first);
+    TEST_CHECK(large[2], &third);
+
+    event_loop_batched_view_update = event_loop_batched_view_record_update;
+    event_loop_batched_view_flush = event_loop_batched_view_record_flush;
+    event_loop_batched_view_update_count = 0;
+    event_loop_batched_view_flush_count = 0;
+    event_loop_batched_view_operation_count = 0;
+    event_loop_batched_view_fill_large(large, array_count(large), &first, &second, &third);
+    event_loop_flush_batched_views(large, array_count(large));
+    TEST_CHECK(event_loop_batched_view_update_count, 1);
+    TEST_CHECK(event_loop_batched_view_updates[0], &first);
+    TEST_CHECK(event_loop_batched_view_flush_count, 2);
+    TEST_CHECK(event_loop_batched_view_flushes[0], &second);
+    TEST_CHECK(event_loop_batched_view_flushes[1], &first);
+    TEST_CHECK(event_loop_batched_view_operation_count, 3);
+    TEST_CHECK(event_loop_batched_view_operations[0].operation, 'F');
+    TEST_CHECK(event_loop_batched_view_operations[0].view, &second);
+    TEST_CHECK(event_loop_batched_view_operations[1].operation, 'U');
+    TEST_CHECK(event_loop_batched_view_operations[1].view, &first);
+    TEST_CHECK(event_loop_batched_view_operations[2].operation, 'F');
+    TEST_CHECK(event_loop_batched_view_operations[2].view, &first);
+
+    event_loop_batched_view_calloc = event_loop_batched_view_fail_calloc;
+    event_loop_batched_view_update_count = 0;
+    event_loop_batched_view_flush_count = 0;
+    event_loop_batched_view_operation_count = 0;
+    event_loop_batched_view_fill_large(large, array_count(large), &first, &second, &third);
+    event_loop_flush_batched_views(large, array_count(large));
+    TEST_CHECK(event_loop_batched_view_update_count, 1);
+    TEST_CHECK(event_loop_batched_view_updates[0], &first);
+    TEST_CHECK(event_loop_batched_view_flush_count, 2);
+    TEST_CHECK(event_loop_batched_view_flushes[0], &second);
+    TEST_CHECK(event_loop_batched_view_flushes[1], &first);
+    TEST_CHECK(event_loop_batched_view_operation_count, 3);
+    TEST_CHECK(event_loop_batched_view_operations[0].operation, 'F');
+    TEST_CHECK(event_loop_batched_view_operations[0].view, &second);
+    TEST_CHECK(event_loop_batched_view_operations[1].operation, 'U');
+    TEST_CHECK(event_loop_batched_view_operations[1].view, &first);
+    TEST_CHECK(event_loop_batched_view_operations[2].operation, 'F');
+    TEST_CHECK(event_loop_batched_view_operations[2].view, &first);
+
+    event_loop_batched_view_calloc = saved_calloc;
+    event_loop_batched_view_update = saved_update;
+    event_loop_batched_view_flush = saved_flush;
+});
+
 TEST_FUNC(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel,
 {
     struct event_loop saved_event_loop = g_event_loop;

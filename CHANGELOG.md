@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Deduplicate large application-lifecycle view batches in linear time while preserving
+  first-seen flush order and the allocation-free path for ordinary small batches.
 - Reuse window, Space and managed-display topology metadata within each integrated
   menu-bar snapshot, avoiding redundant synchronous WindowServer queries per window,
   Space and display.
