@@ -186,7 +186,17 @@ static uint64_t window_serialization_flags(uint64_t flags)
     return flags ? flags : ~WINDOW_PROPERTY_DIAGNOSTIC_FLAGS;
 }
 
-void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
+static int window_serialization_space_index(const struct window_serialization_context *context,
+                                            uint64_t sid)
+{
+    if (context && context->has_managed_display_spaces_snapshot) {
+        return managed_space_index(context->managed_display_spaces, sid);
+    }
+    return space_manager_mission_control_index(sid);
+}
+
+void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
+                                         const struct window_serialization_context *context)
 {
     TIME_FUNCTION;
 
@@ -330,7 +340,7 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_SPACE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int space = space_manager_mission_control_index(sid);
+        int space = window_serialization_space_index(context, sid);
         fprintf(rsp, "\t\"space\":%d", space);
         did_output = true;
     }
@@ -522,12 +532,18 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     fprintf(rsp, "\n}");
 }
 
+void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
+{
+    window_nonax_serialize_with_context(rsp, wid, flags, NULL);
+}
+
 static bool window_serialize_is_hidden(struct window *window)
 {
     return window->application ? window->application->is_hidden : false;
 }
 
-void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
+void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t flags,
+                                   const struct window_serialization_context *context)
 {
     TIME_FUNCTION;
 
@@ -678,7 +694,7 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_SPACE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int space = space_manager_mission_control_index(sid);
+        int space = window_serialization_space_index(context, sid);
         fprintf(rsp, "\t\"space\":%d", space);
         did_output = true;
     }
@@ -873,6 +889,11 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     }
 
     fprintf(rsp, "\n}");
+}
+
+void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
+{
+    window_serialize_with_context(rsp, window, flags, NULL);
 }
 
 char *window_property_title_ts(uint32_t wid)

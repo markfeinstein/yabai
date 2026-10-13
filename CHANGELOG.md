@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Reuse window, Space and managed-display topology metadata within each integrated
   menu-bar snapshot, avoiding redundant synchronous WindowServer queries per window,
   Space and display.
+- Reuse one managed-display topology snapshot across each window-query request,
+  avoiding repeated topology IPC for display Space enumeration and serialized indices.
 - Add non-mutating window diagnostics for raw parent id, WindowServer tags,
   ordered-in state, and CoreGraphics on-screen presence, plus verbose visibility-event
   and Space-focus-path tracing for cross-Space compositor investigations.

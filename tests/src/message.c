@@ -762,6 +762,59 @@ static uint32_t *message_query_window_inventory_failure(uint64_t *space_list, in
     return NULL;
 }
 
+static int message_query_topology_call_count;
+static int message_query_display_space_list_call_count;
+static uint32_t message_query_display_space_list_failure_did;
+static bool message_query_topology_fails;
+
+static CFArrayRef message_query_managed_display_spaces(int cid)
+{
+    (void) cid;
+    ++message_query_topology_call_count;
+    return message_query_topology_fails
+        ? NULL
+        : CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
+}
+
+static CGError message_query_active_displays(uint32_t capacity, CGDirectDisplayID *displays,
+                                             uint32_t *count)
+{
+    *count = 2;
+    if (!capacity || !displays) return kCGErrorSuccess;
+    if (capacity < 2) return kCGErrorRangeCheck;
+    displays[0] = 1;
+    displays[1] = 2;
+    return kCGErrorSuccess;
+}
+
+static uint64_t *message_query_display_spaces(uint32_t did, CFArrayRef topology, int *count)
+{
+    (void) topology;
+    ++message_query_display_space_list_call_count;
+    *count = 0;
+    if (did == message_query_display_space_list_failure_did) return NULL;
+
+    uint64_t *spaces = ts_alloc_list(uint64_t, 1);
+    if (!spaces) return NULL;
+    spaces[0] = did == 1 ? 41 : 42;
+    *count = 1;
+    return spaces;
+}
+
+static uint32_t *message_query_window_inventory_success(uint64_t *space_list, int space_count,
+                                                        int cid, int *count,
+                                                        bool include_minimized, bool *success)
+{
+    static uint32_t windows[] = { UINT32_C(0x7ffffffd), UINT32_C(0x7ffffffe), UINT32_C(0x7fffffff) };
+    (void) space_list;
+    (void) space_count;
+    (void) cid;
+    (void) include_minimized;
+    *count = (int) array_count(windows);
+    *success = true;
+    return windows;
+}
+
 static uint64_t *message_query_window_spaces_empty(uint32_t wid, int *count, bool *success)
 {
     (void) wid;
@@ -863,6 +916,149 @@ TEST_FUNC(message_query_backend_failures_are_reported,
         fclose(response);
     }
     space_manager_test_query_window_space_list = saved_window_space_list;
+});
+
+TEST_FUNC(message_window_query_reuses_topology_across_serialization,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    __auto_type saved_window_list = window_manager_query_window_list;
+    __auto_type saved_topology = window_manager_query_managed_display_spaces;
+    __auto_type saved_display_spaces = window_manager_query_display_space_list;
+    struct table saved_windows = g_window_manager.window;
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+    struct window tracked = { .id = UINT32_C(0x7ffffffd), .is_root = true };
+    table_add(&g_window_manager.window, &tracked.id, &tracked);
+    window_manager_query_window_list = message_query_window_inventory_success;
+    window_manager_query_managed_display_spaces = message_query_managed_display_spaces;
+    window_manager_query_display_space_list = message_query_display_spaces;
+    uint64_t sid = 1;
+
+    message_query_topology_call_count = 0;
+    message_query_topology_fails = false;
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1,
+                                                            WINDOW_PROPERTY_ID | WINDOW_PROPERTY_SPACE), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "\"space\":0") != NULL, true);
+        fclose(response);
+    }
+
+    message_query_topology_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, WINDOW_PROPERTY_ID), true);
+        TEST_CHECK(message_query_topology_call_count, 0);
+        fclose(response);
+    }
+
+    message_query_topology_call_count = 0;
+    message_query_topology_fails = true;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, WINDOW_PROPERTY_SPACE), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        rewind(response);
+        char output[192] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "\"space\":0") != NULL, true);
+        fclose(response);
+    }
+
+    message_query_topology_fails = false;
+    message_query_display_space_list_failure_did = 0;
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_display(response, 1, WINDOW_PROPERTY_SPACE), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 1);
+        fclose(response);
+    }
+
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_display(response, 1, WINDOW_PROPERTY_ID), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 1);
+        fclose(response);
+    }
+
+    display_manager_test_set_active_display_list_fn(message_query_active_displays);
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_SPACE), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 2);
+        fclose(response);
+    }
+
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_ID), true);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 2);
+        fclose(response);
+    }
+
+    message_query_display_space_list_failure_did = 2;
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_ID), false);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 2);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+
+    message_query_topology_fails = true;
+    message_query_display_space_list_failure_did = 0;
+    message_query_topology_call_count = 0;
+    message_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_displays(response, WINDOW_PROPERTY_ID), false);
+        TEST_CHECK(message_query_topology_call_count, 1);
+        TEST_CHECK(message_query_display_space_list_call_count, 0);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    display_manager_test_set_active_display_list_fn(NULL);
+
+    window_manager_query_window_list = saved_window_list;
+    window_manager_query_managed_display_spaces = saved_topology;
+    window_manager_query_display_space_list = saved_display_spaces;
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    message_query_topology_fails = false;
+    message_query_display_space_list_failure_did = 0;
+    ts_reset();
 });
 
 TEST_FUNC(message_rule_filter_diagnostic_lists_all_matchers,

@@ -3060,6 +3060,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_rule_and_signal_reject_duplicate_fields)           \
     TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
+    TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \

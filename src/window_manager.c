@@ -42,38 +42,80 @@ void window_manager_query_window_rules(FILE *rsp)
 #ifdef TESTS
 static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *) =
     space_window_list_for_connection_with_status;
+static CFArrayRef (*window_manager_query_managed_display_spaces)(int) = SLSCopyManagedDisplaySpaces;
+static uint64_t *(*window_manager_query_display_space_list)(uint32_t, CFArrayRef, int *) =
+    display_space_list_with_topology;
 #else
 #define window_manager_query_window_list space_window_list_for_connection_with_status
+#define window_manager_query_managed_display_spaces SLSCopyManagedDisplaySpaces
+#define window_manager_query_display_space_list display_space_list_with_topology
 #endif
 
-bool window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags)
+static bool window_manager_query_serializes_space(uint64_t flags)
 {
-    TIME_FUNCTION;
+    return !flags || (flags & WINDOW_PROPERTY_SPACE);
+}
 
+static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
+                                                                  uint64_t *space_list,
+                                                                  int space_count,
+                                                                  uint64_t flags,
+                                                                  CFArrayRef topology,
+                                                                  bool has_topology_snapshot)
+{
     int window_count = 0;
     bool inventory_succeeded = false;
     uint32_t *window_list = window_manager_query_window_list(space_list, space_count, 0, &window_count,
                                                              true, &inventory_succeeded);
     if (!inventory_succeeded) return false;
 
+    bool owns_topology = false;
+    if (!has_topology_snapshot && window_manager_query_serializes_space(flags)) {
+        topology = window_manager_query_managed_display_spaces(g_connection);
+        has_topology_snapshot = true;
+        owns_topology = topology != NULL;
+    }
+
+    struct window_serialization_context context = {
+        .managed_display_spaces = topology,
+        .has_managed_display_spaces_snapshot = has_topology_snapshot
+    };
+
     fprintf(rsp, "[");
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_manager_find_window(&g_window_manager, window_list[i]);
-        if (window) window_serialize(rsp, window, flags); else window_nonax_serialize(rsp, window_list[i], flags);
+        if (window) {
+            window_serialize_with_context(rsp, window, flags, &context);
+        } else {
+            window_nonax_serialize_with_context(rsp, window_list[i], flags, &context);
+        }
         if (i < window_count - 1) fprintf(rsp, ",");
     }
     fprintf(rsp, "]\n");
+    if (owns_topology) CFRelease(topology);
     return true;
+}
+
+bool window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags)
+{
+    TIME_FUNCTION;
+    return window_manager_query_windows_for_spaces_with_topology(rsp, space_list, space_count,
+                                                                  flags, NULL, false);
 }
 
 bool window_manager_query_windows_for_display(FILE *rsp, uint32_t did, uint64_t flags)
 {
     TIME_FUNCTION;
 
+    CFArrayRef topology = window_manager_query_managed_display_spaces(g_connection);
+    if (!topology) return false;
+
     int space_count = 0;
-    uint64_t *space_list = display_space_list(did, &space_count);
-    if (!space_list) return false;
-    return window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
+    uint64_t *space_list = window_manager_query_display_space_list(did, topology, &space_count);
+    bool result = space_list && window_manager_query_windows_for_spaces_with_topology(
+                                      rsp, space_list, space_count, flags, topology, true);
+    CFRelease(topology);
+    return result;
 }
 
 bool window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
@@ -84,16 +126,22 @@ bool window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
     uint32_t *display_list = display_manager_active_display_list(&display_count);
     if (!display_list) return false;
 
+    CFArrayRef topology = window_manager_query_managed_display_spaces(g_connection);
+    if (!topology) return false;
+
     int space_count = 0;
     uint64_t *space_list = NULL;
 
     for (int i = 0; i < display_count; ++i) {
         int count;
-        uint64_t *list = display_space_list(display_list[i], &count);
-        if (!list) return false;
+        uint64_t *list = window_manager_query_display_space_list(display_list[i], topology, &count);
+        if (!list) {
+            CFRelease(topology);
+            return false;
+        }
 
         //
-        // NOTE(asmvik): display_space_list(..) uses a linear allocator,
+        // NOTE(asmvik): display_space_list_with_topology(..) uses a linear allocator,
         // and so we only need to track the beginning of the first list along
         // with the total number of spaces that have been allocated.
         //
@@ -102,7 +150,10 @@ bool window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags)
         space_count += count;
     }
 
-    return window_manager_query_windows_for_spaces(rsp, space_list, space_count, flags);
+    bool result = window_manager_query_windows_for_spaces_with_topology(
+        rsp, space_list, space_count, flags, topology, true);
+    CFRelease(topology);
+    return result;
 }
 
 bool window_manager_rule_matches_window(struct rule *rule, struct window *window, char *window_title, char *window_role, char *window_subrole)

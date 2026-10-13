@@ -347,15 +347,29 @@ static uint64_t *display_space_list_from_spaces(CFArrayRef spaces, int *count)
     return result;
 }
 
+uint64_t *display_space_list_with_topology(uint32_t did, CFArrayRef topology, int *count)
+{
+    if (count) *count = 0;
+    if (!count || !topology) return NULL;
+
+    CFStringRef uuid = display_uuid(did);
+    if (!uuid) return NULL;
+
+    CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+    uint64_t *result = display_space_list_from_spaces(spaces, count);
+    CFRelease(uuid);
+    return result;
+}
+
 uint64_t *display_space_list(uint32_t did, int *count)
 {
     if (count) *count = 0;
     if (!count) return NULL;
 
-    uint64_t *result = NULL;
     CFStringRef uuid = display_uuid(did);
     if (!uuid) return NULL;
 
+    uint64_t *result = NULL;
     CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
     if (topology) {
         CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
