@@ -47,6 +47,7 @@ struct menu_bar_manager_state
 
 struct menu_bar_manager_native_seams
 {
+    CFArrayRef (*managed_display_spaces)(void);
     int (*active_display_count)(void);
     uint32_t (*arrangement_display_id)(int arrangement);
     CFStringRef (*display_uuid)(uint32_t did);
@@ -150,11 +151,32 @@ static CFStringRef menu_bar_manager_native_display_uuid(uint32_t did)
         : display_uuid(did);
 }
 
-static uint64_t *menu_bar_manager_native_display_space_list(uint32_t did, int *count)
+static CFArrayRef menu_bar_manager_native_managed_display_spaces(void)
 {
-    return g_menu_bar_manager_native.display_space_list
-        ? g_menu_bar_manager_native.display_space_list(did, count)
-        : display_space_list(did, count);
+    return g_menu_bar_manager_native.managed_display_spaces
+        ? g_menu_bar_manager_native.managed_display_spaces()
+        : SLSCopyManagedDisplaySpaces(g_connection);
+}
+
+static uint64_t *menu_bar_manager_native_display_space_list(CFArrayRef topology,
+                                                             CFStringRef uuid,
+                                                             uint32_t did,
+                                                             int *count)
+{
+    if (g_menu_bar_manager_native.display_space_list) {
+        return g_menu_bar_manager_native.display_space_list(did, count);
+    }
+
+    if (count) *count = 0;
+    if (!count || !uuid || !topology) return NULL;
+
+    CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+    int valid_count = 0;
+    if (!managed_space_count_valid_checked(spaces, &valid_count) || valid_count <= 0) return NULL;
+
+    uint64_t *result = ts_alloc_list(uint64_t, valid_count);
+    if (result) *count = managed_space_copy_valid(spaces, result);
+    return result;
 }
 
 static uint64_t menu_bar_manager_native_display_space_id(uint32_t did)
@@ -171,11 +193,11 @@ static int menu_bar_manager_native_space_type(uint64_t sid)
         : SLSSpaceGetType(g_connection, sid);
 }
 
-static int menu_bar_manager_native_mission_control_index(uint64_t sid)
+static int menu_bar_manager_native_mission_control_index(CFArrayRef topology, uint64_t sid)
 {
     return g_menu_bar_manager_native.mission_control_index
         ? g_menu_bar_manager_native.mission_control_index(sid)
-        : space_manager_mission_control_index(sid);
+        : managed_space_index(topology, sid);
 }
 
 static uint32_t *menu_bar_manager_native_space_window_list(uint64_t sid, int *count,
@@ -373,17 +395,18 @@ static bool menu_bar_manager_mark_space_unknown(struct menu_bar_space_builder *s
 }
 
 static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_builder *display,
+                                                        CFArrayRef topology,
                                                         uint32_t did,
                                                         uint32_t arrangement_index)
 {
+    CFStringRef uuid = menu_bar_manager_native_display_uuid(did);
     int native_space_count = 0;
-    uint64_t *native_spaces = menu_bar_manager_native_display_space_list(did, &native_space_count);
+    uint64_t *native_spaces = menu_bar_manager_native_display_space_list(topology, uuid, did, &native_space_count);
     uint64_t visible_sid = menu_bar_manager_native_display_space_id(did);
 
     display->input.display_id = did;
     display->input.arrangement_index = arrangement_index;
 
-    CFStringRef uuid = menu_bar_manager_native_display_uuid(did);
     if (uuid) {
         display->input.uuid = menu_bar_manager_copy_cfstring(uuid);
         CFRelease(uuid);
@@ -420,7 +443,7 @@ static bool menu_bar_manager_collect_spaces_for_display(struct menu_bar_display_
 
         struct space_label *space_label = space_manager_get_label_for_space(&g_space_manager, sid);
         space->space_id = sid;
-        space->mission_control_index = (uint32_t) menu_bar_manager_native_mission_control_index(sid);
+        space->mission_control_index = (uint32_t) menu_bar_manager_native_mission_control_index(topology, sid);
         space->label = space_label ? space_label->label : NULL;
         space->is_native_fullscreen = type == 4;
         space->is_visible = sid == visible_sid;
@@ -659,18 +682,22 @@ static struct menu_bar_snapshot *menu_bar_manager_create_snapshot(void)
     struct menu_bar_display_builder *displays = display_capacity ? calloc(display_capacity, sizeof(struct menu_bar_display_builder)) : NULL;
     if (display_capacity && !displays) return NULL;
 
+    CFArrayRef topology = display_capacity ? menu_bar_manager_native_managed_display_spaces() : NULL;
     size_t display_count = 0;
     for (int arrangement = 1; arrangement <= active_display_count; ++arrangement) {
         uint32_t did = menu_bar_manager_native_arrangement_display_id(arrangement);
         if (!did) continue;
 
-        if (!menu_bar_manager_collect_spaces_for_display(&displays[display_count], did, (uint32_t) arrangement - 1)) {
+        if (!menu_bar_manager_collect_spaces_for_display(&displays[display_count], topology,
+                                                         did, (uint32_t) arrangement - 1)) {
+            if (topology) CFRelease(topology);
             menu_bar_manager_destroy_builders(displays, display_count + 1);
             return NULL;
         }
 
         ++display_count;
     }
+    if (topology) CFRelease(topology);
 
     if (!menu_bar_manager_collect_raw_untracked(displays, display_count) ||
         !menu_bar_manager_collect_tracked_windows(displays, display_count)) {

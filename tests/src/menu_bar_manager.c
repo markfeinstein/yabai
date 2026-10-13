@@ -48,6 +48,17 @@ static bool g_menu_bar_manager_test_native_fullscreen_space;
 static bool g_menu_bar_manager_test_native_sticky_window;
 static int g_menu_bar_manager_test_inventory_call_count;
 static int g_menu_bar_manager_test_snapshot_space_type_calls;
+static int g_menu_bar_manager_test_topology_call_count;
+
+static CFArrayRef menu_bar_manager_test_managed_display_spaces(void)
+{
+    ++g_menu_bar_manager_test_topology_call_count;
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"display-one",
+           @"Spaces": @[ @{ @"id64": @42 } ] }
+    ];
+    return CFRetain((CFArrayRef) topology);
+}
 
 static int menu_bar_manager_test_active_display_count(void)
 {
@@ -210,6 +221,34 @@ TEST_FUNC(menu_bar_manager_reuses_collected_window_and_space_state,
                window_flags | MENU_BAR_WINDOW_NATIVE_FULLSCREEN);
 });
 
+TEST_FUNC(menu_bar_manager_topology_snapshot_drives_space_metadata,
+{
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"display-one",
+           @"Spaces": @[ @{ @"id64": @42 }, @{ @"id64": @84 } ] }
+    ];
+    __auto_type saved_display_space_list = g_menu_bar_manager_native.display_space_list;
+    __auto_type saved_mission_control_index = g_menu_bar_manager_native.mission_control_index;
+    g_menu_bar_manager_native.display_space_list = NULL;
+    g_menu_bar_manager_native.mission_control_index = NULL;
+
+    int count = 0;
+    uint64_t *spaces = menu_bar_manager_native_display_space_list((CFArrayRef) topology,
+                                                                  CFSTR("display-one"),
+                                                                  1, &count);
+    TEST_CHECK(count, 2);
+    TEST_CHECK(spaces != NULL, true);
+    if (spaces) {
+        TEST_CHECK(spaces[0], 42ULL);
+        TEST_CHECK(spaces[1], 84ULL);
+    }
+    TEST_CHECK(menu_bar_manager_native_mission_control_index((CFArrayRef) topology, 42), 1);
+    TEST_CHECK(menu_bar_manager_native_mission_control_index((CFArrayRef) topology, 84), 2);
+
+    g_menu_bar_manager_native.display_space_list = saved_display_space_list;
+    g_menu_bar_manager_native.mission_control_index = saved_mission_control_index;
+});
+
 TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
 {
     struct display_manager saved_display_manager = g_display_manager;
@@ -217,6 +256,8 @@ TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
     struct table saved_managed_windows = g_window_manager.managed_window;
     menu_bar_manager_test_reset();
     menu_bar_manager_test_install_native_seams();
+    g_menu_bar_manager_native.display_space_list = NULL;
+    g_menu_bar_manager_native.mission_control_index = NULL;
     g_menu_bar_manager.settings = (struct menu_bar_settings) {
         .enabled = MENU_BAR_ENABLED,
         .style = MENU_BAR_STYLE_EXPANDED,
@@ -241,10 +282,13 @@ TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
 
     struct menu_bar_snapshot *snapshot = menu_bar_manager_create_snapshot();
     TEST_CHECK(snapshot != NULL, true);
+    TEST_CHECK(g_menu_bar_manager_test_topology_call_count, 1);
     TEST_CHECK(g_menu_bar_manager_test_snapshot_space_type_calls, 1);
     if (snapshot) {
         TEST_CHECK(snapshot->display_count, 1U);
         TEST_CHECK(snapshot->displays[0].space_count, 1U);
+        TEST_CHECK(snapshot->displays[0].spaces[0].space_id, 42ULL);
+        TEST_CHECK(snapshot->displays[0].spaces[0].mission_control_index, 1U);
         TEST_CHECK(snapshot->displays[0].spaces[0].is_native_fullscreen, true);
         TEST_CHECK(snapshot->displays[0].spaces[0].membership, MENU_BAR_SPACE_MEMBERSHIP_OCCUPIED);
     }
@@ -253,8 +297,10 @@ TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
     g_menu_bar_manager_test_native_fullscreen_space = false;
     g_menu_bar_manager_test_native_sticky_window = true;
     g_menu_bar_manager_test_snapshot_space_type_calls = 0;
+    g_menu_bar_manager_test_topology_call_count = 0;
     snapshot = menu_bar_manager_create_snapshot();
     TEST_CHECK(snapshot != NULL, true);
+    TEST_CHECK(g_menu_bar_manager_test_topology_call_count, 1);
     TEST_CHECK(g_menu_bar_manager_test_snapshot_space_type_calls, 1);
     if (snapshot) {
         TEST_CHECK(snapshot->displays[0].spaces[0].is_native_fullscreen, false);
@@ -280,7 +326,7 @@ TEST_FUNC(menu_bar_manager_samples_each_space_type_once,
 
     struct menu_bar_display_builder display = {0};
     menu_bar_manager_test_space_type_call_count = 0;
-    TEST_CHECK(menu_bar_manager_collect_spaces_for_display(&display, 1, 0), true);
+    TEST_CHECK(menu_bar_manager_collect_spaces_for_display(&display, NULL, 1, 0), true);
     TEST_CHECK(menu_bar_manager_test_space_type_call_count, 2);
     TEST_CHECK(display.input.space_count, 1U);
     TEST_CHECK(display.space_inputs[0].space_id, 42ULL);
@@ -305,10 +351,12 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_native_sticky_window = false;
     g_menu_bar_manager_test_inventory_call_count = 0;
     g_menu_bar_manager_test_snapshot_space_type_calls = 0;
+    g_menu_bar_manager_test_topology_call_count = 0;
 }
 
 static void menu_bar_manager_test_install_native_seams(void)
 {
+    g_menu_bar_manager_native.managed_display_spaces = menu_bar_manager_test_managed_display_spaces;
     g_menu_bar_manager_native.active_display_count = menu_bar_manager_test_active_display_count;
     g_menu_bar_manager_native.arrangement_display_id = menu_bar_manager_test_arrangement_display_id;
     g_menu_bar_manager_native.display_uuid = menu_bar_manager_test_display_uuid;
