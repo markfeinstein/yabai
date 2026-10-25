@@ -991,15 +991,72 @@ static void application_window_collection_update_inventory(int previous_window_c
     }
 }
 
-static void event_loop_flush_batched_views(struct view **views, int count)
+#define EVENT_LOOP_BATCHED_VIEW_LINEAR_LIMIT 32
+
+#ifdef TESTS
+static void *(*event_loop_batched_view_calloc)(size_t, size_t) = calloc;
+static void (*event_loop_batched_view_update)(struct view *) = view_update;
+static void (*event_loop_batched_view_flush)(struct view *) = view_flush;
+#else
+#define event_loop_batched_view_calloc calloc
+#define event_loop_batched_view_update view_update
+#define event_loop_batched_view_flush view_flush
+#endif
+
+static int event_loop_compact_unique_views_linear(struct view **views, int count)
 {
+    int unique_count = 0;
+    for (int i = 0; i < count; ++i) {
+        bool duplicate = false;
+        for (int j = 0; j < unique_count; ++j) {
+            if (views[j] == views[i]) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) views[unique_count++] = views[i];
+    }
+    return unique_count;
+}
+
+static int event_loop_compact_unique_views(struct view **views, int count)
+{
+    if (count <= 1) return max(0, count);
+    if (count <= EVENT_LOOP_BATCHED_VIEW_LINEAR_LIMIT) {
+        return event_loop_compact_unique_views_linear(views, count);
+    }
+
+    size_t needed = (size_t) count * 2;
+    size_t capacity = 64;
+    while (capacity < needed) capacity *= 2;
+
+    struct view **seen = event_loop_batched_view_calloc(capacity, sizeof(*seen));
+    if (!seen) return event_loop_compact_unique_views_linear(views, count);
+
+    int unique_count = 0;
+    size_t mask = capacity - 1;
     for (int i = 0; i < count; ++i) {
         struct view *view = views[i];
-        bool duplicate = false;
-        for (int j = 0; j < i; ++j) duplicate |= views[j] == view;
-        if (duplicate || !view_is_dirty(view)) continue;
-        if (view_layout_is_accordion(view->layout)) view_update(view);
-        view_flush(view);
+        size_t slot = (((uintptr_t) view >> 4) * UINT64_C(11400714819323198485)) & mask;
+        while (seen[slot] && seen[slot] != view) slot = (slot + 1) & mask;
+        if (seen[slot]) continue;
+
+        seen[slot] = view;
+        views[unique_count++] = view;
+    }
+
+    free(seen);
+    return unique_count;
+}
+
+static void event_loop_flush_batched_views(struct view **views, int count)
+{
+    count = event_loop_compact_unique_views(views, count);
+    for (int i = 0; i < count; ++i) {
+        struct view *view = views[i];
+        if (!view_is_dirty(view)) continue;
+        if (view_layout_is_accordion(view->layout)) event_loop_batched_view_update(view);
+        event_loop_batched_view_flush(view);
     }
 }
 

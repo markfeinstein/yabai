@@ -67,6 +67,8 @@ uint32_t display_manager_dock_display_id(void);
 CFStringRef display_manager_point_display_uuid(CGPoint point);
 uint32_t display_manager_point_display_id(CGPoint point);
 uint32_t display_manager_cursor_display_id(void);
+CFArrayRef display_manager_copy_ordered_display_uuids(void);
+int display_manager_display_uuid_arrangement(CFArrayRef displays, CFStringRef uuid);
 int display_manager_display_id_arrangement(uint32_t did);
 CFStringRef display_manager_arrangement_display_uuid(int arrangement);
 uint32_t display_manager_arrangement_display_id(int arrangement);

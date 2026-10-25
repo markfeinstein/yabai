@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 unsigned char __src_osax_payload[1];
 unsigned int __src_osax_payload_len;
@@ -33,6 +34,38 @@ static FILE *daemon_response_test_fmemopen(void *bytes, size_t size, const char 
 }
 #define DAEMON_RESPONSE_ALLOCATE(size) daemon_response_test_allocate(size)
 #define DAEMON_RESPONSE_FMEMOPEN(bytes, size, mode) daemon_response_test_fmemopen(bytes, size, mode)
+
+static bool g_test_cfarray_create_mutable_fail;
+static bool g_test_cfdictionary_create_fail;
+static int g_test_cfnumber_create_fail_after = -1;
+static int g_test_cfnumber_create_calls;
+
+static CFMutableArrayRef test_cfarray_create_mutable(CFAllocatorRef allocator, CFIndex capacity,
+                                                     const CFArrayCallBacks *callbacks)
+{
+    return g_test_cfarray_create_mutable_fail ? NULL : CFArrayCreateMutable(allocator, capacity, callbacks);
+}
+
+static CFDictionaryRef test_cfdictionary_create(CFAllocatorRef allocator, const void **keys,
+                                                const void **values, CFIndex count,
+                                                const CFDictionaryKeyCallBacks *key_callbacks,
+                                                const CFDictionaryValueCallBacks *value_callbacks)
+{
+    return g_test_cfdictionary_create_fail ? NULL :
+           CFDictionaryCreate(allocator, keys, values, count, key_callbacks, value_callbacks);
+}
+
+static CFNumberRef test_cfnumber_create(CFAllocatorRef allocator, CFNumberType type, const void *value)
+{
+    if (g_test_cfnumber_create_fail_after >= 0 &&
+        g_test_cfnumber_create_calls++ == g_test_cfnumber_create_fail_after) return NULL;
+    return CFNumberCreate(allocator, type, value);
+}
+
+#define YABAI_CFARRAY_CREATE_MUTABLE test_cfarray_create_mutable
+#define YABAI_CFDICTIONARY_CREATE test_cfdictionary_create
+#define YABAI_CFNUMBER_CREATE test_cfnumber_create
+
 static const char *g_test_runtime_home_override;
 static uid_t g_test_runtime_effective_uid = (uid_t) -1;
 static uid_t test_runtime_effective_uid(void)
@@ -427,6 +460,47 @@ TEST_FUNC(temporary_stretch_buffer_growth_charges_only_capacity,
     }
 });
 
+TEST_FUNC(core_foundation_constructors_fail_conservatively,
+{
+    uint32_t values[] = { 1, 2 };
+
+    g_test_cfarray_create_mutable_fail = true;
+    TEST_CHECK(cfarray_of_cfnumbers(values, sizeof(*values), array_count(values), kCFNumberSInt32Type) == NULL, true);
+    g_test_cfarray_create_mutable_fail = false;
+
+    g_test_cfnumber_create_calls = 0;
+    g_test_cfnumber_create_fail_after = 0;
+    TEST_CHECK(cfarray_of_cfnumbers(values, sizeof(*values), array_count(values), kCFNumberSInt32Type) == NULL, true);
+    g_test_cfnumber_create_calls = 0;
+    TEST_CHECK(sls_window_disable_shadow(1), false);
+    g_test_cfnumber_create_fail_after = -1;
+
+    g_test_cfnumber_create_calls = 0;
+    g_test_cfnumber_create_fail_after = 1;
+    TEST_CHECK(cfarray_of_cfnumbers(values, sizeof(*values), array_count(values), kCFNumberSInt32Type) == NULL, true);
+    g_test_cfnumber_create_fail_after = -1;
+
+    g_test_cfdictionary_create_fail = true;
+    TEST_CHECK(sls_window_disable_shadow(1), false);
+    TEST_CHECK(ax_privilege(), false);
+    g_test_cfdictionary_create_fail = false;
+
+    g_test_cfarray_create_mutable_fail = true;
+    TEST_CHECK(window_is_sticky(1), false);
+    g_test_cfarray_create_mutable_fail = false;
+
+    TEST_CHECK(cfarray_of_cfnumbers(values, 0, 1, kCFNumberSInt32Type) == NULL, true);
+    TEST_CHECK(cfarray_of_cfnumbers(NULL, sizeof(*values), 1, kCFNumberSInt32Type) == NULL, true);
+    TEST_CHECK(cfarray_of_cfnumbers(values, sizeof(*values), -1, kCFNumberSInt32Type) == NULL, true);
+
+    CFArrayRef empty = cfarray_of_cfnumbers(NULL, sizeof(*values), 0, kCFNumberSInt32Type);
+    TEST_CHECK(empty != NULL, true);
+    if (empty) {
+        TEST_CHECK(CFArrayGetCount(empty), 0L);
+        CFRelease(empty);
+    }
+});
+
 TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
 {
     TEST_CHECK(display_manager_display_id_for_uuid(NULL), 0U);
@@ -437,6 +511,10 @@ TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
     TEST_CHECK(display_manager_copy_valid_display_uuids(NULL, DISPLAY_ARRANGEMENT_ORDER_DEFAULT) == NULL, true);
 
     NSArray *displays = @[ @1, @"display-a", @{}, @"display-b" ];
+    g_test_cfarray_create_mutable_fail = true;
+    TEST_CHECK(display_manager_copy_valid_display_uuids((CFArrayRef) displays,
+                                                        DISPLAY_ARRANGEMENT_ORDER_DEFAULT) == NULL, true);
+    g_test_cfarray_create_mutable_fail = false;
     TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, -1) == NULL, true);
     TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, 0) == NULL, true);
     TEST_CHECK(display_manager_uuid_at_index((CFArrayRef) displays, 4) == NULL, true);
@@ -2833,6 +2911,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
+    TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
     TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
     TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
@@ -2840,6 +2919,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
     TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
     TEST_ENTRY(native_resize_shutdown_serializes_final_cancellation_and_restart_state) \
+    TEST_ENTRY(event_loop_batched_views_deduplicate_in_first_seen_order) \
     TEST_ENTRY(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
     TEST_ENTRY(application_launch_and_startup_table_failures_retry_and_recover_through_callers) \
@@ -2990,6 +3070,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(active_display_enumeration_rejects_errors_and_unstable_samples) \
     TEST_ENTRY(temporary_storage_checked_allocation_is_fallible_and_atomic) \
     TEST_ENTRY(temporary_stretch_buffer_growth_charges_only_capacity)       \
+    TEST_ENTRY(core_foundation_constructors_fail_conservatively) \
     TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
     TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
     TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
@@ -3036,6 +3117,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
     TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
     TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
+    TEST_ENTRY(menu_bar_manager_reuses_collected_window_and_space_state) \
+    TEST_ENTRY(menu_bar_manager_topology_snapshot_drives_space_metadata) \
+    TEST_ENTRY(menu_bar_manager_snapshot_reuses_native_metadata_per_window) \
     TEST_ENTRY(menu_bar_manager_samples_each_space_type_once)          \
     TEST_ENTRY(menu_bar_manager_app_summary_growth_is_geometric)       \
     TEST_ENTRY(menu_bar_manager_focus_only_refresh_reuses_inventory)   \
@@ -3057,6 +3141,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_rule_and_signal_reject_duplicate_fields)           \
     TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
+    TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \

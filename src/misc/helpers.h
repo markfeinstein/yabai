@@ -461,34 +461,55 @@ static inline CFStringRef CFSTRINGNUM32(int32_t num)
     return CFStringCreateWithCString(NULL, num_str, kCFStringEncodingMacRoman);
 }
 
+#ifndef YABAI_CFNUMBER_CREATE
+#define YABAI_CFNUMBER_CREATE CFNumberCreate
+#endif
+#ifndef YABAI_CFARRAY_CREATE_MUTABLE
+#define YABAI_CFARRAY_CREATE_MUTABLE CFArrayCreateMutable
+#endif
+#ifndef YABAI_CFDICTIONARY_CREATE
+#define YABAI_CFDICTIONARY_CREATE CFDictionaryCreate
+#endif
+
 static inline CFNumberRef CFNUM32(int32_t num)
 {
-    return CFNumberCreate(NULL, kCFNumberSInt32Type, &num);
+    return YABAI_CFNUMBER_CREATE(NULL, kCFNumberSInt32Type, &num);
 }
 
-static inline void sls_window_disable_shadow(uint32_t id)
+static inline bool sls_window_disable_shadow(uint32_t id)
 {
     CFNumberRef density = CFNUM32(0);
+    if (!density) return false;
+
     const void *keys[1] = { CFSTR("com.apple.WindowShadowDensity") };
     const void *values[1] = { density };
-    CFDictionaryRef options = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    SLSWindowSetShadowProperties(id, options);
+    CFDictionaryRef options = YABAI_CFDICTIONARY_CREATE(NULL, keys, values, 1,
+                                                        &kCFTypeDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
     CFRelease(density);
+    if (!options) return false;
+
+    bool result = SLSWindowSetShadowProperties(id, options) == kCGErrorSuccess;
     CFRelease(options);
+    return result;
 }
 
+// An empty input is a successful conversion and returns an empty array.
 static inline CFArrayRef cfarray_of_cfnumbers(void *values, size_t size, int count, CFNumberType type)
 {
-    CFNumberRef temp[count];
+    if (count < 0 || (count && (!values || !size))) return NULL;
+
+    CFMutableArrayRef result = YABAI_CFARRAY_CREATE_MUTABLE(NULL, count, &kCFTypeArrayCallBacks);
+    if (!result) return NULL;
 
     for (int i = 0; i < count; ++i) {
-        temp[i] = CFNumberCreate(NULL, type, ((char *)values) + (size * i));
-    }
-
-    CFArrayRef result = CFArrayCreate(NULL, (const void **)temp, count, &kCFTypeArrayCallBacks);
-
-    for (int i = 0; i < count; ++i) {
-        CFRelease(temp[i]);
+        CFNumberRef number = YABAI_CFNUMBER_CREATE(NULL, type, ((char *) values) + (size * i));
+        if (!number) {
+            CFRelease(result);
+            return NULL;
+        }
+        CFArrayAppendValue(result, number);
+        CFRelease(number);
     }
 
     return result;
@@ -650,7 +671,11 @@ static inline bool ax_privilege(void)
 {
     const void *keys[] = { kAXTrustedCheckOptionPrompt };
     const void *values[] = { kCFBooleanTrue };
-    CFDictionaryRef options = CFDictionaryCreate(NULL, keys, values, array_count(keys), &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef options = YABAI_CFDICTIONARY_CREATE(NULL, keys, values, array_count(keys),
+                                                        &kCFCopyStringDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
+    if (!options) return false;
+
     bool result = AXIsProcessTrustedWithOptions(options);
     CFRelease(options);
     return result;

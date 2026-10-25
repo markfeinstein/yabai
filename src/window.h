@@ -91,6 +91,14 @@ static char *window_property_str[] =
 #undef WINDOW_PROPERTY_ENTRY
 };
 
+struct window_serialization_context
+{
+    CFArrayRef managed_display_spaces;
+    CFArrayRef ordered_display_uuids;
+    bool has_managed_display_spaces_snapshot;
+    bool has_ordered_display_uuids_snapshot;
+};
+
 struct window
 {
     struct application *application;
@@ -161,6 +169,11 @@ uint64_t window_space(uint32_t wid);
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
+void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
+                                         const struct window_serialization_context *context);
+void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
+void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t flags,
+                                   const struct window_serialization_context *context);
 void window_serialize(FILE *rsp, struct window *window, uint64_t flags);
 char *window_property_title_ts(uint32_t wid);
 char *window_title_ts(struct window *window);

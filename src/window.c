@@ -8,10 +8,18 @@ extern int g_connection;
 static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
 static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
+static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
+static bool (*window_test_serialization_is_sticky)(uint32_t) = window_is_sticky;
+static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
+static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 #else
 #define window_observe_add_notification AXObserverAddNotification
 #define window_test_is_ordered_in SLSWindowIsOrderedIn
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
+#define window_test_serialization_space window_space
+#define window_test_serialization_is_sticky window_is_sticky
+#define window_test_space_display_id space_display_id
+#define window_test_display_id_arrangement display_manager_display_id_arrangement
 #endif
 
 bool window_observe(struct window *window, bool *retry)
@@ -105,6 +113,8 @@ uint64_t window_space(uint32_t wid)
     uint64_t sid = 0;
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return window_display_space(wid);
+
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
     if (!space_list_ref) goto err;
 
@@ -121,6 +131,46 @@ err:
 
     return sid ? sid : window_display_space(wid);
 }
+
+#ifdef TESTS
+static CFArrayRef (*window_test_serialization_copy_spaces)(int, int, CFArrayRef) = SLSCopySpacesForWindows;
+static uint64_t (*window_test_serialization_display_space)(uint32_t) = window_display_space;
+#else
+#define window_test_serialization_copy_spaces SLSCopySpacesForWindows
+#define window_test_serialization_display_space window_display_space
+#endif
+
+static void window_serialization_membership(uint32_t wid, uint64_t *sid, bool *is_sticky)
+{
+    *sid = 0;
+    *is_sticky = false;
+
+    CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) goto out;
+
+    CFArrayRef space_list_ref = window_test_serialization_copy_spaces(g_connection, 0x7, window_list_ref);
+    if (!space_list_ref) goto out;
+
+    CFIndex count = CFArrayGetCount(space_list_ref);
+    *is_sticky = count > 1;
+    if (count > 0) {
+        CFTypeRef id_ref = CFArrayGetValueAtIndex(space_list_ref, 0);
+        if (cf_is_type(id_ref, CFNumberGetTypeID())) {
+            (void) CFNumberGetValue((CFNumberRef) id_ref, CFNumberGetType((CFNumberRef) id_ref), sid);
+        }
+    }
+    CFRelease(space_list_ref);
+
+out:
+    if (window_list_ref) CFRelease(window_list_ref);
+    if (!*sid) *sid = window_test_serialization_display_space(wid);
+}
+
+#ifdef TESTS
+static void (*window_test_serialization_membership)(uint32_t, uint64_t *, bool *) = window_serialization_membership;
+#else
+#define window_test_serialization_membership window_serialization_membership
+#endif
 
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success)
 {
@@ -186,7 +236,31 @@ static uint64_t window_serialization_flags(uint64_t flags)
     return flags ? flags : ~WINDOW_PROPERTY_DIAGNOSTIC_FLAGS;
 }
 
-void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
+static int window_serialization_space_index(const struct window_serialization_context *context,
+                                            uint64_t sid)
+{
+    if (context && context->has_managed_display_spaces_snapshot) {
+        return managed_space_index(context->managed_display_spaces, sid);
+    }
+    return space_manager_mission_control_index(sid);
+}
+
+static int window_serialization_display_index(const struct window_serialization_context *context,
+                                              uint64_t sid)
+{
+    if (context && context->has_managed_display_spaces_snapshot &&
+        context->has_ordered_display_uuids_snapshot &&
+        cf_is_type(context->managed_display_spaces, CFArrayGetTypeID()) &&
+        cf_is_type(context->ordered_display_uuids, CFArrayGetTypeID())) {
+        CFStringRef uuid = managed_space_display_identifier_for_space(context->managed_display_spaces, sid);
+        int arrangement = display_manager_display_uuid_arrangement(context->ordered_display_uuids, uuid);
+        if (arrangement) return arrangement;
+    }
+    return window_test_display_id_arrangement(window_test_space_display_id(sid));
+}
+
+void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
+                                         const struct window_serialization_context *context)
 {
     TIME_FUNCTION;
 
@@ -201,6 +275,7 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     uint64_t tags = 0;
     bool parent_known = false;
     bool tags_known = false;
+    bool is_sticky = false;
 
     if ((flags & WINDOW_PROPERTY_PID) ||
         (flags & WINDOW_PROPERTY_APP)) {
@@ -211,10 +286,15 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
         }
     }
 
-    if ((flags & WINDOW_PROPERTY_DISPLAY) ||
-        (flags & WINDOW_PROPERTY_SPACE) ||
-        (flags & WINDOW_PROPERTY_IS_FULLSCREEN)) {
-        sid = window_space(wid);
+    bool needs_sid = (flags & WINDOW_PROPERTY_DISPLAY) ||
+                     (flags & WINDOW_PROPERTY_SPACE) ||
+                     (flags & WINDOW_PROPERTY_IS_FULLSCREEN);
+    bool needs_sticky = flags & WINDOW_PROPERTY_IS_STICKY;
+    if (needs_sid && needs_sticky) {
+        window_test_serialization_membership(wid, &sid, &is_sticky);
+    } else {
+        if (needs_sid) sid = window_test_serialization_space(wid);
+        if (needs_sticky) is_sticky = window_test_serialization_is_sticky(wid);
     }
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
@@ -322,7 +402,7 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int display = display_manager_display_id_arrangement(space_display_id(sid));
+        int display = window_serialization_display_index(context, sid);
         fprintf(rsp, "\t\"display\":%d", display);
         did_output = true;
     }
@@ -330,7 +410,7 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_SPACE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int space = space_manager_mission_control_index(sid);
+        int space = window_serialization_space_index(context, sid);
         fprintf(rsp, "\t\"space\":%d", space);
         did_output = true;
     }
@@ -508,7 +588,6 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     if (flags & WINDOW_PROPERTY_IS_STICKY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        bool is_sticky = window_is_sticky(wid);
         fprintf(rsp, "\t\"is-sticky\":%s", json_bool(is_sticky));
         did_output = true;
     }
@@ -522,12 +601,18 @@ void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
     fprintf(rsp, "\n}");
 }
 
+void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
+{
+    window_nonax_serialize_with_context(rsp, wid, flags, NULL);
+}
+
 static bool window_serialize_is_hidden(struct window *window)
 {
     return window->application ? window->application->is_hidden : false;
 }
 
-void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
+void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t flags,
+                                   const struct window_serialization_context *context)
 {
     TIME_FUNCTION;
 
@@ -545,10 +630,19 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     bool is_minimized;
     bool is_sticky;
 
-    if ((flags & WINDOW_PROPERTY_DISPLAY) ||
-        (flags & WINDOW_PROPERTY_SPACE) ||
-        (flags & WINDOW_PROPERTY_IS_VISIBLE)) {
-        sid = window_space(window->id);
+    bool needs_sid = (flags & WINDOW_PROPERTY_DISPLAY) ||
+                     (flags & WINDOW_PROPERTY_SPACE) ||
+                     (flags & WINDOW_PROPERTY_IS_VISIBLE);
+    bool needs_sticky = (flags & WINDOW_PROPERTY_IS_VISIBLE) ||
+                        (flags & WINDOW_PROPERTY_IS_STICKY);
+    bool sticky_cached = window_check_flag(window, WINDOW_STICKY);
+    if (needs_sid && needs_sticky && !sticky_cached) {
+        window_test_serialization_membership(window->id, &sid, &is_sticky);
+    } else {
+        if (needs_sid) sid = window_test_serialization_space(window->id);
+        if (needs_sticky) {
+            is_sticky = sticky_cached || window_test_serialization_is_sticky(window->id);
+        }
     }
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
@@ -576,11 +670,6 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if ((flags & WINDOW_PROPERTY_IS_VISIBLE) ||
         (flags & WINDOW_PROPERTY_IS_MINIMIZED)) {
         is_minimized = window_check_flag(window, WINDOW_MINIMIZE);
-    }
-
-    if ((flags & WINDOW_PROPERTY_IS_VISIBLE) ||
-        (flags & WINDOW_PROPERTY_IS_STICKY)) {
-        is_sticky = window_check_flag(window, WINDOW_STICKY) || window_is_sticky(window->id);
     }
 
     bool did_output = false;
@@ -670,7 +759,7 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int display = display_manager_display_id_arrangement(space_display_id(sid));
+        int display = window_serialization_display_index(context, sid);
         fprintf(rsp, "\t\"display\":%d", display);
         did_output = true;
     }
@@ -678,7 +767,7 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     if (flags & WINDOW_PROPERTY_SPACE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        int space = space_manager_mission_control_index(sid);
+        int space = window_serialization_space_index(context, sid);
         fprintf(rsp, "\t\"space\":%d", space);
         did_output = true;
     }
@@ -875,6 +964,11 @@ void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
     fprintf(rsp, "\n}");
 }
 
+void window_serialize(FILE *rsp, struct window *window, uint64_t flags)
+{
+    window_serialize_with_context(rsp, window, flags, NULL);
+}
+
 char *window_property_title_ts(uint32_t wid)
 {
     CFTypeRef value = NULL;
@@ -1010,6 +1104,8 @@ bool window_is_sticky(uint32_t wid)
     bool result = false;
 
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return false;
+
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
     if (!space_list_ref) goto err;
 
@@ -1075,6 +1171,7 @@ int window_level(uint32_t wid)
 
     if (workspace_is_macos_ventura() || workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
         CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+        if (!window_ref) return 0;
 
         CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
         if (!query) goto err2;
