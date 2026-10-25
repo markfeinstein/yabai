@@ -462,6 +462,7 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     destination->configured_ffm_mode = source->configured_ffm_mode;
     destination->effective_ffm_mode = source->effective_ffm_mode;
     destination->ffm_menu_suspend_count = source->ffm_menu_suspend_count;
+    destination->ffm_anonymous_menu_suspend_count = source->ffm_anonymous_menu_suspend_count;
     destination->purify_mode = source->purify_mode;
     destination->window_origin_mode = source->window_origin_mode;
     destination->window_focus_fallback = source->window_focus_fallback;

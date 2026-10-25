@@ -377,13 +377,44 @@ bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_
 
 void window_manager_ffm_menu_opened(struct window_manager *wm)
 {
-    if (wm->ffm_menu_suspend_count != UINT32_MAX) ++wm->ffm_menu_suspend_count;
+    if (wm->ffm_anonymous_menu_suspend_count == UINT32_MAX || wm->ffm_menu_suspend_count == UINT32_MAX) return;
+    ++wm->ffm_anonymous_menu_suspend_count;
+    ++wm->ffm_menu_suspend_count;
     window_manager_recompute_effective_ffm_mode(wm);
 }
 
 void window_manager_ffm_menu_closed(struct window_manager *wm)
 {
+    if (wm->ffm_anonymous_menu_suspend_count == 0) return;
+    --wm->ffm_anonymous_menu_suspend_count;
     if (wm->ffm_menu_suspend_count != 0) --wm->ffm_menu_suspend_count;
+    window_manager_recompute_effective_ffm_mode(wm);
+}
+
+void window_manager_ffm_application_menu_opened(struct window_manager *wm, struct application *application)
+{
+    if (!application || application->ffm_menu_suspend_count == UINT32_MAX || wm->ffm_menu_suspend_count == UINT32_MAX) return;
+    ++application->ffm_menu_suspend_count;
+    ++wm->ffm_menu_suspend_count;
+    window_manager_recompute_effective_ffm_mode(wm);
+}
+
+void window_manager_ffm_application_menu_closed(struct window_manager *wm, struct application *application)
+{
+    if (!application || application->ffm_menu_suspend_count == 0) return;
+    --application->ffm_menu_suspend_count;
+    if (wm->ffm_menu_suspend_count != 0) --wm->ffm_menu_suspend_count;
+    window_manager_recompute_effective_ffm_mode(wm);
+}
+
+void window_manager_ffm_application_terminated(struct window_manager *wm, struct application *application)
+{
+    if (!application || application->ffm_menu_suspend_count == 0) return;
+    uint32_t released = application->ffm_menu_suspend_count;
+    application->ffm_menu_suspend_count = 0;
+    wm->ffm_menu_suspend_count = released >= wm->ffm_menu_suspend_count
+                               ? 0
+                               : wm->ffm_menu_suspend_count - released;
     window_manager_recompute_effective_ffm_mode(wm);
 }
 
@@ -435,6 +466,12 @@ bool window_manager_should_manage_window(struct window *window)
     if (window_check_flag(window, WINDOW_MINIMIZE))    return false;
     if (window_check_flag(window, WINDOW_ORDERED_OUT)) return false;
     if (window->application->is_hidden)                return false;
+
+    // Invisible helper windows can otherwise reserve an empty BSP slot. Keep
+    // explicit manage=on rules authoritative for applications that intentionally
+    // publish their usable frame later.
+    if ((window->frame.size.width <= 0.0f || window->frame.size.height <= 0.0f) &&
+        !window_check_rule_flag(window, WINDOW_RULE_MANAGED)) return false;
 
     return (window_is_standard(window) && window_level_is_standard(window) && window_can_move(window)) || window_check_rule_flag(window, WINDOW_RULE_MANAGED);
 }
@@ -3872,6 +3909,10 @@ static bool window_manager_check_for_windows_on_space(struct window_manager *wm,
 
         struct view *existing_view = window_manager_find_managed_window(wm, window);
         if (existing_view && existing_view->layout != VIEW_FLOAT && existing_view != view) {
+            // A title-bar or modifier drag appears in the destination Space's
+            // inventory before mouse-up. Leave ownership with the gesture until
+            // its drop handler commits the transfer.
+            if (window == g_mouse_state.window) continue;
             if (!window_manager_transfer_managed_window_internal(wm, window, existing_view, view, 0, false)) {
                 return false;
             }
@@ -4034,6 +4075,7 @@ void window_manager_init(struct window_manager *wm)
 
     wm->configured_ffm_mode = FFM_DISABLED;
     wm->ffm_menu_suspend_count = 0;
+    wm->ffm_anonymous_menu_suspend_count = 0;
     window_manager_recompute_effective_ffm_mode(wm);
     wm->purify_mode = PURIFY_DISABLED;
     wm->window_origin_mode = WINDOW_ORIGIN_DEFAULT;

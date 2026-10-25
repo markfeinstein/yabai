@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Restore *focus follows mouse* when an application terminates while one of its
+  menus is open, without consuming menu-bar-owned suspension state [#2834](https://github.com/asmvik/yabai/issues/2834).
+- Avoid permanently blocking Space operations on Big Sur when its private
+  display-animation query remains latched after application activation [#2841](https://github.com/asmvik/yabai/issues/2841).
+- Keep drag insertion feedback consistent for source stacks and stack-layout
+  destinations [#2840](https://github.com/asmvik/yabai/issues/2840).
+- Refresh complete BSP geometry after window removal so surviving windows use
+  current display bounds without changing configured split ratios.
+- Leave actively dragged cross-display windows under mouse-up ownership instead
+  of reconciling them into the destination Space early [#2843](https://github.com/asmvik/yabai/issues/2843).
+- Ignore zero-area helper windows unless an explicit rule manages them.
+- Use modern Objective-C ivar accessors for scripting-addition compatibility
+  with current Apple Silicon SDKs.
 - Fail conservatively when Core Foundation allocation fails during display ordering,
   accessibility checks, shadow configuration, or window/Space list construction.
 - Reuse one WindowServer Space-membership result when window queries serialize both

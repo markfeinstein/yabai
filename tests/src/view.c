@@ -366,13 +366,27 @@ TEST_FUNC(view_find_min_depth_leaf_node_handles_complete_tree_boundary,
     TEST_CHECK(view_find_min_depth_leaf_node(nodes) == &nodes[128], true);
 });
 
+struct view_removal_refresh_fixture
+{
+    struct area area;
+    int calls;
+};
+
+static void view_removal_refresh_update(struct view *view, void *context)
+{
+    struct view_removal_refresh_fixture *fixture = context;
+    ++fixture->calls;
+    view->root->area = fixture->area;
+    window_node_update(view, view->root);
+}
+
 TEST_FUNC(view_remove_promotes_internal_sibling_geometry,
 {
     size_t outstanding_before = legacy_allocation_test_outstanding();
     struct window_node root = {
         .split = SPLIT_X,
         .ratio = 0.25f,
-        .area = {0, 0, 1000, 800}
+        .area = {0, 0, 944, 800}
     };
     struct window_node *removed = legacy_allocation_calloc(1, sizeof(*removed));
     struct window_node *sibling = legacy_allocation_calloc(1, sizeof(*sibling));
@@ -404,17 +418,29 @@ TEST_FUNC(view_remove_promotes_internal_sibling_geometry,
     second->window_list[0] = second->window_order[0] = 43;
     second->window_count = 1;
 
+    struct view_removal_refresh_fixture fixture = {
+        .area = {0, 0, 1000, 800}
+    };
+    struct view_test_platform_ops ops = {
+        .update_windows = view_removal_refresh_update,
+        .context = &fixture
+    };
+    view_test_set_platform_ops(&ops);
     struct view view = { .layout = VIEW_BSP, .root = &root };
     struct window window = { .id = 41 };
     TEST_CHECK(view_remove_window_node(&view, &window), &root);
+    TEST_CHECK(fixture.calls, 1);
+    TEST_CHECK(root.area.w, 1000.0f);
     TEST_CHECK(root.split, SPLIT_Y);
     TEST_CHECK(root.ratio, 0.7f);
     TEST_CHECK(root.left, first);
     TEST_CHECK(root.right, second);
     TEST_CHECK(first->parent, &root);
     TEST_CHECK(second->parent, &root);
+    TEST_CHECK(second->area.x + second->area.w, 1000.0f);
 
     legacy_allocation_free(first);
     legacy_allocation_free(second);
     TEST_CHECK(legacy_allocation_test_outstanding(), outstanding_before);
+    view_test_set_platform_ops(NULL);
 });

@@ -25,16 +25,54 @@ TEST_FUNC(ffm_configured_and_effective_state_handles_nested_suspension_and_lates
 )
 
 TEST_FUNC(ffm_menu_suspension_saturates_and_extra_close_is_safe,
-    struct window_manager wm = { .configured_ffm_mode = FFM_AUTOFOCUS, .ffm_menu_suspend_count = UINT32_MAX };
+    struct window_manager wm = {
+        .configured_ffm_mode = FFM_AUTOFOCUS,
+        .ffm_menu_suspend_count = UINT32_MAX,
+        .ffm_anonymous_menu_suspend_count = UINT32_MAX
+    };
     window_manager_recompute_effective_ffm_mode(&wm);
     window_manager_ffm_menu_opened(&wm);
     TEST_CHECK(wm.ffm_menu_suspend_count, UINT32_MAX);
     TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_DISABLED);
     window_manager_ffm_menu_closed(&wm);
     TEST_CHECK(wm.ffm_menu_suspend_count, UINT32_MAX - 1);
+    TEST_CHECK(wm.ffm_anonymous_menu_suspend_count, UINT32_MAX - 1);
     TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_DISABLED);
 
     wm.ffm_menu_suspend_count = 0;
+    wm.ffm_anonymous_menu_suspend_count = 0;
+    window_manager_recompute_effective_ffm_mode(&wm);
+    window_manager_ffm_menu_closed(&wm);
+    TEST_CHECK(wm.ffm_menu_suspend_count, 0U);
+    TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_AUTOFOCUS);
+)
+
+TEST_FUNC(ffm_application_menu_termination_releases_only_owned_suspensions,
+    struct window_manager wm = {0};
+    struct application first = { .name = "first" };
+    struct application second = { .name = "second" };
+    window_manager_set_focus_follows_mouse(&wm, FFM_AUTOFOCUS);
+
+    window_manager_ffm_menu_opened(&wm);
+    window_manager_ffm_application_menu_opened(&wm, &first);
+    window_manager_ffm_application_menu_opened(&wm, &first);
+    window_manager_ffm_application_menu_opened(&wm, &second);
+    TEST_CHECK(wm.ffm_menu_suspend_count, 4U);
+    TEST_CHECK(first.ffm_menu_suspend_count, 2U);
+    TEST_CHECK(second.ffm_menu_suspend_count, 1U);
+    TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_DISABLED);
+
+    window_manager_ffm_application_terminated(&wm, &first);
+    TEST_CHECK(wm.ffm_menu_suspend_count, 2U);
+    TEST_CHECK(first.ffm_menu_suspend_count, 0U);
+    TEST_CHECK(second.ffm_menu_suspend_count, 1U);
+    TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_DISABLED);
+
+    window_manager_ffm_application_menu_closed(&wm, &first);
+    TEST_CHECK(wm.ffm_menu_suspend_count, 2U);
+    window_manager_ffm_application_menu_closed(&wm, &second);
+    TEST_CHECK(wm.ffm_menu_suspend_count, 1U);
+    TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_DISABLED);
     window_manager_ffm_menu_closed(&wm);
     TEST_CHECK(wm.ffm_menu_suspend_count, 0U);
     TEST_CHECK(window_manager_effective_ffm_mode(&wm), FFM_AUTOFOCUS);
@@ -43,7 +81,9 @@ TEST_FUNC(ffm_menu_suspension_saturates_and_extra_close_is_safe,
 TEST_FUNC(ffm_config_query_reports_configured_mode_while_effective_is_suspended,
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
+    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
     g_window_manager.ffm_menu_suspend_count = 0;
+    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTORAISE);
     window_manager_ffm_menu_opened(&g_window_manager);
     char *output = declarative_test_run_config("focus_follows_mouse", NULL);
@@ -52,6 +92,7 @@ TEST_FUNC(ffm_config_query_reports_configured_mode_while_effective_is_suspended,
     free(output);
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
+    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -68,7 +109,9 @@ TEST_FUNC(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change,
     enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
+    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
     g_window_manager.ffm_menu_suspend_count = 0;
+    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
     ffm_test_handler_snapshot_loads = 0;
@@ -85,6 +128,7 @@ TEST_FUNC(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change,
     g_mission_control_mode = saved_mission_control_mode;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
+    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -102,6 +146,7 @@ TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
     struct mouse_state saved_mouse_state = g_mouse_state;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
+    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
 
     g_event_loop = (struct event_loop) {0};
     menu_bar_manager_test_reset();
@@ -110,6 +155,7 @@ TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
     g_mouse_state.ffm_window_id = 0;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
     g_window_manager.ffm_menu_suspend_count = 0;
+    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
 
     struct menu_bar_action *open = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 11);
@@ -176,6 +222,7 @@ TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
     g_mouse_state = saved_mouse_state;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
+    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -183,12 +230,14 @@ TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
     struct event_loop saved_event_loop = g_event_loop;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
+    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
 
     g_event_loop = (struct event_loop) {0};
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();
     menu_bar_manager_test_set_enabled_snapshot(21, 21);
     g_window_manager.ffm_menu_suspend_count = 0;
+    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
 
     struct menu_bar_action *action = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 21);
@@ -221,6 +270,7 @@ TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
 
     g_menu_bar_manager.menu_tracking_depth = UINT32_MAX;
     g_window_manager.ffm_menu_suspend_count = UINT32_MAX;
+    g_window_manager.ffm_anonymous_menu_suspend_count = UINT32_MAX;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
     action = menu_bar_manager_test_action(MENU_BAR_ACTION_MENU_TRACKING_CHANGED, 21);
     action->data.menu_tracking.is_tracking = true;
@@ -232,6 +282,7 @@ TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
     EVENT_HANDLER_MENU_BAR_ACTION(action, 0);
     TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, UINT32_MAX - 1);
     TEST_CHECK(g_window_manager.ffm_menu_suspend_count, UINT32_MAX - 1);
+    TEST_CHECK(g_window_manager.ffm_anonymous_menu_suspend_count, UINT32_MAX - 1);
 
     TEST_CHECK(g_event_loop.queue.count, 1U);
     struct event event = {0};
@@ -244,6 +295,7 @@ TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
     g_event_loop = saved_event_loop;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
+    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -251,6 +303,7 @@ TEST_FUNC(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_o
     struct event_loop saved_event_loop = g_event_loop;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
+    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
     struct mouse_state mouse_state = { .modifier = MOUSE_MOD_ALT, .ffm_window_id = 77 };
     struct mouse_handler_context handler_context = { .mouse_state = &mouse_state, .handle = NULL };
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGPointMake(10, 20), kCGMouseButtonLeft);
@@ -293,5 +346,6 @@ TEST_FUNC(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_o
     g_event_loop = saved_event_loop;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
+    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )

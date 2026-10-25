@@ -66,6 +66,38 @@ static struct display_visible_frame_fixture display_visible_frame_test_fixture(v
     };
 }
 
+TEST_FUNC(display_animation_query_excludes_bigsur_and_modern_releases,
+{
+    bool saved_tahoe = _workspace_is_macos_version_tahoe;
+    bool saved_sequoia = _workspace_is_macos_version_sequoia;
+    bool saved_sonoma = _workspace_is_macos_version_sonoma;
+    bool saved_ventura = _workspace_is_macos_version_ventura;
+    bool saved_monterey = _workspace_is_macos_version_monterey;
+    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+
+    workspace_set_macos_version(11);
+    TEST_CHECK(display_manager_animation_query_is_supported(), false);
+    workspace_set_macos_version(12);
+    TEST_CHECK(display_manager_animation_query_is_supported(), true);
+    workspace_set_macos_version(13);
+    TEST_CHECK(display_manager_animation_query_is_supported(), true);
+    workspace_set_macos_version(14);
+    TEST_CHECK(display_manager_animation_query_is_supported(), false);
+    workspace_set_macos_version(15);
+    TEST_CHECK(display_manager_animation_query_is_supported(), false);
+    workspace_set_macos_version(26);
+    TEST_CHECK(display_manager_animation_query_is_supported(), false);
+    workspace_set_macos_version(27);
+    TEST_CHECK(display_manager_animation_query_is_supported(), false);
+
+    _workspace_is_macos_version_tahoe = saved_tahoe;
+    _workspace_is_macos_version_sequoia = saved_sequoia;
+    _workspace_is_macos_version_sonoma = saved_sonoma;
+    _workspace_is_macos_version_ventura = saved_ventura;
+    _workspace_is_macos_version_monterey = saved_monterey;
+    _workspace_is_macos_version_bigsur = saved_bigsur;
+});
+
 TEST_FUNC(display_visible_frame_property_selection_and_serialization_are_explicit,
 {
     struct display_manager saved_display_manager = g_display_manager;

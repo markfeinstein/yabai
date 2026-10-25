@@ -2564,6 +2564,27 @@ TEST_FUNC(mouse_drag_reset_clears_feedback_window_action_and_button_state,
     g_mouse_state.active_button = saved_active_button;
 });
 
+TEST_FUNC(mouse_drag_feedback_rejects_source_node_and_normalizes_stack_layout,
+{
+    struct window_node source = { .insert_dir = DIR_EAST };
+    struct window_node target = {0};
+    struct view bsp = { .layout = VIEW_BSP };
+    struct view stack = { .layout = VIEW_STACK };
+
+    TEST_CHECK(mouse_drag_feedback_target_is_valid(&source, &target), true);
+    TEST_CHECK(mouse_drag_feedback_target_is_valid(&source, &source), false);
+    TEST_CHECK(mouse_drag_feedback_target_is_valid(&source, NULL), false);
+    TEST_CHECK(mouse_drag_feedback_target_is_valid(NULL, &target), false);
+    TEST_CHECK(mouse_drag_feedback_direction(&bsp, DIR_EAST), DIR_EAST);
+    TEST_CHECK(mouse_drag_feedback_direction(&stack, DIR_EAST), STACK);
+    TEST_CHECK(mouse_drag_feedback_direction(&stack, 0), 0);
+
+    struct mouse_state state = { .feedback_node = &source };
+    mouse_drag_clear_feedback(&state);
+    TEST_CHECK(source.insert_dir, 0);
+    TEST_CHECK(state.feedback_node == NULL, true);
+});
+
 TEST_FUNC(insert_feedback_destroy_clears_mouse_reference,
 {
     struct window_node node = {0};
@@ -2909,6 +2930,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
+    TEST_ENTRY(display_animation_query_excludes_bigsur_and_modern_releases) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
@@ -2976,6 +2998,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
@@ -3034,6 +3057,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mouse_dragged_unmanaged_window_preserves_owner_gesture) \
     TEST_ENTRY(mouse_drag_owner_button_controls_events_and_reset) \
     TEST_ENTRY(mouse_drag_reset_clears_feedback_window_action_and_button_state) \
+    TEST_ENTRY(mouse_drag_feedback_rejects_source_node_and_normalizes_stack_layout) \
     TEST_ENTRY(insert_feedback_destroy_clears_mouse_reference) \
     TEST_ENTRY(insert_feedback_invalid_direction_and_no_action_cleanup) \
     TEST_ENTRY(insert_feedback_rekeys_on_stack_order_mutations) \
@@ -3320,6 +3344,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(rule_protected_label_messages_are_exact_and_ordered) \
     TEST_ENTRY(rule_label_ownership_results_preserve_runtime_order_and_protect_native) \
     TEST_ENTRY(ffm_menu_suspension_saturates_and_extra_close_is_safe) \
+    TEST_ENTRY(ffm_application_menu_termination_releases_only_owned_suspensions) \
     TEST_ENTRY(ffm_config_query_reports_configured_mode_while_effective_is_suspended) \
     TEST_ENTRY(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change) \
     TEST_ENTRY(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves) \

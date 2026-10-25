@@ -1398,6 +1398,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
     debug("%s: %s (%d)\n", __FUNCTION__, process->name, process->pid);
     event_signal_push(SIGNAL_APPLICATION_TERMINATED, application);
     event_loop_clear_terminated_front_identity(process);
+    window_manager_ffm_application_terminated(&g_window_manager, application);
     window_manager_remove_application(&g_window_manager, application->pid);
     rule_cancel_one_shots(application);
     application->launch_refresh = false;
@@ -2820,6 +2821,24 @@ static bool mouse_drag_event_is_owner(struct mouse_state *mouse_state, int64_t b
     return mouse_state->active_button != MOUSE_BUTTON_NONE && mouse_state->active_button == button;
 }
 
+static bool mouse_drag_feedback_target_is_valid(struct window_node *source, struct window_node *target)
+{
+    return source && target && source != target;
+}
+
+static int mouse_drag_feedback_direction(struct view *view, int direction)
+{
+    return direction && view && view->layout == VIEW_STACK ? STACK : direction;
+}
+
+static void mouse_drag_clear_feedback(struct mouse_state *mouse_state)
+{
+    if (!mouse_state->feedback_node) return;
+    mouse_state->feedback_node->insert_dir = 0;
+    insert_feedback_destroy(mouse_state->feedback_node);
+    mouse_state->feedback_node = NULL;
+}
+
 #define MOUSE_RESIZE_MINIMUM_DISTANCE 2.0
 #define MOUSE_RESIZE_MINIMUM_DURATION_MS (1000.0 / 60.0)
 
@@ -2863,11 +2882,7 @@ static bool mouse_drag_resize_window(struct mouse_state *mouse_state, CGPoint po
 
 static void mouse_drag_reset(struct mouse_state *mouse_state)
 {
-    if (mouse_state->feedback_node) {
-        mouse_state->feedback_node->insert_dir = 0;
-        insert_feedback_destroy(mouse_state->feedback_node);
-        mouse_state->feedback_node = NULL;
-    }
+    mouse_drag_clear_feedback(mouse_state);
 
     mouse_state->window = NULL;
     mouse_state->current_action = MOUSE_MODE_NONE;
@@ -3020,7 +3035,7 @@ static EVENT_HANDLER(MOUSE_UP)
         struct window_node *a_node = view_find_window_node(src_view, g_mouse_state.window->id);
         struct window_node *b_node = window ? view_find_window_node(dst_view, window->id) : NULL;
 
-        if (a_node && b_node && a_node != b_node) {
+        if (mouse_drag_feedback_target_is_valid(a_node, b_node)) {
             if (g_mouse_state.feedback_node) {
                 g_mouse_state.feedback_node->insert_dir = 0;
                 insert_feedback_destroy(g_mouse_state.feedback_node);
@@ -3163,26 +3178,20 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
                 insert_dir = DIR_WEST;
             } break;
             case MOUSE_DROP_ACTION_NONE: {
-                if (g_mouse_state.feedback_node) {
-                    g_mouse_state.feedback_node->insert_dir = 0;
-                    insert_feedback_destroy(g_mouse_state.feedback_node);
-                }
+                mouse_drag_clear_feedback(&g_mouse_state);
                 b_node->insert_dir = 0;
                 insert_feedback_destroy(b_node);
             } break;
             }
 
+            insert_dir = mouse_drag_feedback_direction(dst_view, insert_dir);
             if (insert_dir && b_node->insert_dir != insert_dir) {
                 b_node->insert_dir = insert_dir;
                 insert_feedback_show(b_node);
                 g_mouse_state.feedback_node = b_node;
             }
-        } else if (!b_node) {
-            if (g_mouse_state.feedback_node) {
-                g_mouse_state.feedback_node->insert_dir = 0;
-                insert_feedback_destroy(g_mouse_state.feedback_node);
-                g_mouse_state.feedback_node = NULL;
-            }
+        } else {
+            mouse_drag_clear_feedback(&g_mouse_state);
         }
     }
 
@@ -3462,14 +3471,18 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
 
 static EVENT_HANDLER(MENU_OPENED)
 {
-    debug("%s\n", __FUNCTION__);
-    window_manager_ffm_menu_opened(&g_window_manager);
+    struct application *application = window_manager_find_application(&g_window_manager, (pid_t)(intptr_t) context);
+    if (!application) return;
+    debug("%s: %s (%d)\n", __FUNCTION__, application->name, application->pid);
+    window_manager_ffm_application_menu_opened(&g_window_manager, application);
 }
 
 static EVENT_HANDLER(MENU_CLOSED)
 {
-    debug("%s\n", __FUNCTION__);
-    window_manager_ffm_menu_closed(&g_window_manager);
+    struct application *application = window_manager_find_application(&g_window_manager, (pid_t)(intptr_t) context);
+    if (!application) return;
+    debug("%s: %s (%d)\n", __FUNCTION__, application->name, application->pid);
+    window_manager_ffm_application_menu_closed(&g_window_manager, application);
 }
 
 static EVENT_HANDLER(MENU_BAR_HIDDEN_CHANGED)

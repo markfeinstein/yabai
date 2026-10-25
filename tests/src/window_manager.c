@@ -129,6 +129,28 @@ TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
     table_free(&wm.window);
 });
 
+TEST_FUNC(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules,
+{
+    struct application application = { .name = "helper" };
+    struct window window = {
+        .application = &application,
+        .id = UINT32_C(0x7fffff80),
+        .is_root = true,
+        .frame = { { 10.0f, 20.0f }, { 0.0f, 100.0f } }
+    };
+    window_set_flag(&window, WINDOW_MOVABLE);
+
+    TEST_CHECK(window_manager_should_manage_window(&window), false);
+    window.frame.size.width = 100.0f;
+    window.frame.size.height = 0.0f;
+    TEST_CHECK(window_manager_should_manage_window(&window), false);
+
+    window_set_rule_flag(&window, WINDOW_RULE_MANAGED);
+    TEST_CHECK(window_manager_should_manage_window(&window), true);
+    window_set_flag(&window, WINDOW_ORDERED_OUT);
+    TEST_CHECK(window_manager_should_manage_window(&window), false);
+});
+
 TEST_FUNC(window_selector_area_comparison_preserves_fractional_and_zero_geometry,
 {
     struct space_manager sm = {0};
@@ -367,6 +389,7 @@ TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
 
 TEST_FUNC(window_reconciliation_prepares_destination_before_detaching_source,
 {
+    struct window *saved_dragged_window = g_mouse_state.window;
     struct window_manager wm = { .purify_mode = PURIFY_DISABLED };
     table_init(&wm.window, 4, hash_wm, compare_wm);
     table_init(&wm.managed_window, 4, hash_wm, compare_wm);
@@ -401,6 +424,14 @@ TEST_FUNC(window_reconciliation_prepares_destination_before_detaching_source,
     };
     view_test_set_platform_ops(&ops);
 
+    g_mouse_state.window = &window;
+    TEST_CHECK(window_manager_reconcile_windows_on_space_with_storage(&wm, &dst, window_list, 1, true,
+                                                                      mutated_views, 2), true);
+    TEST_CHECK(view_find_window_node(&src, window.id) != NULL, true);
+    TEST_CHECK(view_find_window_node(&dst, window.id) == NULL, true);
+    TEST_CHECK(window_manager_find_managed_window(&wm, &window) == &src, true);
+    g_mouse_state.window = NULL;
+
     for (size_t ordinal = 1; ordinal <= 2; ++ordinal) {
         legacy_allocation_test_fail_at(ordinal);
         TEST_CHECK(window_manager_reconcile_windows_on_space_with_storage(&wm, &dst, window_list, 1, true,
@@ -425,6 +456,7 @@ TEST_FUNC(window_reconciliation_prepares_destination_before_detaching_source,
     view_test_set_platform_ops(NULL);
     table_free(&wm.managed_window);
     table_free(&wm.window);
+    g_mouse_state.window = saved_dragged_window;
 });
 
 TEST_FUNC(mouse_no_target_cross_space_transfer_prepares_before_source_mutation,

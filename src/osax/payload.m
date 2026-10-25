@@ -758,19 +758,25 @@ static void init_instances()
     }
 }
 
+static inline Ivar get_instance_ivar(id instance, const char *name)
+{
+    return instance ? class_getInstanceVariable(object_getClass(instance), name) : NULL;
+}
+
 static inline id get_ivar_value(id instance, const char *name)
 {
-    id result = nil;
-    object_getInstanceVariable(instance, name, (void **) &result);
-    return result;
+    Ivar ivar = get_instance_ivar(instance, name);
+    return ivar ? object_getIvar(instance, ivar) : nil;
 }
 
 static inline void replace_owned_ivar_value(id instance, const char *name, id value)
 {
-    id previous = get_ivar_value(instance, name);
+    Ivar ivar = get_instance_ivar(instance, name);
+    if (!ivar) return;
+    id previous = object_getIvar(instance, ivar);
     if (previous == value) return;
     [value retain];
-    object_setInstanceVariable(instance, name, value);
+    object_setIvar(instance, ivar, value);
     [previous release];
 }
 

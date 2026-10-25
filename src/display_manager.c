@@ -371,11 +371,17 @@ CGRect display_manager_dock_rect(void)
     return bounds;
 }
 
+static bool display_manager_animation_query_is_supported(void)
+{
+    // Big Sur can leave this bit latched after an application-driven Space
+    // transition. Newer releases are already excluded because the query is not
+    // reliable there; retain the established Monterey and Ventura behavior.
+    return workspace_is_macos_monterey() || workspace_is_macos_ventura();
+}
+
 bool display_manager_active_display_is_animating(void)
 {
-    if (workspace_is_macos_bigsur()   ||
-        workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura())
+    if (display_manager_animation_query_is_supported())
     {
         CFStringRef uuid = display_manager_active_display_uuid();
         if (!uuid) return false;
@@ -395,9 +401,7 @@ bool display_manager_active_display_is_animating(void)
 
 bool display_manager_display_is_animating(uint32_t did)
 {
-    if (workspace_is_macos_bigsur()   ||
-        workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura())
+    if (display_manager_animation_query_is_supported())
     {
         CFStringRef uuid = display_uuid(did);
         if (!uuid) return false;

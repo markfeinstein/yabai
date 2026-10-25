@@ -769,8 +769,14 @@ static void test_owned_ivar_replacement_balances_retain_counts(void)
     replace_owned_ivar_value(holder, "_currentSpace", nil);
     CHECK([second retainCount] == 1);
 
+    NSObject *missing = [[NSObject alloc] init];
+    CHECK(get_ivar_value(holder, "_missing") == nil);
+    replace_owned_ivar_value(holder, "_missing", missing);
+    CHECK([missing retainCount] == 1);
+
     [first release];
     [second release];
+    [missing release];
     [holder release];
 }
 

@@ -865,13 +865,18 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     legacy_allocation_free(child);
     legacy_allocation_free(node);
 
+    bool was_dirty = view_is_dirty(view);
     if (view->auto_balance != SPLIT_NONE) {
         window_node_balance(view->root, view->auto_balance);
-        view_update(view);
-        return view->root;
     }
 
-    return parent;
+    // A cached root area can predate a change to usable display bounds. Refresh
+    // the complete tree even without auto-balance so surviving windows do not
+    // retain stale Dock, menu-bar, or external-bar geometry. view_update keeps
+    // the user's split ratios intact.
+    view_update(view);
+    if (!was_dirty) view_clear_flag(view, VIEW_IS_DIRTY);
+    return view->root;
 }
 
 bool view_stack_window_node(struct window_node *node, struct window *window)

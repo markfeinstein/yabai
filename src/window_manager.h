@@ -117,6 +117,7 @@ struct window_manager
     enum ffm_mode configured_ffm_mode;
     ffm_atomic_mode effective_ffm_mode;
     uint32_t ffm_menu_suspend_count;
+    uint32_t ffm_anonymous_menu_suspend_count;
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
     enum window_focus_fallback window_focus_fallback;
@@ -222,6 +223,9 @@ enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm)
 void window_manager_recompute_effective_ffm_mode(struct window_manager *wm);
 void window_manager_ffm_menu_opened(struct window_manager *wm);
 void window_manager_ffm_menu_closed(struct window_manager *wm);
+void window_manager_ffm_application_menu_opened(struct window_manager *wm, struct application *application);
+void window_manager_ffm_application_menu_closed(struct window_manager *wm, struct application *application);
+void window_manager_ffm_application_terminated(struct window_manager *wm, struct application *application);
 enum window_op_error window_manager_set_window_insertion(struct space_manager *sm, struct window *window, int direction);
 enum window_op_error window_manager_stack_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
 enum window_op_error window_manager_warp_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
