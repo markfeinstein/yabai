@@ -8,7 +8,7 @@
 #         Fallback: /usr/local/bin
 #
 # ARG2:   Directory in which to store the yabai man-page; must be an absolutepath.
-#         Fallback: /usr/local/man/man1
+#         Fallback: /usr/local/share/man/man1
 #
 # Author: Åsmund Vikane
 #   Date: 2024-02-13
