@@ -258,14 +258,15 @@ static bool scripting_addition_handshake_fd(int sockfd, char *version, size_t ve
            socket_io_read_exact_until(sockfd, attrib, sizeof(*attrib), deadline);
 }
 
-static bool scripting_addition_request_handshake(char *version, size_t version_capacity, uint32_t *attrib)
+static bool scripting_addition_request_handshake_with_timeout(char *version, size_t version_capacity,
+                                                              uint32_t *attrib, uint64_t timeout_ms)
 {
     int sockfd;
     bool result = false;
 
     if (socket_open(&sockfd)) {
         if (socket_connect(sockfd, g_sa_socket_file)) {
-            uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
+            uint64_t deadline = socket_io_deadline_after_ms(timeout_ms);
             result = scripting_addition_handshake_fd(sockfd, version, version_capacity, attrib, deadline);
         }
 
@@ -273,6 +274,32 @@ static bool scripting_addition_request_handshake(char *version, size_t version_c
     }
 
     return result;
+}
+
+static bool scripting_addition_request_handshake(char *version, size_t version_capacity, uint32_t *attrib)
+{
+    return scripting_addition_request_handshake_with_timeout(version, version_capacity, attrib,
+                                                             SOCKET_IO_PRODUCTION_TIMEOUT_MS);
+}
+
+enum scripting_addition_runtime_status scripting_addition_classify_runtime(bool reachable, const char *version,
+                                                                             uint32_t attributes, long macos_major)
+{
+    if (!reachable) return SA_RUNTIME_UNREACHABLE;
+    if (!version || !string_equals(version, OSAX_VERSION)) return SA_RUNTIME_OUTDATED;
+    uint32_t required_attributes = macos_major == 27 ? OSAX_ATTRIB_DOCK_SPACES : OSAX_ATTRIB_ALL;
+    return (attributes & required_attributes) == required_attributes
+         ? SA_RUNTIME_CURRENT
+         : SA_RUNTIME_INCOMPLETE;
+}
+
+enum scripting_addition_runtime_status scripting_addition_probe_runtime(void)
+{
+    uint32_t attributes = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    bool reachable = scripting_addition_request_handshake_with_timeout(version, sizeof(version), &attributes, 250);
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    return scripting_addition_classify_runtime(reachable, version, attributes, os_version.majorVersion);
 }
 
 static int scripting_addition_perform_validation(void)
@@ -286,17 +313,14 @@ static int scripting_addition_perform_validation(void)
         return 1;
     }
 
-    if (string_equals(version, OSAX_VERSION)) {
-        NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-        uint32_t required_attrib = os_version.majorVersion == 27
-                                 ? OSAX_ATTRIB_DOCK_SPACES
-                                 : OSAX_ATTRIB_ALL;
-
-        if ((attrib & required_attrib) == required_attrib) {
-            notify("scripting-addition", "payload v%s", version);
-            return 0;
-        }
-
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    enum scripting_addition_runtime_status runtime =
+        scripting_addition_classify_runtime(true, version, attrib, os_version.majorVersion);
+    if (runtime == SA_RUNTIME_CURRENT) {
+        notify("scripting-addition", "payload v%s", version);
+        return 0;
+    }
+    if (runtime == SA_RUNTIME_INCOMPLETE) {
         notify("scripting-addition", "payload (0x%X) doesn't support this macOS version!", attrib);
         return 1;
     }

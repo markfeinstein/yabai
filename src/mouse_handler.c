@@ -317,8 +317,12 @@ void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, s
     }
 }
 
-void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window)
+bool mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window)
 {
+    if (src_view->sid != dst_view->sid &&
+        !window_manager_move_node_windows_between_spaces(wm, src_node, src_view->sid, dst_node, dst_view->sid)) {
+        return false;
+    }
     if (window_node_contains_window(src_node, src_view->insertion_point)) {
         src_view->insertion_point = dst_window->id;
     } else if (window_node_contains_window(dst_node, dst_view->insertion_point)) {
@@ -343,6 +347,7 @@ void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, st
     window_node_capture_windows(src_node, &window_list);
     window_node_capture_windows(dst_node, &window_list);
     window_manager_animate_window_list(window_list, ts_buf_len(window_list));
+    return true;
 }
 
 void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window, enum window_node_split split, enum window_node_child child)
@@ -359,7 +364,7 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
                             (src_node->window_count == 1);
 
     if (sibling_collapse && dst_node->parent->split == split) {
-        mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
+        (void) mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
         return;
     }
 

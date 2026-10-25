@@ -2606,8 +2606,11 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 if (space_is_fullscreen(sid)) {
                     daemon_fail(rsp, "can not move window to a macOS fullscreen space!\n");
                 } else {
-                    window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, sid, false);
-                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
+                    if (!window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, sid, false)) {
+                        daemon_fail(rsp, "could not move window to the selected Space.\n");
+                    } else {
+                        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
+                    }
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_SPACE)) {
@@ -2616,8 +2619,11 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 if (space_is_fullscreen(selector.sid)) {
                     daemon_fail(rsp, "can not move window to a macOS fullscreen space!\n");
                 } else {
-                    window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, selector.sid, false);
-                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
+                    if (!window_manager_send_window_to_space(&g_space_manager, &g_window_manager, acting_window, selector.sid, false)) {
+                        daemon_fail(rsp, "could not move window to the selected Space.\n");
+                    } else {
+                        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
+                    }
                 }
             }
         } else if (token_equals(command, COMMAND_WINDOW_SWAP)) {
@@ -2636,6 +2642,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot swap a window with a window in the same stack.\n");
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot swap a window with itself.\n");
+                } else if (result == WINDOW_OP_ERROR_SPACE_MOVE_FAILED) {
+                    daemon_fail(rsp, "could not move windows between Spaces.\n");
                 } else {
                     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }
@@ -2658,6 +2666,8 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot stack window, max capacity of %d reached.\n", NODE_MAX_WINDOW_COUNT);
                 } else if (result == WINDOW_OP_ERROR_SAME_WINDOW) {
                     daemon_fail(rsp, "cannot warp a window onto itself.\n");
+                } else if (result == WINDOW_OP_ERROR_SPACE_MOVE_FAILED) {
+                    daemon_fail(rsp, "could not move window to the destination Space.\n");
                 } else {
                     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_SPACE);
                 }

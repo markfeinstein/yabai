@@ -172,8 +172,28 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
     }
 
     if (facts->sa_socket == DOCTOR_PROBE_YES) {
-        doctor_emit(stream, "WARN", "scripting status", "a user-owned mode-0600 socket exists but was not contacted",
-                    "status remains unverified until an optional scripting feature performs a handshake");
+        switch (facts->sa_runtime) {
+        case DOCTOR_SA_RUNTIME_CURRENT:
+            doctor_emit(stream, "PASS", "scripting status", "the live payload handshake matches this build and required capabilities",
+                        "no action required");
+            break;
+        case DOCTOR_SA_RUNTIME_OUTDATED:
+            doctor_emit(stream, "WARN", "scripting status", "the live payload handshake reports a different version",
+                        "reload the scripting addition only if optional features are needed");
+            break;
+        case DOCTOR_SA_RUNTIME_INCOMPLETE:
+            doctor_emit(stream, "WARN", "scripting status", "the live payload lacks capabilities required on this macOS release",
+                        "review compatibility before using scripting-addition features");
+            break;
+        case DOCTOR_SA_RUNTIME_UNREACHABLE:
+            doctor_emit(stream, "WARN", "scripting status", "the validated socket did not complete a bounded handshake",
+                        "reload the scripting addition or restart Dock only if optional features are needed");
+            break;
+        default:
+            doctor_emit(stream, "UNKNOWN", "scripting status", "the live payload handshake was not attempted",
+                        "verify scripting-addition status manually if needed");
+            break;
+        }
     } else if (facts->sa_socket == DOCTOR_PROBE_NO) {
         doctor_emit(stream, "UNKNOWN", "scripting status", "no per-user scripting-addition socket exists",
                     "load the addition only if optional features are needed");
@@ -869,6 +889,14 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
                                           identity_resolved ? &identity : NULL,
                                           "/Library/ScriptingAdditions/yabai.osax",
                                           "/Library/ScriptingAdditions/yabai.osax/Contents/Resources/payload.bundle/Contents/Info.plist");
+    if (facts->sa_socket == DOCTOR_PROBE_YES) {
+        switch (scripting_addition_probe_runtime()) {
+        case SA_RUNTIME_CURRENT:    facts->sa_runtime = DOCTOR_SA_RUNTIME_CURRENT; break;
+        case SA_RUNTIME_OUTDATED:   facts->sa_runtime = DOCTOR_SA_RUNTIME_OUTDATED; break;
+        case SA_RUNTIME_INCOMPLETE: facts->sa_runtime = DOCTOR_SA_RUNTIME_INCOMPLETE; break;
+        default:                    facts->sa_runtime = DOCTOR_SA_RUNTIME_UNREACHABLE; break;
+        }
+    }
 }
 
 static int doctor_run_with_ops(const struct doctor_runtime_ops *ops)

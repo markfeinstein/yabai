@@ -9,6 +9,18 @@ extern unsigned int __src_osax_loader_len;
 int scripting_addition_load(void);
 int scripting_addition_uninstall(void);
 
+enum scripting_addition_runtime_status
+{
+    SA_RUNTIME_UNREACHABLE,
+    SA_RUNTIME_CURRENT,
+    SA_RUNTIME_OUTDATED,
+    SA_RUNTIME_INCOMPLETE
+};
+
+enum scripting_addition_runtime_status scripting_addition_classify_runtime(bool reachable, const char *version,
+                                                                             uint32_t attributes, long macos_major);
+enum scripting_addition_runtime_status scripting_addition_probe_runtime(void);
+
 bool scripting_addition_create_space(uint64_t sid);
 bool scripting_addition_destroy_space(uint64_t sid);
 bool scripting_addition_focus_space(uint64_t sid);

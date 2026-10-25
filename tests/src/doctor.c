@@ -17,6 +17,7 @@ static struct doctor_facts doctor_test_healthy_facts(void)
         .config_readable = DOCTOR_PROBE_YES,
         .sa_install = DOCTOR_SA_CURRENT,
         .sa_socket = DOCTOR_PROBE_YES,
+        .sa_runtime = DOCTOR_SA_RUNTIME_CURRENT,
         .runtime_arch = "arm64"
     };
 }
@@ -38,10 +39,19 @@ TEST_FUNC(doctor_healthy_fixture_returns_success,
     if (stream) {
         TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
         TEST_CHECK(doctor_test_output_contains(stream, "UNKNOWN service runtime"), true);
-        TEST_CHECK(doctor_test_output_contains(stream, "WARN scripting status"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "PASS scripting status"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures; doctor made no changes"), true);
         fclose(stream);
     }
+});
+
+TEST_FUNC(scripting_addition_runtime_classification_is_nonmutating_and_versioned,
+{
+    TEST_CHECK(scripting_addition_classify_runtime(false, NULL, 0, 26), SA_RUNTIME_UNREACHABLE);
+    TEST_CHECK(scripting_addition_classify_runtime(true, "old", OSAX_ATTRIB_ALL, 26), SA_RUNTIME_OUTDATED);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 26), SA_RUNTIME_INCOMPLETE);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_ALL, 26), SA_RUNTIME_CURRENT);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 27), SA_RUNTIME_CURRENT);
 });
 
 TEST_FUNC(doctor_failures_and_unknown_privileged_checks_are_classified,

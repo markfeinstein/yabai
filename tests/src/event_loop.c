@@ -193,6 +193,156 @@ static void application_test_reset(AXError default_result)
     }
 }
 
+static AXUIElementRef missed_window_test_ref;
+static uint32_t missed_window_test_id;
+static int missed_window_test_created_calls;
+
+static CFArrayRef missed_window_test_list(struct application *application)
+{
+    (void) application;
+    const void *values[] = { missed_window_test_ref };
+    return CFArrayCreate(NULL, values, 1, &kCFTypeArrayCallBacks);
+}
+
+static uint32_t missed_window_test_ax_id(AXUIElementRef ref)
+{
+    (void) ref;
+    return missed_window_test_id;
+}
+
+static void missed_window_test_created(AXUIElementRef ref, struct application *application)
+{
+    (void) application;
+    ++missed_window_test_created_calls;
+    CFRelease(ref);
+}
+
+static bool replacement_window_test_is_window(AXUIElementRef ref)
+{
+    (void) ref;
+    return true;
+}
+
+static bool replacement_window_test_is_not_window(AXUIElementRef ref)
+{
+    (void) ref;
+    return false;
+}
+
+static bool replacement_window_test_observe(struct window *window, bool *retry)
+{
+    (void) window;
+    if (retry) *retry = false;
+    return true;
+}
+
+static void replacement_window_test_unobserve(struct window *window)
+{
+    (void) window;
+}
+
+TEST_FUNC(missed_focused_window_adoption_is_bounded_per_application_identity,
+{
+    __auto_type saved_list = window_manager_test_application_window_list;
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_created = event_loop_test_adopt_created;
+    struct application application = { .name = "missed-window" };
+    missed_window_test_ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("missed-window-ref"));
+    missed_window_test_id = 7001;
+    missed_window_test_created_calls = 0;
+    window_manager_test_application_window_list = missed_window_test_list;
+    window_manager_test_ax_window_id = missed_window_test_ax_id;
+    event_loop_test_adopt_created = missed_window_test_created;
+
+    TEST_CHECK(event_loop_try_adopt_focused_window(&application, 7001), true);
+    TEST_CHECK(missed_window_test_created_calls, 1);
+    TEST_CHECK(application.adopt_attempted_window_id, 7001U);
+    TEST_CHECK(event_loop_try_adopt_focused_window(&application, 7001), false);
+    TEST_CHECK(missed_window_test_created_calls, 1);
+
+    missed_window_test_id = 7002;
+    TEST_CHECK(event_loop_try_adopt_focused_window(&application, 7002), true);
+    TEST_CHECK(missed_window_test_created_calls, 2);
+    TEST_CHECK(application.adopt_attempted_window_id, 7002U);
+
+    CFRelease(missed_window_test_ref);
+    missed_window_test_ref = NULL;
+    window_manager_test_application_window_list = saved_list;
+    window_manager_test_ax_window_id = saved_id;
+    event_loop_test_adopt_created = saved_created;
+});
+
+TEST_FUNC(window_created_replaces_only_same_id_window_elements,
+{
+    struct table saved_windows = g_window_manager.window;
+    struct table saved_managed = g_window_manager.managed_window;
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_role = event_loop_test_window_ref_is_window;
+    __auto_type saved_observe = window_manager_test_window_observe;
+    __auto_type saved_unobserve = window_manager_test_window_unobserve;
+    g_window_manager.window = (struct table) {0};
+    g_window_manager.managed_window = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
+
+    struct application application = { .name = "replacement" };
+    struct window window = {
+        .application = &application,
+        .ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("old-window-element")),
+        .id = 7002
+    };
+    table_add(&g_window_manager.window, &window.id, &window);
+    missed_window_test_id = window.id;
+    window_manager_test_ax_window_id = missed_window_test_ax_id;
+    event_loop_test_window_ref_is_window = replacement_window_test_is_window;
+    window_manager_test_window_observe = replacement_window_test_observe;
+    window_manager_test_window_unobserve = replacement_window_test_unobserve;
+
+    AXUIElementRef replacement = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("new-window-element"));
+    event_loop_handle_window_created(replacement, &application, true, 0);
+    TEST_CHECK(window.ref == replacement, true);
+    TEST_CHECK(window_manager_find_window(&g_window_manager, window.id), &window);
+
+    event_loop_test_window_ref_is_window = replacement_window_test_is_not_window;
+    AXUIElementRef child = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("child-element"));
+    event_loop_handle_window_created(child, &application, true, 0);
+    TEST_CHECK(window.ref == replacement, true);
+
+    CFRelease(window.ref);
+    window_manager_test_ax_window_id = saved_id;
+    event_loop_test_window_ref_is_window = saved_role;
+    window_manager_test_window_observe = saved_observe;
+    window_manager_test_window_unobserve = saved_unobserve;
+    table_free(&g_window_manager.managed_window);
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    g_window_manager.managed_window = saved_managed;
+});
+
+TEST_FUNC(window_resize_debounce_preserves_fullscreen_state_transitions,
+{
+    CGRect frame = CGRectMake(10.0, 20.0, 800.0, 600.0);
+    TEST_CHECK(window_resize_should_debounce(false, false, frame, frame), true);
+    TEST_CHECK(window_resize_should_debounce(true, true, frame, frame), true);
+    TEST_CHECK(window_resize_should_debounce(false, true, frame, frame), false);
+    TEST_CHECK(window_resize_should_debounce(true, false, frame, frame), false);
+    TEST_CHECK(window_resize_should_debounce(false, false, frame,
+                                              CGRectMake(11.0, 20.0, 800.0, 600.0)), false);
+});
+
+TEST_FUNC(mouse_follows_focus_ignores_ineligible_auxiliary_transitions,
+{
+    struct window eligible = { .id = 41, .is_eligible = true };
+    struct window other_eligible = { .id = 42, .is_eligible = true };
+    struct window auxiliary = { .id = 43, .is_eligible = false };
+
+    TEST_CHECK(window_focus_should_center_mouse(NULL, &eligible, 0), true);
+    TEST_CHECK(window_focus_should_center_mouse(&other_eligible, &eligible, 0), true);
+    TEST_CHECK(window_focus_should_center_mouse(&auxiliary, &eligible, 0), false);
+    TEST_CHECK(window_focus_should_center_mouse(&eligible, &auxiliary, 0), false);
+    TEST_CHECK(window_focus_should_center_mouse(&other_eligible, &eligible, eligible.id), false);
+});
+
 TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals,
 {
     struct table saved_applications = g_window_manager.application;

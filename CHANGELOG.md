@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Recover windows whose accessibility reference is replaced, and adopt focused
+  windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
+- Preserve BSP membership and complete-tree geometry across native-fullscreen
+  and zoom transitions.
+- Move cross-Space swap participants before mutating their layout trees, with
+  bounded postcondition checks and rollback when a transport fails.
+- Prefer the observable scripting-addition window-move operation, then verify
+  bridged and compatibility fallbacks instead of accepting silent asynchronous
+  failure [#2789](https://github.com/asmvik/yabai/issues/2789).
+- Add exact Intel Sonoma 14.8.5 and 14.8.9 scripting-addition scan windows and
+  build-specific desktop-picture handling [#2839](https://github.com/asmvik/yabai/issues/2839) [#2827](https://github.com/asmvik/yabai/issues/2827).
+- Have `yabai --doctor` perform a bounded, read-only live scripting-addition
+  handshake after validating socket ownership and permissions.
+- Report WindowServer notification-subscription failures and avoid cursor warps
+  for focus transitions involving ineligible auxiliary windows.
 - Restore *focus follows mouse* when an application terminates while one of its
   menus is open, without consuming menu-bar-owned suspension state [#2834](https://github.com/asmvik/yabai/issues/2834).
 - Avoid permanently blocking Space operations on Big Sur when its private

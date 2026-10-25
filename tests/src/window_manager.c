@@ -11,6 +11,99 @@ static CGError window_manager_test_window_is_ordered_in(int connection, uint32_t
     return window_manager_test_ordered_result;
 }
 
+static AXUIElementRef stale_ref_test_old;
+static AXUIElementRef stale_ref_test_fresh;
+static uint32_t stale_ref_test_window_id;
+static int stale_ref_test_set_calls;
+static int stale_ref_test_observe_calls;
+static int stale_ref_test_unobserve_calls;
+
+static CFArrayRef stale_ref_test_window_list(struct application *application)
+{
+    (void) application;
+    if (!stale_ref_test_fresh) return NULL;
+    const void *values[] = { stale_ref_test_fresh };
+    return CFArrayCreate(NULL, values, 1, &kCFTypeArrayCallBacks);
+}
+
+static uint32_t stale_ref_test_id(AXUIElementRef ref)
+{
+    (void) ref;
+    return stale_ref_test_window_id;
+}
+
+static AXError stale_ref_test_set_attribute(AXUIElementRef element, CFStringRef attribute, CFTypeRef value)
+{
+    (void) attribute;
+    (void) value;
+    ++stale_ref_test_set_calls;
+    return element == stale_ref_test_old ? kAXErrorInvalidUIElement : kAXErrorSuccess;
+}
+
+static bool stale_ref_test_observe(struct window *window, bool *retry)
+{
+    (void) window;
+    if (retry) *retry = false;
+    ++stale_ref_test_observe_calls;
+    return true;
+}
+
+static void stale_ref_test_unobserve(struct window *window)
+{
+    (void) window;
+    ++stale_ref_test_unobserve_calls;
+}
+
+TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
+{
+    __auto_type saved_list = window_manager_test_application_window_list;
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_set = window_manager_test_set_attribute_value;
+    __auto_type saved_observe = window_manager_test_window_observe;
+    __auto_type saved_unobserve = window_manager_test_window_unobserve;
+    struct table saved_managed = g_window_manager.managed_window;
+    g_window_manager.managed_window = (struct table) {0};
+    table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
+
+    struct application application = { .name = "stale-ref" };
+    stale_ref_test_old = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("old-ref"));
+    stale_ref_test_fresh = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("fresh-ref"));
+    stale_ref_test_window_id = 4242;
+    stale_ref_test_set_calls = 0;
+    stale_ref_test_observe_calls = 0;
+    stale_ref_test_unobserve_calls = 0;
+    struct window window = {
+        .application = &application,
+        .ref = stale_ref_test_old,
+        .id = stale_ref_test_window_id
+    };
+
+    window_manager_test_application_window_list = stale_ref_test_window_list;
+    window_manager_test_ax_window_id = stale_ref_test_id;
+    window_manager_test_set_attribute_value = stale_ref_test_set_attribute;
+    window_manager_test_window_observe = stale_ref_test_observe;
+    window_manager_test_window_unobserve = stale_ref_test_unobserve;
+
+    window_manager_move_window(&window, 100.0f, 200.0f);
+    TEST_CHECK(stale_ref_test_set_calls, 2);
+    TEST_CHECK(stale_ref_test_unobserve_calls, 1);
+    TEST_CHECK(stale_ref_test_observe_calls, 1);
+    TEST_CHECK(window.ref == stale_ref_test_fresh, true);
+    TEST_CHECK(window_manager_refresh_window_ref(&g_window_manager, &window), false);
+
+    CFRelease(window.ref);
+    CFRelease(stale_ref_test_fresh);
+    stale_ref_test_old = NULL;
+    stale_ref_test_fresh = NULL;
+    window_manager_test_application_window_list = saved_list;
+    window_manager_test_ax_window_id = saved_id;
+    window_manager_test_set_attribute_value = saved_set;
+    window_manager_test_window_observe = saved_observe;
+    window_manager_test_window_unobserve = saved_unobserve;
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.managed_window = saved_managed;
+});
+
 TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
 {
     __auto_type saved_query = window_manager_window_is_ordered_in;
@@ -243,6 +336,125 @@ TEST_FUNC(space_move_pair_stops_rolls_back_and_reports_partial_commit,
     space_manager_test_move_space_after_space = NULL;
 });
 
+static int window_move_transport_order[4];
+static int window_move_transport_count;
+static bool window_move_transport_result[4];
+
+static bool window_move_transport_sa(uint64_t sid, uint32_t *windows, int count)
+{
+    (void) sid; (void) windows; (void) count;
+    window_move_transport_order[window_move_transport_count] = 1;
+    return window_move_transport_result[window_move_transport_count++];
+}
+
+static bool window_move_transport_bridge(uint64_t sid, uint32_t *windows, int count)
+{
+    (void) sid; (void) windows; (void) count;
+    window_move_transport_order[window_move_transport_count] = 2;
+    return window_move_transport_result[window_move_transport_count++];
+}
+
+static bool window_move_transport_fallback(uint64_t sid, uint32_t *windows, int count)
+{
+    (void) sid; (void) windows; (void) count;
+    window_move_transport_order[window_move_transport_count] = 3;
+    return window_move_transport_result[window_move_transport_count++];
+}
+
+TEST_FUNC(window_space_move_prefers_observable_sa_then_verified_fallbacks,
+{
+    struct space_manager_window_move_ops ops = {
+        .scripting_addition = window_move_transport_sa,
+        .bridged = window_move_transport_bridge,
+        .fallback = window_move_transport_fallback
+    };
+    uint32_t windows[] = {41, 42};
+
+    memset(window_move_transport_result, 0, sizeof(window_move_transport_result));
+    window_move_transport_count = 0;
+    window_move_transport_result[0] = true;
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, windows, 2, &ops), true);
+    TEST_CHECK(window_move_transport_count, 1);
+    TEST_CHECK(window_move_transport_order[0], 1);
+
+    memset(window_move_transport_result, 0, sizeof(window_move_transport_result));
+    window_move_transport_count = 0;
+    window_move_transport_result[1] = true;
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, windows, 2, &ops), true);
+    TEST_CHECK(window_move_transport_count, 2);
+    TEST_CHECK(window_move_transport_order[0], 1);
+    TEST_CHECK(window_move_transport_order[1], 2);
+
+    memset(window_move_transport_result, 0, sizeof(window_move_transport_result));
+    window_move_transport_count = 0;
+    window_move_transport_result[2] = true;
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, windows, 2, &ops), true);
+    TEST_CHECK(window_move_transport_count, 3);
+    TEST_CHECK(window_move_transport_order[2], 3);
+
+    memset(window_move_transport_result, 0, sizeof(window_move_transport_result));
+    window_move_transport_count = 0;
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, windows, 2, &ops), false);
+    TEST_CHECK(window_move_transport_count, 3);
+    TEST_CHECK(space_manager_move_window_list_with_ops(0, windows, 2, &ops), false);
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, NULL, 2, &ops), false);
+    TEST_CHECK(space_manager_move_window_list_with_ops(91, NULL, 0, &ops), true);
+});
+
+static bool node_space_move_results[8];
+static uint64_t node_space_move_sids[8];
+static uint32_t node_space_move_windows[8];
+static int node_space_move_calls;
+
+static bool node_space_move_test(uint64_t sid, struct window *window)
+{
+    int call = node_space_move_calls++;
+    node_space_move_sids[call] = sid;
+    node_space_move_windows[call] = window->id;
+    return node_space_move_results[call];
+}
+
+TEST_FUNC(cross_space_node_move_rolls_back_before_tree_mutation,
+{
+    __auto_type saved_move = space_manager_test_move_window_to_space;
+    struct window_manager wm = {0};
+    table_init(&wm.window, 8, hash_wm, compare_wm);
+    struct window first = { .id = 11 }, second = { .id = 21 };
+    table_add(&wm.window, &first.id, &first);
+    table_add(&wm.window, &second.id, &second);
+    struct window_node source = { .window_list = {11}, .window_order = {11}, .window_count = 1 };
+    struct window_node destination = { .window_list = {21}, .window_order = {21}, .window_count = 1 };
+    space_manager_test_move_window_to_space = node_space_move_test;
+
+    memset(node_space_move_results, 0, sizeof(node_space_move_results));
+    node_space_move_calls = 0;
+    TEST_CHECK(window_manager_move_node_windows_between_spaces(&wm, &source, 101, &destination, 202), false);
+    TEST_CHECK(node_space_move_calls, 1);
+    TEST_CHECK(source.window_list[0], 11U);
+    TEST_CHECK(destination.window_list[0], 21U);
+
+    memset(node_space_move_results, 0, sizeof(node_space_move_results));
+    node_space_move_results[0] = true;
+    node_space_move_results[1] = false;
+    node_space_move_results[2] = true;
+    node_space_move_calls = 0;
+    TEST_CHECK(window_manager_move_node_windows_between_spaces(&wm, &source, 101, &destination, 202), false);
+    TEST_CHECK(node_space_move_calls, 3);
+    TEST_CHECK(node_space_move_sids[0], 202ULL);
+    TEST_CHECK(node_space_move_sids[1], 101ULL);
+    TEST_CHECK(node_space_move_sids[2], 101ULL);
+    TEST_CHECK(node_space_move_windows[2], 11U);
+
+    memset(node_space_move_results, 0, sizeof(node_space_move_results));
+    node_space_move_results[0] = node_space_move_results[1] = true;
+    node_space_move_calls = 0;
+    TEST_CHECK(window_manager_move_node_windows_between_spaces(&wm, &source, 101, &destination, 202), true);
+    TEST_CHECK(node_space_move_calls, 2);
+
+    space_manager_test_move_window_to_space = saved_move;
+    table_free(&wm.window);
+});
+
 static uint64_t window_manager_test_warp_space(uint32_t wid)
 {
     return wid < 20 ? 1 : 2;
@@ -457,6 +669,48 @@ TEST_FUNC(window_reconciliation_prepares_destination_before_detaching_source,
     table_free(&wm.managed_window);
     table_free(&wm.window);
     g_mouse_state.window = saved_dragged_window;
+});
+
+static uint64_t transient_fullscreen_test_space(uint32_t wid)
+{
+    (void) wid;
+    return 9001;
+}
+
+TEST_FUNC(window_reconciliation_preserves_transient_fullscreen_exit_membership,
+{
+    __auto_type saved_space = window_test_space_for_id;
+    struct window_manager wm = { .purify_mode = PURIFY_DISABLED };
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+    table_init(&wm.managed_window, 4, hash_wm, compare_wm);
+    struct application application = { .name = "fullscreen-exit" };
+    struct window window = {
+        .application = &application,
+        .id = 91,
+        .is_root = true,
+        .frame = { { 10.0f, 20.0f }, { 800.0f, 600.0f } }
+    };
+    window_set_flag(&window, WINDOW_MOVABLE);
+    window_set_rule_flag(&window, WINDOW_RULE_MANAGED);
+    struct window_node root = {
+        .window_list = {91}, .window_order = {91}, .window_count = 1,
+        .area = {10.0f, 20.0f, 800.0f, 600.0f}
+    };
+    struct view view = { .sid = 9001, .layout = VIEW_BSP, .root = &root };
+    struct view *mutated_views[1];
+    table_add(&wm.window, &window.id, &window);
+    table_add(&wm.managed_window, &window.id, &view);
+    window_test_space_for_id = transient_fullscreen_test_space;
+
+    TEST_CHECK(window_manager_reconcile_windows_on_space_with_storage(&wm, &view, NULL, 0, true,
+                                                                      mutated_views, 1), true);
+    TEST_CHECK(view_find_window_node(&view, window.id), &root);
+    TEST_CHECK(window_manager_find_managed_window(&wm, &window), &view);
+    TEST_CHECK(view_is_dirty(&view), false);
+
+    window_test_space_for_id = saved_space;
+    table_free(&wm.managed_window);
+    table_free(&wm.window);
 });
 
 TEST_FUNC(mouse_no_target_cross_space_transfer_prepares_before_source_mutation,
@@ -732,11 +986,12 @@ static void warp_success_animate(struct window_capture *list, int count)
     warp_success_animation_windows += count;
 }
 
-static void warp_success_move(uint64_t sid, struct window *window)
+static bool warp_success_move(uint64_t sid, struct window *window)
 {
     (void) window;
     ++warp_success_move_calls;
     warp_success_move_sid = sid;
+    return true;
 }
 
 static bool warp_success_feedback_show(struct window_node *node, void *context)

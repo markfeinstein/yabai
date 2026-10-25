@@ -4,12 +4,19 @@
 #define asm__call_move_space(v0,v1,v2,v3,func) \
     __asm__("movq %0, %%rdi;""movq %1, %%rsi;""movq %2, %%rdx;""movq %3, %%r13;""callq *%4;" : :"r"(v0), "r"(v1), "r"(v2), "r"(v3), "r"(func) :"%rdi", "%rsi", "%rdx", "%r13");
 
+static bool is_sonoma_14_8_build(NSOperatingSystemVersion version, long patch)
+{
+    return version.majorVersion == 14 && version.minorVersion == 8 && version.patchVersion == patch;
+}
+
 uint64_t get_dock_spaces_offset(NSOperatingSystemVersion os_version) {
     if (os_version.majorVersion == 26) {
         return 0x90000;
     } else if (os_version.majorVersion == 15) {
         return 0xA0000;
     } else if (os_version.majorVersion == 14) {
+        if (is_sonoma_14_8_build(os_version, 5)) return 0xD4000;
+        if (is_sonoma_14_8_build(os_version, 9)) return 0x4000;
         return os_version.minorVersion > 0 ? 0xD5000 : 0x140000;
     } else if (os_version.majorVersion == 13) {
         return 0x140000;
@@ -28,6 +35,8 @@ uint64_t get_dppm_offset(NSOperatingSystemVersion os_version) {
     } else if (os_version.majorVersion == 15) {
         return 0x13b000;
     } else if (os_version.majorVersion == 14) {
+        if (is_sonoma_14_8_build(os_version, 5)) return 0x2A7000;
+        if (is_sonoma_14_8_build(os_version, 9)) return 0x290000;
         return os_version.minorVersion > 0 ? 0x12ce00 : 0x8000;
     } else if (os_version.majorVersion == 13) {
         return 0x8000;
@@ -119,6 +128,8 @@ uint64_t get_set_front_window_offset(NSOperatingSystemVersion os_version) {
     } else if (os_version.majorVersion == 15) {
         return 0x3d000;
     } else if (os_version.majorVersion == 14) {
+        if (is_sonoma_14_8_build(os_version, 5)) return 0x49000;
+        if (is_sonoma_14_8_build(os_version, 9)) return 0x40000;
         return os_version.minorVersion > 0 ? 0x4a000 : 0x51BBE;
     } else if (os_version.majorVersion == 13) {
         return 0x52000;
@@ -135,6 +146,9 @@ const char *get_dock_spaces_pattern(NSOperatingSystemVersion os_version) {
     if (os_version.majorVersion == 26 || os_version.majorVersion == 15) {
         return "?? ?? ?? 00 48 8B 38 48 8B 35 ?? ?? ?? 00 89 DA 41 FF D5 48 89 C7 E8 ?? ?? ?? 00 49 89 C7 48 8B 35 ?? ?? ?? 00 48 89";
     } else if (os_version.majorVersion == 14) {
+        if (is_sonoma_14_8_build(os_version, 9)) {
+            return "BC BC 3E 00 48 8B 38 48 8B 35 12 E8 3B 00 48 8B 1D 9B 26 36 00 FF D3 48 89 C7 E8 ?? ?? ?? 00 49 89 C6";
+        }
         if (os_version.minorVersion > 0) {
             return "?? ?? ?? 00 48 8B 38 48 8B 35 ?? ?? ?? 00 89 DA 41 FF D5 48 89 C7 E8 ?? ?? ?? 00 49 89 C7 48 8B 35 ?? ?? ?? 00 48 89";
         }
@@ -154,6 +168,9 @@ const char *get_dppm_pattern(NSOperatingSystemVersion os_version) {
     if (os_version.majorVersion == 26 || os_version.majorVersion == 15) {
         return "?? ?? ?? 00 31 FF 5D E9 ?? ??";
     } else if (os_version.majorVersion == 14) {
+        if (is_sonoma_14_8_build(os_version, 5) || is_sonoma_14_8_build(os_version, 9)) {
+            return "BE C9 14 00 4C 8B 28 4C 89 EF E8 ?? ?? ?? 00 48 89 DF 4C 89 F6 E8 ?? ?? ?? 00 48 89 C3 48 8B 35 EE 14 12 00 4C 89 EF";
+        }
         if (os_version.minorVersion > 0) {
             return "?? ?? ?? 00 31 FF 5D E9 ?? ?? 1C 00";
         }

@@ -21,6 +21,7 @@ enum window_op_error
     WINDOW_OP_ERROR_DEMINIMIZE_FAILED,
     WINDOW_OP_ERROR_MAX_STACK,
     WINDOW_OP_ERROR_SAME_STACK,
+    WINDOW_OP_ERROR_SPACE_MOVE_FAILED,
 };
 
 enum managed_window_result
@@ -201,6 +202,9 @@ bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t 
 void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 uint32_t window_manager_ax_window_id(AXUIElementRef window_ref);
+AXUIElementRef window_manager_copy_application_window_ref(struct application *application, uint32_t window_id);
+bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window, AXUIElementRef window_ref);
+bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window);
 struct window *window_manager_find_window(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_window(struct window_manager *wm, uint32_t window_id);
 bool window_manager_add_window(struct window_manager *wm, struct window *window);
@@ -233,7 +237,10 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
 enum window_op_error window_manager_minimize_window(struct window *window);
 enum window_op_error window_manager_deminimize_window(struct window *window);
 bool window_manager_close_window(struct window *window);
-void window_manager_send_window_to_space(struct space_manager *sm, struct window_manager *wm, struct window *window, uint64_t sid, bool moved_by_rule);
+bool window_manager_send_window_to_space(struct space_manager *sm, struct window_manager *wm, struct window *window, uint64_t sid, bool moved_by_rule);
+bool window_manager_move_node_windows_between_spaces(struct window_manager *wm,
+                                                      struct window_node *a_node, uint64_t a_sid,
+                                                      struct window_node *b_node, uint64_t b_sid);
 struct window_created_retry
 {
     AXUIElementRef window_ref;

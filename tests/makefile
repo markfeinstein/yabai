@@ -98,13 +98,17 @@ syntax:
 
 arch-arm64:
 	$(MAKE) CONFIG=arch ARCH=arm64 core-build
+	$(CC) ./src/osax_payload.m -o ./bin/arch-arm64/osax_payload -arch arm64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
 	@lipo -verify_arch arm64 ./bin/arch-arm64/tests
-	@if [ "$$(uname -m)" = arm64 ]; then ./bin/arch-arm64/tests; else echo "SKIP arm64 execution: host is not arm64"; fi
+	@lipo -verify_arch arm64 ./bin/arch-arm64/osax_payload
+	@if [ "$$(uname -m)" = arm64 ]; then ./bin/arch-arm64/tests && ./bin/arch-arm64/osax_payload; else echo "SKIP arm64 execution: host is not arm64"; fi
 
 arch-x86_64:
 	$(MAKE) CONFIG=arch ARCH=x86_64 core-build
+	$(CC) ./src/osax_payload.m -o ./bin/arch-x86_64/osax_payload -arch x86_64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
 	@lipo -verify_arch x86_64 ./bin/arch-x86_64/tests
-	@if [ "$$(uname -m)" = x86_64 ]; then ./bin/arch-x86_64/tests; elif /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then /usr/bin/arch -x86_64 ./bin/arch-x86_64/tests; else echo "SKIP x86_64 execution: Rosetta is unavailable"; fi
+	@lipo -verify_arch x86_64 ./bin/arch-x86_64/osax_payload
+	@if [ "$$(uname -m)" = x86_64 ]; then ./bin/arch-x86_64/tests && ./bin/arch-x86_64/osax_payload; elif /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then /usr/bin/arch -x86_64 ./bin/arch-x86_64/tests && /usr/bin/arch -x86_64 ./bin/arch-x86_64/osax_payload; else echo "SKIP x86_64 execution: Rosetta is unavailable"; fi
 
 integration-hide-on-close:
 	./integration/hide_on_close.sh

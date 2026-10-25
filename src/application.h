@@ -92,6 +92,7 @@ struct application
     bool frame_recovery_hint_pending;
     bool frame_recovery_hint_active;
     uint32_t ffm_menu_suspend_count;
+    uint32_t adopt_attempted_window_id;
     uint16_t inactive_probe_cursor;
     uint64_t frame_recovery_cleanup_retry_time;
 };

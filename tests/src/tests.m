@@ -630,7 +630,7 @@ TEST_FUNC(window_node_toggle_zoom_parent_switches_siblings,
     TEST_CHECK(right.zoom == &parent, true);
 
     flush_node = window_node_toggle_zoom_parent(&right);
-    TEST_CHECK(flush_node == &right, true);
+    TEST_CHECK(flush_node == &parent, true);
     TEST_CHECK(left.zoom == NULL, true);
     TEST_CHECK(right.zoom == NULL, true);
 });
@@ -2897,6 +2897,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
+    TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
     TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
     TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
@@ -2944,6 +2945,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_loop_batched_views_deduplicate_in_first_seen_order) \
     TEST_ENTRY(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel) \
     TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
+    TEST_ENTRY(missed_focused_window_adoption_is_bounded_per_application_identity) \
+    TEST_ENTRY(window_created_replaces_only_same_id_window_elements) \
     TEST_ENTRY(application_launch_and_startup_table_failures_retry_and_recover_through_callers) \
     TEST_ENTRY(window_created_event_ax_ownership_matrix_is_exact) \
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
@@ -2981,6 +2984,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
     TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
+    TEST_ENTRY(window_resize_debounce_preserves_fullscreen_state_transitions) \
+    TEST_ENTRY(mouse_follows_focus_ignores_ineligible_auxiliary_transitions) \
     TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
     TEST_ENTRY(window_focus_fallback_trigger_policy_and_behavior_are_deterministic) \
     TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \
@@ -2998,12 +3003,16 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
+    TEST_ENTRY(window_space_move_prefers_observable_sa_then_verified_fallbacks) \
+    TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
+    TEST_ENTRY(window_reconciliation_preserves_transient_fullscreen_exit_membership) \
     TEST_ENTRY(mouse_no_target_cross_space_transfer_prepares_before_source_mutation) \
     TEST_ENTRY(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits) \
     TEST_ENTRY(window_manager_warp_preparation_failure_preserves_trees) \

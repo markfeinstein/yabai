@@ -863,13 +863,25 @@ static bool update_window_notifications(void)
     }
 
     if (success && window_count <= INT_MAX) {
-        success = SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count) == kCGErrorSuccess;
+        CGError request_result = SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count);
+        success = request_result == kCGErrorSuccess;
+        if (!success) {
+            warn("%s: SLSRequestNotificationsForWindows rejected %zu windows with status %d\n",
+                 __FUNCTION__, window_count, request_result);
+        }
     } else {
+        warn("%s: could not construct a bounded notification list for %zu windows\n", __FUNCTION__, window_count);
         success = false;
     }
 
     free(window_list);
     return success;
+}
+
+static bool window_focus_should_center_mouse(struct window *focused_window, struct window *window, uint32_t ffm_window_id)
+{
+    return window && ffm_window_id != window->id && window->is_eligible &&
+           (!focused_window || focused_window->is_eligible);
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
@@ -887,7 +899,7 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
 
     if (wm->focused_window_id != window->id) {
-        if (ms->ffm_window_id != window->id) {
+        if (window_focus_should_center_mouse(focused_window, window, ms->ffm_window_id)) {
             window_manager_center_mouse(wm, window);
         }
 
@@ -1223,6 +1235,9 @@ static void *(*event_loop_test_create_running_application)(struct process *) = w
 static bool (*event_loop_test_application_finished)(struct process *) = workspace_application_is_finished_launching;
 static bool (*event_loop_test_application_observable)(struct process *) = workspace_application_is_observable;
 static pid_t (*event_loop_test_ax_window_pid)(AXUIElementRef);
+static bool (*event_loop_test_window_ref_is_window)(AXUIElementRef);
+static struct application *(*event_loop_test_application_for_window_id)(uint32_t);
+static void (*event_loop_test_adopt_created)(AXUIElementRef, struct application *);
 #endif
 
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
@@ -1482,6 +1497,42 @@ static struct application *event_loop_find_processed_front_application(void)
     return application;
 }
 
+static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application,
+                                             bool one_shot_rules, pid_t one_shot_owner_pid);
+
+static struct application *event_loop_application_for_window_id(uint32_t window_id)
+{
+#ifdef TESTS
+    return event_loop_test_application_for_window_id
+         ? event_loop_test_application_for_window_id(window_id)
+         : NULL;
+#else
+    int connection = 0;
+    pid_t pid = 0;
+    if (SLSGetWindowOwner(g_connection, window_id, &connection) != kCGErrorSuccess ||
+        SLSConnectionGetPID(connection, &pid) != kCGErrorSuccess || pid <= 0) return NULL;
+    return window_manager_find_application(&g_window_manager, pid);
+#endif
+}
+
+static bool event_loop_try_adopt_focused_window(struct application *application, uint32_t window_id)
+{
+    if (!application || !window_id || application->adopt_attempted_window_id == window_id) return false;
+    AXUIElementRef window_ref = window_manager_copy_application_window_ref(application, window_id);
+    if (!window_ref) return false;
+
+    application->adopt_attempted_window_id = window_id;
+    debug("%s: %s %d\n", __FUNCTION__, application->name, window_id);
+#ifdef TESTS
+    if (event_loop_test_adopt_created) {
+        event_loop_test_adopt_created(window_ref, application);
+        return true;
+    }
+#endif
+    event_loop_handle_window_created(window_ref, application, true, 0);
+    return true;
+}
+
 static void event_loop_application_front_update_focus(struct application *application)
 {
     uint32_t focused_window_id = application_focused_window(application);
@@ -1506,9 +1557,12 @@ static void event_loop_application_front_update_focus(struct application *applic
         }
 
         window_manager_add_lost_focused_event(&g_window_manager, focused_window_id);
+        (void) event_loop_try_adopt_focused_window(application, focused_window_id);
         return;
     }
 
+    application->adopt_attempted_window_id = 0;
+    (void) window_manager_refresh_window_ref(&g_window_manager, window);
     window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
     event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
 }
@@ -1725,10 +1779,32 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
     event_loop_request_window_focus_fallback_for_event(APPLICATION_HIDDEN);
 }
 
+static bool event_loop_window_ref_is_window(AXUIElementRef window_ref)
+{
+#ifdef TESTS
+    if (event_loop_test_window_ref_is_window) return event_loop_test_window_ref_is_window(window_ref);
+#endif
+    CFTypeRef role = NULL;
+    bool result = AXUIElementCopyAttributeValue(window_ref, kAXRoleAttribute, &role) == kAXErrorSuccess &&
+                  role && CFEqual(role, kAXWindowRole);
+    if (role) CFRelease(role);
+    return result;
+}
+
 static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
 {
     uint32_t window_id = window_manager_ax_window_id(window_ref);
-    if (!window_id || window_manager_find_window(&g_window_manager, window_id)) { CFRelease(window_ref); return; }
+    if (!window_id) { CFRelease(window_ref); return; }
+
+    struct window *existing_window = window_manager_find_window(&g_window_manager, window_id);
+    if (existing_window) {
+        if (event_loop_window_ref_is_window(window_ref)) {
+            (void) window_manager_replace_window_ref(&g_window_manager, existing_window, window_ref);
+        } else {
+            CFRelease(window_ref);
+        }
+        return;
+    }
 
     if (!application) {
 #ifdef TESTS
@@ -1745,6 +1821,7 @@ static void event_loop_handle_window_created(AXUIElementRef window_ref, struct a
     struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id, one_shot_rules, one_shot_owner_pid, &retry);
     if (!window && retry) window_manager_schedule_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
     if (!window) return;
+    application->adopt_attempted_window_id = 0;
 
     rule_cleanup_one_shots();
 
@@ -1872,6 +1949,8 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
     struct window *window = window_manager_find_window(&g_window_manager, window_id);
     if (!window) {
         window_manager_add_lost_focused_event(&g_window_manager, window_id);
+        struct application *application = event_loop_application_for_window_id(window_id);
+        if (application) (void) event_loop_try_adopt_focused_window(application, window_id);
         return;
     }
 
@@ -1888,6 +1967,9 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
     if (!event_loop_window_focus_is_frontmost(window->application)) {
         return;
     }
+
+    window->application->adopt_attempted_window_id = 0;
+    (void) window_manager_refresh_window_ref(&g_window_manager, window);
 
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
 
@@ -2115,6 +2197,12 @@ static EVENT_HANDLER(WINDOW_MOVED)
     }
 }
 
+static bool window_resize_should_debounce(bool was_fullscreen, bool is_fullscreen,
+                                          CGRect current_frame, CGRect new_frame)
+{
+    return was_fullscreen == is_fullscreen && CGRectEqualToRect(current_frame, new_frame);
+}
+
 static EVENT_HANDLER(WINDOW_RESIZED)
 {
     uint32_t window_id = (uint32_t)(intptr_t) context;
@@ -2132,7 +2220,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     }
 
     CGRect new_frame = window_ax_frame(window);
-    if (CGRectEqualToRect(new_frame, window->frame)) {
+    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
+    bool is_fullscreen = window_is_fullscreen(window);
+    if (window_resize_should_debounce(was_fullscreen, is_fullscreen, window->frame, new_frame)) {
         debug("%s:DEBOUNCED %s %d\n", __FUNCTION__, window->application->name, window->id);
         return;
     }
@@ -2140,9 +2230,6 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
     event_signal_push(SIGNAL_WINDOW_RESIZED, window);
 
-    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
-
-    bool is_fullscreen = window_is_fullscreen(window);
     if (is_fullscreen) {
         window_set_flag(window, WINDOW_FULLSCREEN);
     } else {
@@ -2194,6 +2281,16 @@ static EVENT_HANDLER(WINDOW_RESIZED)
             declarative_configuration_request_reconcile();
             return;
         }
+
+        if (window_ax_can_move(window)) window_set_flag(window, WINDOW_MOVABLE);
+        else window_clear_flag(window, WINDOW_MOVABLE);
+        if (window_ax_can_resize(window)) window_set_flag(window, WINDOW_RESIZABLE);
+        else window_clear_flag(window, WINDOW_RESIZABLE);
+        if (window->role) CFRelease(window->role);
+        window->role = window_ax_role(window);
+        if (window->subrole) CFRelease(window->subrole);
+        window->subrole = window_ax_subrole(window);
+        window->frame = window_ax_frame(window);
 
         if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
             enum managed_window_result managed_result = window_manager_tile_window_on_space(&g_space_manager, &g_window_manager,
@@ -2554,6 +2651,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
     if (ordered_result != kCGErrorSuccess) return;
     if (!ordered_in || !window_check_flag(window, WINDOW_ORDERED_OUT)) return;
 
+    (void) window_manager_refresh_window_ref(&g_window_manager, window);
     uint64_t sid = space_manager_active_space();
     window_manager_window_did_order_in(&g_window_manager, window, space_manager_is_window_on_space(sid, window) ? sid : 0);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
@@ -3048,7 +3146,7 @@ static EVENT_HANDLER(MOUSE_UP)
                 mouse_drop_action_stack(&g_window_manager, src_view, g_mouse_state.window, dst_view, window);
             } break;
             case MOUSE_DROP_ACTION_SWAP: {
-                mouse_drop_action_swap(&g_window_manager, src_view, a_node, g_mouse_state.window, dst_view, b_node, window);
+                (void) mouse_drop_action_swap(&g_window_manager, src_view, a_node, g_mouse_state.window, dst_view, b_node, window);
             } break;
             case MOUSE_DROP_ACTION_WARP_TOP: {
                 mouse_drop_action_warp(&g_window_manager, src_view, a_node, g_mouse_state.window, dst_view, b_node, window, SPLIT_X, CHILD_FIRST);

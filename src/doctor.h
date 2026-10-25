@@ -32,6 +32,14 @@ enum doctor_sa_install {
     DOCTOR_SA_OUTDATED
 };
 
+enum doctor_sa_runtime {
+    DOCTOR_SA_RUNTIME_UNKNOWN,
+    DOCTOR_SA_RUNTIME_CURRENT,
+    DOCTOR_SA_RUNTIME_OUTDATED,
+    DOCTOR_SA_RUNTIME_INCOMPLETE,
+    DOCTOR_SA_RUNTIME_UNREACHABLE
+};
+
 struct doctor_facts {
     enum doctor_probe identity;
     enum doctor_probe binary_executable;
@@ -49,6 +57,7 @@ struct doctor_facts {
     enum doctor_probe config_readable;
     enum doctor_sa_install sa_install;
     enum doctor_probe sa_socket;
+    enum doctor_sa_runtime sa_runtime;
     const char *runtime_arch;
 };
 

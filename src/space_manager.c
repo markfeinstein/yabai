@@ -887,60 +887,114 @@ uint64_t space_manager_active_space(void)
     return display_space_id(did);
 }
 
-void space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list, int window_count)
+struct space_manager_window_move_ops
 {
-    if (SLSPerformAsynchronousBridgedWindowManagementOperation) {
-        CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
-        if (!window_list_ref) return;
-        Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
-        SEL sel = sel_registerName("initWithWindows:spaceID:");
-        id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
+    bool (*scripting_addition)(uint64_t, uint32_t *, int);
+    bool (*bridged)(uint64_t, uint32_t *, int);
+    bool (*fallback)(uint64_t, uint32_t *, int);
+};
+
+static bool space_manager_move_window_list_with_ops(uint64_t sid, uint32_t *window_list, int window_count,
+                                                    const struct space_manager_window_move_ops *ops)
+{
+    if (!sid || window_count < 0 || (window_count && !window_list) || !ops) return false;
+    if (!window_count) return true;
+    if (ops->scripting_addition && ops->scripting_addition(sid, window_list, window_count)) return true;
+    if (ops->bridged && ops->bridged(sid, window_list, window_count)) return true;
+    return ops->fallback && ops->fallback(sid, window_list, window_count);
+}
+
+#define WINDOW_SPACE_MOVE_WAIT_ATTEMPTS 50
+#define WINDOW_SPACE_MOVE_WAIT_INTERVAL_US 10000
+
+static bool space_manager_wait_for_window_list_space(uint64_t sid, uint32_t *window_list, int window_count)
+{
+    for (int attempt = 0; attempt < WINDOW_SPACE_MOVE_WAIT_ATTEMPTS; ++attempt) {
+        bool complete = true;
+        for (int i = 0; i < window_count; ++i) {
+            if (window_space(window_list[i]) != sid) {
+                complete = false;
+                break;
+            }
+        }
+        if (complete) return true;
+        usleep(WINDOW_SPACE_MOVE_WAIT_INTERVAL_US);
+    }
+    return false;
+}
+
+static bool space_manager_move_window_list_using_sa(uint64_t sid, uint32_t *window_list, int window_count)
+{
+    return scripting_addition_move_window_list_to_space(sid, window_list, window_count);
+}
+
+static bool space_manager_move_window_list_using_bridge(uint64_t sid, uint32_t *window_list, int window_count)
+{
+    if (!SLSPerformAsynchronousBridgedWindowManagementOperation) return false;
+    Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
+    if (!cls) return false;
+    CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
+    if (!window_list_ref) return false;
+    SEL sel = sel_registerName("initWithWindows:spaceID:");
+    id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
+    bool dispatched = operation != nil;
+    if (operation) {
         SLSPerformAsynchronousBridgedWindowManagementOperation(operation);
         [operation release];
-        CFRelease(window_list_ref);
-    } else if (!workspace_use_macos_space_workaround()) {
-        CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
-        if (!window_list_ref) return;
-        SLSMoveWindowsToManagedSpace(g_connection, window_list_ref, sid);
-        CFRelease(window_list_ref);
-    } else if (!scripting_addition_move_window_list_to_space(sid, window_list, window_count)) {
-        SLSSpaceSetCompatID(g_connection, sid, 0x79616265);
-        SLSSetWindowListWorkspace(g_connection, window_list, window_count, 0x79616265);
-        SLSSpaceSetCompatID(g_connection, sid, 0x0);
     }
+    CFRelease(window_list_ref);
+    return dispatched && space_manager_wait_for_window_list_space(sid, window_list, window_count);
+}
+
+static bool space_manager_move_window_list_using_sls(uint64_t sid, uint32_t *window_list, int window_count)
+{
+    CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
+    if (!window_list_ref) return false;
+    SLSMoveWindowsToManagedSpace(g_connection, window_list_ref, sid);
+    CFRelease(window_list_ref);
+    return space_manager_wait_for_window_list_space(sid, window_list, window_count);
+}
+
+static bool space_manager_move_window_list_using_compat(uint64_t sid, uint32_t *window_list, int window_count)
+{
+    SLSSpaceSetCompatID(g_connection, sid, 0x79616265);
+    SLSSetWindowListWorkspace(g_connection, window_list, window_count, 0x79616265);
+    SLSSpaceSetCompatID(g_connection, sid, 0x0);
+    return space_manager_wait_for_window_list_space(sid, window_list, window_count);
 }
 
 #ifdef TESTS
-static void (*space_manager_test_move_window_to_space)(uint64_t, struct window *);
+static bool (*space_manager_test_move_window_list_to_space)(uint64_t, uint32_t *, int);
+static bool (*space_manager_test_move_window_to_space)(uint64_t, struct window *);
 #endif
 
-void space_manager_move_window_to_space(uint64_t sid, struct window *window)
+bool space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list, int window_count)
 {
 #ifdef TESTS
-    if (space_manager_test_move_window_to_space) {
-        space_manager_test_move_window_to_space(sid, window);
-        return;
+    if (space_manager_test_move_window_list_to_space) {
+        return space_manager_test_move_window_list_to_space(sid, window_list, window_count);
     }
 #endif
-    if (SLSPerformAsynchronousBridgedWindowManagementOperation) {
-        CFArrayRef window_list_ref = cfarray_of_cfnumbers(&window->id, sizeof(uint32_t), 1, kCFNumberSInt32Type);
-        if (!window_list_ref) return;
-        Class cls = objc_getClass("SLSBridgedMoveWindowsToManagedSpaceOperation");
-        SEL sel = sel_registerName("initWithWindows:spaceID:");
-        id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
-        SLSPerformAsynchronousBridgedWindowManagementOperation(operation);
-        [operation release];
-        CFRelease(window_list_ref);
-    } else if (!workspace_use_macos_space_workaround()) {
-        CFArrayRef window_list_ref = cfarray_of_cfnumbers(&window->id, sizeof(uint32_t), 1, kCFNumberSInt32Type);
-        if (!window_list_ref) return;
-        SLSMoveWindowsToManagedSpace(g_connection, window_list_ref, sid);
-        CFRelease(window_list_ref);
-    } else if (!scripting_addition_move_window_to_space(sid, window->id)) {
-        SLSSpaceSetCompatID(g_connection, sid, 0x79616265);
-        SLSSetWindowListWorkspace(g_connection, &window->id, 1, 0x79616265);
-        SLSSpaceSetCompatID(g_connection, sid, 0x0);
-    }
+    struct space_manager_window_move_ops ops = {
+        .scripting_addition = space_manager_move_window_list_using_sa,
+        .bridged = space_manager_move_window_list_using_bridge,
+        .fallback = workspace_use_macos_space_workaround()
+                  ? space_manager_move_window_list_using_compat
+                  : space_manager_move_window_list_using_sls
+    };
+    bool moved = space_manager_move_window_list_with_ops(sid, window_list, window_count, &ops);
+    if (!moved) warn("%s: could not move %d window%s to Space %llu\n", __FUNCTION__, window_count,
+                     window_count == 1 ? "" : "s", (unsigned long long) sid);
+    return moved;
+}
+
+bool space_manager_move_window_to_space(uint64_t sid, struct window *window)
+{
+    if (!window) return false;
+#ifdef TESTS
+    if (space_manager_test_move_window_to_space) return space_manager_test_move_window_to_space(sid, window);
+#endif
+    return space_manager_move_window_list_to_space(sid, &window->id, 1);
 }
 
 static inline uint64_t space_manager_find_first_user_space_for_display(uint32_t did)
@@ -1036,6 +1090,21 @@ static enum space_op_error space_manager_swap_space_with_space_on_display(uint32
     g_window_manager.window_animation_duration = 0.0f;
     __asm__ __volatile__ ("" ::: "memory");
 
+    bool moved_a = !a_window_list_count ||
+                   space_manager_move_window_list_to_space(b_sid, a_window_list, a_window_list_count);
+    if (!moved_a) {
+        g_window_manager.window_animation_duration = window_animation_duration;
+        return SPACE_OP_ERROR_WINDOW_SERVER;
+    }
+    bool moved_b = !b_window_list_count ||
+                   space_manager_move_window_list_to_space(a_sid, b_window_list, b_window_list_count);
+    if (!moved_b) {
+        bool rolled_back = !a_window_list_count ||
+                           space_manager_move_window_list_to_space(a_sid, a_window_list, a_window_list_count);
+        g_window_manager.window_animation_duration = window_animation_duration;
+        return rolled_back ? SPACE_OP_ERROR_WINDOW_SERVER : SPACE_OP_ERROR_PARTIAL_COMMIT;
+    }
+
     /* Both keys were resolved above; replacement cannot allocate or fail recoverably. */
     if (!table_replace(&g_space_manager.view, &a_sid, b_view) ||
         !table_replace(&g_space_manager.view, &b_sid, a_view)) {
@@ -1045,14 +1114,6 @@ static enum space_op_error space_manager_swap_space_with_space_on_display(uint32
     a_view->sid = b_sid;
     b_view->sid = a_sid;
     space_manager_swap_view_identity(a_view, b_view);
-
-    if (a_window_list_count) {
-        space_manager_move_window_list_to_space(b_sid, a_window_list, a_window_list_count);
-    }
-
-    if (b_window_list_count) {
-        space_manager_move_window_list_to_space(a_sid, b_window_list, b_window_list_count);
-    }
 
     for (int i = 0; i < buf_len(g_space_manager.labels); ++i) {
         struct space_label *label = &g_space_manager.labels[i];
