@@ -183,6 +183,47 @@ static void reset_resolver_hooks(void)
     } \
 } while (0)
 
+static void test_main_image_segment_lookup(void)
+{
+    struct {
+        struct mach_header_64 header;
+        struct segment_command_64 segment;
+    } fixture = {
+        .header = {
+            .magic = MH_MAGIC_64,
+            .filetype = MH_EXECUTE,
+            .ncmds = 1,
+            .sizeofcmds = sizeof(struct segment_command_64)
+        },
+        .segment = {
+            .cmd = LC_SEGMENT_64,
+            .cmdsize = sizeof(struct segment_command_64),
+            .vmaddr = 0x100000000ULL,
+            .vmsize = 0x4000
+        }
+    };
+    memcpy(fixture.segment.segname, "__TEXT", sizeof("__TEXT"));
+
+    const struct segment_command_64 *segment = find_segment_command_64(&fixture.header, "__TEXT");
+    CHECK(segment == &fixture.segment);
+    CHECK(segment && segment->vmaddr == fixture.segment.vmaddr);
+    CHECK(find_segment_command_64(&fixture.header, "__DATA") == NULL);
+    CHECK(find_segment_command_64(&fixture.header, "12345678901234567") == NULL);
+
+    fixture.segment.cmdsize = sizeof(struct load_command) - 1;
+    CHECK(find_segment_command_64(&fixture.header, "__TEXT") == NULL);
+    fixture.segment.cmdsize = sizeof(struct segment_command_64);
+    fixture.header.sizeofcmds = sizeof(struct load_command) - 1;
+    CHECK(find_segment_command_64(&fixture.header, "__TEXT") == NULL);
+    fixture.header.sizeofcmds = sizeof(struct segment_command_64);
+    fixture.header.magic = MH_CIGAM_64;
+    CHECK(find_segment_command_64(&fixture.header, "__TEXT") == NULL);
+
+    segment = main_image_segment("__TEXT");
+    CHECK(segment != NULL);
+    CHECK(segment && static_base_address() == segment->vmaddr);
+}
+
 static void alpha_control_reset(void)
 {
     memset(&alpha_control, 0, sizeof(alpha_control));
@@ -809,6 +850,7 @@ static void test_intel_sonoma_14_8_build_specific_scan_windows(void)
 
 static int osax_payload_test_main(void)
 {
+    test_main_image_segment_lookup();
 #if __arm64__
     test_resolver_scan_bounds();
     test_resolver_decode();

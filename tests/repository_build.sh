@@ -222,6 +222,9 @@ for config in debug release asan tsan; do
     test ! -e "$WORK/bin/$config/osax/payload"
     test ! -e "$WORK/bin/$config/osax/loader"
 done
+# The embedded Info.plist is a daemon link input, never an object-compile flag.
+test "$(grep -F -c 'xcrun-arg:-sectcreate' "$XCRUN_LOG")" -eq 4
+test "$(grep -F -c 'xcrun-arg:./assets/Info.plist' "$XCRUN_LOG")" -eq 4
 
 # An unchanged configuration is a true no-op, while an OSAX source change
 # regenerates the embedded artifacts and rebuilds the dependent binary once.

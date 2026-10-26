@@ -15,6 +15,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   responsive singleton opens a second managed window.
 - Compile the core test translation unit with warnings treated as errors while
   retaining narrow exceptions for deliberate fixtures and legacy APIs.
+- Parse the injected process's main-image Mach-O load commands directly instead
+  of using deprecated segment lookup APIs.
+- Pass the embedded Info.plist section flag only when linking daemon binaries,
+  not when compiling the standalone menu-bar model object.
 - Recover windows whose accessibility reference is replaced, and adopt focused
   windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
 - Preserve BSP membership and complete-tree geometry across native-fullscreen
