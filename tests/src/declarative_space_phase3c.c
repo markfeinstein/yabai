@@ -252,7 +252,8 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_TABLE_COUNT, PHASE3C_TABLE_CAPACITY, PHASE3C_TABLE_MAX_LOAD,
     PHASE3C_TABLE_HASH, PHASE3C_TABLE_CMP,
     PHASE3C_SCALAR_LAYOUT, PHASE3C_SCALAR_TOP, PHASE3C_SCALAR_BOTTOM, PHASE3C_SCALAR_LEFT,
-    PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_RATIO, PHASE3C_SCALAR_SPLIT,
+    PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_SINGLE_WINDOW_MAX_WIDTH,
+    PHASE3C_SCALAR_RATIO, PHASE3C_SCALAR_SPLIT,
     PHASE3C_SCALAR_BALANCE,
     PHASE3C_INSERTION, PHASE3C_SCAFFOLD_FINGERPRINT, PHASE3C_SCAFFOLD_PRIMARY, PHASE3C_COMPLETE_FLAGS,
     PHASE3C_ROOT_POINTER_NULL, PHASE3C_ROOT_WINDOW_COUNT_NEGATIVE,
@@ -271,13 +272,13 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_STALE_CASE_COUNT
 };
 
-_Static_assert(PHASE3C_STALE_CASE_COUNT == 119, "Phase 3C stale matrix must contain exactly 119 cases");
+_Static_assert(PHASE3C_STALE_CASE_COUNT == 123, "Phase 3C stale matrix must contain exactly 123 cases");
 
 TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
 {
     static const uint64_t legacy_flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SPLIT_RATIO,
+        VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SINGLE_WINDOW_MAX_WIDTH, VIEW_SPLIT_RATIO,
         VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
     size_t cases_run = 0;
@@ -342,6 +343,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         else if (kind == PHASE3C_SCALAR_LEFT) f.view.left_padding++;
         else if (kind == PHASE3C_SCALAR_RIGHT) f.view.right_padding++;
         else if (kind == PHASE3C_SCALAR_GAP) f.view.window_gap++;
+        else if (kind == PHASE3C_SCALAR_SINGLE_WINDOW_MAX_WIDTH) f.view.single_window_max_width++;
         else if (kind == PHASE3C_SCALAR_RATIO) f.view.split_ratio = 0.6f;
         else if (kind == PHASE3C_SCALAR_SPLIT) f.view.split_type = SPLIT_X;
         else if (kind == PHASE3C_SCALAR_BALANCE) f.view.auto_balance = SPLIT_NONE;
@@ -406,7 +408,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         ++cases_run;
     }
-    TEST_CHECK(cases_run, 119UL);
+    TEST_CHECK(cases_run, 123UL);
 })
 
 struct declarative_space_phase3c_outcome_context

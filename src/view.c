@@ -300,6 +300,35 @@ static inline bool window_node_is_leaf(struct window_node *node)
     return node->left == NULL && node->right == NULL;
 }
 
+static bool view_has_single_managed_window(struct view *view)
+{
+    return view && view->layout != VIEW_FLOAT && view->root &&
+           window_node_is_leaf(view->root) && view->root->window_count == 1;
+}
+
+void view_apply_single_window_max_width(struct view *view)
+{
+    if (!view_has_single_managed_window(view) || view->single_window_max_width <= 0) return;
+
+    struct area *area = &view->root->area;
+    double available = area->w;
+    double requested = view->single_window_max_width;
+    if (!isfinite(available) || available <= requested) return;
+
+    double centered_x = (double) area->x + (available - requested) * 0.5;
+    if (!isfinite(centered_x) || centered_x > FLT_MAX || centered_x < -FLT_MAX) return;
+    area->x = (float) centered_x;
+    area->w = (float) requested;
+}
+
+static bool view_reconcile_single_window_geometry(struct view *view, bool was_single)
+{
+    if (!view || view->single_window_max_width <= 0) return false;
+    if (was_single == view_has_single_managed_window(view)) return false;
+    view_update(view);
+    return true;
+}
+
 static inline bool window_node_is_left_child(struct window_node *node)
 {
     return node->parent && node->parent->left == node;
@@ -763,6 +792,7 @@ struct window_node *view_find_window_node(struct view *view, uint32_t window_id)
 
 struct window_node *view_remove_window_node(struct view *view, struct window *window)
 {
+    bool was_single = view_has_single_managed_window(view);
     struct window_node *node = view_find_window_node(view, window->id);
     if (!node) return NULL;
 
@@ -792,6 +822,7 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
             view->insertion_point = node->window_order[0];
         }
 
+        if (view_reconcile_single_window_geometry(view, was_single)) return view->root;
         return NULL;
     }
 
@@ -943,11 +974,13 @@ bool view_prepare_window_node_insertion(struct view *view, struct window *window
 struct window_node *view_commit_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan)
 {
     if (!view || !window || !plan) return NULL;
+    bool was_single = view_has_single_managed_window(view);
     if (!window_node_is_occupied(view->root) &&
         window_node_is_leaf(view->root)) {
         view->root->window_list[0] = window->id;
         view->root->window_order[0] = window->id;
         view->root->window_count = 1;
+        view_reconcile_single_window_geometry(view, was_single);
         return view->root;
     } else if (view->layout == VIEW_BSP) {
         uint32_t prev_insertion_point = 0;
@@ -970,6 +1003,7 @@ struct window_node *view_commit_window_node_insertion(struct view *view, struct 
 
                     leaf->insert_dir = 0;
                     insert_feedback_destroy(leaf);
+                    view_reconcile_single_window_geometry(view, was_single);
                     return leaf;
                 }
 
@@ -1008,9 +1042,12 @@ struct window_node *view_commit_window_node_insertion(struct view *view, struct 
             return view->root;
         }
 
+        view_reconcile_single_window_geometry(view, was_single);
         return leaf;
     } else if (view_layout_is_single_root(view->layout)) {
-        return view_stack_window_node(view->root, window) ? view->root : NULL;
+        if (!view_stack_window_node(view->root, window)) return NULL;
+        view_reconcile_single_window_geometry(view, was_single);
+        return view->root;
     }
 
     return NULL;
@@ -1291,6 +1328,8 @@ void view_update(struct view *view)
             view->root->area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
         }
 
+        view_apply_single_window_max_width(view);
+
         window_node_clear_window_areas(view->root);
         if (view_layout_is_accordion(view->layout)) {
             view_update_accordion(view);
@@ -1342,6 +1381,7 @@ struct view *view_create(uint64_t sid)
         if (!view_check_flag(view, VIEW_RIGHT_PADDING))  view->right_padding  = g_space_manager.right_padding;
         if (!view_check_flag(view, VIEW_WINDOW_GAP))     view->window_gap     = g_space_manager.window_gap;
         if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) view->accordion_padding = g_space_manager.accordion_padding;
+        if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MAX_WIDTH)) view->single_window_max_width = g_space_manager.single_window_max_width;
         if (!view_check_flag(view, VIEW_AUTO_BALANCE))   view->auto_balance   = g_space_manager.auto_balance;
         if (!view_check_flag(view, VIEW_SPLIT_RATIO))    view->split_ratio    = g_space_manager.split_ratio;
         if (!view_check_flag(view, VIEW_SPLIT_TYPE))     view->split_type     = g_space_manager.split_type;

@@ -2992,6 +2992,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_focus_fallback_selector_matches_public_recent_helper) \
     TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
     TEST_ENTRY(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry) \
+    TEST_ENTRY(single_window_max_width_centers_only_one_managed_window) \
+    TEST_ENTRY(single_window_max_width_reconciles_stack_membership_transitions) \
+    TEST_ENTRY(single_window_max_width_reconciles_bsp_split_and_collapse) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
@@ -3214,7 +3217,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_numeric_field_matrix)                           \
     TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
     TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
-    TEST_ENTRY(declarative_command_matrix_covers_all_40_query_invalid_and_mutation_paths) \
+    TEST_ENTRY(declarative_command_matrix_covers_all_41_query_invalid_and_mutation_paths) \
     TEST_ENTRY(focus_follows_mouse_query_is_canonical_and_round_trips)       \
     TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
     TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
@@ -3224,7 +3227,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
     TEST_ENTRY(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects) \
     TEST_ENTRY(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation) \
-    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_40_typed_setters)   \
+    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_41_typed_setters)   \
     TEST_ENTRY(imperative_numeric_domain_table_matches_documented_contract)  \
     TEST_ENTRY(documented_numeric_domains_match_runtime_boundaries)           \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \

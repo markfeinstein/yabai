@@ -150,6 +150,7 @@ struct declarative_space_defaults declarative_startup_view_defaults(const struct
     NATIVE_INT(RIGHT_PADDING, right_padding);
     NATIVE_INT(WINDOW_GAP, window_gap);
     NATIVE_INT(ACCORDION_PADDING, accordion_padding);
+    NATIVE_INT(SINGLE_WINDOW_MAX_WIDTH, single_window_max_width);
 #undef NATIVE_INT
     if (model->config[DECLARATIVE_CONFIG_LAYOUT].present) defaults.layout = model->config[DECLARATIVE_CONFIG_LAYOUT].enumeration;
     if (model->config[DECLARATIVE_CONFIG_SPLIT_TYPE].present) defaults.split_type = model->config[DECLARATIVE_CONFIG_SPLIT_TYPE].enumeration;

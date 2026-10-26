@@ -13,6 +13,10 @@
     // Used only by accordion layouts. Over-capacity requests clamp to one
     // equal share per window, so focused frames never become negative.
     "accordion_padding": 30,
+    // Center one managed window at no more than this many display points.
+    // Zero disables the policy; narrower displays and multi-window Spaces keep
+    // their ordinary geometry.
+    "single_window_max_width": 1600,
     "split_ratio": 0.5,
     "split_type": "auto",
     "auto_balance": "off",

@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Add opt-in `single_window_max_width` geometry that centers and caps one
+  managed window while preserving ordinary multi-window layouts.
 - Recover windows whose accessibility reference is replaced, and adopt focused
   windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
 - Preserve BSP membership and complete-tree geometry across native-fullscreen

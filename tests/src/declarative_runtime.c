@@ -103,6 +103,7 @@ static void declarative_test_global_geometry(void *manager, enum declarative_con
     case DECLARATIVE_CONFIG_RIGHT_PADDING: sm->right_padding = value; break;
     case DECLARATIVE_CONFIG_WINDOW_GAP: sm->window_gap = value; break;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: sm->accordion_padding = value; break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: sm->single_window_max_width = value; break;
     default: break;
     }
 }
@@ -203,6 +204,7 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_LAYOUT, "bsp", "bsp\n", DECLARATIVE_TEST_EFFECT_LAYOUT },
     { DECLARATIVE_CONFIG_WINDOW_GAP, "15", "15\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_ACCORDION_PADDING, "30", "30\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, "1600", "1600\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
     { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", DECLARATIVE_TEST_EFFECT_SPLIT_RATIO },
     { DECLARATIVE_CONFIG_SPLIT_TYPE, "auto", "auto\n", DECLARATIVE_TEST_EFFECT_SPLIT_TYPE },
     { DECLARATIVE_CONFIG_AUTO_BALANCE, "on", "on\n", DECLARATIVE_TEST_EFFECT_AUTO_BALANCE },
@@ -346,8 +348,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_40_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 40);
+TEST_FUNC(declarative_command_matrix_covers_all_41_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 41);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -820,8 +822,8 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
     }
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_40_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 40);
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_41_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 41);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
@@ -878,7 +880,7 @@ TEST_FUNC(declarative_runtime_live_matrix_covers_all_40_typed_setters,
     TEST_CHECK(declarative_test_ffm_calls > 0, true);
     TEST_CHECK(declarative_test_global_layout_calls > 0, true);
     TEST_CHECK(declarative_test_space_layout_calls > 0, true);
-    TEST_CHECK(declarative_test_space_geometry_calls, 5);
+    TEST_CHECK(declarative_test_space_geometry_calls, 6);
     for (int easing = 0; easing < EASING_TYPE_COUNT; ++easing) {
         struct declarative_value value = { .present = true, .enumeration = easing };
         TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_EASING, &value, 0), DECLARATIVE_APPLY_OK);
@@ -904,6 +906,8 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
         { "normal_window_opacity", "inf", false },
         { "split_ratio", "0.1", true }, { "split_ratio", "0.9", true },
         { "split_ratio", "0", false }, { "split_ratio", "1", false },
+        { "single_window_max_width", "0", true }, { "single_window_max_width", "1600", true },
+        { "single_window_max_width", "-1", false }, { "single_window_max_width", "1.5", false },
         { "window_animation_duration", "0", true }, { "window_animation_duration", "2", true },
         { "window_animation_duration", "-0.1", false }, { "window_animation_duration", "inf", false },
         { "window_opacity_duration", "0", true }, { "window_opacity_duration", "2", true },
@@ -918,6 +922,7 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
     float saved_animation = g_window_manager.window_animation_duration;
     float saved_opacity_duration = g_window_manager.window_opacity_duration;
     float saved_split_ratio = g_space_manager.split_ratio;
+    int saved_single_window_max_width = g_space_manager.single_window_max_width;
     struct declarative_animation_permission_ops permissions = {
         declarative_test_permission_yes, declarative_test_permission_yes,
         declarative_test_permission_request
@@ -939,6 +944,7 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
     g_window_manager.window_animation_duration = saved_animation;
     g_window_manager.window_opacity_duration = saved_opacity_duration;
     g_space_manager.split_ratio = saved_split_ratio;
+    g_space_manager.single_window_max_width = saved_single_window_max_width;
     declarative_runtime_reset_operation_ops();
     declarative_runtime_reset_animation_permission_ops();
 });
@@ -965,6 +971,13 @@ TEST_FUNC(documented_numeric_domains_match_runtime_boundaries,
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
     value.real = 0.901f;
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
+
+    value.integer = -1;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), false);
+    value.integer = 0;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), true);
+    value.integer = INT_MAX;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), true);
 
     value.real = 0.0f;
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), true);
