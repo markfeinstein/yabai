@@ -877,13 +877,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         const struct menu_bar_display *display = &_snapshot->displays[display_index];
         NSString *display_title = yb_display_menu_title(display, display_index);
         NSString *display_accessibility = yb_display_accessibility_title(display, display_index);
-        NSMenuItem *display_item = [[[NSMenuItem alloc] initWithTitle:display_title action:nil keyEquivalent:@""] autorelease];
-        [display_item setToolTip:display_accessibility];
-        [display_item setAccessibilityLabel:display_accessibility];
 
-        NSMenu *display_menu = [[[NSMenu alloc] initWithTitle:display_title] autorelease];
-        [display_menu setAutoenablesItems:NO];
-        [display_menu addItem:yb_section_header_menu_item(display_title, display_accessibility)];
+        if (added_display) [_menu addItem:[NSMenuItem separatorItem]];
+        [_menu addItem:yb_section_header_menu_item(display_title, display_accessibility)];
 
         bool added_space = false;
         for (size_t space_index = 0; space_index < display->space_count; ++space_index) {
@@ -898,18 +894,17 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                                                   self,
                                                   space_target);
             [space_item setState:space->is_visible ? NSControlStateValueOn : NSControlStateValueOff];
+            [space_item setIndentationLevel:1];
             [space_item setToolTip:[NSString stringWithFormat:@"%@. Choose to focus this space.", space_accessibility]];
             [space_item setAccessibilityLabel:space_accessibility];
-            [display_menu addItem:space_item];
+            [_menu addItem:space_item];
             added_space = true;
         }
 
         if (!added_space) {
-            [display_menu addItem:yb_informational_menu_item(@"No matching spaces", 0, @"No spaces match the current filter.")];
+            [_menu addItem:yb_informational_menu_item(@"No matching spaces", 1, @"No spaces match the current filter.")];
         }
 
-        [display_item setSubmenu:display_menu];
-        [_menu addItem:display_item];
         added_display = true;
     }
 

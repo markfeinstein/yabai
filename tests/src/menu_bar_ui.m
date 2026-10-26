@@ -558,7 +558,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     NSMenu *menu = [controller testMenu];
 
     TEST_CHECK(menu != nil);
-    TEST_CHECK([menu numberOfItems] == 6);
+    TEST_CHECK([menu numberOfItems] == 8);
 
     NSMenuItem *title = [menu itemAtIndex:0];
     TEST_CHECK([[title title] isEqualToString:@"yabai Spaces"]);
@@ -566,40 +566,34 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK([[title accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
     if (@available(macOS 14.0, *)) TEST_CHECK([title isSectionHeader]);
 
-    NSMenuItem *display = [menu itemAtIndex:2];
-    TEST_CHECK([[display title] containsString:@"Display 1"]);
-    TEST_CHECK([[display title] containsString:@"Focused"]);
-    TEST_CHECK([display state] == NSControlStateValueOff);
-    TEST_CHECK([display representedObject] == nil);
-    NSMenu *display_menu = [display submenu];
-    TEST_CHECK(display_menu != nil);
-    TEST_CHECK([display_menu numberOfItems] == 3);
-
-    NSMenuItem *display_header = [display_menu itemAtIndex:0];
+    NSMenuItem *display_header = [menu itemAtIndex:2];
     TEST_CHECK([[display_header title] containsString:@"Display 1"]);
+    TEST_CHECK([[display_header title] containsString:@"Focused"]);
     TEST_CHECK([display_header action] == nil);
+    TEST_CHECK([display_header submenu] == nil);
     TEST_CHECK([[display_header accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
     if (@available(macOS 14.0, *)) TEST_CHECK([display_header isSectionHeader]);
 
-    NSMenuItem *visible_space = [display_menu itemAtIndex:1];
-    NSMenuItem *unknown_space = [display_menu itemAtIndex:2];
+    NSMenuItem *visible_space = [menu itemAtIndex:3];
+    NSMenuItem *unknown_space = [menu itemAtIndex:4];
     TEST_CHECK([visible_space isEnabled]);
     TEST_CHECK([visible_space action] == @selector(performMenuAction:));
     TEST_CHECK([[visible_space representedObject] isKindOfClass:[YBMenuBarActionTarget class]]);
     TEST_CHECK(((YBMenuBarActionTarget *) [visible_space representedObject])->yb_space_id == 42);
     TEST_CHECK([visible_space state] == NSControlStateValueOn);
+    TEST_CHECK([visible_space indentationLevel] == 1);
     TEST_CHECK([unknown_space action] == @selector(performMenuAction:));
     TEST_CHECK(((YBMenuBarActionTarget *) [unknown_space representedObject])->yb_space_id == 84);
     TEST_CHECK([unknown_space state] == NSControlStateValueOff);
     TEST_CHECK([[unknown_space toolTip] containsString:@"Choose to focus this space"]);
     [controller performMenuAction:unknown_space];
 
-    NSMenuItem *filter = [menu itemAtIndex:4];
+    NSMenuItem *filter = [menu itemAtIndex:6];
     TEST_CHECK([filter action] == @selector(performMenuAction:));
     TEST_CHECK([[filter representedObject] isKindOfClass:[YBMenuBarActionTarget class]]);
     [controller performMenuAction:filter];
 
-    NSMenu *style_menu = [[menu itemAtIndex:5] submenu];
+    NSMenu *style_menu = [[menu itemAtIndex:7] submenu];
     TEST_CHECK(style_menu != nil);
     TEST_CHECK([style_menu numberOfItems] == 3);
     NSMenuItem *automatic = [style_menu itemAtIndex:0];
@@ -844,15 +838,19 @@ test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
     TEST_CHECK(![[button toolTip] containsString:@"space 5"]);
 
     NSMenu *menu = [controller testMenu];
-    TEST_CHECK([menu numberOfItems] == 7);
+    TEST_CHECK([menu numberOfItems] == 12);
     NSMenuItem *first_display = [menu itemAtIndex:2];
-    NSMenuItem *second_display = [menu itemAtIndex:3];
+    NSMenuItem *second_display = [menu itemAtIndex:6];
     TEST_CHECK([[first_display title] containsString:@"Display 1"]);
     TEST_CHECK([[second_display title] containsString:@"Display 2"]);
-    TEST_CHECK([first_display state] == NSControlStateValueOff);
-    TEST_CHECK([second_display state] == NSControlStateValueOff);
-    TEST_CHECK([first_display submenu] != nil);
-    TEST_CHECK([second_display submenu] != nil);
+    TEST_CHECK([first_display action] == nil);
+    TEST_CHECK([second_display action] == nil);
+    TEST_CHECK([first_display submenu] == nil);
+    TEST_CHECK([second_display submenu] == nil);
+    TEST_CHECK([[[menu itemAtIndex:3] title] containsString:@"2 visible"]);
+    TEST_CHECK([[[menu itemAtIndex:4] title] containsString:@"3 work"]);
+    TEST_CHECK([[[menu itemAtIndex:7] title] containsString:@"4 chat"]);
+    TEST_CHECK([[[menu itemAtIndex:8] title] containsString:@"5 focus"]);
 
     NSMenu *style_menu = [[menu itemAtIndex:[menu numberOfItems] - 1] submenu];
     TEST_CHECK(style_menu != nil);
