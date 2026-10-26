@@ -3170,6 +3170,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
     TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
     TEST_ENTRY(window_manager_scratchpad_refresh_routes_inventory_changes) \
+    TEST_ENTRY(menu_bar_manager_focus_action_switches_space) \
+    TEST_ENTRY(menu_bar_manager_focus_action_reports_failures_and_rejects_missing_spaces) \
     TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
     TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
     TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \

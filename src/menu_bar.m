@@ -42,7 +42,8 @@ enum yb_menu_bar_screen_state
 
 enum yb_menu_bar_control_kind
 {
-    YB_MENU_BAR_CONTROL_SET_STYLE = 0,
+    YB_MENU_BAR_CONTROL_FOCUS_SPACE = 0,
+    YB_MENU_BAR_CONTROL_SET_STYLE,
     YB_MENU_BAR_CONTROL_SET_FILTER
 };
 
@@ -66,6 +67,7 @@ enum yb_menu_bar_control_kind
 @public
     enum yb_menu_bar_control_kind yb_kind;
     uint64_t yb_generation;
+    uint64_t yb_space_id;
     enum menu_bar_style yb_style;
     enum menu_bar_space_filter yb_filter;
 }
@@ -856,15 +858,15 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [_menu setDelegate:self];
     [_menu setAutoenablesItems:NO];
 
-    NSMenuItem *title = yb_section_header_menu_item(@"yabai Spaces — Read Only",
-                                                    @"Space and application information; use the controls below to change the indicator layout.");
+    NSMenuItem *title = yb_section_header_menu_item(@"yabai Spaces",
+                                                    @"Choose a Space to focus it; use the controls below to change the indicator layout.");
     [_menu addItem:title];
 
     NSString *failure = yb_nsstring(_snapshot->action_failure_text);
     if ([failure length]) {
         NSMenuItem *failure_item = yb_informational_menu_item([NSString stringWithFormat:@"Last action failed: %@", failure],
                                                               0,
-                                                              @"The most recent menu bar setting change failed.");
+                                                              @"The most recent menu bar action failed.");
         [_menu addItem:failure_item];
     }
 
@@ -888,10 +890,16 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
             const struct menu_bar_space *space = &display->spaces[space_index];
             if (!yb_space_matches_filter(space, _snapshot->settings.space_filter)) continue;
 
-            NSMenuItem *space_item = yb_informational_menu_item(yb_space_menu_title(space),
-                                                                0,
-                                                                yb_space_accessibility_title(display, display_index, space));
+            NSString *space_accessibility = yb_space_accessibility_title(display, display_index, space);
+            YBMenuBarActionTarget *space_target = yb_action_target(YB_MENU_BAR_CONTROL_FOCUS_SPACE, _snapshot->generation);
+            space_target->yb_space_id = space->space_id;
+            NSMenuItem *space_item = yb_menu_item(yb_space_menu_title(space),
+                                                  @selector(performMenuAction:),
+                                                  self,
+                                                  space_target);
             [space_item setState:space->is_visible ? NSControlStateValueOn : NSControlStateValueOff];
+            [space_item setToolTip:[NSString stringWithFormat:@"%@. Choose to focus this space.", space_accessibility]];
+            [space_item setAccessibilityLabel:space_accessibility];
             [display_menu addItem:space_item];
             added_space = true;
         }
@@ -1011,10 +1019,10 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (button) {
         [button setTitle:@""];
         [button setImage:nil];
-        [button setToolTip:@"yabai Spaces — Read-only indicator; click to open the Spaces menu."];
+        [button setToolTip:@"yabai Spaces — click to choose a Space."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
-        [button setAccessibilityHelp:@"Read-only Spaces indicator; click to open the Spaces menu."];
+        [button setAccessibilityHelp:@"Open the Spaces menu and choose a Space to focus it."];
 
         NSRect frame = [_strip_view frame];
         CGFloat host_height = NSHeight([button bounds]);
@@ -1168,12 +1176,16 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (_callbacks.action) _callbacks.action(&action, _callbacks.context);
 }
 
-- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter
+- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter
 {
     struct menu_bar_action action = {0};
     action.generation = generation;
 
     switch (kind) {
+    case YB_MENU_BAR_CONTROL_FOCUS_SPACE:
+        action.type = MENU_BAR_ACTION_FOCUS_SPACE;
+        action.data.focus_space.space_id = space_id;
+        break;
     case YB_MENU_BAR_CONTROL_SET_STYLE:
         action.type = MENU_BAR_ACTION_SET_STYLE;
         action.data.set_style.style = style;
@@ -1195,6 +1207,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (![target isKindOfClass:[YBMenuBarActionTarget class]]) return;
     [self performActionKind:target->yb_kind
                  generation:target->yb_generation
+                      space:target->yb_space_id
                       style:target->yb_style
                      filter:target->yb_filter];
 }

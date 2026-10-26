@@ -1,5 +1,6 @@
 #include "menu_bar_manager.h"
 #include "event_loop.h"
+#include "space_manager.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -57,6 +58,7 @@ struct menu_bar_manager_native_seams
     int (*mission_control_index)(uint64_t sid);
     uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized, bool *success);
     uint64_t *(*window_space_list)(uint32_t wid, int *count);
+    enum space_op_error (*focus_space)(uint64_t sid);
 };
 
 static struct menu_bar_manager_state g_menu_bar_manager;
@@ -216,6 +218,13 @@ static uint64_t *menu_bar_manager_native_window_space_list(uint32_t wid, int *co
     return g_menu_bar_manager_native.window_space_list
         ? g_menu_bar_manager_native.window_space_list(wid, count)
         : window_space_list(wid, count);
+}
+
+static enum space_op_error menu_bar_manager_native_focus_space(uint64_t sid)
+{
+    return g_menu_bar_manager_native.focus_space
+        ? g_menu_bar_manager_native.focus_space(sid)
+        : space_manager_focus_space(sid);
 }
 
 static bool menu_bar_manager_resize(void **items, size_t item_size, size_t *capacity, size_t needed)
@@ -794,6 +803,49 @@ static bool menu_bar_manager_action_in_enabled_lifecycle(const struct menu_bar_a
     return true;
 }
 
+static bool menu_bar_manager_snapshot_contains_space(const struct menu_bar_snapshot *snapshot, uint64_t sid)
+{
+    if (!snapshot || !sid) return false;
+
+    for (size_t display_index = 0; display_index < snapshot->display_count; ++display_index) {
+        const struct menu_bar_display *display = &snapshot->displays[display_index];
+        for (size_t space_index = 0; space_index < display->space_count; ++space_index) {
+            if (display->spaces[space_index].space_id == sid) return true;
+        }
+    }
+
+    return false;
+}
+
+static const char *menu_bar_manager_focus_failure(enum space_op_error error)
+{
+    switch (error) {
+    case SPACE_OP_ERROR_DISPLAY_IS_ANIMATING:
+        return "cannot focus space while its display is animating";
+    case SPACE_OP_ERROR_IN_MISSION_CONTROL:
+        return "cannot focus space while Mission Control is active";
+    case SPACE_OP_ERROR_SCRIPTING_ADDITION:
+        return "cannot focus space because the scripting addition failed";
+    case SPACE_OP_ERROR_GESTURE:
+        return "cannot focus space because the fallback gesture failed";
+    case SPACE_OP_ERROR_WINDOW_SERVER:
+        return "cannot focus space because the WindowServer request failed";
+    case SPACE_OP_ERROR_MISSING_SRC:
+    case SPACE_OP_ERROR_MISSING_DST:
+    case SPACE_OP_ERROR_INVALID_SRC:
+    case SPACE_OP_ERROR_INVALID_DST:
+    case SPACE_OP_ERROR_INVALID_TYPE:
+        return "space is no longer available";
+    case SPACE_OP_ERROR_SAME_DISPLAY:
+    case SPACE_OP_ERROR_PARTIAL_COMMIT:
+    case SPACE_OP_ERROR_SUCCESS:
+    case SPACE_OP_ERROR_SAME_SPACE:
+        break;
+    }
+
+    return "cannot focus space";
+}
+
 static struct menu_bar_snapshot *menu_bar_manager_create_disabled_snapshot(void)
 {
     return menu_bar_model_snapshot_create(menu_bar_manager_next_generation(),
@@ -1159,6 +1211,24 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
     if (!action) return transition;
 
     switch (action->type) {
+    case MENU_BAR_ACTION_FOCUS_SPACE: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        uint64_t sid = action->data.focus_space.space_id;
+        if (!menu_bar_manager_snapshot_contains_space(g_menu_bar_manager.last_snapshot, sid)) {
+            menu_bar_manager_set_action_failure(action->generation, "space is no longer available");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
+            break;
+        }
+
+        enum space_op_error result = menu_bar_manager_native_focus_space(sid);
+        if (result == SPACE_OP_ERROR_SUCCESS || result == SPACE_OP_ERROR_SAME_SPACE) {
+            menu_bar_manager_clear_action_failure();
+        } else {
+            menu_bar_manager_set_action_failure(action->generation, menu_bar_manager_focus_failure(result));
+        }
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
+    } break;
     case MENU_BAR_ACTION_SET_STYLE: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
 

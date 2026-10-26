@@ -9,6 +9,7 @@ struct menu_bar_ui_action_log
     size_t count;
     enum menu_bar_action_type type[16];
     uint64_t generation[16];
+    uint64_t space_id[16];
     bool is_tracking[16];
     uint32_t focused_display_id[16];
 };
@@ -22,6 +23,9 @@ menu_bar_ui_record_action(const struct menu_bar_action *action, void *context)
     size_t index = log->count++;
     log->type[index] = action->type;
     log->generation[index] = action->generation;
+    log->space_id[index] = action->type == MENU_BAR_ACTION_FOCUS_SPACE
+                         ? action->data.focus_space.space_id
+                         : 0;
     log->is_tracking[index] = action->type == MENU_BAR_ACTION_MENU_TRACKING_CHANGED
                             ? action->data.menu_tracking.is_tracking
                             : false;
@@ -543,7 +547,7 @@ test_lifecycle_reinit_ignores_stale_delivery(void)
 }
 
 static bool
-test_read_only_rendered_paths_emit_only_setting_actions(void)
+test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
 {
     struct menu_bar_ui_action_log log = {0};
     struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
@@ -557,7 +561,7 @@ test_read_only_rendered_paths_emit_only_setting_actions(void)
     TEST_CHECK([menu numberOfItems] == 6);
 
     NSMenuItem *title = [menu itemAtIndex:0];
-    TEST_CHECK([[title title] containsString:@"Read Only"]);
+    TEST_CHECK([[title title] isEqualToString:@"yabai Spaces"]);
     TEST_CHECK([title action] == nil);
     TEST_CHECK([[title accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
     if (@available(macOS 14.0, *)) TEST_CHECK([title isSectionHeader]);
@@ -580,10 +584,15 @@ test_read_only_rendered_paths_emit_only_setting_actions(void)
     NSMenuItem *visible_space = [display_menu itemAtIndex:1];
     NSMenuItem *unknown_space = [display_menu itemAtIndex:2];
     TEST_CHECK([visible_space isEnabled]);
-    TEST_CHECK([visible_space action] == nil);
-    TEST_CHECK([[visible_space accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK([visible_space action] == @selector(performMenuAction:));
+    TEST_CHECK([[visible_space representedObject] isKindOfClass:[YBMenuBarActionTarget class]]);
+    TEST_CHECK(((YBMenuBarActionTarget *) [visible_space representedObject])->yb_space_id == 42);
     TEST_CHECK([visible_space state] == NSControlStateValueOn);
+    TEST_CHECK([unknown_space action] == @selector(performMenuAction:));
+    TEST_CHECK(((YBMenuBarActionTarget *) [unknown_space representedObject])->yb_space_id == 84);
     TEST_CHECK([unknown_space state] == NSControlStateValueOff);
+    TEST_CHECK([[unknown_space toolTip] containsString:@"Choose to focus this space"]);
+    [controller performMenuAction:unknown_space];
 
     NSMenuItem *filter = [menu itemAtIndex:4];
     TEST_CHECK([filter action] == @selector(performMenuAction:));
@@ -603,13 +612,17 @@ test_read_only_rendered_paths_emit_only_setting_actions(void)
     TEST_CHECK([expanded state] == NSControlStateValueOn);
     [controller performMenuAction:automatic];
 
-    TEST_CHECK(log.count == 2);
-    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_SET_SPACE_FILTER);
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[0] == 60);
-    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_SET_STYLE);
+    TEST_CHECK(log.space_id[0] == 84);
+    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_SET_SPACE_FILTER);
     TEST_CHECK(log.generation[1] == 60);
+    TEST_CHECK(log.type[2] == MENU_BAR_ACTION_SET_STYLE);
+    TEST_CHECK(log.generation[2] == 60);
     for (size_t i = 0; i < log.count; ++i) {
-        TEST_CHECK(log.type[i] == MENU_BAR_ACTION_SET_STYLE ||
+        TEST_CHECK(log.type[i] == MENU_BAR_ACTION_FOCUS_SPACE ||
+                   log.type[i] == MENU_BAR_ACTION_SET_STYLE ||
                    log.type[i] == MENU_BAR_ACTION_SET_SPACE_FILTER ||
                    log.type[i] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     }
@@ -797,7 +810,7 @@ test_expanded_render_uses_native_status_button_menu(void)
     TEST_CHECK([controller testStatusButtonOwnsStripView]);
     TEST_CHECK([controller testStatusItemOwnsMenu]);
     TEST_CHECK(button != nil);
-    TEST_CHECK([[button toolTip] containsString:@"Read-only indicator"]);
+    TEST_CHECK([[button toolTip] containsString:@"click to choose a Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);
 
     [controller clearStatusItem];
@@ -1195,7 +1208,7 @@ int main(void)
             { "synchronous_and_late_close_are_suppressed_during_teardown", test_synchronous_and_late_close_are_suppressed_during_teardown },
             { "deferred_snapshot_is_disposed_when_teardown_has_no_menu", test_deferred_snapshot_is_disposed_when_teardown_has_no_menu },
             { "lifecycle_reinit_ignores_stale_delivery", test_lifecycle_reinit_ignores_stale_delivery },
-            { "read_only_rendered_paths_emit_only_setting_actions", test_read_only_rendered_paths_emit_only_setting_actions },
+            { "space_rows_emit_focus_actions_and_settings_remain_interactive", test_space_rows_emit_focus_actions_and_settings_remain_interactive },
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
             { "strip_clicks_are_owned_by_native_status_button", test_strip_clicks_are_owned_by_native_status_button },
             { "expanded_render_uses_native_status_button_menu", test_expanded_render_uses_native_status_button_menu },
