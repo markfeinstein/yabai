@@ -1,5 +1,5 @@
 FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
-FRAMEWORK      = -framework Carbon -framework Cocoa -framework CoreServices -framework CoreVideo -framework SkyLight
+FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
 COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
 DEBUG_FLAGS    = $(COMMON_FLAGS) -O0
@@ -28,7 +28,7 @@ RELEASE_MODEL  = $(BUILD_PATH)/release/menu_bar_model.o
 ASAN_MODEL     = $(BUILD_PATH)/asan/menu_bar_model.o
 TSAN_MODEL     = $(BUILD_PATH)/tsan/menu_bar_model.o
 OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
-OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon
+OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
 XCRUN          ?= xcrun
 XXD            ?= xxd
 CODESIGN       ?= /usr/bin/codesign

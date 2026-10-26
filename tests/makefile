@@ -7,7 +7,7 @@ ARCH ?=
 CC ?= clang
 ARCH_FLAG = $(if $(ARCH),-arch $(ARCH),)
 BASE_FLAGS = $(ARCH_FLAG) -DTESTS -DPROFILE=1 -std=c11 -Wall -Wextra
-FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Cocoa -framework CoreServices -framework CoreVideo -framework SkyLight
+FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
@@ -39,7 +39,7 @@ build: core-build opaque-context
 	$(CC) ./src/runtime_paths.c -o $(OUT)/runtime_paths $(ARCH_FLAG) -DTESTS -std=c11 -Wall -Wextra -Werror
 	$(CC) ./src/menu_bar_ui.m ../src/menu_bar_model.c -o $(OUT)/menu_bar_ui $(ARCH_FLAG) -framework Cocoa
 	$(CC) ./src/loader_protocol.c -x assembler-with-cpp ../src/osax/loader_shellcode.s $(ARCH_FLAG) -Wall -Wextra -Werror -o $(OUT)/loader_protocol
-	$(CC) ./src/osax_payload.m -o $(OUT)/osax_payload $(ARCH_FLAG) -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
+	$(CC) ./src/osax_payload.m -o $(OUT)/osax_payload $(ARCH_FLAG) -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
 	$(CC) ./src/macho_parser.c ../scripts/macho_parser.c ../scripts/scan_sa_core.c -o $(OUT)/macho_parser $(ARCH_FLAG) -DMACHO_PARSER_TESTING -std=c11 -Wall -Wextra -Werror
 	$(CC) -fobjc-arc ../scripts/scan-sa-patterns.m ../scripts/macho_parser.c ../scripts/scan_sa_core.c $(ARCH_FLAG) -framework Foundation -o $(OUT)/scan_sa_patterns -Wall -Wextra -Werror -Wno-unused-function
 	$(CC) -c ../scripts/macho_parser.c -o $(OUT)/macho_parser_production.o $(ARCH_FLAG) -std=c11 -Wall -Wextra -Werror -MMD -MP
@@ -79,7 +79,7 @@ sanitizer-run: core-build
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 TSAN_OPTIONS=halt_on_error=1 $(OUT)/runtime_paths
 
 asan-focused-run: | $(OUT)
-	$(CC) ./src/osax_payload.m -o $(OUT)/osax_payload $(ARCH_FLAG) -DPROFILE=1 -fsanitize=address,undefined -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
+	$(CC) ./src/osax_payload.m -o $(OUT)/osax_payload $(ARCH_FLAG) -DPROFILE=1 -fsanitize=address,undefined -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
 	$(CC) ./src/macho_parser.c ../scripts/macho_parser.c ../scripts/scan_sa_core.c -o $(OUT)/macho_parser $(ARCH_FLAG) -DMACHO_PARSER_TESTING -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(OUT)/osax_payload
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(OUT)/macho_parser
@@ -98,14 +98,14 @@ syntax:
 
 arch-arm64:
 	$(MAKE) CONFIG=arch ARCH=arm64 core-build
-	$(CC) ./src/osax_payload.m -o ./bin/arch-arm64/osax_payload -arch arm64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
+	$(CC) ./src/osax_payload.m -o ./bin/arch-arm64/osax_payload -arch arm64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
 	@lipo -verify_arch arm64 ./bin/arch-arm64/tests
 	@lipo -verify_arch arm64 ./bin/arch-arm64/osax_payload
 	@if [ "$$(uname -m)" = arm64 ]; then ./bin/arch-arm64/tests && ./bin/arch-arm64/osax_payload; else echo "SKIP arm64 execution: host is not arm64"; fi
 
 arch-x86_64:
 	$(MAKE) CONFIG=arch ARCH=x86_64 core-build
-	$(CC) ./src/osax_payload.m -o ./bin/arch-x86_64/osax_payload -arch x86_64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework Foundation -framework SkyLight
+	$(CC) ./src/osax_payload.m -o ./bin/arch-x86_64/osax_payload -arch x86_64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
 	@lipo -verify_arch x86_64 ./bin/arch-x86_64/tests
 	@lipo -verify_arch x86_64 ./bin/arch-x86_64/osax_payload
 	@if [ "$$(uname -m)" = x86_64 ]; then ./bin/arch-x86_64/tests && ./bin/arch-x86_64/osax_payload; elif /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then /usr/bin/arch -x86_64 ./bin/arch-x86_64/tests && /usr/bin/arch -x86_64 ./bin/arch-x86_64/osax_payload; else echo "SKIP x86_64 execution: Rosetta is unavailable"; fi
