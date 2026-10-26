@@ -41,20 +41,13 @@ enum yb_menu_bar_screen_state
 
 enum yb_menu_bar_control_kind
 {
-    YB_MENU_BAR_CONTROL_OPEN_MENU = 0,
-    YB_MENU_BAR_CONTROL_SET_STYLE,
+    YB_MENU_BAR_CONTROL_SET_STYLE = 0,
     YB_MENU_BAR_CONTROL_SET_FILTER
 };
 
 @class YBMenuBarController;
 
-@interface YBMenuBarButton : NSButton {
-@public
-    enum yb_menu_bar_control_kind yb_kind;
-    uint64_t yb_generation;
-    enum menu_bar_style yb_style;
-    enum menu_bar_space_filter yb_filter;
-}
+@interface YBMenuBarButton : NSButton
 @end
 
 @implementation YBMenuBarButton
@@ -65,9 +58,7 @@ enum yb_menu_bar_control_kind
     enum yb_menu_bar_screen_state yb_state;
     uint32_t yb_index;
     size_t yb_display_index;
-    bool yb_pressed;
 }
-- (void)setYBPressed:(bool)pressed;
 @end
 
 @interface YBMenuBarActionTarget : NSObject {
@@ -125,17 +116,12 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     bool _is_tracking_menu;
     bool _is_tearing_down_status_item;
     uint64_t _tracking_generation;
-#if defined(YB_MENU_BAR_TEST)
-    bool _test_has_strip_action_point;
-    NSPoint _test_strip_action_point;
-#endif
 }
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
 - (void)performMenuAction:(id)sender;
-- (void)performStripAction:(id)sender;
-- (void)openMenu:(id)sender;
+- (void)installStripView:(NSView *)strip;
 #if defined(YB_MENU_BAR_TEST)
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
 - (void)testSetMenu:(NSMenu *)menu;
@@ -146,9 +132,10 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (bool)testHasStatusItem;
 - (NSUInteger)testStatusItemCount;
 - (NSUInteger)testStatusButtonCount;
-- (bool)testStatusItemOwnsStripView;
+- (bool)testStatusButtonOwnsStripView;
+- (bool)testStatusItemOwnsMenu;
+- (NSStatusBarButton *)testStatusButton;
 - (NSView *)testStripView;
-- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point;
 - (bool)testIsTrackingMenu;
 - (uint64_t)testTrackingGeneration;
 - (NSView *)testBuildCompactStrip;
@@ -159,8 +146,10 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 @implementation YBMenuBarStripView
 - (NSView *)hitTest:(NSPoint)point
 {
-    NSView *target = [super hitTest:point];
-    return target == self ? nil : target;
+    (void) point;
+    // Keep the rendered cells informational. The enclosing NSStatusBarButton
+    // must own pointer tracking so AppKit presents NSStatusItem.menu natively.
+    return nil;
 }
 
 - (void)drawRect:(NSRect)dirty_rect
@@ -261,18 +250,6 @@ yb_screen_is_dashed(enum yb_menu_bar_screen_state state)
     return state == YB_MENU_BAR_SCREEN_UNKNOWN || state == YB_MENU_BAR_SCREEN_PLACEHOLDER;
 }
 
-static NSColor *
-yb_screen_pressed_color(void)
-{
-    return [NSColor systemOrangeColor];
-}
-
-static CGFloat
-yb_screen_pressed_fill_alpha(void)
-{
-    return yb_increased_contrast() ? 0.34 : 0.22;
-}
-
 static NSFont *
 yb_screen_index_font(void)
 {
@@ -335,19 +312,6 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
     [self setNeedsDisplay:YES];
 }
 
-- (void)highlight:(BOOL)flag
-{
-    [super highlight:flag];
-    [self setNeedsDisplay:YES];
-}
-
-- (void)setYBPressed:(bool)pressed
-{
-    if (yb_pressed == pressed) return;
-    yb_pressed = pressed;
-    [self setNeedsDisplay:YES];
-}
-
 - (void)drawRect:(NSRect)dirty_rect
 {
     (void) dirty_rect;
@@ -363,24 +327,14 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
             [outline setLineDash:pattern count:2 phase:0.0];
         }
 
-        bool pressed = yb_pressed;
-        NSColor *pressed_ink = yb_screen_pressed_color();
-        if (pressed) {
-            [[pressed_ink colorWithAlphaComponent:yb_screen_pressed_fill_alpha()] setFill];
-            [outline fill];
-        }
-
-        NSColor *outline_ink = pressed
-                             ? pressed_ink
-                             : [[NSColor labelColor] colorWithAlphaComponent:yb_screen_alpha(yb_state)];
-        [outline_ink setStroke];
+        [[[NSColor labelColor] colorWithAlphaComponent:yb_screen_alpha(yb_state)] setStroke];
         [outline stroke];
 
         NSString *index = yb_screen_index_text(yb_index);
         if (index) {
             NSDictionary *attributes = @{
                 NSFontAttributeName: yb_screen_index_font(),
-                NSForegroundColorAttributeName: pressed ? pressed_ink : [NSColor labelColor]
+                NSForegroundColorAttributeName: [NSColor labelColor]
             };
             NSSize text_size = [index sizeWithAttributes:attributes];
             NSPoint text_origin = NSMakePoint(NSMidX(screen) - text_size.width * 0.5,
@@ -752,6 +706,8 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         [self endMenuTrackingApplyDeferred:false];
     }
 
+    [_strip_view removeFromSuperview];
+
     if (_status_item) {
         [_status_item setMenu:nil];
         [_status_item setView:nil];
@@ -827,6 +783,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (void)rebuildMenu
 {
     if (_menu) {
+        if (_status_item && [_status_item menu] == _menu) [_status_item setMenu:nil];
         [_menu cancelTracking];
         [_menu setDelegate:nil];
     }
@@ -926,20 +883,15 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [cell setImage:nil];
     [cell setBordered:NO];
     [cell setButtonType:NSButtonTypeMomentaryPushIn];
-    [cell setTarget:self];
-    [cell setAction:@selector(performStripAction:)];
-    cell->yb_kind = YB_MENU_BAR_CONTROL_OPEN_MENU;
-    cell->yb_generation = _snapshot ? _snapshot->generation : 0;
     cell->yb_state = yb_screen_state(display, space);
     cell->yb_index = space ? space->mission_control_index : 0;
     cell->yb_display_index = display ? display_index : 0;
 
     NSString *description = display && space
-                          ? [NSString stringWithFormat:@"%@; read-only; opens yabai Spaces menu",
-                             yb_space_accessibility_title(display, display_index, space)]
-                          : @"Focused display or visible space unresolved; read-only; opens yabai Spaces menu";
+                          ? yb_space_accessibility_title(display, display_index, space)
+                          : @"Focused display or visible space unresolved";
     [cell setToolTip:description];
-    [cell setAccessibilityRole:NSAccessibilityButtonRole];
+    [cell setAccessibilityRole:NSAccessibilityStaticTextRole];
     [cell setAccessibilityLabel:description];
     return cell;
 }
@@ -966,17 +918,51 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return strip;
 }
 
-- (void)renderCompactStatusItem
+- (void)installStripView:(NSView *)strip
 {
+    if (!_status_item || !strip) return;
+
     [_status_item setMenu:nil];
-    [_status_item setView:nil];
+    [_strip_view removeFromSuperview];
     [_strip_view release];
-    _strip_view = [[self buildCompactStrip] retain];
+    _strip_view = [strip retain];
+
+    [_status_item setView:nil];
     [_status_item setLength:NSWidth([_strip_view frame])];
-    [_status_item setView:_strip_view];
+
+    // Host the custom strip inside the standard status button instead of
+    // replacing the status-item view. This preserves native menu anchoring,
+    // tracking, highlighting and keyboard behavior.
+    NSStatusBarButton *button = [_status_item button];
+    if (button) {
+        [button setTitle:@""];
+        [button setImage:nil];
+        [button setToolTip:@"yabai Spaces — Read-only indicator; click to open the Spaces menu."];
+        [button setAccessibilityLabel:@"yabai Spaces"];
+        [button setAccessibilityHelp:@"Read-only Spaces indicator; click to open the Spaces menu."];
+
+        NSRect frame = [_strip_view frame];
+        CGFloat host_height = NSHeight([button bounds]);
+        frame.origin = NSMakePoint(0.0,
+                                   host_height > NSHeight(frame)
+                                 ? floor((host_height - NSHeight(frame)) * 0.5)
+                                 : 0.0);
+        [_strip_view setFrame:frame];
+        [_strip_view setAutoresizingMask:NSViewMinYMargin | NSViewMaxYMargin];
+        [button addSubview:_strip_view];
+    } else {
+        [_status_item setView:_strip_view];
+    }
+
+    [_status_item setMenu:_menu];
 }
 
-- (YBMenuBarButton *)buttonWithTitle:(NSString *)title frame:(NSRect)frame kind:(enum yb_menu_bar_control_kind)kind
+- (void)renderCompactStatusItem
+{
+    [self installStripView:[self buildCompactStrip]];
+}
+
+- (YBMenuBarButton *)buttonWithTitle:(NSString *)title frame:(NSRect)frame
 {
     YBMenuBarButton *button = [[[YBMenuBarButton alloc] initWithFrame:frame] autorelease];
     [button setTitle:title];
@@ -984,10 +970,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [button setBezelStyle:NSBezelStyleTexturedRounded];
     [button setBordered:NO];
     [button setFont:[NSFont menuBarFontOfSize:0.0]];
-    [button setTarget:self];
-    [button setAction:@selector(performStripAction:)];
-    button->yb_kind = kind;
-    button->yb_generation = _snapshot ? _snapshot->generation : 0;
+    [button setAccessibilityRole:NSAccessibilityStaticTextRole];
     return button;
 }
 
@@ -1060,10 +1043,9 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         NSString *title = [NSString stringWithFormat:@"…+%zu", omitted];
         CGFloat width = yb_overflow_width(omitted);
         YBMenuBarButton *overflow = [self buttonWithTitle:title
-                                                    frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)
-                                                     kind:YB_MENU_BAR_CONTROL_OPEN_MENU];
-        [overflow setToolTip:@"Open menu for omitted spaces"];
-        [overflow setAccessibilityLabel:@"Open yabai Spaces menu for omitted spaces"];
+                                                    frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
+        [overflow setToolTip:@"Additional spaces are listed in the yabai Spaces menu"];
+        [overflow setAccessibilityLabel:@"Additional spaces listed in the yabai Spaces menu"];
         [strip addSubview:overflow];
     }
 
@@ -1073,12 +1055,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)renderExpandedStatusItem
 {
-    [_status_item setMenu:nil];
-    [_status_item setView:nil];
-    [_strip_view release];
-    _strip_view = [[self buildExpandedStrip] retain];
-    [_status_item setLength:NSWidth([_strip_view frame])];
-    [_status_item setView:_strip_view];
+    [self installStripView:[self buildExpandedStrip]];
 }
 
 - (void)sendAction:(struct menu_bar_action)action
@@ -1100,9 +1077,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         action.type = MENU_BAR_ACTION_SET_SPACE_FILTER;
         action.data.set_space_filter.filter = filter;
         break;
-    case YB_MENU_BAR_CONTROL_OPEN_MENU:
-        [self openMenu:nil];
-        return;
     default:
         return;
     }
@@ -1118,98 +1092,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
                  generation:target->yb_generation
                       style:target->yb_style
                      filter:target->yb_filter];
-}
-
-- (YBMenuBarButton *)resolvedStripButtonForSender:(id)sender usedLocation:(bool *)used_location
-{
-    if (used_location) *used_location = false;
-    if (!_strip_view) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
-
-    NSPoint strip_point = NSZeroPoint;
-    bool has_point = false;
-#if defined(YB_MENU_BAR_TEST)
-    if (_test_has_strip_action_point) {
-        strip_point = _test_strip_action_point;
-        has_point = true;
-    } else
-#endif
-    {
-        NSEvent *event = [NSApp currentEvent];
-        NSEventType type = event ? [event type] : 0;
-        bool mouse_event = type == NSEventTypeLeftMouseDown ||
-                           type == NSEventTypeLeftMouseUp ||
-                           type == NSEventTypeRightMouseDown ||
-                           type == NSEventTypeRightMouseUp ||
-                           type == NSEventTypeOtherMouseDown ||
-                           type == NSEventTypeOtherMouseUp;
-        NSWindow *window = [_strip_view window];
-        if (mouse_event && window) {
-            NSPoint window_point = [window convertPointFromScreen:[NSEvent mouseLocation]];
-            strip_point = [_strip_view convertPoint:window_point fromView:nil];
-            has_point = true;
-        }
-    }
-
-    if (!has_point) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
-    if (used_location) *used_location = true;
-
-    NSView *hit = [_strip_view hitTest:strip_point];
-    return [hit isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) hit : nil;
-}
-
-- (void)performStripAction:(id)sender
-{
-    if (![sender isKindOfClass:[YBMenuBarButton class]]) return;
-
-    bool used_location = false;
-    YBMenuBarButton *button = [self resolvedStripButtonForSender:sender usedLocation:&used_location];
-    if (!button) {
-        if (used_location) [self openMenu:_strip_view];
-        return;
-    }
-
-    if (button->yb_kind == YB_MENU_BAR_CONTROL_OPEN_MENU) {
-        YBMenuBarScreenCell *pressed_cell = [button isKindOfClass:[YBMenuBarScreenCell class]]
-                                          ? (YBMenuBarScreenCell *) button
-                                          : nil;
-        if (pressed_cell) {
-            for (NSView *view in [[pressed_cell superview] subviews]) {
-                if ([view isKindOfClass:[YBMenuBarScreenCell class]] && view != pressed_cell) {
-                    [(YBMenuBarScreenCell *) view setYBPressed:false];
-                }
-            }
-            [pressed_cell retain];
-            @try {
-                [pressed_cell setYBPressed:true];
-                [pressed_cell displayIfNeeded];
-                [self openMenu:button];
-            } @finally {
-                [pressed_cell setYBPressed:false];
-                [pressed_cell setNeedsDisplay:YES];
-                [pressed_cell release];
-            }
-        } else {
-            [self openMenu:button];
-        }
-        return;
-    }
-
-    [self performActionKind:button->yb_kind
-                 generation:button->yb_generation
-                      style:button->yb_style
-                     filter:button->yb_filter];
-}
-
-- (void)openMenu:(id)sender
-{
-    if (!_status_item || !_menu) return;
-
-    NSView *view = [sender isKindOfClass:[NSView class]] ? (NSView *) sender : _strip_view;
-    if (!view) view = [_status_item button];
-    if (!view) return;
-
-    NSPoint point = NSMakePoint(NSMidX([view bounds]), NSMinY([view bounds]));
-    [_menu popUpMenuPositioningItem:nil atLocation:point inView:view];
 }
 
 - (void)menuWillOpen:(NSMenu *)menu
@@ -1235,10 +1117,13 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 {
     if (_menu == menu) return;
 
+    bool attached = _status_item && [_status_item menu] == _menu;
+    if (attached) [_status_item setMenu:nil];
     [_menu setDelegate:nil];
     [_menu release];
     _menu = [menu retain];
     [_menu setDelegate:self];
+    if (attached) [_status_item setMenu:_menu];
 }
 
 - (void)testRebuildMenu
@@ -1276,25 +1161,25 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return [[_strip_view subviews] count];
 }
 
-- (bool)testStatusItemOwnsStripView
+- (bool)testStatusButtonOwnsStripView
 {
-    return _status_item && [_status_item view] == _strip_view;
+    NSStatusBarButton *button = _status_item ? [_status_item button] : nil;
+    return button && [_status_item view] == nil && [_strip_view superview] == button;
+}
+
+- (bool)testStatusItemOwnsMenu
+{
+    return _status_item && [_status_item menu] == _menu;
+}
+
+- (NSStatusBarButton *)testStatusButton
+{
+    return _status_item ? [_status_item button] : nil;
 }
 
 - (NSView *)testStripView
 {
     return _strip_view;
-}
-
-- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point
-{
-    _test_has_strip_action_point = true;
-    _test_strip_action_point = point;
-    @try {
-        [self performStripAction:sender];
-    } @finally {
-        _test_has_strip_action_point = false;
-    }
 }
 
 - (bool)testIsTrackingMenu
