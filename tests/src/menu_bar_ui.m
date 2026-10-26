@@ -739,7 +739,7 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(NSMinX([active frame]) - NSMaxX([occupied_two frame]) == YB_MENU_BAR_GAP);
 
     for (NSView *view in [expanded subviews]) {
-        TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == view);
+        TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == expanded);
     }
     TEST_CHECK(NSMaxX([visible_other frame]) == NSMinX([occupied_one frame]));
     CGFloat display_gap = (NSMaxX([occupied_one frame]) + NSMinX([occupied_two frame])) * 0.5;
@@ -751,9 +751,9 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(decorations.second_group_alpha > decorations.first_group_alpha + 0.02);
     TEST_CHECK(decorations.separator_alpha > 0.80);
     TEST_CHECK(decorations.separator_alpha > decorations.second_group_alpha * 8.0);
-    TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == nil);
+    TEST_CHECK([expanded hitTest:NSMakePoint(display_gap, NSMidY([expanded bounds]))] == expanded);
     TEST_CHECK([expanded hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
-                                             NSMidY([expanded bounds]))] == nil);
+                                             NSMidY([expanded bounds]))] == expanded);
 
     for (NSView *view in [expanded subviews]) {
         TEST_CHECK([view isKindOfClass:[YBMenuBarScreenCell class]]);
@@ -771,9 +771,9 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(compact_cell->yb_index == 5);
     TEST_CHECK(compact_cell->yb_state == YB_MENU_BAR_SCREEN_ACTIVE);
     TEST_CHECK(NSWidth([compact frame]) == YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH);
-    TEST_CHECK([compact hitTest:NSMakePoint(NSMidX([compact_cell frame]), NSMidY([compact_cell frame]))] == compact_cell);
+    TEST_CHECK([compact hitTest:NSMakePoint(NSMidX([compact_cell frame]), NSMidY([compact_cell frame]))] == compact);
     TEST_CHECK([compact hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
-                                            NSMidY([compact bounds]))] == nil);
+                                            NSMidY([compact bounds]))] == compact);
     TEST_CHECK([compact_cell action] == @selector(showStatusMenu:));
     TEST_CHECK([compact_cell target] == controller);
     TEST_CHECK([[compact_cell accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
@@ -786,7 +786,7 @@ test_expanded_screen_cells_and_compact_option(void)
     YBMenuBarScreenCell *placeholder = [[unresolved subviews] objectAtIndex:0];
     TEST_CHECK(placeholder->yb_state == YB_MENU_BAR_SCREEN_PLACEHOLDER);
     TEST_CHECK([unresolved hitTest:NSMakePoint(NSMidX([placeholder frame]),
-                                               NSMidY([placeholder frame]))] == placeholder);
+                                               NSMidY([placeholder frame]))] == unresolved);
     TEST_CHECK([placeholder action] == @selector(showStatusMenu:));
     TEST_CHECK([placeholder target] == controller);
     TEST_CHECK([[placeholder accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
@@ -820,23 +820,26 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
         YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
         TEST_CHECK([cell action] == (cell == active ? @selector(showStatusMenu:) : @selector(performScreenAction:)));
         TEST_CHECK([cell target] == controller);
-        TEST_CHECK([cell menu] == [controller testMenu]);
-        TEST_CHECK([strip hitTest:NSMakePoint(NSMidX([cell frame]), NSMidY([cell frame]))] == cell);
+        TEST_CHECK([cell menu] == nil);
+        TEST_CHECK([strip hitTest:NSMakePoint(NSMidX([cell frame]), NSMidY([cell frame]))] == strip);
     }
 
-    YBMenuBarScreenCell *direct = [[strip subviews] firstObject];
-    [direct performClick:nil];
-    TEST_CHECK(log.count == 1);
-    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
-    TEST_CHECK(log.generation[0] == 73);
-    TEST_CHECK(log.space_id[0] == 11);
+    uint64_t expected_space_ids[] = { 11, 12, 20 };
+    for (size_t i = 0; i < sizeof(expected_space_ids) / sizeof(expected_space_ids[0]); ++i) {
+        YBMenuBarScreenCell *direct = [[strip subviews] objectAtIndex:i];
+        [(YBMenuBarStripView *) strip activatePoint:NSMakePoint(NSMidX([direct frame]), NSMidY([direct frame]))];
+        TEST_CHECK(log.count == i + 1);
+        TEST_CHECK(log.type[i] == MENU_BAR_ACTION_FOCUS_SPACE);
+        TEST_CHECK(log.generation[i] == 73);
+        TEST_CHECK(log.space_id[i] == expected_space_ids[i]);
+    }
 
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];
     NSPoint gap = NSMakePoint((NSMaxX([before_gap frame]) + NSMinX([after_gap frame])) * 0.5,
                               NSMidY([strip bounds]));
-    TEST_CHECK([strip hitTest:gap] == nil);
-    TEST_CHECK(log.count == 1);
+    TEST_CHECK([strip hitTest:gap] == strip);
+    TEST_CHECK(log.count == 3);
 
     [controller clearStatusItem];
     [controller release];
@@ -1183,7 +1186,7 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     TEST_CHECK([[trailing accessibilityLabel] containsString:@"after"]);
     TEST_CHECK([leading action] == @selector(showStatusMenu:) && [trailing action] == @selector(showStatusMenu:));
     TEST_CHECK([leading target] == controller && [trailing target] == controller);
-    TEST_CHECK([leading menu] == [controller testMenu] && [trailing menu] == [controller testMenu]);
+    TEST_CHECK([leading menu] == nil && [trailing menu] == nil);
     TEST_CHECK([[leading accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
     TEST_CHECK([[trailing accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
     TEST_CHECK(NSMinX([leading frame]) == YB_MENU_BAR_OUTER_INSET);
@@ -1201,8 +1204,8 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     TEST_CHECK(NSMinX([trailing frame]) == expected_x);
     TEST_CHECK(NSWidth([trailing frame]) == yb_overflow_width(omitted_after, false));
     TEST_CHECK(NSMaxX([trailing frame]) + YB_MENU_BAR_OUTER_INSET == NSWidth([expanded frame]));
-    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([leading frame]), NSMidY([leading frame]))] == leading);
-    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([trailing frame]), NSMidY([trailing frame]))] == trailing);
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([leading frame]), NSMidY([leading frame]))] == expanded);
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([trailing frame]), NSMidY([trailing frame]))] == expanded);
 
     bool found_active = false;
     for (size_t i = 0; i < count; ++i) {

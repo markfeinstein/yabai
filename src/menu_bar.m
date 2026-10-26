@@ -78,7 +78,11 @@ enum yb_menu_bar_control_kind
 @implementation YBMenuBarActionTarget
 @end
 
-@interface YBMenuBarStripView : NSView
+@interface YBMenuBarStripView : NSView {
+@public
+    YBMenuBarController *yb_controller;
+}
+- (void)activatePoint:(NSPoint)point;
 @end
 
 static bool yb_increased_contrast(void);
@@ -157,10 +161,36 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 @implementation YBMenuBarStripView
 - (NSView *)hitTest:(NSPoint)point
 {
-    NSView *hit = [super hitTest:point];
-    // Let buttons receive direct clicks while gaps and decoration regions fall
-    // through to the enclosing status button, which opens the menu.
-    return hit == self ? nil : hit;
+    // Route the entire strip through one tracking view. Nested NSButton tracking
+    // inside NSStatusBarButton is unreliable after the status item is rebuilt.
+    return NSPointInRect(point, [self bounds]) ? self : nil;
+}
+
+- (void)activatePoint:(NSPoint)point
+{
+    for (NSView *view in [[self subviews] reverseObjectEnumerator]) {
+        if (!NSPointInRect(point, [view frame])) continue;
+        if ([view isKindOfClass:[YBMenuBarScreenCell class]] &&
+            [(NSButton *) view action] == @selector(performScreenAction:)) {
+            [yb_controller performScreenAction:view];
+        } else {
+            [yb_controller showStatusMenu:self];
+        }
+        return;
+    }
+
+    [yb_controller showStatusMenu:self];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    [self activatePoint:[self convertPoint:[event locationInWindow] fromView:nil]];
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    (void) event;
+    [yb_controller showStatusMenu:self];
 }
 
 - (void)drawRect:(NSRect)dirty_rect
@@ -1008,6 +1038,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     CGFloat cell_width = yb_screen_cell_width(space ? space->mission_control_index : 0);
     CGFloat width = YB_MENU_BAR_OUTER_INSET * 2.0 + cell_width;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
+    strip->yb_controller = self;
 
     YBMenuBarScreenCell *cell = [self screenCellForDisplay:display
                                               displayIndex:display_index
@@ -1027,7 +1058,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [button setMenu:_menu];
     [_strip_view setMenu:_menu];
     for (NSView *view in [_strip_view subviews]) {
-        if ([view isKindOfClass:[NSButton class]]) [(NSButton *) view setMenu:_menu];
+        if ([view isKindOfClass:[NSButton class]]) [(NSButton *) view setMenu:nil];
     }
 }
 
@@ -1145,6 +1176,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                         ? yb_screen_interval_width(entries, total, selection.start, selection.count)
                         : YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, strip_width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
+    strip->yb_controller = self;
 
     CGFloat x = YB_MENU_BAR_OUTER_INSET;
     if (omitted_before) {
@@ -1367,7 +1399,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     NSStatusBarButton *button = [_status_item button];
     if (!button || [button menu] != _menu || [_strip_view menu] != _menu) return false;
     for (NSView *view in [_strip_view subviews]) {
-        if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != _menu) return false;
+        if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != nil) return false;
     }
     return true;
 }
