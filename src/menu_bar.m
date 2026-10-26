@@ -60,6 +60,8 @@ enum yb_menu_bar_control_kind
     enum yb_menu_bar_screen_state yb_state;
     uint32_t yb_index;
     size_t yb_display_index;
+    uint64_t yb_generation;
+    uint64_t yb_space_id;
 }
 @end
 
@@ -114,6 +116,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     NSStatusItem *_status_item;
     NSMenu *_menu;
     NSView *_strip_view;
+    NSPressGestureRecognizer *_long_press_recognizer;
     struct menu_bar_snapshot *_snapshot;
     struct menu_bar_snapshot *_deferred_snapshot;
     bool _is_tracking_menu;
@@ -123,7 +126,12 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
+- (void)showStatusMenu:(id)sender;
+- (void)showStatusMenuForPress:(NSPressGestureRecognizer *)recognizer;
+- (void)performScreenAction:(id)sender;
 - (void)performMenuAction:(id)sender;
+- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter;
+- (void)attachMenuToStatusViews;
 - (void)installStripView:(NSView *)strip;
 #if defined(YB_MENU_BAR_TEST)
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
@@ -136,7 +144,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (NSUInteger)testStatusItemCount;
 - (NSUInteger)testStatusButtonCount;
 - (bool)testStatusButtonOwnsStripView;
-- (bool)testStatusItemOwnsMenu;
+- (bool)testStatusViewsOwnMenu;
 - (NSStatusBarButton *)testStatusButton;
 - (NSView *)testStripView;
 - (bool)testIsTrackingMenu;
@@ -149,10 +157,10 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 @implementation YBMenuBarStripView
 - (NSView *)hitTest:(NSPoint)point
 {
-    (void) point;
-    // Keep the rendered cells informational. The enclosing NSStatusBarButton
-    // must own pointer tracking so AppKit presents NSStatusItem.menu natively.
-    return nil;
+    NSView *hit = [super hitTest:point];
+    // Let buttons receive direct clicks while gaps and decoration regions fall
+    // through to the enclosing status button, which opens the menu.
+    return hit == self ? nil : hit;
 }
 
 - (void)drawRect:(NSRect)dirty_rect
@@ -768,6 +776,13 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [_strip_view removeFromSuperview];
 
     if (_status_item) {
+        NSStatusBarButton *button = [_status_item button];
+        if (_long_press_recognizer) [button removeGestureRecognizer:_long_press_recognizer];
+        [_long_press_recognizer release];
+        _long_press_recognizer = nil;
+        [button setMenu:nil];
+        [button setTarget:nil];
+        [button setAction:NULL];
         [_status_item setMenu:nil];
         [_status_item setView:nil];
         [[NSStatusBar systemStatusBar] removeStatusItem:_status_item];
@@ -963,13 +978,22 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     cell->yb_state = yb_screen_state(display, space);
     cell->yb_index = space ? space->mission_control_index : 0;
     cell->yb_display_index = display ? display_index : 0;
+    cell->yb_generation = _snapshot ? _snapshot->generation : 0;
+    cell->yb_space_id = space ? space->space_id : 0;
+
+    bool can_focus = display && space && !(display->has_focus && space->is_visible);
+    [cell setTarget:self];
+    [cell setAction:can_focus ? @selector(performScreenAction:) : @selector(showStatusMenu:)];
 
     NSString *description = display && space
                           ? yb_space_accessibility_title(display, display_index, space)
                           : @"Focused display or visible space unresolved";
     [cell setToolTip:description];
-    [cell setAccessibilityRole:NSAccessibilityStaticTextRole];
+    [cell setAccessibilityRole:NSAccessibilityButtonRole];
     [cell setAccessibilityLabel:description];
+    [cell setAccessibilityHelp:can_focus
+                              ? @"Click to focus this Space. Right-click or press and hold to open the Spaces menu."
+                              : @"Click, right-click or press and hold to open the Spaces menu."];
     return cell;
 }
 
@@ -995,6 +1019,18 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     return strip;
 }
 
+- (void)attachMenuToStatusViews
+{
+    if (!_status_item) return;
+
+    NSStatusBarButton *button = [_status_item button];
+    [button setMenu:_menu];
+    [_strip_view setMenu:_menu];
+    for (NSView *view in [_strip_view subviews]) {
+        if ([view isKindOfClass:[NSButton class]]) [(NSButton *) view setMenu:_menu];
+    }
+}
+
 - (void)installStripView:(NSView *)strip
 {
     if (!_status_item || !strip) return;
@@ -1014,10 +1050,19 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (button) {
         [button setTitle:@""];
         [button setImage:nil];
-        [button setToolTip:@"yabai Spaces — click to choose a Space."];
+        [button setTarget:self];
+        [button setAction:@selector(showStatusMenu:)];
+        if (!_long_press_recognizer) {
+            _long_press_recognizer = [[NSPressGestureRecognizer alloc] initWithTarget:self
+                                                                               action:@selector(showStatusMenuForPress:)];
+            [_long_press_recognizer setButtonMask:0x1];
+            [_long_press_recognizer setMinimumPressDuration:0.45];
+            [button addGestureRecognizer:_long_press_recognizer];
+        }
+        [button setToolTip:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
-        [button setAccessibilityHelp:@"Open the Spaces menu and choose a Space to focus it."];
+        [button setAccessibilityHelp:@"Click an inactive Space to focus it. Click the active Space, right-click or press and hold to open the menu."];
 
         NSRect frame = [_strip_view frame];
         CGFloat host_height = NSHeight([button bounds]);
@@ -1032,7 +1077,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [_status_item setView:_strip_view];
     }
 
-    [_status_item setMenu:_menu];
+    [self attachMenuToStatusViews];
 }
 
 - (void)renderCompactStatusItem
@@ -1048,7 +1093,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [button setBezelStyle:NSBezelStyleTexturedRounded];
     [button setBordered:NO];
     [button setFont:[NSFont menuBarFontOfSize:0.0]];
-    [button setAccessibilityRole:NSAccessibilityStaticTextRole];
+    [button setAccessibilityRole:NSAccessibilityButtonRole];
     return button;
 }
 
@@ -1060,6 +1105,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                                                         omitted, direction]];
     [overflow setAccessibilityLabel:[NSString stringWithFormat:@"%zu spaces %@ the visible interval",
                                                                omitted, direction]];
+    [overflow setAccessibilityHelp:@"Open the Spaces menu to view omitted Spaces."];
+    [overflow setTarget:self];
+    [overflow setAction:@selector(showStatusMenu:)];
     return overflow;
 }
 
@@ -1166,9 +1214,38 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     }
 }
 
+- (void)showStatusMenu:(id)sender
+{
+    (void) sender;
+    if (!_status_item || !_menu || _is_tracking_menu) return;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [_status_item popUpStatusItemMenu:_menu];
+#pragma clang diagnostic pop
+}
+
+- (void)showStatusMenuForPress:(NSPressGestureRecognizer *)recognizer
+{
+    if ([recognizer state] == NSGestureRecognizerStateBegan) [self showStatusMenu:recognizer];
+}
+
 - (void)sendAction:(struct menu_bar_action)action
 {
     if (_callbacks.action) _callbacks.action(&action, _callbacks.context);
+}
+
+- (void)performScreenAction:(id)sender
+{
+    if (![sender isKindOfClass:[YBMenuBarScreenCell class]]) return;
+
+    YBMenuBarScreenCell *cell = sender;
+    if (!cell->yb_generation || !cell->yb_space_id) return;
+    [self performActionKind:YB_MENU_BAR_CONTROL_FOCUS_SPACE
+                 generation:cell->yb_generation
+                      space:cell->yb_space_id
+                      style:MENU_BAR_STYLE_EXPANDED
+                     filter:MENU_BAR_SPACE_FILTER_OCCUPIED];
 }
 
 - (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter
@@ -1200,11 +1277,16 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 {
     YBMenuBarActionTarget *target = [sender representedObject];
     if (![target isKindOfClass:[YBMenuBarActionTarget class]]) return;
-    [self performActionKind:target->yb_kind
+
+    enum yb_menu_bar_control_kind kind = target->yb_kind;
+    [self performActionKind:kind
                  generation:target->yb_generation
                       space:target->yb_space_id
                       style:target->yb_style
                      filter:target->yb_filter];
+    if (kind == YB_MENU_BAR_CONTROL_FOCUS_SPACE && _is_tracking_menu) {
+        [_menu cancelTrackingWithoutAnimation];
+    }
 }
 
 - (void)menuWillOpen:(NSMenu *)menu
@@ -1230,13 +1312,11 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 {
     if (_menu == menu) return;
 
-    bool attached = _status_item && [_status_item menu] == _menu;
-    if (attached) [_status_item setMenu:nil];
     [_menu setDelegate:nil];
     [_menu release];
     _menu = [menu retain];
     [_menu setDelegate:self];
-    if (attached) [_status_item setMenu:_menu];
+    [self attachMenuToStatusViews];
 }
 
 - (void)testRebuildMenu
@@ -1280,9 +1360,16 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     return button && [_status_item view] == nil && [_strip_view superview] == button;
 }
 
-- (bool)testStatusItemOwnsMenu
+- (bool)testStatusViewsOwnMenu
 {
-    return _status_item && [_status_item menu] == _menu;
+    if (!_status_item || [_status_item menu] != nil) return false;
+
+    NSStatusBarButton *button = [_status_item button];
+    if (!button || [button menu] != _menu || [_strip_view menu] != _menu) return false;
+    for (NSView *view in [_strip_view subviews]) {
+        if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != _menu) return false;
+    }
+    return true;
 }
 
 - (NSStatusBarButton *)testStatusButton

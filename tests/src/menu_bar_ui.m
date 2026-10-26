@@ -182,6 +182,19 @@ menu_bar_ui_overflow_snapshot(uint64_t generation, size_t active_index)
 }
 @end
 
+@interface YBMenuBarAnimationFreeCloseMenu : NSMenu {
+@public
+    NSUInteger yb_cancel_without_animation_count;
+}
+@end
+
+@implementation YBMenuBarAnimationFreeCloseMenu
+- (void)cancelTrackingWithoutAnimation
+{
+    ++yb_cancel_without_animation_count;
+}
+@end
+
 struct menu_bar_ui_bitmap_metrics
 {
     NSUInteger painted_pixel_count;
@@ -627,6 +640,39 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
 }
 
 static bool
+test_space_menu_focus_closes_without_animation(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    YBMenuBarAnimationFreeCloseMenu *menu = [[YBMenuBarAnimationFreeCloseMenu alloc] initWithTitle:@"test"];
+
+    [controller testSetSnapshot:menu_bar_ui_detailed_snapshot(61)];
+    [controller testSetMenu:menu];
+    [controller menuWillOpen:menu];
+
+    YBMenuBarActionTarget *target = yb_action_target(YB_MENU_BAR_CONTROL_FOCUS_SPACE, 61);
+    target->yb_space_id = 84;
+    NSMenuItem *item = yb_menu_item(@"Space 2", @selector(performMenuAction:), controller, target);
+    [controller performMenuAction:item];
+
+    TEST_CHECK(menu->yb_cancel_without_animation_count == 1);
+    TEST_CHECK(log.count == 2);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
+    TEST_CHECK(log.is_tracking[0] == true);
+    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.space_id[1] == 84);
+
+    [controller menuDidClose:menu];
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.is_tracking[2] == false);
+
+    [menu release];
+    [controller release];
+    return true;
+}
+
+static bool
 test_expanded_screen_cells_and_compact_option(void)
 {
     struct menu_bar_settings defaults = {0};
@@ -693,7 +739,7 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(NSMinX([active frame]) - NSMaxX([occupied_two frame]) == YB_MENU_BAR_GAP);
 
     for (NSView *view in [expanded subviews]) {
-        TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == nil);
+        TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([view frame]), NSMidY([view frame]))] == view);
     }
     TEST_CHECK(NSMaxX([visible_other frame]) == NSMinX([occupied_one frame]));
     CGFloat display_gap = (NSMaxX([occupied_one frame]) + NSMinX([occupied_two frame])) * 0.5;
@@ -712,9 +758,9 @@ test_expanded_screen_cells_and_compact_option(void)
     for (NSView *view in [expanded subviews]) {
         TEST_CHECK([view isKindOfClass:[YBMenuBarScreenCell class]]);
         YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
-        TEST_CHECK([cell action] == nil);
-        TEST_CHECK([cell target] == nil);
-        TEST_CHECK([[cell accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+        TEST_CHECK([cell action] == (cell == active ? @selector(showStatusMenu:) : @selector(performScreenAction:)));
+        TEST_CHECK([cell target] == controller);
+        TEST_CHECK([[cell accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
     }
     TEST_CHECK(log.count == 0);
 
@@ -725,11 +771,12 @@ test_expanded_screen_cells_and_compact_option(void)
     TEST_CHECK(compact_cell->yb_index == 5);
     TEST_CHECK(compact_cell->yb_state == YB_MENU_BAR_SCREEN_ACTIVE);
     TEST_CHECK(NSWidth([compact frame]) == YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH);
-    TEST_CHECK([compact hitTest:NSMakePoint(NSMidX([compact_cell frame]), NSMidY([compact_cell frame]))] == nil);
+    TEST_CHECK([compact hitTest:NSMakePoint(NSMidX([compact_cell frame]), NSMidY([compact_cell frame]))] == compact_cell);
     TEST_CHECK([compact hitTest:NSMakePoint(YB_MENU_BAR_OUTER_INSET * 0.5,
                                             NSMidY([compact bounds]))] == nil);
-    TEST_CHECK([compact_cell action] == nil);
-    TEST_CHECK([[compact_cell accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK([compact_cell action] == @selector(showStatusMenu:));
+    TEST_CHECK([compact_cell target] == controller);
+    TEST_CHECK([[compact_cell accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
 
     struct menu_bar_snapshot *unresolved_snapshot = menu_bar_ui_snapshot(71, MENU_BAR_ENABLED);
     unresolved_snapshot->settings.style = MENU_BAR_STYLE_EXPANDED;
@@ -739,9 +786,10 @@ test_expanded_screen_cells_and_compact_option(void)
     YBMenuBarScreenCell *placeholder = [[unresolved subviews] objectAtIndex:0];
     TEST_CHECK(placeholder->yb_state == YB_MENU_BAR_SCREEN_PLACEHOLDER);
     TEST_CHECK([unresolved hitTest:NSMakePoint(NSMidX([placeholder frame]),
-                                               NSMidY([placeholder frame]))] == nil);
-    TEST_CHECK([placeholder action] == nil);
-    TEST_CHECK([[placeholder accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+                                               NSMidY([placeholder frame]))] == placeholder);
+    TEST_CHECK([placeholder action] == @selector(showStatusMenu:));
+    TEST_CHECK([placeholder target] == controller);
+    TEST_CHECK([[placeholder accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
     TEST_CHECK(log.count == 0);
 
     [controller release];
@@ -749,7 +797,7 @@ test_expanded_screen_cells_and_compact_option(void)
 }
 
 static bool
-test_strip_clicks_are_owned_by_native_status_button(void)
+test_strip_cells_route_direct_focus_and_menu_actions(void)
 {
     struct menu_bar_ui_action_log log = {0};
     struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
@@ -766,20 +814,29 @@ test_strip_clicks_are_owned_by_native_status_button(void)
     TEST_CHECK([strip superview] == button);
     TEST_CHECK([[strip subviews] count] == 4);
 
+    YBMenuBarScreenCell *active = [[strip subviews] lastObject];
     for (NSView *view in [strip subviews]) {
         TEST_CHECK([view isKindOfClass:[YBMenuBarScreenCell class]]);
         YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
-        TEST_CHECK([cell action] == nil);
-        TEST_CHECK([cell target] == nil);
-        TEST_CHECK([strip hitTest:NSMakePoint(NSMidX([cell frame]), NSMidY([cell frame]))] == nil);
+        TEST_CHECK([cell action] == (cell == active ? @selector(showStatusMenu:) : @selector(performScreenAction:)));
+        TEST_CHECK([cell target] == controller);
+        TEST_CHECK([cell menu] == [controller testMenu]);
+        TEST_CHECK([strip hitTest:NSMakePoint(NSMidX([cell frame]), NSMidY([cell frame]))] == cell);
     }
+
+    YBMenuBarScreenCell *direct = [[strip subviews] firstObject];
+    [direct performClick:nil];
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.generation[0] == 73);
+    TEST_CHECK(log.space_id[0] == 11);
 
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];
     NSPoint gap = NSMakePoint((NSMaxX([before_gap frame]) + NSMinX([after_gap frame])) * 0.5,
                               NSMidY([strip bounds]));
     TEST_CHECK([strip hitTest:gap] == nil);
-    TEST_CHECK(log.count == 0);
+    TEST_CHECK(log.count == 1);
 
     [controller clearStatusItem];
     [controller release];
@@ -787,7 +844,7 @@ test_strip_clicks_are_owned_by_native_status_button(void)
 }
 
 static bool
-test_expanded_render_uses_native_status_button_menu(void)
+test_expanded_render_uses_direct_actions_and_context_menu(void)
 {
     struct menu_bar_ui_action_log log = {0};
     struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
@@ -802,9 +859,19 @@ test_expanded_render_uses_native_status_button_menu(void)
     TEST_CHECK([controller testStatusItemCount] == 1);
     TEST_CHECK([controller testStatusButtonCount] == 4);
     TEST_CHECK([controller testStatusButtonOwnsStripView]);
-    TEST_CHECK([controller testStatusItemOwnsMenu]);
+    TEST_CHECK([controller testStatusViewsOwnMenu]);
     TEST_CHECK(button != nil);
-    TEST_CHECK([[button toolTip] containsString:@"click to choose a Space"]);
+    TEST_CHECK([button action] == @selector(showStatusMenu:));
+    TEST_CHECK([button target] == controller);
+    bool found_long_press = false;
+    for (NSGestureRecognizer *recognizer in [button gestureRecognizers]) {
+        if (![recognizer isKindOfClass:[NSPressGestureRecognizer class]]) continue;
+        found_long_press = true;
+        TEST_CHECK([(NSPressGestureRecognizer *) recognizer buttonMask] == 0x1);
+        TEST_CHECK([(NSPressGestureRecognizer *) recognizer minimumPressDuration] == 0.45);
+    }
+    TEST_CHECK(found_long_press);
+    TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);
 
     [controller clearStatusItem];
@@ -1114,10 +1181,11 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     TEST_CHECK([[trailing title] isEqualToString:yb_overflow_title(omitted_after, false)]);
     TEST_CHECK([[leading accessibilityLabel] containsString:@"before"]);
     TEST_CHECK([[trailing accessibilityLabel] containsString:@"after"]);
-    TEST_CHECK([leading action] == nil && [trailing action] == nil);
-    TEST_CHECK([leading target] == nil && [trailing target] == nil);
-    TEST_CHECK([[leading accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
-    TEST_CHECK([[trailing accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK([leading action] == @selector(showStatusMenu:) && [trailing action] == @selector(showStatusMenu:));
+    TEST_CHECK([leading target] == controller && [trailing target] == controller);
+    TEST_CHECK([leading menu] == [controller testMenu] && [trailing menu] == [controller testMenu]);
+    TEST_CHECK([[leading accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
+    TEST_CHECK([[trailing accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
     TEST_CHECK(NSMinX([leading frame]) == YB_MENU_BAR_OUTER_INSET);
     TEST_CHECK(NSWidth([leading frame]) == yb_overflow_width(omitted_before, true));
 
@@ -1133,8 +1201,8 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     TEST_CHECK(NSMinX([trailing frame]) == expected_x);
     TEST_CHECK(NSWidth([trailing frame]) == yb_overflow_width(omitted_after, false));
     TEST_CHECK(NSMaxX([trailing frame]) + YB_MENU_BAR_OUTER_INSET == NSWidth([expanded frame]));
-    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([leading frame]), NSMidY([leading frame]))] == nil);
-    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([trailing frame]), NSMidY([trailing frame]))] == nil);
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([leading frame]), NSMidY([leading frame]))] == leading);
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([trailing frame]), NSMidY([trailing frame]))] == trailing);
 
     bool found_active = false;
     for (size_t i = 0; i < count; ++i) {
@@ -1207,9 +1275,10 @@ int main(void)
             { "deferred_snapshot_is_disposed_when_teardown_has_no_menu", test_deferred_snapshot_is_disposed_when_teardown_has_no_menu },
             { "lifecycle_reinit_ignores_stale_delivery", test_lifecycle_reinit_ignores_stale_delivery },
             { "space_rows_emit_focus_actions_and_settings_remain_interactive", test_space_rows_emit_focus_actions_and_settings_remain_interactive },
+            { "space_menu_focus_closes_without_animation", test_space_menu_focus_closes_without_animation },
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
-            { "strip_clicks_are_owned_by_native_status_button", test_strip_clicks_are_owned_by_native_status_button },
-            { "expanded_render_uses_native_status_button_menu", test_expanded_render_uses_native_status_button_menu },
+            { "strip_cells_route_direct_focus_and_menu_actions", test_strip_cells_route_direct_focus_and_menu_actions },
+            { "expanded_render_uses_direct_actions_and_context_menu", test_expanded_render_uses_direct_actions_and_context_menu },
             { "automatic_layout_uses_width_budget_and_accessibility_summary", test_automatic_layout_uses_width_budget_and_accessibility_summary },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
