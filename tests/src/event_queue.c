@@ -818,7 +818,7 @@ static enum declarative_topology_result topology_fixture_capture(
 {
     int capture = ++topology_fixture_capture_count;
     memset(out, 0, sizeof(*out));
-    if (!bounds || bounds->external_bar_mode != g_display_manager.mode ||
+    if (!bounds || bounds->external_bar_mode != (int) g_display_manager.mode ||
         bounds->external_bar_top_padding != g_display_manager.top_padding ||
         bounds->external_bar_bottom_padding != g_display_manager.bottom_padding)
         return DECLARATIVE_TOPOLOGY_INVALID;

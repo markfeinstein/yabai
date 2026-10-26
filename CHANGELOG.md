@@ -11,6 +11,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `single_window_max_width` ceiling, that centers one managed window while
   preserving ordinary multi-window layouts; `zoom-fullscreen` temporarily
   bypasses responsive singleton sizing.
+- Choose the first automatic BSP split from the ordinary full root when a
+  responsive singleton opens a second managed window.
+- Compile the core test translation unit with warnings treated as errors while
+  retaining narrow exceptions for deliberate fixtures and legacy APIs.
 - Recover windows whose accessibility reference is replaced, and adopt focused
   windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
 - Preserve BSP membership and complete-tree geometry across native-fullscreen

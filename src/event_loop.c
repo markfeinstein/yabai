@@ -458,6 +458,7 @@ void event_loop_post_managed_window_correction_hint(AXObserverRef observer, AXUI
 
 static EVENT_HANDLER(MANAGED_WINDOW_CORRECTION_HINT)
 {
+    (void) param1;
     struct managed_window_correction_hint_context *hint = context;
     managed_window_correction_schedule_application_hint(managed_window_correction_hint_application(hint));
     managed_window_correction_hint_context_destroy(hint);

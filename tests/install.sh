@@ -301,7 +301,7 @@ if (
     fail 'relative TMPDIR unexpectedly succeeded'
 fi
 [ ! -e "$MKTEMP_LOG" ] || fail 'relative TMPDIR invoked mktemp'
-grep -F "Temporary directory base 'relative/tmp' is not an absolutepath." "$relative_output" >/dev/null || \
+grep -F "Temporary directory base 'relative/tmp' is not an absolute path." "$relative_output" >/dev/null || \
     fail 'relative TMPDIR did not report absolute-path rejection'
 [ "$(cat "$MKTEMP_ESCAPE/sentinel")" = 'cleanup escape sentinel' ] || \
     fail 'relative TMPDIR cleanup escaped before rejection'

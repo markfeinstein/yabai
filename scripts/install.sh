@@ -4,10 +4,10 @@
 # This script will install the latest pre-built yabai release from GitHub.
 # Depends on curl, shasum, tar, cp, cut, id, mktemp, mv.
 #
-# ARG1:   Directory in which to store the yabai binary; must be an absolutepath.
+# ARG1:   Directory in which to store the yabai binary; must be an absolute path.
 #         Fallback: /usr/local/bin
 #
-# ARG2:   Directory in which to store the yabai man-page; must be an absolutepath.
+# ARG2:   Directory in which to store the yabai man-page; must be an absolute path.
 #         Fallback: /usr/local/share/man/man1
 #
 # Author: Åsmund Vikane
@@ -31,7 +31,7 @@ if [ -z "$MAN_DIR" ]; then
 fi
 
 if [ "${BIN_DIR%%/*}" ]; then
-    echo "Error: Binary target directory '${BIN_DIR}' is not an absolutepath."
+    echo "Error: Binary target directory '${BIN_DIR}' is not an absolute path."
     exit 1
 fi
 
@@ -46,7 +46,7 @@ if [ ! -w "$BIN_DIR" ]; then
 fi
 
 if [ "${MAN_DIR%%/*}" ]; then
-    echo "Error: Man-page target directory '${MAN_DIR}' is not an absolutepath."
+    echo "Error: Man-page target directory '${MAN_DIR}' is not an absolute path."
     exit 1
 fi
 
@@ -83,7 +83,7 @@ COMMIT_FINISHED=0
 case "$TMP_BASE" in
     /*) ;;
     *)
-        echo "Error: Temporary directory base '${TMP_BASE}' is not an absolutepath."
+        echo "Error: Temporary directory base '${TMP_BASE}' is not an absolute path."
         exit 1
         ;;
 esac

@@ -1489,7 +1489,7 @@ TEST_FUNC(window_created_event_ax_ownership_matrix_is_exact,
             rule_test_fail_reservation_allocation_at(1);
         }
 
-        event_loop_dispatch_event((struct event) { .type = WINDOW_CREATED, .context = ref });
+        event_loop_dispatch_event((struct event) { .type = WINDOW_CREATED, .context = (void *) ref });
 
         TEST_CHECK(ax_owner_observe_count, kind == AX_PENDING ? 0 : 1);
         TEST_CHECK(ax_owner_unobserve_count,

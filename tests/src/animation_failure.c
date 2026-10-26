@@ -115,7 +115,7 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
 {
     CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
     CGContextRef bitmap = CGBitmapContextCreate(NULL, 1, 1, 8, 4, color_space,
-                                                 kCGImageAlphaPremultipliedLast);
+                                                 (CGBitmapInfo) kCGImageAlphaPremultipliedLast);
     CGImageRef image = bitmap ? CGBitmapContextCreateImage(bitmap) : NULL;
     TEST_CHECK(image != NULL, true);
 

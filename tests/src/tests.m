@@ -86,7 +86,7 @@ typedef TEST_SIG(function);
 #define TEST_CHECK(r, e) do { \
     __auto_type test_actual = (r); \
     __auto_type test_expected = (e); \
-    if (test_actual != test_expected) { \
+    if (test_actual != (__typeof__(test_actual)) test_expected) { \
         printf("                   \e[1;33m%s\e[m\e[1;31m#%d %s == %s\e[m\n", test_name, __LINE__, #r, #e); \
         result = false; \
     } \
@@ -2998,6 +2998,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(single_window_zoom_bypasses_and_restores_responsive_width) \
     TEST_ENTRY(single_window_width_ratio_reconciles_stack_membership_transitions) \
     TEST_ENTRY(single_window_width_ratio_reconciles_bsp_split_and_collapse) \
+    TEST_ENTRY(single_window_auto_split_uses_ordinary_root_geometry) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
@@ -3451,6 +3452,8 @@ static struct {
 
 int main(int argc, char **argv)
 {
+    (void) argc;
+    (void) argv;
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize animation test mutex\n");
         return EXIT_FAILURE;
