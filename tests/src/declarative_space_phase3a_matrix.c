@@ -2,13 +2,15 @@
 static const enum declarative_config_id declarative_space_test_field_ids[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
     DECLARATIVE_CONFIG_LAYOUT, DECLARATIVE_CONFIG_TOP_PADDING, DECLARATIVE_CONFIG_BOTTOM_PADDING,
     DECLARATIVE_CONFIG_LEFT_PADDING, DECLARATIVE_CONFIG_RIGHT_PADDING, DECLARATIVE_CONFIG_WINDOW_GAP,
-    DECLARATIVE_CONFIG_ACCORDION_PADDING, DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, DECLARATIVE_CONFIG_SPLIT_RATIO,
+    DECLARATIVE_CONFIG_ACCORDION_PADDING, DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH,
+    DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, DECLARATIVE_CONFIG_SPLIT_RATIO,
     DECLARATIVE_CONFIG_SPLIT_TYPE, DECLARATIVE_CONFIG_AUTO_BALANCE
 };
 
 static const uint64_t declarative_space_test_legacy_flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
     VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
-    VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SINGLE_WINDOW_MAX_WIDTH, VIEW_SPLIT_RATIO,
+    VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SINGLE_WINDOW_MAX_WIDTH,
+    VIEW_SINGLE_WINDOW_WIDTH_RATIO, VIEW_SPLIT_RATIO,
     VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
 };
 
@@ -70,6 +72,7 @@ TEST_FUNC(declarative_space_generated_precedence_matrix_covers_all_fields_and_la
                 case DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP: defaults.window_gap = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING: defaults.accordion_padding = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH: defaults.single_window_max_width = values[0]; break;
+                case DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO: defaults.single_window_width_ratio = (float) values[0] / 10000.0f; break;
                 case DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO: defaults.split_ratio = (float) values[0] / 10000.0f; break;
                 case DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE: defaults.split_type = values[0]; break;
                 case DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE: defaults.auto_balance = (uint32_t) values[0]; break;
@@ -81,7 +84,7 @@ TEST_FUNC(declarative_space_generated_precedence_matrix_covers_all_fields_and_la
                     if (layer == 2) declarative_space_test_set_native_value(&policy.settings[id], values[layer]);
                     if (layer == 3) declarative_space_test_set_runtime_cell(&runtime.global[id], DECLARATIVE_SETTING_RUNTIME_GLOBAL, values[layer]);
                     if (layer == 4) declarative_space_test_set_runtime_cell(&view.runtime_ownership[field], DECLARATIVE_SETTING_RUNTIME_SPACE, values[layer]);
-                    if (id == DECLARATIVE_CONFIG_SPLIT_RATIO) {
+                    if (id == DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO || id == DECLARATIVE_CONFIG_SPLIT_RATIO) {
                         if (layer == 1) native.config[id].real = (float) values[layer] / 10000.0f;
                         if (layer == 2) policy.settings[id].real = (float) values[layer] / 10000.0f;
                         if (layer == 3) runtime.global[id].value.real = (float) values[layer] / 10000.0f;
@@ -92,7 +95,8 @@ TEST_FUNC(declarative_space_generated_precedence_matrix_covers_all_fields_and_la
                 TEST_CHECK(declarative_space_resolve_policy(&native, &runtime, &defaults, &target,
                                                              DECLARATIVE_SPACE_PRESERVE_RUNTIME, &effective), true);
                 TEST_CHECK(effective.fields[field].source, declarative_space_test_layer_source(upper));
-                if (field == DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO) {
+                if (field == DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO ||
+                    field == DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO) {
                     TEST_CHECK(effective.fields[field].value.real, (float) values[upper] / 10000.0f);
                 } else {
                     TEST_CHECK(effective.fields[field].value.integer, values[upper]);
@@ -127,6 +131,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
         case DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP: defaults.window_gap = base; break;
         case DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING: defaults.accordion_padding = base; break;
         case DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH: defaults.single_window_max_width = base; break;
+        case DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO: defaults.single_window_width_ratio = (float) base / 10000.0f; break;
         case DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO: defaults.split_ratio = (float) base / 10000.0f; break;
         case DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE: defaults.split_type = base; break;
         case DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE: defaults.auto_balance = (uint32_t) base; break;
@@ -138,7 +143,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
                                                 declarative_space_test_layer_value(field, 3));
         declarative_space_test_set_runtime_cell(&view.runtime_ownership[field], DECLARATIVE_SETTING_RUNTIME_SPACE,
                                                 declarative_space_test_layer_value(field, 4));
-        if (id == DECLARATIVE_CONFIG_SPLIT_RATIO) {
+        if (id == DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO || id == DECLARATIVE_CONFIG_SPLIT_RATIO) {
             native.config[id].real = (float) declarative_space_test_layer_value(field, 1) / 10000.0f;
             owner->settings[id].real = (float) declarative_space_test_layer_value(field, 2) / 10000.0f;
             runtime.global[id].value.real = (float) declarative_space_test_layer_value(field, 3) / 10000.0f;
@@ -156,7 +161,8 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
             int expected = declarative_space_test_layer_value(field, winner);
             if (winner == 2 && field == DECLARATIVE_RUNTIME_SPACE_TOP_PADDING) expected = 2202;
             TEST_CHECK(effective.fields[field].source, declarative_space_test_layer_source(winner));
-            if (field == DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO) {
+            if (field == DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO ||
+                field == DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO) {
                 TEST_CHECK(effective.fields[field].value.real, (float) expected / 10000.0f);
             } else {
                 TEST_CHECK(effective.fields[field].value.integer, expected);
@@ -169,7 +175,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
     }
     view.layout = VIEW_STACK; view.top_padding = 31; view.bottom_padding = 32; view.left_padding = 33;
     view.right_padding = 34; view.window_gap = 35; view.accordion_padding = 36;
-    view.single_window_max_width = 1600; view.split_ratio = 0.6f;
+    view.single_window_max_width = 1600; view.single_window_width_ratio = 0.85f; view.split_ratio = 0.6f;
     view.split_type = SPLIT_Y; view.auto_balance = SPLIT_X;
     target.is_user_space = false;
     struct declarative_space_effective effective;
@@ -183,6 +189,7 @@ TEST_FUNC(declarative_space_generated_full_chain_and_native_overlap_are_fieldwis
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer, 35);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer, 36);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH].value.integer, 1600);
+    TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO].value.real, 0.85f);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.6f);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer, SPLIT_Y);
     TEST_CHECK(effective.fields[DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE].value.u32, SPLIT_X);

@@ -52,6 +52,7 @@
     X(WINDOW_GAP,            COMMAND_CONFIG_WINDOW_GAP,            "window_gap",                    INT,        SPACE,  INT,              WINDOW_GAP) \
     X(ACCORDION_PADDING,      COMMAND_CONFIG_ACCORDION_PADDING,      "accordion_padding",              INT,        SPACE,  NONNEGATIVE_INT,  ACCORDION_PADDING) \
     X(SINGLE_WINDOW_MAX_WIDTH, COMMAND_CONFIG_SINGLE_WINDOW_MAX_WIDTH, "single_window_max_width",       INT,        SPACE,  NONNEGATIVE_INT,  SINGLE_WINDOW_MAX_WIDTH) \
+    X(SINGLE_WINDOW_WIDTH_RATIO, COMMAND_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, "single_window_width_ratio", FLOAT,      SPACE,  POSITIVE_UNIT,    SINGLE_WINDOW_WIDTH_RATIO) \
     X(SPLIT_RATIO,           COMMAND_CONFIG_SPLIT_RATIO,           "split_ratio",                   FLOAT,      SPACE,  SPLIT_RATIO,      SPLIT_RATIO) \
     X(SPLIT_TYPE,            COMMAND_CONFIG_SPLIT_TYPE,            "split_type",                    ENUM,       SPACE,  SPLIT_TYPE,       SPLIT_TYPE) \
     X(AUTO_BALANCE,          COMMAND_CONFIG_AUTO_BALANCE,          "auto_balance",                  ENUM,       SPACE,  AUTO_BALANCE,     AUTO_BALANCE) \

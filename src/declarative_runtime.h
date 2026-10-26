@@ -42,6 +42,7 @@ struct declarative_runtime_operation_ops
     bool (*set_focus_follows_mouse)(void *, int);
     bool (*set_layout_for_all_spaces)(void *, int);
     bool (*set_layout_for_view)(void *, void *, int);
+    void (*set_single_window_width_ratio_for_all_spaces)(void *, float);
     void (*set_split_ratio_for_all_spaces)(void *, float);
     void (*set_split_type_for_all_spaces)(void *, int);
     void (*set_auto_balance_for_all_spaces)(void *, uint32_t);

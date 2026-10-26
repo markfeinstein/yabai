@@ -3,6 +3,7 @@ static struct declarative_space_defaults declarative_space_test_defaults(void)
     return (struct declarative_space_defaults) {
         .layout = VIEW_BSP, .top_padding = 1, .bottom_padding = 2,
         .left_padding = 3, .right_padding = 4, .window_gap = 5,
+        .single_window_width_ratio = 1.0f,
         .split_type = SPLIT_AUTO, .auto_balance = SPLIT_X | SPLIT_Y,
         .split_ratio = 0.5f, .window_placement = CHILD_SECOND,
         .window_insertion_point = INSERT_FOCUSED, .window_zoom_persist = true

@@ -666,6 +666,7 @@ static struct view *declarative_detached_view_create(const struct declarative_to
         view->window_gap = defaults->window_gap;
         view->accordion_padding = defaults->accordion_padding;
         view->single_window_max_width = defaults->single_window_max_width;
+        view->single_window_width_ratio = defaults->single_window_width_ratio;
         view->split_ratio = defaults->split_ratio;
         view->auto_balance = defaults->auto_balance;
         view->split_type = defaults->split_type;
@@ -788,6 +789,8 @@ bool declarative_detached_view_table_prepare(const struct declarative_topology *
     if (!declarative_topology_validate_owned(topology) || !defaults ||
         defaults->layout < VIEW_BSP || defaults->layout > VIEW_ACCORDION_VERTICAL ||
         defaults->accordion_padding < 0 || defaults->single_window_max_width < 0 ||
+        !(defaults->single_window_width_ratio > 0.0f && defaults->single_window_width_ratio <= 1.0f) ||
+        !isfinite(defaults->single_window_width_ratio) ||
         defaults->split_type < SPLIT_Y || defaults->split_type > SPLIT_AUTO) return false;
     if (topology->space_count > (size_t) (INT_MAX - 1) / 2) return false;
     out->view_table = (struct table) {

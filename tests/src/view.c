@@ -94,17 +94,18 @@ TEST_FUNC(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry,
     TEST_CHECK(view_left.w >= 0.0f && view_right.w >= 0.0f, true);
 });
 
-TEST_FUNC(single_window_max_width_centers_only_one_managed_window,
+TEST_FUNC(single_window_width_ratio_scales_and_combines_with_absolute_ceiling,
 {
     const struct area full = { .x = 100.0f, .y = 20.0f, .w = 3000.0f, .h = 1200.0f };
     struct window_node root = {
         .area = full, .window_count = 1, .window_list = { 7 }, .window_order = { 7 }
     };
     struct view view = {
-        .layout = VIEW_BSP, .root = &root, .single_window_max_width = 1600
+        .layout = VIEW_BSP, .root = &root, .single_window_max_width = 1600,
+        .single_window_width_ratio = 1.0f
     };
 
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(root.area.x, 800.0f);
     TEST_CHECK(root.area.y, full.y);
     TEST_CHECK(root.area.w, 1600.0f);
@@ -112,27 +113,48 @@ TEST_FUNC(single_window_max_width_centers_only_one_managed_window,
 
     root.area = full;
     view.single_window_max_width = 4000;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(memcmp(&root.area, &full, sizeof(full)), 0);
 
     root.area = full;
     view.single_window_max_width = 0;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(memcmp(&root.area, &full, sizeof(full)), 0);
 
     root.area = full;
+    view.single_window_width_ratio = 0.8f;
+    view_apply_single_window_width(&view);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
+
+    root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 1440.0f, .h = 900.0f };
+    view_apply_single_window_width(&view);
+    TEST_CHECK(fabsf(root.area.x - 144.0f) < 0.001f, true);
+    TEST_CHECK(fabsf(root.area.w - 1152.0f) < 0.001f, true);
+
+    root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 3440.0f, .h = 1440.0f };
+    view_apply_single_window_width(&view);
+    TEST_CHECK(fabsf(root.area.x - 344.0f) < 0.001f, true);
+    TEST_CHECK(fabsf(root.area.w - 2752.0f) < 0.001f, true);
+
+    root.area = full;
     view.single_window_max_width = 1600;
+    view_apply_single_window_width(&view);
+    TEST_CHECK(root.area.x, 800.0f);
+    TEST_CHECK(root.area.w, 1600.0f);
+
+    root.area = full;
     root.window_count = 2;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(memcmp(&root.area, &full, sizeof(full)), 0);
 
     root.window_count = 1;
     view.layout = VIEW_FLOAT;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(memcmp(&root.area, &full, sizeof(full)), 0);
 
     view.layout = VIEW_ACCORDION_HORIZONTAL;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     view_update_accordion(&view);
     TEST_CHECK(root.window_area[0].x, 800.0f);
     TEST_CHECK(root.window_area[0].w, 1600.0f);
@@ -140,7 +162,7 @@ TEST_FUNC(single_window_max_width_centers_only_one_managed_window,
 
     view.layout = VIEW_BSP;
     root.area.w = NAN;
-    view_apply_single_window_max_width(&view);
+    view_apply_single_window_width(&view);
     TEST_CHECK(isnan(root.area.w), true);
 });
 
@@ -155,15 +177,15 @@ static void single_window_lifecycle_update(struct view *view, void *context)
     struct single_window_lifecycle_context *state = context;
     ++state->updates;
     view->root->area = state->full;
-    view_apply_single_window_max_width(view);
+    view_apply_single_window_width(view);
     if (!window_node_is_leaf(view->root)) window_node_update(view, view->root);
 }
 
-TEST_FUNC(single_window_max_width_reconciles_stack_membership_transitions,
+TEST_FUNC(single_window_width_ratio_reconciles_stack_membership_transitions,
 {
     struct window_node root = {0};
     struct view view = {
-        .layout = VIEW_STACK, .root = &root, .single_window_max_width = 1600
+        .layout = VIEW_STACK, .root = &root, .single_window_width_ratio = 0.8f
     };
     struct single_window_lifecycle_context context = {
         .full = { .x = 100.0f, .y = 20.0f, .w = 3000.0f, .h = 1200.0f }
@@ -179,8 +201,8 @@ TEST_FUNC(single_window_max_width_reconciles_stack_membership_transitions,
     TEST_CHECK(view_commit_window_node_insertion(&view, &first, 0, &plan), &root);
     view_abort_window_node_insertion(&plan);
     TEST_CHECK(context.updates, 1);
-    TEST_CHECK(root.area.x, 800.0f);
-    TEST_CHECK(root.area.w, 1600.0f);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
 
     struct window second = { .id = 2 };
     TEST_CHECK(view_prepare_window_node_insertion(&view, &second, 0, &plan), true);
@@ -191,8 +213,8 @@ TEST_FUNC(single_window_max_width_reconciles_stack_membership_transitions,
 
     TEST_CHECK(view_remove_window_node(&view, &second), &root);
     TEST_CHECK(context.updates, 3);
-    TEST_CHECK(root.area.x, 800.0f);
-    TEST_CHECK(root.area.w, 1600.0f);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
 
     TEST_CHECK(view_remove_window_node(&view, &first), NULL);
     TEST_CHECK(context.updates, 4);
@@ -200,11 +222,11 @@ TEST_FUNC(single_window_max_width_reconciles_stack_membership_transitions,
     view_test_set_platform_ops(NULL);
 });
 
-TEST_FUNC(single_window_max_width_reconciles_bsp_split_and_collapse,
+TEST_FUNC(single_window_width_ratio_reconciles_bsp_split_and_collapse,
 {
     struct window_node root = {0};
     struct view view = {
-        .layout = VIEW_BSP, .root = &root, .single_window_max_width = 1600,
+        .layout = VIEW_BSP, .root = &root, .single_window_width_ratio = 0.8f,
         .split_type = SPLIT_Y, .split_ratio = 0.5f
     };
     struct single_window_lifecycle_context context = {
@@ -220,8 +242,8 @@ TEST_FUNC(single_window_max_width_reconciles_bsp_split_and_collapse,
     TEST_CHECK(view_prepare_window_node_insertion(&view, &first, 0, &plan), true);
     TEST_CHECK(view_commit_window_node_insertion(&view, &first, 0, &plan), &root);
     view_abort_window_node_insertion(&plan);
-    TEST_CHECK(root.area.x, 800.0f);
-    TEST_CHECK(root.area.w, 1600.0f);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
 
     struct window second = { .id = 2 };
     TEST_CHECK(view_prepare_window_node_insertion(&view, &second, 0, &plan), true);
@@ -237,8 +259,8 @@ TEST_FUNC(single_window_max_width_reconciles_bsp_split_and_collapse,
     TEST_CHECK(view_remove_window_node(&view, &second), &root);
     TEST_CHECK(context.updates, 3);
     TEST_CHECK(root.window_count, 1);
-    TEST_CHECK(root.area.x, 800.0f);
-    TEST_CHECK(root.area.w, 1600.0f);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
     view_test_set_platform_ops(NULL);
 });
 

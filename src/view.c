@@ -306,13 +306,29 @@ static bool view_has_single_managed_window(struct view *view)
            window_node_is_leaf(view->root) && view->root->window_count == 1;
 }
 
-void view_apply_single_window_max_width(struct view *view)
+static bool view_single_window_width_enabled(struct view *view)
 {
-    if (!view_has_single_managed_window(view) || view->single_window_max_width <= 0) return;
+    if (!view) return false;
+    bool proportional = view->single_window_width_ratio > 0.0f &&
+                        view->single_window_width_ratio < 1.0f &&
+                        isfinite(view->single_window_width_ratio);
+    return proportional || view->single_window_max_width > 0;
+}
+
+void view_apply_single_window_width(struct view *view)
+{
+    if (!view_has_single_managed_window(view) || !view_single_window_width_enabled(view)) return;
 
     struct area *area = &view->root->area;
     double available = area->w;
-    double requested = view->single_window_max_width;
+    double ratio = view->single_window_width_ratio > 0.0f &&
+                   view->single_window_width_ratio <= 1.0f &&
+                   isfinite(view->single_window_width_ratio)
+                 ? view->single_window_width_ratio : 1.0;
+    double requested = available * ratio;
+    if (view->single_window_max_width > 0) {
+        requested = fmin(requested, (double) view->single_window_max_width);
+    }
     if (!isfinite(available) || available <= requested) return;
 
     double centered_x = (double) area->x + (available - requested) * 0.5;
@@ -323,7 +339,7 @@ void view_apply_single_window_max_width(struct view *view)
 
 static bool view_reconcile_single_window_geometry(struct view *view, bool was_single)
 {
-    if (!view || view->single_window_max_width <= 0) return false;
+    if (!view_single_window_width_enabled(view)) return false;
     if (was_single == view_has_single_managed_window(view)) return false;
     view_update(view);
     return true;
@@ -1328,7 +1344,7 @@ void view_update(struct view *view)
             view->root->area = (struct area) { x, y, fmaxf(0.0f, right - x), fmaxf(0.0f, bottom - y) };
         }
 
-        view_apply_single_window_max_width(view);
+        view_apply_single_window_width(view);
 
         window_node_clear_window_areas(view->root);
         if (view_layout_is_accordion(view->layout)) {
@@ -1382,6 +1398,7 @@ struct view *view_create(uint64_t sid)
         if (!view_check_flag(view, VIEW_WINDOW_GAP))     view->window_gap     = g_space_manager.window_gap;
         if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) view->accordion_padding = g_space_manager.accordion_padding;
         if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MAX_WIDTH)) view->single_window_max_width = g_space_manager.single_window_max_width;
+        if (!view_check_flag(view, VIEW_SINGLE_WINDOW_WIDTH_RATIO)) view->single_window_width_ratio = g_space_manager.single_window_width_ratio;
         if (!view_check_flag(view, VIEW_AUTO_BALANCE))   view->auto_balance   = g_space_manager.auto_balance;
         if (!view_check_flag(view, VIEW_SPLIT_RATIO))    view->split_ratio    = g_space_manager.split_ratio;
         if (!view_check_flag(view, VIEW_SPLIT_TYPE))     view->split_type     = g_space_manager.split_type;

@@ -43,6 +43,7 @@ struct declarative_space_defaults
     int window_gap;
     int accordion_padding;
     int single_window_max_width;
+    float single_window_width_ratio;
     /* Captured global gap-enable state used by detached geometry calculations. */
     bool window_gap_enabled;
     enum window_node_split split_type;
@@ -161,6 +162,7 @@ struct declarative_space_view_before_image
     int window_gap;
     int accordion_padding;
     int single_window_max_width;
+    float single_window_width_ratio;
     float split_ratio;
     enum window_node_split split_type;
     uint32_t auto_balance;

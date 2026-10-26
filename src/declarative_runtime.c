@@ -54,6 +54,10 @@ static void declarative_operation_set_split_ratio(void *manager, float split_rat
 {
     space_manager_set_split_ratio_for_all_spaces(manager, split_ratio);
 }
+static void declarative_operation_set_single_window_width_ratio(void *manager, float single_window_width_ratio)
+{
+    space_manager_set_single_window_width_ratio_for_all_spaces(manager, single_window_width_ratio);
+}
 static void declarative_operation_set_split_type(void *manager, int split_type)
 {
     space_manager_set_split_type_for_all_spaces(manager, split_type);
@@ -100,6 +104,7 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .set_focus_follows_mouse = declarative_operation_set_ffm, \
     .set_layout_for_all_spaces = declarative_operation_set_global_layout, \
     .set_layout_for_view = declarative_operation_set_space_layout, \
+    .set_single_window_width_ratio_for_all_spaces = declarative_operation_set_single_window_width_ratio, \
     .set_split_ratio_for_all_spaces = declarative_operation_set_split_ratio, \
     .set_split_type_for_all_spaces = declarative_operation_set_split_type, \
     .set_auto_balance_for_all_spaces = declarative_operation_set_auto_balance, \
@@ -172,6 +177,7 @@ int declarative_space_field_for_id(enum declarative_config_id id)
     case DECLARATIVE_CONFIG_WINDOW_GAP:     return DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: return DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: return DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: return DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO;
     case DECLARATIVE_CONFIG_SPLIT_RATIO:    return DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO;
     case DECLARATIVE_CONFIG_SPLIT_TYPE:     return DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE;
     case DECLARATIVE_CONFIG_AUTO_BALANCE:   return DECLARATIVE_RUNTIME_SPACE_AUTO_BALANCE;
@@ -225,6 +231,7 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_LAYOUT: return value->enumeration >= VIEW_BSP && value->enumeration <= VIEW_ACCORDION_VERTICAL;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: return value->integer >= 0;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: return value->integer >= 0;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: return value->real > 0.0f && value->real <= 1.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return value->real >= 0.1f && value->real <= 0.9f && isfinite(value->real);
     case DECLARATIVE_CONFIG_SPLIT_TYPE: return value->enumeration == SPLIT_Y || value->enumeration == SPLIT_X || value->enumeration == SPLIT_AUTO;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: return value->u32 <= (SPLIT_X | SPLIT_Y);
@@ -357,6 +364,15 @@ static enum declarative_apply_result declarative_apply_runtime_setting_to_view(e
             declarative_runtime_operation_ops.update_and_flush_space(view);
         } else {
             declarative_runtime_operation_ops.set_global_space_geometry(&g_space_manager, id, value->integer);
+        }
+        break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO:
+        if (view) {
+            view_set_flag(view, VIEW_SINGLE_WINDOW_WIDTH_RATIO);
+            view->single_window_width_ratio = value->real;
+            declarative_runtime_operation_ops.update_and_flush_space(view);
+        } else {
+            declarative_runtime_operation_ops.set_single_window_width_ratio_for_all_spaces(&g_space_manager, value->real);
         }
         break;
     case DECLARATIVE_CONFIG_LAYOUT:

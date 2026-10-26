@@ -203,7 +203,8 @@ Numeric fields are:
 * `insert_feedback_width`: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
 * `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`: mathematical integer `INT_MIN...INT_MAX`;
 * `accordion_padding`: mathematical integer `0...INT_MAX`, default 30 display points;
-* `single_window_max_width`: mathematical integer `0...INT_MAX`, default 0 (disabled);
+* `single_window_max_width`: mathematical integer `0...INT_MAX`, default 0 (no ceiling);
+* `single_window_width_ratio`: finite float greater than zero and at most 1, default 1;
 * `split_ratio`: `0.1...0.9`.
 
 `external_bar` is an exact object. All three fields are required: `mode` is `off`, `main` or `all`, while `top_padding` and `bottom_padding` are mathematical integers in `INT_MIN...INT_MAX`.
@@ -213,7 +214,7 @@ The native `window_shadow`, `window_opacity`, `window_opacity_duration`, `active
 Space policy
 ~~~~~~~~~~~~
 
-Each `spaces` entry is an exact object with required `match` and at least one of `settings` or `scaffold`. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. When present, `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `single_window_max_width`, `split_ratio`, `split_type` and `auto_balance`, using the types and ranges above. A Space `split_ratio` uses the existing `0.1...0.9` range and controls the default ratio for new BSP splits on that Space.
+Each `spaces` entry is an exact object with required `match` and at least one of `settings` or `scaffold`. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. When present, `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `single_window_width_ratio`, `single_window_max_width`, `split_ratio`, `split_type` and `auto_balance`, using the types and ranges above. A Space `split_ratio` uses the existing `0.1...0.9` range and controls the default ratio for new BSP splits on that Space.
 
 Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. A positive index that is not present in the current valid topology is accepted and its policy remains dormant. An index follows its Mission Control slot, so reconciliation automatically applies that policy if the slot later appears; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native-fullscreen Spaces remain floating.
 
@@ -269,11 +270,13 @@ Present primaries compact in declaration order. One fills the Space. With two pr
 Single-window geometry
 ~~~~~~~~~~~~~~~~~~~~~~
 
-`single_window_max_width` is an opt-in managed-layout policy for wide displays. After display, menu bar, Dock, external-bar and ordinary Space padding constraints are applied, a positive value caps the effective root width when the Space contains exactly one managed window. Yabai preserves the full usable height and centers the narrower root horizontally. A value of zero disables the policy, and a value greater than or equal to the usable width has no effect.
+`single_window_width_ratio` and `single_window_max_width` form an opt-in managed-layout policy for wide displays. After display, menu bar, Dock, external-bar and ordinary Space padding constraints are applied, the ratio selects a percentage of the usable root width when the Space contains exactly one managed window. Yabai preserves the full usable height and centers the narrower root horizontally. The ratio is a finite value greater than zero and at most 1; its default of 1 selects 100% width.
+
+Let `A` be the usable width, `r` the effective `single_window_width_ratio`, and `m` the effective `single_window_max_width`. The selected width is `A * r` when `m` is zero, otherwise `min(A * r, m)`. A maximum of zero therefore means no absolute ceiling. A maximum greater than or equal to the proportional width has no effect. The default pair (`r = 1`, `m = 0`) preserves ordinary full-width behavior. Because each side margin is `(A - selected width) / 2`, one ratio produces smaller absolute margins on a laptop and larger absolute margins on an ultrawide.
 
 The trigger counts managed windows, not applications or occupied leaves. A BSP stack, `stack` layout or accordion containing two or more managed windows therefore uses ordinary full-width geometry even though windows may overlap. Floating, unmanaged, system and native-fullscreen windows do not participate. `float` Spaces are unchanged.
 
-Opening a second managed window restores the ordinary root before its final frames are flushed; closing, minimizing, hiding or moving windows so that exactly one remains reapplies the cap. Display and Space changes, startup, reload, mode activation and topology reconciliation recompute the same geometry without rebuilding or reordering an otherwise unchanged tree. The setting follows normal global and per-Space precedence and runtime ownership. Because it is a maximum rather than a ratio, the same value can leave a narrower display unchanged while constraining an ultrawide display.
+Opening a second managed window restores the ordinary root before its final frames are flushed; closing, minimizing, hiding or moving windows so that exactly one remains reapplies the ratio and ceiling. Display and Space changes, startup, reload, mode activation and topology reconciliation recompute the same geometry without rebuilding or reordering an otherwise unchanged tree. Both settings follow normal global and per-Space precedence and runtime ownership.
 
 Accordion geometry
 ~~~~~~~~~~~~~~~~~~
@@ -282,7 +285,7 @@ Accordion geometry
 
 The layout keeps one stable membership order. Every window retains the same-size overlapping frame; changing focus raises that window above its peers without changing geometry or moving it in the membership order. Insertion, removal, minimization, restoration, a cross-Space move or an explicit swap may change membership order.
 
-After display, menu bar, Dock, external-bar and Space padding constraints, let `L` be the finite nonnegative length on the accordion axis, `n` the managed-window count and `p` the nonnegative `accordion_padding` request. With no windows, yabai emits no frames. One window receives the complete effective root area, including any `single_window_max_width` constraint. For two or more windows, the effective exposed strip is `s = min(p, L / n)` and every window receives axis length `W = L - (n - 1) * s`. Window `i` in stable zero-based order starts at `i * s` from the usable-area origin. In ideal real-number geometry, the equal frames overlap, remain inside the usable area, fill the cross axis and place their first and last edges on the constrained boundaries. Stored origins are deterministically rounded and clamped to representable in-bounds coordinates, while every stored frame uses the same rounded axis length; at extreme coordinate magnitudes, adjacent origins may therefore coincide. Over-capacity requests give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid and makes all frames coincide.
+After display, menu bar, Dock, external-bar and Space padding constraints, let `L` be the finite nonnegative length on the accordion axis, `n` the managed-window count and `p` the nonnegative `accordion_padding` request. With no windows, yabai emits no frames. One window receives the complete effective root area, including any singleton width ratio or ceiling. For two or more windows, the effective exposed strip is `s = min(p, L / n)` and every window receives axis length `W = L - (n - 1) * s`. Window `i` in stable zero-based order starts at `i * s` from the usable-area origin. In ideal real-number geometry, the equal frames overlap, remain inside the usable area, fill the cross axis and place their first and last edges on the constrained boundaries. Stored origins are deterministically rounded and clamped to representable in-bounds coordinates, while every stored frame uses the same rounded axis length; at extreme coordinate magnitudes, adjacent origins may therefore coincide. Over-capacity requests give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid and makes all frames coincide.
 
 Focus, inventory, delayed create, destroy, minimize, restore, Space move, display change, topology reconciliation and Mission Control exit paths recompute the same geometry. A successful JSONC reload may add, change or remove the layout and `accordion_padding` under the normal transaction and precedence rules. Preparation failure preserves the installed generation, roots, managed-window table, ownership and effective layout.
 
@@ -562,7 +565,10 @@ Global Settings
     Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value.
 
 *single_window_max_width* ['<nonnegative integer number>']::
-    Maximum width in display points for a Space containing exactly one managed window. The window keeps the full usable height and is centered horizontally. Zero disables the policy. (default: 0)
+    Optional absolute ceiling in display points for a Space containing exactly one managed window. Zero disables the ceiling. The proportional setting still applies. (default: 0)
+
+*single_window_width_ratio* ['<POSITIVE_UNIT_SEL>']::
+    Proportion of usable width assigned to a Space containing exactly one managed window. The window keeps the full usable height and is centered horizontally. A value of 1 preserves full width unless an absolute ceiling is configured. (default: 1)
 
 *native_edge_resize* ['<BOOL_SEL>']::
     Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application's mouse events. Only a focused, visible, resizable, unzoomed single-window BSP leaf can start a native resize; stacked leaves are not supported. Auto-balance and managed-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
@@ -610,7 +616,10 @@ Space Settings
     Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on `bsp`, `stack` or `float` geometry.
 
 *single_window_max_width* ['<nonnegative integer number>']::
-    Maximum centered width in display points when the selected Space contains exactly one managed window. Zero disables the policy. Values greater than or equal to the usable width have no effect. Multiple managed windows retain ordinary layout geometry.
+    Optional absolute ceiling in display points when the selected Space contains exactly one managed window. Zero disables the ceiling. Multiple managed windows retain ordinary layout geometry.
+
+*single_window_width_ratio* ['<POSITIVE_UNIT_SEL>']::
+    Proportion of usable width assigned when the selected Space contains exactly one managed window. The result is centered horizontally and then limited by `single_window_max_width` when that ceiling is positive. A value of 1 preserves full proportional width.
 
 *split_ratio* ['<SPLIT_RATIO_SEL>']::
     Set the default ratio for new BSP splits on the selected Space. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.

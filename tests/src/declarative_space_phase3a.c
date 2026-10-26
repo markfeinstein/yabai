@@ -7,7 +7,7 @@ TEST_FUNC(declarative_space_before_image_zero_topology_and_window_identity_guard
 {
     struct view view = { .layout = VIEW_BSP, .top_padding = 1, .bottom_padding = 2, .left_padding = 3,
                          .right_padding = 4, .window_gap = 5, .accordion_padding = 30,
-                         .single_window_max_width = 1600, .split_type = SPLIT_AUTO,
+                         .single_window_max_width = 1600, .single_window_width_ratio = 0.85f, .split_type = SPLIT_AUTO,
                          .auto_balance = SPLIT_X, .insertion_point = 17, .flags = VIEW_LAYOUT | VIEW_ENABLE_GAP };
     struct declarative_space_view_before_image image;
     memset(&image, 0xA5, sizeof(image)); /* Padding is deliberately poisoned and semantically irrelevant. */
@@ -20,6 +20,7 @@ TEST_FUNC(declarative_space_before_image_zero_topology_and_window_identity_guard
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, window_gap, 15);
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, accordion_padding, 31);
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, single_window_max_width, 1700);
+    DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, single_window_width_ratio, 0.75f);
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, split_type, SPLIT_X);
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, auto_balance, SPLIT_Y);
     DECLARATIVE_SPACE_MUTATE_BEFORE(view, image, insertion_point, 18);

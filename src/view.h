@@ -254,6 +254,7 @@ enum view_flag
     VIEW_ACCORDION_PADDING = 0x1000,
     VIEW_SPLIT_RATIO       = 0x2000,
     VIEW_SINGLE_WINDOW_MAX_WIDTH = 0x4000,
+    VIEW_SINGLE_WINDOW_WIDTH_RATIO = 0x8000,
 };
 
 struct view
@@ -272,6 +273,7 @@ struct view
     int window_gap;
     int accordion_padding;
     int single_window_max_width;
+    float single_window_width_ratio;
     float split_ratio;
     uint32_t auto_balance;
     uint64_t scaffold_fingerprint;
@@ -336,7 +338,7 @@ bool view_is_dirty(struct view *view);
 bool view_space_is_visible(uint64_t sid);
 void view_flush(struct view *view);
 void view_update(struct view *view);
-void view_apply_single_window_max_width(struct view *view);
+void view_apply_single_window_width(struct view *view);
 #ifdef TESTS
 struct view_test_platform_ops
 {

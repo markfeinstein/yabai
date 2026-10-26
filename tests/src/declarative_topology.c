@@ -295,7 +295,8 @@ TEST_FUNC(declarative_topology_uuidless_live_shape_has_private_stable_identity,
     TEST_CHECK(declarative_space_identity_valid(&topology.spaces[1].identity), true);
 
     struct declarative_space_defaults defaults = {
-        .layout = VIEW_BSP, .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
+        .layout = VIEW_BSP, .single_window_width_ratio = 1.0f,
+        .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
         .window_placement = CHILD_SECOND, .window_insertion_point = INSERT_FOCUSED,
         .window_zoom_persist = true
     };
@@ -949,7 +950,7 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     struct declarative_space_defaults defaults = {
         .layout = VIEW_BSP, .top_padding = 10, .bottom_padding = 20,
         .left_padding = 30, .right_padding = 40, .window_gap = 8,
-        .single_window_max_width = 1600,
+        .single_window_max_width = 1600, .single_window_width_ratio = 0.85f,
         .split_type = SPLIT_X, .auto_balance = SPLIT_Y,
         .split_ratio = 0.5f, .window_placement = CHILD_SECOND,
         .window_insertion_point = INSERT_FOCUSED, .window_zoom_persist = true
@@ -964,6 +965,7 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     TEST_CHECK(table_find(&table.view_table, &lookup_sid) == table.views[1], true);
     TEST_CHECK(table.views[0]->layout, VIEW_BSP);
     TEST_CHECK(table.views[0]->single_window_max_width, 1600);
+    TEST_CHECK(table.views[0]->single_window_width_ratio, 0.85f);
     TEST_CHECK(table.views[0]->root->area.x, 30.0f);
     TEST_CHECK(table.views[0]->root->area.y, 10.0f);
     TEST_CHECK(table.views[0]->root->area.w, 930.0f);
@@ -1096,7 +1098,8 @@ TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transa
     struct declarative_topology_startup_test_context test = {
         .state = &state,
         .defaults = {
-            .layout = VIEW_FLOAT, .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
+            .layout = VIEW_FLOAT, .single_window_width_ratio = 1.0f,
+            .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
             .window_placement = CHILD_SECOND, .window_insertion_point = INSERT_FOCUSED,
             .window_zoom_persist = true
         },
@@ -1181,7 +1184,8 @@ TEST_FUNC(declarative_topology_allocation_failures_leave_no_owned_state,
     struct declarative_topology_capture_ops startup_baseline_ops = declarative_topology_test_ops(&startup_baseline_fixture);
     struct declarative_startup_state startup_baseline = { .present = true };
     struct declarative_space_defaults defaults = {
-        .layout = VIEW_BSP, .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
+        .layout = VIEW_BSP, .single_window_width_ratio = 1.0f,
+        .split_type = SPLIT_AUTO, .split_ratio = 0.5f,
         .window_placement = CHILD_SECOND, .window_insertion_point = INSERT_FOCUSED,
         .window_zoom_persist = true
     };

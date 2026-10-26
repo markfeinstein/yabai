@@ -1931,6 +1931,23 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_WIDTH_RATIO)) {
+            struct token_value value = token_to_value(get_token(&message));
+            float real;
+            if (value.type == TOKEN_TYPE_INVALID) {
+                float ratio = sel_sid ? selected_view->single_window_width_ratio : g_space_manager.single_window_width_ratio;
+                fprintf(rsp, "%.4f\n", ratio);
+            } else if (token_value_to_float(value, &real) && real > 0.0f && real <= 1.0f) {
+                struct declarative_value setting = { .present = true, .real = real };
+                if (sel_sid) {
+                    apply_scoped_setting(rsp, selected_view, sel_sid,
+                                         DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &setting, false);
+                } else {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &setting, 0);
+                }
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
         } else if (token_equals(command, COMMAND_CONFIG_LAYOUT)) {
             struct token value = get_token(&message);
             if (sel_sid) {
