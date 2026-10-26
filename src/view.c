@@ -321,6 +321,7 @@ void view_apply_single_window_width(struct view *view)
 
     struct area *area = &view->root->area;
     double available = area->w;
+    if (!isfinite(available) || available <= 0.0) return;
     double ratio = view->single_window_width_ratio > 0.0f &&
                    view->single_window_width_ratio <= 1.0f &&
                    isfinite(view->single_window_width_ratio)
@@ -329,7 +330,11 @@ void view_apply_single_window_width(struct view *view)
     if (view->single_window_max_width > 0) {
         requested = fmin(requested, (double) view->single_window_max_width);
     }
-    if (!isfinite(available) || available <= requested) return;
+    if (view->single_window_min_width > 0) {
+        requested = fmax(requested, (double) view->single_window_min_width);
+    }
+    requested = fmin(requested, available);
+    if (available <= requested) return;
 
     double centered_x = (double) area->x + (available - requested) * 0.5;
     if (!isfinite(centered_x) || centered_x > FLT_MAX || centered_x < -FLT_MAX) return;
@@ -1398,6 +1403,7 @@ struct view *view_create(uint64_t sid)
         if (!view_check_flag(view, VIEW_WINDOW_GAP))     view->window_gap     = g_space_manager.window_gap;
         if (!view_check_flag(view, VIEW_ACCORDION_PADDING)) view->accordion_padding = g_space_manager.accordion_padding;
         if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MAX_WIDTH)) view->single_window_max_width = g_space_manager.single_window_max_width;
+        if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MIN_WIDTH)) view->single_window_min_width = g_space_manager.single_window_min_width;
         if (!view_check_flag(view, VIEW_SINGLE_WINDOW_WIDTH_RATIO)) view->single_window_width_ratio = g_space_manager.single_window_width_ratio;
         if (!view_check_flag(view, VIEW_AUTO_BALANCE))   view->auto_balance   = g_space_manager.auto_balance;
         if (!view_check_flag(view, VIEW_SPLIT_RATIO))    view->split_ratio    = g_space_manager.split_ratio;

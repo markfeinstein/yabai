@@ -1931,6 +1931,26 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_MIN_WIDTH)) {
+            struct token_value value = token_to_value(get_token(&message));
+            if (sel_sid) {
+                struct view *view = selected_view;
+                if (value.type == TOKEN_TYPE_INVALID) {
+                    fprintf(rsp, "%d\n", view->single_window_min_width);
+                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
+                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+                }
+            } else {
+                if (value.type == TOKEN_TYPE_INVALID) {
+                    fprintf(rsp, "%d\n", g_space_manager.single_window_min_width);
+                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
         } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_WIDTH_RATIO)) {
             struct token_value value = token_to_value(get_token(&message));
             float real;

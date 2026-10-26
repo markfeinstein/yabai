@@ -16,8 +16,9 @@
     // Give one managed window 85% of the usable width. This creates smaller
     // absolute side margins on a laptop and larger margins on an ultrawide.
     "single_window_width_ratio": 0.85,
-    // Optional hard ceiling in display points; zero leaves the ratio uncapped.
-    "single_window_max_width": 0,
+    // Keep lower-resolution windows usable, but cap very wide displays.
+    "single_window_min_width": 1200,
+    "single_window_max_width": 1800,
     "split_ratio": 0.5,
     "split_type": "auto",
     "auto_balance": "off",

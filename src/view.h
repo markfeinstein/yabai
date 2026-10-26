@@ -255,6 +255,7 @@ enum view_flag
     VIEW_SPLIT_RATIO       = 0x2000,
     VIEW_SINGLE_WINDOW_MAX_WIDTH = 0x4000,
     VIEW_SINGLE_WINDOW_WIDTH_RATIO = 0x8000,
+    VIEW_SINGLE_WINDOW_MIN_WIDTH = 0x10000,
 };
 
 struct view
@@ -273,6 +274,7 @@ struct view
     int window_gap;
     int accordion_padding;
     int single_window_max_width;
+    int single_window_min_width;
     float single_window_width_ratio;
     float split_ratio;
     uint32_t auto_balance;

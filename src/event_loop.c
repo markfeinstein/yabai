@@ -3834,6 +3834,7 @@ static struct view *event_loop_topology_create_view(const struct declarative_top
     view->window_gap = g_space_manager.window_gap;
     view->accordion_padding = g_space_manager.accordion_padding;
     view->single_window_max_width = g_space_manager.single_window_max_width;
+    view->single_window_min_width = g_space_manager.single_window_min_width;
     view->single_window_width_ratio = g_space_manager.single_window_width_ratio;
     view->split_ratio = g_space_manager.split_ratio;
     view->auto_balance = g_space_manager.auto_balance;

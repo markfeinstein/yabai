@@ -294,6 +294,7 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_WINDOW_GAP: sm->window_gap = value->integer; break;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: sm->accordion_padding = value->integer; break;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: sm->single_window_max_width = value->integer; break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH: sm->single_window_min_width = value->integer; break;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: sm->single_window_width_ratio = value->real; break;
     case DECLARATIVE_CONFIG_LAYOUT: sm->layout = value->enumeration; break;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: sm->split_ratio = value->real; break;
@@ -355,6 +356,7 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, DECLARATIVE_CONFIG_WINDOW_GAP, window_gap);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, DECLARATIVE_CONFIG_ACCORDION_PADDING, accordion_padding);
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH, DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, single_window_max_width);
+        APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH, DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, single_window_min_width);
         view->single_window_width_ratio = effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO].value.real;
         view->split_ratio = effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
         APPLY_SPACE(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, DECLARATIVE_CONFIG_SPLIT_TYPE, split_type);
@@ -708,6 +710,7 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     g_space_manager.window_gap = bundle->space_manager.window_gap;
     g_space_manager.accordion_padding = bundle->space_manager.accordion_padding;
     g_space_manager.single_window_max_width = bundle->space_manager.single_window_max_width;
+    g_space_manager.single_window_min_width = bundle->space_manager.single_window_min_width;
     g_space_manager.single_window_width_ratio = bundle->space_manager.single_window_width_ratio;
     g_space_manager.split_ratio = bundle->space_manager.split_ratio;
     g_space_manager.split_type = bundle->space_manager.split_type;

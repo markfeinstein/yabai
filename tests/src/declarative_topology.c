@@ -950,7 +950,8 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     struct declarative_space_defaults defaults = {
         .layout = VIEW_BSP, .top_padding = 10, .bottom_padding = 20,
         .left_padding = 30, .right_padding = 40, .window_gap = 8,
-        .single_window_max_width = 1600, .single_window_width_ratio = 0.85f,
+        .single_window_max_width = 1600, .single_window_min_width = 1200,
+        .single_window_width_ratio = 0.85f,
         .split_type = SPLIT_X, .auto_balance = SPLIT_Y,
         .split_ratio = 0.5f, .window_placement = CHILD_SECOND,
         .window_insertion_point = INSERT_FOCUSED, .window_zoom_persist = true
@@ -965,6 +966,7 @@ TEST_FUNC(declarative_detached_views_use_only_capture_identity_bounds_kind_and_d
     TEST_CHECK(table_find(&table.view_table, &lookup_sid) == table.views[1], true);
     TEST_CHECK(table.views[0]->layout, VIEW_BSP);
     TEST_CHECK(table.views[0]->single_window_max_width, 1600);
+    TEST_CHECK(table.views[0]->single_window_min_width, 1200);
     TEST_CHECK(table.views[0]->single_window_width_ratio, 0.85f);
     TEST_CHECK(table.views[0]->root->area.x, 30.0f);
     TEST_CHECK(table.views[0]->root->area.y, 10.0f);

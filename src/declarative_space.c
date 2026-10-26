@@ -80,7 +80,7 @@ static uint64_t declarative_space_legacy_flag(enum declarative_runtime_space_fie
     static const uint64_t flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
         VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SINGLE_WINDOW_MAX_WIDTH,
-        VIEW_SINGLE_WINDOW_WIDTH_RATIO, VIEW_SPLIT_RATIO,
+        VIEW_SINGLE_WINDOW_MIN_WIDTH, VIEW_SINGLE_WINDOW_WIDTH_RATIO, VIEW_SPLIT_RATIO,
         VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
     return flags[field];
@@ -144,6 +144,7 @@ static void declarative_space_set_current_non_user(const struct view *view,
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH, single_window_max_width, integer);
+    SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH, single_window_min_width, integer);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO, single_window_width_ratio, real);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
     SET_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
@@ -177,6 +178,7 @@ bool declarative_space_resolve_effective_policy(const struct declarative_config_
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH, single_window_max_width, integer);
+    SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH, single_window_min_width, integer);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO, single_window_width_ratio, real);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
     SET_DEFAULT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
@@ -706,6 +708,7 @@ void declarative_space_capture_view_before(const struct view *view,
         .window_gap = view->window_gap,
         .accordion_padding = view->accordion_padding,
         .single_window_max_width = view->single_window_max_width,
+        .single_window_min_width = view->single_window_min_width,
         .single_window_width_ratio = view->single_window_width_ratio,
         .split_ratio = view->split_ratio,
         .split_type = view->split_type,
@@ -732,6 +735,7 @@ bool declarative_space_view_before_matches(const struct view *view,
            view->window_gap == image->window_gap &&
            view->accordion_padding == image->accordion_padding &&
            view->single_window_max_width == image->single_window_max_width &&
+           view->single_window_min_width == image->single_window_min_width &&
            view->single_window_width_ratio == image->single_window_width_ratio &&
            view->split_ratio == image->split_ratio &&
            view->split_type == image->split_type &&
@@ -2133,6 +2137,7 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
     if ((mode != DECLARATIVE_SPACE_PRESERVE_RUNTIME && mode != DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD) ||
         !defaults || defaults->layout < VIEW_BSP || defaults->layout > VIEW_ACCORDION_VERTICAL ||
         defaults->accordion_padding < 0 || defaults->single_window_max_width < 0 ||
+        defaults->single_window_min_width < 0 ||
         !(defaults->single_window_width_ratio > 0.0f && defaults->single_window_width_ratio <= 1.0f) ||
         !isfinite(defaults->single_window_width_ratio) ||
         defaults->split_type < SPLIT_NONE || defaults->split_type > SPLIT_AUTO ||
@@ -2197,6 +2202,7 @@ static bool declarative_space_prepare_effective(const struct declarative_space_t
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP, window_gap, integer);
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING, accordion_padding, integer);
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH, single_window_max_width, integer);
+            PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH, single_window_min_width, integer);
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO, single_window_width_ratio, real);
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO, split_ratio, real);
             PRESERVE_CURRENT(DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE, split_type, integer);
@@ -2489,6 +2495,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             view->window_gap != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer ||
             view->accordion_padding != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer ||
             view->single_window_max_width != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH].value.integer ||
+            view->single_window_min_width != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH].value.integer ||
             view->single_window_width_ratio != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO].value.real ||
             (target->final_scaffold_fingerprint &&
              view->split_ratio != target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real);
@@ -2502,6 +2509,7 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
         view->window_gap = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].value.integer;
         view->accordion_padding = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_ACCORDION_PADDING].value.integer;
         view->single_window_max_width = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MAX_WIDTH].value.integer;
+        view->single_window_min_width = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_MIN_WIDTH].value.integer;
         view->single_window_width_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SINGLE_WINDOW_WIDTH_RATIO].value.real;
         view->split_ratio = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real;
         view->split_type = target->effective.fields[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].value.integer;

@@ -127,10 +127,21 @@ TEST_FUNC(single_window_width_ratio_scales_and_combines_with_absolute_ceiling,
     TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
     TEST_CHECK(root.area.w, 2400.0f);
 
+    view.single_window_min_width = 1200;
+    root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 1280.0f, .h = 800.0f };
+    view_apply_single_window_width(&view);
+    TEST_CHECK(root.area.x, 40.0f);
+    TEST_CHECK(root.area.w, 1200.0f);
+
+    root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 1024.0f, .h = 768.0f };
+    view_apply_single_window_width(&view);
+    TEST_CHECK(root.area.x, 0.0f);
+    TEST_CHECK(root.area.w, 1024.0f);
+
     root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 1440.0f, .h = 900.0f };
     view_apply_single_window_width(&view);
-    TEST_CHECK(fabsf(root.area.x - 144.0f) < 0.001f, true);
-    TEST_CHECK(fabsf(root.area.w - 1152.0f) < 0.001f, true);
+    TEST_CHECK(root.area.x, 120.0f);
+    TEST_CHECK(root.area.w, 1200.0f);
 
     root.area = (struct area) { .x = 0.0f, .y = 20.0f, .w = 3440.0f, .h = 1440.0f };
     view_apply_single_window_width(&view);
@@ -142,6 +153,13 @@ TEST_FUNC(single_window_width_ratio_scales_and_combines_with_absolute_ceiling,
     view_apply_single_window_width(&view);
     TEST_CHECK(root.area.x, 800.0f);
     TEST_CHECK(root.area.w, 1600.0f);
+
+    root.area = full;
+    view.single_window_min_width = 2000;
+    view_apply_single_window_width(&view);
+    TEST_CHECK(root.area.x, 600.0f);
+    TEST_CHECK(root.area.w, 2000.0f);
+    view.single_window_min_width = 1200;
 
     root.area = full;
     root.window_count = 2;

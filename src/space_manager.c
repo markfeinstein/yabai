@@ -464,6 +464,7 @@ static bool space_manager_apply_layout_transaction(struct space_manager *sm, str
         .left_padding = sm->left_padding, .right_padding = sm->right_padding,
         .window_gap = sm->window_gap, .accordion_padding = sm->accordion_padding,
         .single_window_max_width = sm->single_window_max_width,
+        .single_window_min_width = sm->single_window_min_width,
         .single_window_width_ratio = sm->single_window_width_ratio > 0.0f && sm->single_window_width_ratio <= 1.0f
                                    ? sm->single_window_width_ratio : 1.0f,
         .window_gap_enabled = true, .split_type = sm->split_type,
@@ -595,6 +596,18 @@ void space_manager_set_single_window_max_width_for_all_spaces(struct space_manag
     table_for (struct view *view, sm->view, {
         if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MAX_WIDTH)) {
             view->single_window_max_width = single_window_max_width;
+            view_update(view);
+            view_flush(view);
+        }
+    })
+}
+
+void space_manager_set_single_window_min_width_for_all_spaces(struct space_manager *sm, int single_window_min_width)
+{
+    sm->single_window_min_width = single_window_min_width;
+    table_for (struct view *view, sm->view, {
+        if (!view_check_flag(view, VIEW_SINGLE_WINDOW_MIN_WIDTH)) {
+            view->single_window_min_width = single_window_min_width;
             view_update(view);
             view_flush(view);
         }
@@ -1668,6 +1681,7 @@ bool space_manager_begin(struct space_manager *sm)
     sm->layout = VIEW_FLOAT;
     sm->accordion_padding = 30;
     sm->single_window_max_width = 0;
+    sm->single_window_min_width = 0;
     sm->single_window_width_ratio = 1.0f;
     sm->split_ratio = 0.5f;
     sm->auto_balance = SPLIT_NONE;

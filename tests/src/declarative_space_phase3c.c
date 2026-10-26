@@ -253,6 +253,7 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_TABLE_HASH, PHASE3C_TABLE_CMP,
     PHASE3C_SCALAR_LAYOUT, PHASE3C_SCALAR_TOP, PHASE3C_SCALAR_BOTTOM, PHASE3C_SCALAR_LEFT,
     PHASE3C_SCALAR_RIGHT, PHASE3C_SCALAR_GAP, PHASE3C_SCALAR_SINGLE_WINDOW_MAX_WIDTH,
+    PHASE3C_SCALAR_SINGLE_WINDOW_MIN_WIDTH,
     PHASE3C_SCALAR_SINGLE_WINDOW_WIDTH_RATIO,
     PHASE3C_SCALAR_RATIO, PHASE3C_SCALAR_SPLIT,
     PHASE3C_SCALAR_BALANCE,
@@ -273,13 +274,14 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_STALE_CASE_COUNT
 };
 
-_Static_assert(PHASE3C_STALE_CASE_COUNT == 127, "Phase 3C stale matrix must contain exactly 127 cases");
+_Static_assert(PHASE3C_STALE_CASE_COUNT == 131, "Phase 3C stale matrix must contain exactly 131 cases");
 
 TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
 {
     static const uint64_t legacy_flags[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT] = {
         VIEW_LAYOUT, VIEW_TOP_PADDING, VIEW_BOTTOM_PADDING, VIEW_LEFT_PADDING,
         VIEW_RIGHT_PADDING, VIEW_WINDOW_GAP, VIEW_ACCORDION_PADDING, VIEW_SINGLE_WINDOW_MAX_WIDTH,
+        VIEW_SINGLE_WINDOW_MIN_WIDTH,
         VIEW_SINGLE_WINDOW_WIDTH_RATIO, VIEW_SPLIT_RATIO,
         VIEW_SPLIT_TYPE, VIEW_AUTO_BALANCE
     };
@@ -346,6 +348,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         else if (kind == PHASE3C_SCALAR_RIGHT) f.view.right_padding++;
         else if (kind == PHASE3C_SCALAR_GAP) f.view.window_gap++;
         else if (kind == PHASE3C_SCALAR_SINGLE_WINDOW_MAX_WIDTH) f.view.single_window_max_width++;
+        else if (kind == PHASE3C_SCALAR_SINGLE_WINDOW_MIN_WIDTH) f.view.single_window_min_width++;
         else if (kind == PHASE3C_SCALAR_SINGLE_WINDOW_WIDTH_RATIO) f.view.single_window_width_ratio = 0.85f;
         else if (kind == PHASE3C_SCALAR_RATIO) f.view.split_ratio = 0.6f;
         else if (kind == PHASE3C_SCALAR_SPLIT) f.view.split_type = SPLIT_X;
@@ -411,7 +414,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         ++cases_run;
     }
-    TEST_CHECK(cases_run, 127UL);
+    TEST_CHECK(cases_run, 131UL);
 })
 
 struct declarative_space_phase3c_outcome_context
