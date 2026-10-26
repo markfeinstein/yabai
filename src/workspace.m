@@ -124,13 +124,35 @@ bool workspace_application_is_finished_launching(struct process *process)
     }
 }
 
+// CGDirectDisplayID was added to NSScreen as a public property in macOS 26.
+// Resolve it by selector so this source remains buildable with older SDKs, then
+// retain NSScreenNumber for systems whose AppKit does not implement the selector.
+static CGDirectDisplayID workspace_screen_display_id(NSScreen *screen)
+{
+    SEL display_id_selector = sel_registerName("CGDirectDisplayID");
+    if ([screen respondsToSelector:display_id_selector]) {
+        IMP display_id_method = [screen methodForSelector:display_id_selector];
+        if (!display_id_method) return kCGNullDirectDisplay;
+        return ((CGDirectDisplayID (*)(id, SEL)) display_id_method)(screen, display_id_selector);
+    }
+
+    NSNumber *legacy_display_id = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+    return legacy_display_id ? [legacy_display_id unsignedIntValue] : kCGNullDirectDisplay;
+}
+
+static bool workspace_screen_matches_display(NSScreen *screen, uint32_t did)
+{
+    CGDirectDisplayID screen_did = workspace_screen_display_id(screen);
+    return screen_did != kCGNullDirectDisplay && screen_did == did;
+}
+
 int workspace_display_notch_height(uint32_t did)
 {
     if (!CGDisplayIsBuiltin(did)) return 0;
 
     if (__builtin_available(macos 12.0, *)) {
         for (NSScreen *screen in [NSScreen screens]) {
-            if ([[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue] == did) {
+            if (workspace_screen_matches_display(screen, did)) {
                 return screen.safeAreaInsets.top;
             }
         }
@@ -156,7 +178,7 @@ CGRect workspace_display_visible_frame_from_bounds(CGRect display_bounds, CGRect
 CGRect workspace_display_visible_frame(uint32_t did, CGRect display_bounds)
 {
     for (NSScreen *screen in [NSScreen screens]) {
-        if ([[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue] == did) {
+        if (workspace_screen_matches_display(screen, did)) {
             return workspace_display_visible_frame_from_bounds(display_bounds,
                                                                NSRectToCGRect(screen.frame),
                                                                NSRectToCGRect(screen.visibleFrame));

@@ -10,6 +10,7 @@
 #include <objc/runtime.h>
 
 #include <CoreGraphics/CoreGraphics.h>
+#include <ColorSync/ColorSyncDevice.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -48,7 +49,6 @@ _Static_assert(SA_LAYER_KEY_FLOATING == kCGFloatingWindowLevelKey, "layer key co
 #define unpack(v) memcpy(&v, message, sizeof(v)); message += sizeof(v)
 #define lerp(a, t, b) (((1.0-t)*a) + (t*b))
 
-extern CGDirectDisplayID CGDisplayGetDisplayIDFromUUID(CFUUIDRef uuid);
 extern int SLSMainConnectionID(void);
 extern CGError SLSGetConnectionPSN(int cid, ProcessSerialNumber *psn);
 extern CGError SLSGetWindowAlpha(int cid, uint32_t wid, float *alpha);
