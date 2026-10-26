@@ -879,7 +879,8 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_HAS_FULLSCREEN_ZOOM) {
         if (did_output) fprintf(rsp, ",\n");
 
-        bool zoom_fullscreen = node && node->zoom && node->zoom == view->root;
+        bool zoom_fullscreen = node && ((node->zoom && node->zoom == view->root) ||
+                               (node == view->root && view_check_flag(view, VIEW_SINGLE_WINDOW_ZOOM)));
         fprintf(rsp, "\t\"has-fullscreen-zoom\":%s", json_bool(zoom_fullscreen));
         did_output = true;
     }

@@ -2521,6 +2521,8 @@ static bool declarative_space_transition_commit_impl(struct declarative_space_tr
             memcpy(view->runtime_ownership, target->ownership_after.view, sizeof(view->runtime_ownership));
             view->flags = target->ownership_after.legacy_flags;
         }
+        if (view->layout != VIEW_BSP || !view->root || view->root->left || view->root->right ||
+            view->root->window_count != 1) view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
         if (geometry_changed) { view_clear_flag(view, VIEW_IS_VALID); view_set_flag(view, VIEW_IS_DIRTY); }
     }
     if (p->ownership_mode == DECLARATIVE_SPACE_CLEAR_RUNTIME_FOR_RELOAD && p->runtime) {

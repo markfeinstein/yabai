@@ -199,6 +199,40 @@ static void single_window_lifecycle_update(struct view *view, void *context)
     if (!window_node_is_leaf(view->root)) window_node_update(view, view->root);
 }
 
+TEST_FUNC(single_window_zoom_bypasses_and_restores_responsive_width,
+{
+    struct window_node root = {
+        .window_count = 1, .window_list = { 1 }, .window_order = { 1 }
+    };
+    struct view view = {
+        .layout = VIEW_BSP, .root = &root, .single_window_width_ratio = 0.8f
+    };
+    struct single_window_lifecycle_context context = {
+        .full = { .x = 100.0f, .y = 20.0f, .w = 3000.0f, .h = 1200.0f }
+    };
+    struct view_test_platform_ops ops = {
+        .update_windows = single_window_lifecycle_update, .context = &context
+    };
+    view_test_set_platform_ops(&ops);
+
+    view_update(&view);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
+    TEST_CHECK(view_toggle_single_window_zoom(&view), true);
+    TEST_CHECK(view_check_flag(&view, VIEW_SINGLE_WINDOW_ZOOM) != 0, true);
+    TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
+    TEST_CHECK(view_toggle_single_window_zoom(&view), true);
+    TEST_CHECK(view_check_flag(&view, VIEW_SINGLE_WINDOW_ZOOM) != 0, false);
+    TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
+    TEST_CHECK(root.area.w, 2400.0f);
+
+    view.single_window_width_ratio = 1.0f;
+    view_update(&view);
+    TEST_CHECK(view_toggle_single_window_zoom(&view), false);
+    TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
+    view_test_set_platform_ops(NULL);
+});
+
 TEST_FUNC(single_window_width_ratio_reconciles_stack_membership_transitions,
 {
     struct window_node root = {0};
@@ -221,21 +255,25 @@ TEST_FUNC(single_window_width_ratio_reconciles_stack_membership_transitions,
     TEST_CHECK(context.updates, 1);
     TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
     TEST_CHECK(root.area.w, 2400.0f);
+    TEST_CHECK(view_toggle_single_window_zoom(&view), true);
+    TEST_CHECK(view_check_flag(&view, VIEW_SINGLE_WINDOW_ZOOM) != 0, true);
+    TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
 
     struct window second = { .id = 2 };
     TEST_CHECK(view_prepare_window_node_insertion(&view, &second, 0, &plan), true);
     TEST_CHECK(view_commit_window_node_insertion(&view, &second, 0, &plan), &root);
     view_abort_window_node_insertion(&plan);
-    TEST_CHECK(context.updates, 2);
+    TEST_CHECK(context.updates, 3);
+    TEST_CHECK(view_check_flag(&view, VIEW_SINGLE_WINDOW_ZOOM) != 0, false);
     TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
 
     TEST_CHECK(view_remove_window_node(&view, &second), &root);
-    TEST_CHECK(context.updates, 3);
+    TEST_CHECK(context.updates, 4);
     TEST_CHECK(fabsf(root.area.x - 400.0f) < 0.001f, true);
     TEST_CHECK(root.area.w, 2400.0f);
 
     TEST_CHECK(view_remove_window_node(&view, &first), NULL);
-    TEST_CHECK(context.updates, 4);
+    TEST_CHECK(context.updates, 5);
     TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
     view_test_set_platform_ops(NULL);
 });

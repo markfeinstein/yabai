@@ -279,6 +279,8 @@ The trigger counts managed windows, not applications or occupied leaves. A BSP s
 
 Opening a second managed window restores the ordinary root before its final frames are flushed; closing, minimizing, hiding or moving windows so that exactly one remains reapplies the ratio, floor and ceiling. Display and Space changes, startup, reload, mode activation and topology reconciliation recompute the same geometry without rebuilding or reordering an otherwise unchanged tree. All three settings follow normal global and per-Space precedence and runtime ownership.
 
+For an eligible single managed BSP window, `window --toggle zoom-fullscreen` bypasses the responsive singleton width and uses the complete ordinary root. Toggling it again restores the ratio, floor and ceiling. Adding another managed window, removing or moving the singleton, or changing away from BSP clears this singleton-only zoom state. Ordinary multi-window `zoom-fullscreen` behavior is unchanged.
+
 Accordion geometry
 ~~~~~~~~~~~~~~~~~~
 
@@ -800,6 +802,7 @@ COMMAND
 
 *--toggle* 'float|sticky|pip|shadow|split|zoom-parent|zoom-fullscreen|windowed-fullscreen|native-fullscreen|expose|<LABEL>'::
     Toggle the given property of the selected window. +
+    For a single managed BSP window constrained by responsive singleton width settings, `zoom-fullscreen` toggles between the constrained width and the complete ordinary root. +
     The following properties require System Integrity Protection to be partially disabled: sticky, pip, shadow, LABEL (scratchpad identifier) .
 
 *--sub-layer* '<LAYER>'::

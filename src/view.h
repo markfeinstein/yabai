@@ -256,6 +256,7 @@ enum view_flag
     VIEW_SINGLE_WINDOW_MAX_WIDTH = 0x4000,
     VIEW_SINGLE_WINDOW_WIDTH_RATIO = 0x8000,
     VIEW_SINGLE_WINDOW_MIN_WIDTH = 0x10000,
+    VIEW_SINGLE_WINDOW_ZOOM = 0x20000,
 };
 
 struct view
@@ -340,6 +341,8 @@ bool view_is_dirty(struct view *view);
 bool view_space_is_visible(uint64_t sid);
 void view_flush(struct view *view);
 void view_update(struct view *view);
+bool view_single_window_width_is_active(struct view *view);
+bool view_toggle_single_window_zoom(struct view *view);
 void view_apply_single_window_width(struct view *view);
 #ifdef TESTS
 struct view_test_platform_ops

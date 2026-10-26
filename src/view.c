@@ -315,9 +315,14 @@ static bool view_single_window_width_enabled(struct view *view)
     return proportional || view->single_window_max_width > 0;
 }
 
+bool view_single_window_width_is_active(struct view *view)
+{
+    return view_has_single_managed_window(view) && view_single_window_width_enabled(view);
+}
+
 void view_apply_single_window_width(struct view *view)
 {
-    if (!view_has_single_managed_window(view) || !view_single_window_width_enabled(view)) return;
+    if (!view_single_window_width_is_active(view) || view_check_flag(view, VIEW_SINGLE_WINDOW_ZOOM)) return;
 
     struct area *area = &view->root->area;
     double available = area->w;
@@ -342,10 +347,21 @@ void view_apply_single_window_width(struct view *view)
     area->w = (float) requested;
 }
 
+bool view_toggle_single_window_zoom(struct view *view)
+{
+    if (!view_single_window_width_is_active(view)) return false;
+    if (view_check_flag(view, VIEW_SINGLE_WINDOW_ZOOM)) view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
+    else view_set_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
+    view_update(view);
+    return true;
+}
+
 static bool view_reconcile_single_window_geometry(struct view *view, bool was_single)
 {
+    bool is_single = view_has_single_managed_window(view);
+    if (was_single && !is_single) view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
     if (!view_single_window_width_enabled(view)) return false;
-    if (was_single == view_has_single_managed_window(view)) return false;
+    if (was_single == is_single) return false;
     view_update(view);
     return true;
 }
@@ -816,6 +832,7 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
     bool was_single = view_has_single_managed_window(view);
     struct window_node *node = view_find_window_node(view, window->id);
     if (!node) return NULL;
+    if (node == view->root) view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
 
     if (node->window_count > 1) {
         uint32_t prev_order_head = node->window_order[0];
@@ -1418,6 +1435,7 @@ struct view *view_create(uint64_t sid)
 
 void view_clear(struct view *view)
 {
+    view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
     if (view->root) {
         if (view->root->left)  window_node_destroy(view->root->left);
         if (view->root->right) window_node_destroy(view->root->right);

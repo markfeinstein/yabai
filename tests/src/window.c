@@ -403,6 +403,48 @@ TEST_FUNC(window_serialization_reuses_space_membership_and_preserves_fallbacks,
     window_test_serialization_is_sticky = saved_sticky;
 });
 
+TEST_FUNC(window_serialization_reports_singleton_fullscreen_zoom,
+{
+    struct table saved_managed = g_window_manager.managed_window;
+    memset(&g_window_manager.managed_window, 0, sizeof(g_window_manager.managed_window));
+    table_init(&g_window_manager.managed_window, 8, hash_wm, compare_wm);
+
+    struct window window = { .id = 77 };
+    struct window_node root = {
+        .window_count = 1, .window_list = { 77 }, .window_order = { 77 }
+    };
+    struct view view = {
+        .layout = VIEW_BSP, .root = &root, .flags = VIEW_SINGLE_WINDOW_ZOOM
+    };
+    table_add(&g_window_manager.managed_window, &window.id, &view);
+
+    FILE *file = tmpfile();
+    TEST_CHECK(file != NULL, true);
+    if (file) {
+        window_serialize(file, &window, WINDOW_PROPERTY_HAS_FULLSCREEN_ZOOM);
+        rewind(file);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, file);
+        TEST_CHECK(strstr(output, "\"has-fullscreen-zoom\":true") != NULL, true);
+        fclose(file);
+    }
+
+    view_clear_flag(&view, VIEW_SINGLE_WINDOW_ZOOM);
+    file = tmpfile();
+    TEST_CHECK(file != NULL, true);
+    if (file) {
+        window_serialize(file, &window, WINDOW_PROPERTY_HAS_FULLSCREEN_ZOOM);
+        rewind(file);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, file);
+        TEST_CHECK(strstr(output, "\"has-fullscreen-zoom\":false") != NULL, true);
+        fclose(file);
+    }
+
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.managed_window = saved_managed;
+});
+
 static char *lifecycle_test_cfstring_copy_failure(CFStringRef value)
 {
     (void) value;

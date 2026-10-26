@@ -3816,7 +3816,12 @@ void window_manager_toggle_window_zoom_fullscreen(struct window_manager *wm, str
     struct window_node *node = view_find_window_node(view, window->id);
     assert(node);
 
-    if (node == view->root) return;
+    if (node == view->root) {
+        if (!view_toggle_single_window_zoom(view)) return;
+        if (space_is_visible(view->sid)) view_flush(view);
+        else view_set_flag(view, VIEW_IS_DIRTY);
+        return;
+    }
 
     if (node->zoom == view->root) {
         node->zoom = NULL;

@@ -2935,6 +2935,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
+    TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
     TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
     TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
@@ -2993,6 +2994,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
     TEST_ENTRY(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry) \
     TEST_ENTRY(single_window_width_ratio_scales_and_combines_with_absolute_ceiling) \
+    TEST_ENTRY(single_window_zoom_bypasses_and_restores_responsive_width) \
     TEST_ENTRY(single_window_width_ratio_reconciles_stack_membership_transitions) \
     TEST_ENTRY(single_window_width_ratio_reconciles_bsp_split_and_collapse) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
