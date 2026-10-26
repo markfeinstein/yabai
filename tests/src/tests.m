@@ -2916,6 +2916,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(display_animation_query_excludes_bigsur_and_modern_releases) \
     TEST_ENTRY(window_sub_level_message_id_tracks_tahoe_protocol) \
+    TEST_ENTRY(window_ax_snapshot_reads_and_owns_valid_batch_values) \
+    TEST_ENTRY(window_ax_snapshot_validates_slots_and_couples_frame_fallback) \
+    TEST_ENTRY(window_ax_snapshot_rejects_malformed_batch_shapes_and_types) \
+    TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_reports_allocation_failure) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \

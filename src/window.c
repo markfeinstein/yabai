@@ -6,6 +6,13 @@ extern int g_connection;
 
 #ifdef TESTS
 static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+static CFArrayRef (*window_ax_snapshot_create_attributes)(CFAllocatorRef, const void **, CFIndex,
+                                                          const CFArrayCallBacks *) = CFArrayCreate;
+static AXError (*window_ax_snapshot_copy_multiple)(AXUIElementRef, CFArrayRef,
+                                                    AXCopyMultipleAttributeOptions,
+                                                    CFArrayRef *) = AXUIElementCopyMultipleAttributeValues;
+static AXError (*window_ax_snapshot_copy_single)(AXUIElementRef, CFStringRef,
+                                                  CFTypeRef *) = AXUIElementCopyAttributeValue;
 static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
 static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
@@ -14,6 +21,9 @@ static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
 static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 #else
 #define window_observe_add_notification AXObserverAddNotification
+#define window_ax_snapshot_create_attributes CFArrayCreate
+#define window_ax_snapshot_copy_multiple AXUIElementCopyMultipleAttributeValues
+#define window_ax_snapshot_copy_single AXUIElementCopyAttributeValue
 #define window_test_is_ordered_in SLSWindowIsOrderedIn
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
 #define window_test_serialization_space window_space
@@ -991,6 +1001,205 @@ CFStringRef window_title(struct window *window)
     CFTypeRef value = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXTitleAttribute, &value);
     return value;
+}
+
+static const CFStringRef window_ax_snapshot_attribute[WINDOW_AX_SNAPSHOT_SLOT_COUNT] =
+{
+    [WINDOW_AX_POSITION_SLOT]   = kAXPositionAttribute,
+    [WINDOW_AX_SIZE_SLOT]       = kAXSizeAttribute,
+    [WINDOW_AX_ROLE_SLOT]       = kAXRoleAttribute,
+    [WINDOW_AX_SUBROLE_SLOT]    = kAXSubroleAttribute,
+    [WINDOW_AX_TITLE_SLOT]      = kAXTitleAttribute,
+    [WINDOW_AX_PARENT_SLOT]     = kAXParentAttribute,
+    [WINDOW_AX_MINIMIZED_SLOT]  = kAXMinimizedAttribute,
+    [WINDOW_AX_FULLSCREEN_SLOT] = kAXFullscreenAttribute
+};
+
+_Static_assert(WINDOW_AX_SNAPSHOT_SLOT_COUNT < 32, "snapshot fields must fit in the public masks");
+
+static inline uint32_t window_ax_snapshot_field_for_slot(int slot)
+{
+    return 1u << slot;
+}
+
+static bool window_ax_snapshot_error_allows_fallback(AXError error)
+{
+    return error == kAXErrorAttributeUnsupported ||
+           error == kAXErrorNoValue ||
+           error == kAXErrorCannotComplete ||
+           error == kAXErrorNotImplemented;
+}
+
+static AXError window_ax_snapshot_store_value(struct window_ax_snapshot *snapshot, int slot, CFTypeRef value)
+{
+    if (!value || value == kCFNull) return kAXErrorNoValue;
+
+    if (cf_is_type(value, AXValueGetTypeID()) &&
+        AXValueGetType((AXValueRef) value) == kAXValueTypeAXError) {
+        AXError error = kAXErrorFailure;
+        return AXValueGetValue((AXValueRef) value, kAXValueTypeAXError, &error) ? error : kAXErrorFailure;
+    }
+
+    switch (slot) {
+    case WINDOW_AX_POSITION_SLOT:
+        if (!cf_is_type(value, AXValueGetTypeID()) ||
+            AXValueGetType((AXValueRef) value) != kAXValueTypeCGPoint ||
+            !AXValueGetValue((AXValueRef) value, kAXValueTypeCGPoint, &snapshot->position)) {
+            return kAXErrorIllegalArgument;
+        }
+        break;
+    case WINDOW_AX_SIZE_SLOT:
+        if (!cf_is_type(value, AXValueGetTypeID()) ||
+            AXValueGetType((AXValueRef) value) != kAXValueTypeCGSize ||
+            !AXValueGetValue((AXValueRef) value, kAXValueTypeCGSize, &snapshot->size)) {
+            return kAXErrorIllegalArgument;
+        }
+        break;
+    case WINDOW_AX_ROLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->role = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_SUBROLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->subrole = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_TITLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->title = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_PARENT_SLOT:
+        if (!cf_is_type(value, AXUIElementGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->parent = (AXUIElementRef) CFRetain(value);
+        break;
+    case WINDOW_AX_MINIMIZED_SLOT:
+        if (!cf_is_type(value, CFBooleanGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->minimized = CFBooleanGetValue(value);
+        break;
+    case WINDOW_AX_FULLSCREEN_SLOT:
+        if (!cf_is_type(value, CFBooleanGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->fullscreen = CFBooleanGetValue(value);
+        break;
+    default:
+        return kAXErrorIllegalArgument;
+    }
+
+    snapshot->valid |= window_ax_snapshot_field_for_slot(slot);
+    return kAXErrorSuccess;
+}
+
+static void window_ax_snapshot_fallback_field(AXUIElementRef ref, int slot,
+                                               struct window_ax_snapshot *snapshot)
+{
+    CFTypeRef value = NULL;
+    AXError error = window_ax_snapshot_copy_single(ref, window_ax_snapshot_attribute[slot], &value);
+    if (error == kAXErrorSuccess) {
+        error = window_ax_snapshot_store_value(snapshot, slot, value);
+    }
+    snapshot->slot_error[slot] = error;
+    if (value) CFRelease(value);
+}
+
+static void window_ax_snapshot_fallback_frame(AXUIElementRef ref, struct window_ax_snapshot *snapshot)
+{
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    snapshot->valid &= ~frame_mask;
+    snapshot->position = CGPointZero;
+    snapshot->size = CGSizeZero;
+
+    window_ax_snapshot_fallback_field(ref, WINDOW_AX_POSITION_SLOT, snapshot);
+    window_ax_snapshot_fallback_field(ref, WINDOW_AX_SIZE_SLOT, snapshot);
+
+    if ((snapshot->valid & frame_mask) != frame_mask) {
+        snapshot->valid &= ~frame_mask;
+        snapshot->position = CGPointZero;
+        snapshot->size = CGSizeZero;
+    }
+}
+
+bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct window_ax_snapshot *snapshot)
+{
+    if (!snapshot) return false;
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    const uint32_t known_fields = (1u << WINDOW_AX_SNAPSHOT_SLOT_COUNT) - 1u;
+    if (!ref || !requested || (requested & ~known_fields)) return false;
+    snapshot->requested = requested;
+
+    const void *attributes[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    uint8_t attribute_slots[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    CFIndex attribute_count = 0;
+    for (int slot = 0; slot < WINDOW_AX_SNAPSHOT_SLOT_COUNT; ++slot) {
+        if (!(requested & window_ax_snapshot_field_for_slot(slot))) continue;
+        attributes[attribute_count] = window_ax_snapshot_attribute[slot];
+        attribute_slots[attribute_count++] = (uint8_t) slot;
+        snapshot->slot_error[slot] = kAXErrorNoValue;
+    }
+
+    CFArrayRef attribute_array = window_ax_snapshot_create_attributes(NULL, attributes, attribute_count,
+                                                                       &kCFTypeArrayCallBacks);
+    CFArrayRef values = NULL;
+    AXError batch_error = kAXErrorFailure;
+    if (attribute_array) {
+        batch_error = window_ax_snapshot_copy_multiple(ref, attribute_array, 0, &values);
+        CFRelease(attribute_array);
+    }
+
+    if (batch_error == kAXErrorSuccess && cf_is_type(values, CFArrayGetTypeID())) {
+        CFIndex value_count = CFArrayGetCount(values);
+        if (value_count <= attribute_count) {
+            for (CFIndex index = 0; index < value_count; ++index) {
+                int slot = attribute_slots[index];
+                CFTypeRef value = CFArrayGetValueAtIndex(values, index);
+                snapshot->slot_error[slot] = window_ax_snapshot_store_value(snapshot, slot, value);
+            }
+        } else {
+            for (CFIndex index = 0; index < attribute_count; ++index) {
+                snapshot->slot_error[attribute_slots[index]] = kAXErrorIllegalArgument;
+            }
+        }
+    } else {
+        AXError error = batch_error == kAXErrorSuccess ? kAXErrorIllegalArgument : batch_error;
+        for (CFIndex index = 0; index < attribute_count; ++index) {
+            snapshot->slot_error[attribute_slots[index]] = error;
+        }
+    }
+
+    if (values) CFRelease(values);
+
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    bool full_frame_requested = (requested & frame_mask) == frame_mask;
+    if (full_frame_requested && (snapshot->valid & frame_mask) != frame_mask) {
+        window_ax_snapshot_fallback_frame(ref, snapshot);
+    }
+
+    for (int slot = 0; slot < WINDOW_AX_SNAPSHOT_SLOT_COUNT; ++slot) {
+        uint32_t field = window_ax_snapshot_field_for_slot(slot);
+        if (!(requested & field) || (snapshot->valid & field)) continue;
+        if (full_frame_requested && (field & frame_mask)) continue;
+        if (window_ax_snapshot_error_allows_fallback(snapshot->slot_error[slot])) {
+            window_ax_snapshot_fallback_field(ref, slot, snapshot);
+        }
+    }
+
+    return (snapshot->valid & requested) == requested;
+}
+
+void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot)
+{
+    if (!snapshot) return;
+    if (snapshot->role) CFRelease(snapshot->role);
+    if (snapshot->subrole) CFRelease(snapshot->subrole);
+    if (snapshot->title) CFRelease(snapshot->title);
+    if (snapshot->parent) CFRelease(snapshot->parent);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame)
+{
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    if (!snapshot || !frame || (snapshot->valid & frame_mask) != frame_mask) return false;
+    *frame = (CGRect) { snapshot->position, snapshot->size };
+    return true;
 }
 
 CGPoint window_ax_origin(struct window *window)

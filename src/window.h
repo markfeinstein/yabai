@@ -99,6 +99,46 @@ struct window_serialization_context
     bool has_ordered_display_uuids_snapshot;
 };
 
+enum window_ax_snapshot_slot
+{
+    WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN_SLOT,
+    WINDOW_AX_SNAPSHOT_SLOT_COUNT
+};
+
+enum window_ax_snapshot_field
+{
+    WINDOW_AX_POSITION   = 1u << WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE       = 1u << WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE       = 1u << WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE    = 1u << WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE      = 1u << WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT     = 1u << WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED  = 1u << WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN = 1u << WINDOW_AX_FULLSCREEN_SLOT
+};
+
+struct window_ax_snapshot
+{
+    uint32_t requested;
+    uint32_t valid;
+    AXError slot_error[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    CGPoint position;
+    CGSize size;
+    CFStringRef role;
+    CFStringRef subrole;
+    CFStringRef title;
+    AXUIElementRef parent;
+    bool minimized;
+    bool fullscreen;
+};
+
 struct window
 {
     struct application *application;
@@ -189,6 +229,11 @@ uint64_t window_tags(uint32_t wid);
 bool window_is_ordered_in(uint32_t wid, bool *known);
 bool window_is_on_screen(uint32_t wid, bool *known);
 bool window_is_sticky(uint32_t wid);
+/* The output must be zero-initialized or previously destroyed. It owns its
+ * retained object fields until window_ax_snapshot_destroy is called. */
+bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct window_ax_snapshot *snapshot);
+void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot);
+bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame);
 CGPoint window_ax_origin(struct window *window);
 CGRect window_ax_frame(struct window *window);
 CFStringRef window_ax_role(struct window *window);
