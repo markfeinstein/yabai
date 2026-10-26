@@ -626,12 +626,7 @@ TEST_FUNC(menu_bar_manager_startup_staging_seal_reports_refresh_rejection,
 });
 
 TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
     int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
 
     workspace_set_macos_version(15);
@@ -660,7 +655,7 @@ TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW);
     TEST_CHECK(g_window_notification_rebuild_count, 1);
 
-    // Newer-than-listed macOS releases use the Tahoe notification path.
+    // Golden Gate retains the modern all-window notification path without being classified as Tahoe.
     workspace_set_macos_version(27);
 
     // A fully resolved retry returning true that adds a window also dirties and coalesces.
@@ -672,12 +667,7 @@ TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
@@ -725,12 +715,7 @@ static bool menu_bar_manager_test_scratchpad_refresh_application_windows(struct 
 }
 
 TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
     int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
     __auto_type saved_window_list = window_manager_scratchpad_existing_application_window_list;
     __auto_type saved_order_window_in = window_manager_scratchpad_order_window_in;
@@ -810,12 +795,7 @@ TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     window_manager_scratchpad_refresh_application_windows = saved_refresh_application_windows;
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 

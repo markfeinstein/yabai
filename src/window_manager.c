@@ -3710,11 +3710,7 @@ bool window_manager_wait_for_native_fullscreen_transition(struct window *window,
 {
     TIME_FUNCTION;
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
             uint64_t sid = window_space(window->id);
             if (sid && space_is_user(sid) != fullscreen) return true;

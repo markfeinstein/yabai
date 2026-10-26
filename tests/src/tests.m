@@ -2619,12 +2619,7 @@ TEST_FUNC(insert_feedback_invalid_direction_and_no_action_cleanup,
 
 TEST_FUNC(insert_feedback_rekeys_on_stack_order_mutations,
 {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     workspace_set_macos_version(15);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
@@ -2690,22 +2685,12 @@ TEST_FUNC(insert_feedback_rekeys_on_stack_order_mutations,
     table_free(&g_window_manager.insert_feedback);
     memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
 
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
 });
 
 TEST_FUNC(insert_feedback_rekeys_collapsed_child_before_free,
 {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     workspace_set_macos_version(15);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
@@ -2742,12 +2727,7 @@ TEST_FUNC(insert_feedback_rekeys_collapsed_child_before_free,
     table_free(&g_window_manager.insert_feedback);
     memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
 
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
 });
 
 TEST_FUNC(view_remove_window_node_sibling_collapse_requires_destination_reresolve,
@@ -2935,6 +2915,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(display_animation_query_excludes_bigsur_and_modern_releases) \
+    TEST_ENTRY(window_sub_level_message_id_tracks_tahoe_protocol) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
@@ -3104,7 +3085,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ordered_in_keeps_float)                   \
     TEST_ENTRY(window_reordered_stays_tiled)                    \
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
-    TEST_ENTRY(macos_version_newer_than_listed)                 \
+    TEST_ENTRY(macos_version_classifies_named_and_future_releases) \
     TEST_ENTRY(managed_space_topology_parsing_is_type_safe_and_ordered) \
     TEST_ENTRY(managed_space_ids_require_positive_signed_64_bit_values) \
     TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \

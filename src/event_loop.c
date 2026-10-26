@@ -846,7 +846,7 @@ static bool update_window_notifications(void)
     uint32_t *window_list = NULL;
     bool success = true;
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         // NOTE(asmvik): Subscribe to all windows because of window_destroyed (and ordered) notifications
         table_for (struct window *window, g_window_manager.window, {
             if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, window->id)) {
@@ -933,7 +933,7 @@ void event_loop_window_inventory_did_change(void)
 {
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         update_window_notifications();
     }
 }
@@ -3552,11 +3552,7 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
 {
     debug("%s:\n", __FUNCTION__);
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         mission_control_unobserve();
         mission_control_ensure_observed();
     }
@@ -3607,8 +3603,7 @@ static EVENT_HANDLER(SYSTEM_WOKE)
         window_manager_center_mouse(&g_window_manager, focused_window);
     }
 
-    if (workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         mission_control_ensure_observed();
     }
     mission_control_schedule_poll(0.1);
@@ -4181,8 +4176,7 @@ static bool event_loop_recover_topology(struct event_loop *event_loop)
         }
         g_window_manager.window_animation_duration = animation_duration;
         if (space_manager_refresh_application_windows(&g_space_manager)) event_loop_window_inventory_did_change();
-        if (workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
-            workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) mission_control_ensure_observed();
+        if (workspace_is_macos_monterey_or_newer()) mission_control_ensure_observed();
         mission_control_schedule_poll(0.1);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY |
                                     MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);

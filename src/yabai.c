@@ -416,7 +416,7 @@ static struct declarative_startup_completion_ops declarative_startup_production_
         .seal_menu_staging = declarative_startup_seal_menu,
         .start_socket = declarative_startup_start_socket,
         .execute_legacy_config = declarative_startup_execute_legacy_config,
-        .notifications_required = workspace_is_macos_sequoia() || workspace_is_macos_tahoe()
+        .notifications_required = workspace_is_macos_sequoia_or_newer()
     };
 }
 
@@ -492,17 +492,10 @@ int main(int argc, char **argv)
         error("yabai: could not start mouse handler! abort..\n");
     }
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         mission_control_ensure_observed();
 
-        if (workspace_is_macos_ventura() ||
-            workspace_is_macos_sonoma() ||
-            workspace_is_macos_sequoia() ||
-            workspace_is_macos_tahoe()) {
+        if (workspace_is_macos_ventura_or_newer()) {
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1327, NULL);
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1328, NULL);
         }
@@ -513,7 +506,7 @@ int main(int argc, char **argv)
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 804, NULL);
 
         // NOTE: Only delivered for windows subscribed to, which is every window from Sequoia on.
