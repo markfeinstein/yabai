@@ -304,7 +304,7 @@ MENU_BAR_MODEL_TEST_END
 
 MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_invalid_inputs_and_absent_focus_neutrality)
     struct menu_bar_settings invalid_enabled = test_settings((enum menu_bar_enabled) 2, MENU_BAR_STYLE_COMPACT, MENU_BAR_SPACE_FILTER_OCCUPIED);
-    struct menu_bar_settings invalid_style = test_settings(MENU_BAR_ENABLED, (enum menu_bar_style) 2, MENU_BAR_SPACE_FILTER_OCCUPIED);
+    struct menu_bar_settings invalid_style = test_settings(MENU_BAR_ENABLED, (enum menu_bar_style) 3, MENU_BAR_SPACE_FILTER_OCCUPIED);
     struct menu_bar_settings invalid_filter = test_settings(MENU_BAR_ENABLED, MENU_BAR_STYLE_COMPACT, (enum menu_bar_space_filter) 2);
 
     TEST_CHECK_NULL(menu_bar_model_snapshot_create(1, invalid_enabled, NULL, 0, false, 0, NULL, 0, NULL));

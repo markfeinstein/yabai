@@ -356,20 +356,30 @@ menu_bar_ui_render_strip_decorations(YBMenuBarStripView *strip,
 }
 
 static size_t
-menu_bar_ui_screen_selection(NSView *strip, uint32_t *indexes, size_t capacity, size_t *omitted_out)
+menu_bar_ui_screen_selection(NSView *strip,
+                             uint32_t *indexes,
+                             size_t capacity,
+                             size_t *omitted_before_out,
+                             size_t *omitted_after_out)
 {
     size_t count = 0;
-    size_t omitted = 0;
+    size_t omitted_before = 0;
+    size_t omitted_after = 0;
     for (NSView *view in [strip subviews]) {
         if ([view isKindOfClass:[YBMenuBarScreenCell class]]) {
             if (count < capacity) indexes[count] = ((YBMenuBarScreenCell *) view)->yb_index;
             ++count;
         } else if ([view isKindOfClass:[YBMenuBarButton class]]) {
             NSString *title = [(YBMenuBarButton *) view title];
-            if ([title hasPrefix:@"…+"]) omitted = (size_t) [[title substringFromIndex:2] integerValue];
+            if ([title hasPrefix:@"←+"]) {
+                omitted_before = (size_t) [[title substringFromIndex:2] integerValue];
+            } else if ([title hasPrefix:@"+"] && [title hasSuffix:@"→"] && [title length] > 2) {
+                omitted_after = (size_t) [[title substringWithRange:NSMakeRange(1, [title length] - 2)] integerValue];
+            }
         }
     }
-    if (omitted_out) *omitted_out = omitted;
+    if (omitted_before_out) *omitted_before_out = omitted_before;
+    if (omitted_after_out) *omitted_after_out = omitted_after;
     return count;
 }
 
@@ -544,30 +554,54 @@ test_read_only_rendered_paths_emit_only_setting_actions(void)
     NSMenu *menu = [controller testMenu];
 
     TEST_CHECK(menu != nil);
-    TEST_CHECK([menu numberOfItems] == 8);
+    TEST_CHECK([menu numberOfItems] == 6);
 
-    NSUInteger informational_indices[] = { 0, 2, 3, 4 };
-    for (size_t i = 0; i < sizeof(informational_indices) / sizeof(informational_indices[0]); ++i) {
-        NSMenuItem *item = [menu itemAtIndex:informational_indices[i]];
-        TEST_CHECK([item isEnabled]);
-        TEST_CHECK([item action] == nil);
-        TEST_CHECK([item representedObject] == nil);
-        TEST_CHECK([[item accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
-    }
-    TEST_CHECK([[[menu itemAtIndex:0] title] containsString:@"Read Only"]);
-    TEST_CHECK([[menu itemAtIndex:3] state] == NSControlStateValueOn);
-    TEST_CHECK([[menu itemAtIndex:4] state] == NSControlStateValueOff);
+    NSMenuItem *title = [menu itemAtIndex:0];
+    TEST_CHECK([[title title] containsString:@"Read Only"]);
+    TEST_CHECK([title action] == nil);
+    TEST_CHECK([[title accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    if (@available(macOS 14.0, *)) TEST_CHECK([title isSectionHeader]);
 
-    NSMenuItem *filter = [menu itemAtIndex:6];
+    NSMenuItem *display = [menu itemAtIndex:2];
+    TEST_CHECK([[display title] containsString:@"Display 1"]);
+    TEST_CHECK([[display title] containsString:@"Focused"]);
+    TEST_CHECK([display state] == NSControlStateValueOff);
+    TEST_CHECK([display representedObject] == nil);
+    NSMenu *display_menu = [display submenu];
+    TEST_CHECK(display_menu != nil);
+    TEST_CHECK([display_menu numberOfItems] == 3);
+
+    NSMenuItem *display_header = [display_menu itemAtIndex:0];
+    TEST_CHECK([[display_header title] containsString:@"Display 1"]);
+    TEST_CHECK([display_header action] == nil);
+    TEST_CHECK([[display_header accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    if (@available(macOS 14.0, *)) TEST_CHECK([display_header isSectionHeader]);
+
+    NSMenuItem *visible_space = [display_menu itemAtIndex:1];
+    NSMenuItem *unknown_space = [display_menu itemAtIndex:2];
+    TEST_CHECK([visible_space isEnabled]);
+    TEST_CHECK([visible_space action] == nil);
+    TEST_CHECK([[visible_space accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK([visible_space state] == NSControlStateValueOn);
+    TEST_CHECK([unknown_space state] == NSControlStateValueOff);
+
+    NSMenuItem *filter = [menu itemAtIndex:4];
     TEST_CHECK([filter action] == @selector(performMenuAction:));
     TEST_CHECK([[filter representedObject] isKindOfClass:[YBMenuBarActionTarget class]]);
     [controller performMenuAction:filter];
 
-    NSMenu *style_menu = [[menu itemAtIndex:7] submenu];
+    NSMenu *style_menu = [[menu itemAtIndex:5] submenu];
     TEST_CHECK(style_menu != nil);
-    NSMenuItem *compact = [style_menu itemAtIndex:0];
-    TEST_CHECK([compact action] == @selector(performMenuAction:));
-    [controller performMenuAction:compact];
+    TEST_CHECK([style_menu numberOfItems] == 3);
+    NSMenuItem *automatic = [style_menu itemAtIndex:0];
+    NSMenuItem *compact = [style_menu itemAtIndex:1];
+    NSMenuItem *expanded = [style_menu itemAtIndex:2];
+    TEST_CHECK([[automatic title] isEqualToString:@"Automatic"]);
+    TEST_CHECK([automatic action] == @selector(performMenuAction:));
+    TEST_CHECK([automatic state] == NSControlStateValueOff);
+    TEST_CHECK([compact state] == NSControlStateValueOff);
+    TEST_CHECK([expanded state] == NSControlStateValueOn);
+    [controller performMenuAction:automatic];
 
     TEST_CHECK(log.count == 2);
     TEST_CHECK(log.type[0] == MENU_BAR_ACTION_SET_SPACE_FILTER);
@@ -599,10 +633,12 @@ test_expanded_screen_cells_and_compact_option(void)
 
     NSView *expanded = [controller testBuildExpandedStrip];
     uint32_t indexes[8] = {0};
-    size_t omitted = 0;
-    size_t count = menu_bar_ui_screen_selection(expanded, indexes, 8, &omitted);
+    size_t omitted_before = 0;
+    size_t omitted_after = 0;
+    size_t count = menu_bar_ui_screen_selection(expanded, indexes, 8, &omitted_before, &omitted_after);
     TEST_CHECK(count == 4);
-    TEST_CHECK(omitted == 0);
+    TEST_CHECK(omitted_before == 0);
+    TEST_CHECK(omitted_after == 0);
     TEST_CHECK(indexes[0] == 2);
     TEST_CHECK(indexes[1] == 3);
     TEST_CHECK(indexes[2] == 4);
@@ -770,6 +806,63 @@ test_expanded_render_uses_native_status_button_menu(void)
     TEST_CHECK([controller testStatusButton] == nil);
     TEST_CHECK(log.count == 0);
 
+    [controller release];
+    return true;
+}
+
+static bool
+test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+
+    struct menu_bar_snapshot *small = menu_bar_ui_default_layout_snapshot(74);
+    small->settings.style = MENU_BAR_STYLE_AUTOMATIC;
+    [controller receiveSnapshot:small clear:false];
+
+    NSView *expanded = [controller testStripView];
+    NSStatusBarButton *button = [controller testStatusButton];
+    TEST_CHECK(expanded != nil);
+    TEST_CHECK(NSWidth([expanded frame]) <= YB_MENU_BAR_MAX_AUTOMATIC_WIDTH);
+    TEST_CHECK([controller testStatusButtonCount] == 4);
+    TEST_CHECK([[button accessibilityValue] containsString:@"Display 1"]);
+    TEST_CHECK([[button accessibilityValue] containsString:@"visible space 5 focus"]);
+    TEST_CHECK(![[button toolTip] containsString:@"space 5"]);
+
+    NSMenu *menu = [controller testMenu];
+    TEST_CHECK([menu numberOfItems] == 7);
+    NSMenuItem *first_display = [menu itemAtIndex:2];
+    NSMenuItem *second_display = [menu itemAtIndex:3];
+    TEST_CHECK([[first_display title] containsString:@"Display 1"]);
+    TEST_CHECK([[second_display title] containsString:@"Display 2"]);
+    TEST_CHECK([first_display state] == NSControlStateValueOff);
+    TEST_CHECK([second_display state] == NSControlStateValueOff);
+    TEST_CHECK([first_display submenu] != nil);
+    TEST_CHECK([second_display submenu] != nil);
+
+    NSMenu *style_menu = [[menu itemAtIndex:[menu numberOfItems] - 1] submenu];
+    TEST_CHECK(style_menu != nil);
+    TEST_CHECK([[style_menu itemAtIndex:0] state] == NSControlStateValueOn);
+    TEST_CHECK([[style_menu itemAtIndex:1] state] == NSControlStateValueOff);
+    TEST_CHECK([[style_menu itemAtIndex:2] state] == NSControlStateValueOff);
+
+    struct menu_bar_snapshot *large = menu_bar_ui_overflow_snapshot(75, 20);
+    large->settings.style = MENU_BAR_STYLE_AUTOMATIC;
+    [controller receiveSnapshot:large clear:false];
+
+    NSView *compact = [controller testStripView];
+    button = [controller testStatusButton];
+    TEST_CHECK(compact != nil);
+    TEST_CHECK(NSWidth([compact frame]) < YB_MENU_BAR_MAX_AUTOMATIC_WIDTH);
+    TEST_CHECK([controller testStatusButtonCount] == 1);
+    YBMenuBarScreenCell *cell = [[compact subviews] objectAtIndex:0];
+    TEST_CHECK([cell isKindOfClass:[YBMenuBarScreenCell class]]);
+    TEST_CHECK(cell->yb_index == 121);
+    TEST_CHECK([[button accessibilityValue] containsString:@"visible space 121"]);
+    TEST_CHECK(log.count == 0);
+
+    [controller clearStatusItem];
     [controller release];
     return true;
 }
@@ -969,8 +1062,10 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     }
     struct yb_screen_selection expected = yb_select_screen_interval(entries, total, active);
     TEST_CHECK(YB_MENU_BAR_MAX_EXPANDED_WIDTH == 520.0);
-    TEST_CHECK(expected.start == 14);
-    TEST_CHECK(expected.count == 13);
+    TEST_CHECK(YB_MENU_BAR_MAX_AUTOMATIC_WIDTH == 260.0);
+    TEST_CHECK(expected.start > 0);
+    TEST_CHECK(expected.start + expected.count < total);
+    TEST_CHECK(expected.count > 1 && expected.count < total);
     [controller testSetSnapshot:snapshot];
     [controller testRebuildMenu];
     [controller ensureStatusItem];
@@ -978,16 +1073,17 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
 
     NSView *expanded = [controller testStripView];
     uint32_t indexes[40] = {0};
-    size_t omitted = 0;
-    size_t count = menu_bar_ui_screen_selection(expanded, indexes, 40, &omitted);
-    TEST_CHECK(count > 1 && count < total);
+    size_t omitted_before = 0;
+    size_t omitted_after = 0;
+    size_t count = menu_bar_ui_screen_selection(expanded, indexes, 40, &omitted_before, &omitted_after);
     TEST_CHECK(count == expected.count);
-    TEST_CHECK(indexes[0] == 115);
-    TEST_CHECK(indexes[count - 1] == 127);
-    TEST_CHECK(omitted == 27);
-    TEST_CHECK(omitted == total - count);
-    TEST_CHECK(NSWidth([expanded frame]) == yb_screen_interval_width(entries, expected.start,
-                                                                     expected.count, omitted));
+    TEST_CHECK(indexes[0] == expected.start + 101);
+    TEST_CHECK(indexes[count - 1] == expected.start + expected.count + 100);
+    TEST_CHECK(omitted_before == expected.start);
+    TEST_CHECK(omitted_after == total - expected.start - expected.count);
+    TEST_CHECK(omitted_before + omitted_after == total - count);
+    TEST_CHECK(NSWidth([expanded frame]) == yb_screen_interval_width(entries, total,
+                                                                     expected.start, expected.count));
     TEST_CHECK(NSWidth([expanded frame]) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH);
     TEST_CHECK(yb_screen_interval_fits(entries, total, expected.start, expected.count));
     if (expected.start > 0) {
@@ -997,34 +1093,37 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
         TEST_CHECK(!yb_screen_interval_fits(entries, total, expected.start, expected.count + 1));
     }
 
-    NSString *overflow_title = [NSString stringWithFormat:@"…+%zu", omitted];
-    CGFloat expected_x = YB_MENU_BAR_OUTER_INSET;
-    bool found_overflow = false;
-    YBMenuBarButton *overflow_button = nil;
-    for (NSView *view in [expanded subviews]) {
-        if ([view isKindOfClass:[YBMenuBarScreenCell class]]) {
-            YBMenuBarScreenCell *cell = (YBMenuBarScreenCell *) view;
-            TEST_CHECK(NSMinX([cell frame]) == expected_x);
-            TEST_CHECK(NSWidth([cell frame]) == yb_screen_cell_width(cell->yb_index));
-            TEST_CHECK(NSHeight([cell frame]) == YB_MENU_BAR_STATUS_HEIGHT);
-            expected_x = NSMaxX([cell frame]) + YB_MENU_BAR_GAP;
-        } else if ([view isKindOfClass:[YBMenuBarButton class]]) {
-            TEST_CHECK([[(YBMenuBarButton *) view title] isEqualToString:overflow_title]);
-            TEST_CHECK(NSMinX([view frame]) == expected_x);
-            TEST_CHECK(NSWidth([view frame]) == yb_overflow_width(omitted));
-            TEST_CHECK(NSHeight([view frame]) == YB_MENU_BAR_STATUS_HEIGHT);
-            TEST_CHECK(NSMaxX([view frame]) + YB_MENU_BAR_OUTER_INSET == NSWidth([expanded frame]));
-            TEST_CHECK([(YBMenuBarButton *) view action] == nil);
-            TEST_CHECK([(YBMenuBarButton *) view target] == nil);
-            TEST_CHECK([[(YBMenuBarButton *) view accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
-            overflow_button = (YBMenuBarButton *) view;
-            found_overflow = true;
-        }
+    NSArray *subviews = [expanded subviews];
+    TEST_CHECK([subviews count] == count + 2);
+    YBMenuBarButton *leading = [subviews firstObject];
+    YBMenuBarButton *trailing = [subviews lastObject];
+    TEST_CHECK([leading isKindOfClass:[YBMenuBarButton class]]);
+    TEST_CHECK([trailing isKindOfClass:[YBMenuBarButton class]]);
+    TEST_CHECK([[leading title] isEqualToString:yb_overflow_title(omitted_before, true)]);
+    TEST_CHECK([[trailing title] isEqualToString:yb_overflow_title(omitted_after, false)]);
+    TEST_CHECK([[leading accessibilityLabel] containsString:@"before"]);
+    TEST_CHECK([[trailing accessibilityLabel] containsString:@"after"]);
+    TEST_CHECK([leading action] == nil && [trailing action] == nil);
+    TEST_CHECK([leading target] == nil && [trailing target] == nil);
+    TEST_CHECK([[leading accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK([[trailing accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
+    TEST_CHECK(NSMinX([leading frame]) == YB_MENU_BAR_OUTER_INSET);
+    TEST_CHECK(NSWidth([leading frame]) == yb_overflow_width(omitted_before, true));
+
+    CGFloat expected_x = NSMaxX([leading frame]) + YB_MENU_BAR_GAP;
+    for (NSUInteger i = 1; i + 1 < [subviews count]; ++i) {
+        YBMenuBarScreenCell *cell = [subviews objectAtIndex:i];
+        TEST_CHECK([cell isKindOfClass:[YBMenuBarScreenCell class]]);
+        TEST_CHECK(NSMinX([cell frame]) == expected_x);
+        TEST_CHECK(NSWidth([cell frame]) == yb_screen_cell_width(cell->yb_index));
+        TEST_CHECK(NSHeight([cell frame]) == YB_MENU_BAR_STATUS_HEIGHT);
+        expected_x = NSMaxX([cell frame]) + YB_MENU_BAR_GAP;
     }
-    TEST_CHECK(found_overflow);
-    TEST_CHECK(overflow_button != nil);
-    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([overflow_button frame]),
-                                              NSMidY([overflow_button frame]))] == nil);
+    TEST_CHECK(NSMinX([trailing frame]) == expected_x);
+    TEST_CHECK(NSWidth([trailing frame]) == yb_overflow_width(omitted_after, false));
+    TEST_CHECK(NSMaxX([trailing frame]) + YB_MENU_BAR_OUTER_INSET == NSWidth([expanded frame]));
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([leading frame]), NSMidY([leading frame]))] == nil);
+    TEST_CHECK([expanded hitTest:NSMakePoint(NSMidX([trailing frame]), NSMidY([trailing frame]))] == nil);
 
     bool found_active = false;
     for (size_t i = 0; i < count; ++i) {
@@ -1100,6 +1199,7 @@ int main(void)
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
             { "strip_clicks_are_owned_by_native_status_button", test_strip_clicks_are_owned_by_native_status_button },
             { "expanded_render_uses_native_status_button_menu", test_expanded_render_uses_native_status_button_menu },
+            { "automatic_layout_uses_width_budget_and_accessibility_summary", test_automatic_layout_uses_width_budget_and_accessibility_summary },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
             { "multi_digit_number_geometry_stays_compact_and_within_bounds", test_multi_digit_number_geometry_stays_compact_and_within_bounds },

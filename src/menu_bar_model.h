@@ -34,10 +34,13 @@ enum menu_bar_enabled
 enum menu_bar_style
 {
     /* Show every space selected by the space filter. This is the default. */
-    MENU_BAR_STYLE_EXPANDED = 0,
+    MENU_BAR_STYLE_EXPANDED  = 0,
 
     /* Show only the focused display's visible space in the status item. */
-    MENU_BAR_STYLE_COMPACT  = 1
+    MENU_BAR_STYLE_COMPACT   = 1,
+
+    /* Use expanded layout within the automatic width budget, otherwise compact. */
+    MENU_BAR_STYLE_AUTOMATIC = 2
 };
 
 enum menu_bar_space_filter

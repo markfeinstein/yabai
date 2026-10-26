@@ -69,7 +69,9 @@ static bool menu_bar_manager_valid_enabled(enum menu_bar_enabled enabled)
 
 static bool menu_bar_manager_valid_style(enum menu_bar_style style)
 {
-    return style == MENU_BAR_STYLE_COMPACT || style == MENU_BAR_STYLE_EXPANDED;
+    return style == MENU_BAR_STYLE_COMPACT ||
+           style == MENU_BAR_STYLE_EXPANDED ||
+           style == MENU_BAR_STYLE_AUTOMATIC;
 }
 
 static bool menu_bar_manager_valid_space_filter(enum menu_bar_space_filter filter)
@@ -899,8 +901,9 @@ const char *menu_bar_manager_enabled_string(enum menu_bar_enabled enabled)
 const char *menu_bar_manager_style_string(enum menu_bar_style style)
 {
     switch (style) {
-    case MENU_BAR_STYLE_EXPANDED: return MENU_BAR_STYLE_EXPANDED_STR;
-    case MENU_BAR_STYLE_COMPACT:  return MENU_BAR_STYLE_COMPACT_STR;
+    case MENU_BAR_STYLE_EXPANDED:  return MENU_BAR_STYLE_EXPANDED_STR;
+    case MENU_BAR_STYLE_COMPACT:   return MENU_BAR_STYLE_COMPACT_STR;
+    case MENU_BAR_STYLE_AUTOMATIC: return MENU_BAR_STYLE_AUTOMATIC_STR;
     }
 
     return MENU_BAR_STYLE_EXPANDED_STR;
@@ -940,6 +943,11 @@ bool menu_bar_manager_parse_style(const char *text, size_t length, enum menu_bar
 
     if (menu_bar_manager_text_equals(text, length, MENU_BAR_STYLE_EXPANDED_STR)) {
         if (style) *style = MENU_BAR_STYLE_EXPANDED;
+        return true;
+    }
+
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_STYLE_AUTOMATIC_STR)) {
+        if (style) *style = MENU_BAR_STYLE_AUTOMATIC;
         return true;
     }
 

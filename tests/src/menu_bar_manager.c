@@ -11,6 +11,7 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
 
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_COMPACT), "compact"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_EXPANDED), "expanded"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_AUTOMATIC), "automatic"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "expanded"), 0);
 
     enum menu_bar_enabled enabled = MENU_BAR_ENABLED;
@@ -28,8 +29,10 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(style, MENU_BAR_STYLE_COMPACT);
     TEST_CHECK(menu_bar_manager_parse_style("expanded", 8, &style), true);
     TEST_CHECK(style, MENU_BAR_STYLE_EXPANDED);
+    TEST_CHECK(menu_bar_manager_parse_style("automatic", 9, &style), true);
+    TEST_CHECK(style, MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(menu_bar_manager_parse_style("wide", 4, &style), false);
-    TEST_CHECK(style, MENU_BAR_STYLE_EXPANDED);
+    TEST_CHECK(style, MENU_BAR_STYLE_AUTOMATIC);
 
     TEST_CHECK(menu_bar_manager_parse_space_filter("occupied", 8, &filter), true);
     TEST_CHECK(filter, MENU_BAR_SPACE_FILTER_OCCUPIED);

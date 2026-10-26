@@ -432,7 +432,7 @@ Enum fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
-\f(CRmenubar_style\fP: \f(CRcompact\fP, \f(CRexpanded\fP;
+\f(CRmenubar_style\fP: \f(CRautomatic\fP, \f(CRcompact\fP, \f(CRexpanded\fP;
 .RE
 .sp
 .RS 4
@@ -1030,13 +1030,15 @@ Show yabai Spaces as a read\-only native macOS menu bar status item. Default is 
 The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and \fBmenubar_opacity\fP settings.
 .RE
 .sp
-\fBmenubar_style\fP [\fIcompact|expanded\fP]
+\fBmenubar_style\fP [\fIautomatic|compact|expanded\fP]
 .RS 4
 Set the menu bar status item layout. Default is \fIexpanded\fP.
 .br
+\fIautomatic\fP: Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout.
+.br
 \fIcompact\fP: Show one screen outline for the keyboard\-focused display\(cqs visible space.
 .br
-\fIexpanded\fP: Show a bounded display\-grouped interval of filtered spaces around the focused space in the menu bar; when every outline does not fit within the 520\-point strip, an \f(CR…+N\fP control represents the omitted spaces.
+\fIexpanded\fP: Show a bounded display\-grouped interval of filtered spaces around the focused space in the menu bar. When every outline does not fit within the 520\-point strip, \f(CR←+N\fP and \f(CR+N→\fP controls separately report spaces omitted before and after the visible interval.
 .RE
 .sp
 \fBmenubar_space_filter\fP [\fIoccupied|all\fP]
@@ -1047,7 +1049,7 @@ Select which spaces are shown by the menu bar item and its menu. Default is \fIo
 .br
 \fIall\fP: Show all user\-navigation spaces reported by macOS, including native\-fullscreen spaces. Virtual spaces are not created or shown.
 .br
-The compact and expanded layouts share the same display\-grouped informational menu. A checkmark marks each display\(cqs visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in \fByabairc\fP to persist them.
+The automatic, compact and expanded layouts share the same informational menu. Each display has a labeled submenu with a native section header, and a checkmark marks that display\(cqs visible space. The focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the indicator opens the menu. Accessibility exposes the visible Space summary for every display through the status button and structured display submenus. Layout and filter choices remain interactive and change the running configuration only; set these options in \fByabairc\fP to persist them.
 .RE
 .sp
 \fBmenubar_opacity\fP [\fI<UNIT_SEL>\fP]

@@ -1328,14 +1328,14 @@ TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
     memset(&g_menu_bar_manager, 0, sizeof(g_menu_bar_manager));
     menu_bar_manager_startup_staging_is_open = false;
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), false);
-    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_EXPANDED), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), false);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), false);
     menu_bar_manager_startup_staging_open();
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), true);
-    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_EXPANDED), true);
+    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), true);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), true);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
-    TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_EXPANDED);
+    TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);

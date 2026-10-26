@@ -9,8 +9,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define YB_MENU_BAR_MAX_EXPANDED_WIDTH 520.0
-#define YB_MENU_BAR_STATUS_HEIGHT       22.0
+#define YB_MENU_BAR_MAX_EXPANDED_WIDTH  520.0
+#define YB_MENU_BAR_MAX_AUTOMATIC_WIDTH 260.0
+#define YB_MENU_BAR_STATUS_HEIGHT        22.0
 #define YB_MENU_BAR_BUTTON_PAD_X         7.0
 #define YB_MENU_BAR_GAP                  0.0
 #define YB_MENU_BAR_DISPLAY_GAP          8.0
@@ -510,6 +511,26 @@ yb_find_visible_space(const struct menu_bar_display *display, enum menu_bar_spac
     return NULL;
 }
 
+static NSString *
+yb_status_accessibility_value(const struct menu_bar_snapshot *snapshot)
+{
+    if (!snapshot || snapshot->display_count == 0) return @"No displays available";
+
+    NSMutableArray *summaries = [NSMutableArray arrayWithCapacity:snapshot->display_count];
+    for (size_t display_index = 0; display_index < snapshot->display_count; ++display_index) {
+        const struct menu_bar_display *display = &snapshot->displays[display_index];
+        NSMutableString *summary = [NSMutableString stringWithString:yb_display_accessibility_title(display, display_index)];
+        const struct menu_bar_space *space = yb_find_visible_space(display, snapshot->settings.space_filter);
+        if (space) {
+            [summary appendFormat:@", visible space %@", yb_space_display_label(space)];
+        } else {
+            [summary appendString:@", visible space unresolved"];
+        }
+        [summaries addObject:summary];
+    }
+    return [summaries componentsJoinedByString:@"; "];
+}
+
 static CGFloat
 yb_title_width(NSString *title, NSFont *font)
 {
@@ -549,18 +570,35 @@ struct yb_screen_selection
     size_t count;
 };
 
+static NSString *
+yb_overflow_title(size_t omitted, bool leading)
+{
+    if (!omitted) return @"";
+    return leading
+         ? [NSString stringWithFormat:@"←+%zu", omitted]
+         : [NSString stringWithFormat:@"+%zu→", omitted];
+}
+
 static CGFloat
-yb_overflow_width(size_t omitted)
+yb_overflow_width(size_t omitted, bool leading)
 {
     if (!omitted) return 0.0;
-    NSString *title = [NSString stringWithFormat:@"…+%zu", omitted];
+    NSString *title = yb_overflow_title(omitted, leading);
     return MIN(64.0, MAX(34.0, yb_title_width(title, [NSFont menuBarFontOfSize:0.0]) + 14.0));
 }
 
 static CGFloat
-yb_screen_interval_width(const struct yb_screen_entry *entries, size_t start, size_t count, size_t omitted)
+yb_screen_interval_width(const struct yb_screen_entry *entries, size_t total, size_t start, size_t count)
 {
+    size_t omitted_before = start;
+    size_t omitted_after = total - start - count;
     CGFloat width = YB_MENU_BAR_OUTER_INSET;
+
+    if (omitted_before) {
+        width += yb_overflow_width(omitted_before, true);
+        if (count) width += YB_MENU_BAR_GAP;
+    }
+
     for (size_t i = 0; i < count; ++i) {
         if (i) {
             width += entries[start + i - 1].display == entries[start + i].display
@@ -569,7 +607,11 @@ yb_screen_interval_width(const struct yb_screen_entry *entries, size_t start, si
         const struct menu_bar_space *space = entries[start + i].space;
         width += yb_screen_cell_width(space ? space->mission_control_index : 0);
     }
-    if (omitted) width += YB_MENU_BAR_GAP + yb_overflow_width(omitted);
+
+    if (omitted_after) {
+        if (count || omitted_before) width += YB_MENU_BAR_GAP;
+        width += yb_overflow_width(omitted_after, false);
+    }
     return width + YB_MENU_BAR_OUTER_INSET;
 }
 
@@ -579,7 +621,7 @@ yb_screen_interval_fits(const struct yb_screen_entry *entries,
                         size_t start,
                         size_t count)
 {
-    return yb_screen_interval_width(entries, start, count, total - count) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH;
+    return yb_screen_interval_width(entries, total, start, count) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH;
 }
 
 static struct yb_screen_selection
@@ -587,7 +629,7 @@ yb_select_screen_interval(const struct yb_screen_entry *entries, size_t total, s
 {
     struct yb_screen_selection selection = { 0, 0 };
     if (!entries || !total) return selection;
-    if (yb_screen_interval_width(entries, 0, total, 0) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH) {
+    if (yb_screen_interval_width(entries, total, 0, total) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH) {
         selection.count = total;
         return selection;
     }
@@ -628,6 +670,21 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""] autorelease];
     [item setEnabled:YES];
     [item setIndentationLevel:indentation];
+    [item setToolTip:tool_tip];
+    [item setAccessibilityRole:NSAccessibilityStaticTextRole];
+    [item setAccessibilityLabel:title];
+    return item;
+}
+
+static NSMenuItem *
+yb_section_header_menu_item(NSString *title, NSString *tool_tip)
+{
+    NSMenuItem *item = nil;
+    if (@available(macOS 14.0, *)) {
+        item = [NSMenuItem sectionHeaderWithTitle:title];
+    } else {
+        item = yb_informational_menu_item(title, 0, tool_tip);
+    }
     [item setToolTip:tool_tip];
     [item setAccessibilityRole:NSAccessibilityStaticTextRole];
     [item setAccessibilityLabel:title];
@@ -773,10 +830,16 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [self ensureStatusItem];
     [self rebuildMenu];
 
-    if (_snapshot->settings.style == MENU_BAR_STYLE_EXPANDED) {
+    switch (_snapshot->settings.style) {
+    case MENU_BAR_STYLE_EXPANDED:
         [self renderExpandedStatusItem];
-    } else {
+        break;
+    case MENU_BAR_STYLE_COMPACT:
         [self renderCompactStatusItem];
+        break;
+    case MENU_BAR_STYLE_AUTOMATIC:
+        [self renderAutomaticStatusItem];
+        break;
     }
 }
 
@@ -793,9 +856,8 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [_menu setDelegate:self];
     [_menu setAutoenablesItems:NO];
 
-    NSMenuItem *title = yb_informational_menu_item(@"yabai Spaces — Read Only",
-                                                   0,
-                                                   @"Space and application information; use the controls below to change the indicator layout.");
+    NSMenuItem *title = yb_section_header_menu_item(@"yabai Spaces — Read Only",
+                                                    @"Space and application information; use the controls below to change the indicator layout.");
     [_menu addItem:title];
 
     NSString *failure = yb_nsstring(_snapshot->action_failure_text);
@@ -811,11 +873,15 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     bool added_display = false;
     for (size_t display_index = 0; display_index < _snapshot->display_count; ++display_index) {
         const struct menu_bar_display *display = &_snapshot->displays[display_index];
-        NSMenuItem *display_item = yb_informational_menu_item(yb_display_menu_title(display, display_index),
-                                                              0,
-                                                              yb_display_accessibility_title(display, display_index));
-        if (display->has_focus) [display_item setState:NSControlStateValueMixed];
-        [_menu addItem:display_item];
+        NSString *display_title = yb_display_menu_title(display, display_index);
+        NSString *display_accessibility = yb_display_accessibility_title(display, display_index);
+        NSMenuItem *display_item = [[[NSMenuItem alloc] initWithTitle:display_title action:nil keyEquivalent:@""] autorelease];
+        [display_item setToolTip:display_accessibility];
+        [display_item setAccessibilityLabel:display_accessibility];
+
+        NSMenu *display_menu = [[[NSMenu alloc] initWithTitle:display_title] autorelease];
+        [display_menu setAutoenablesItems:NO];
+        [display_menu addItem:yb_section_header_menu_item(display_title, display_accessibility)];
 
         bool added_space = false;
         for (size_t space_index = 0; space_index < display->space_count; ++space_index) {
@@ -823,25 +889,26 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
             if (!yb_space_matches_filter(space, _snapshot->settings.space_filter)) continue;
 
             NSMenuItem *space_item = yb_informational_menu_item(yb_space_menu_title(space),
-                                                                1,
+                                                                0,
                                                                 yb_space_accessibility_title(display, display_index, space));
             [space_item setState:space->is_visible ? NSControlStateValueOn : NSControlStateValueOff];
-            [_menu addItem:space_item];
+            [display_menu addItem:space_item];
             added_space = true;
         }
 
         if (!added_space) {
-            [_menu addItem:yb_informational_menu_item(@"No matching spaces", 1, @"No spaces match the current filter.")];
+            [display_menu addItem:yb_informational_menu_item(@"No matching spaces", 0, @"No spaces match the current filter.")];
         }
 
-        [_menu addItem:[NSMenuItem separatorItem]];
+        [display_item setSubmenu:display_menu];
+        [_menu addItem:display_item];
         added_display = true;
     }
 
     if (!added_display) {
         [_menu addItem:yb_informational_menu_item(@"No displays available", 0, @"macOS did not report any displays.")];
-        [_menu addItem:[NSMenuItem separatorItem]];
     }
+    [_menu addItem:[NSMenuItem separatorItem]];
 
     enum menu_bar_space_filter next_filter = _snapshot->settings.space_filter == MENU_BAR_SPACE_FILTER_ALL
                                            ? MENU_BAR_SPACE_FILTER_OCCUPIED
@@ -856,6 +923,13 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     NSMenuItem *style_root = [[[NSMenuItem alloc] initWithTitle:@"Menu bar layout" action:nil keyEquivalent:@""] autorelease];
     NSMenu *style_menu = [[[NSMenu alloc] initWithTitle:@"Menu bar layout"] autorelease];
     [style_menu setAutoenablesItems:NO];
+
+    YBMenuBarActionTarget *automatic_target = yb_action_target(YB_MENU_BAR_CONTROL_SET_STYLE, _snapshot->generation);
+    automatic_target->yb_style = MENU_BAR_STYLE_AUTOMATIC;
+    NSMenuItem *automatic = yb_menu_item(@"Automatic", @selector(performMenuAction:), self, automatic_target);
+    [automatic setState:_snapshot->settings.style == MENU_BAR_STYLE_AUTOMATIC ? NSControlStateValueOn : NSControlStateValueOff];
+    [automatic setToolTip:@"Use expanded layout up to 260 points, otherwise compact layout."];
+    [style_menu addItem:automatic];
 
     YBMenuBarActionTarget *compact_target = yb_action_target(YB_MENU_BAR_CONTROL_SET_STYLE, _snapshot->generation);
     compact_target->yb_style = MENU_BAR_STYLE_COMPACT;
@@ -939,6 +1013,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         [button setImage:nil];
         [button setToolTip:@"yabai Spaces — Read-only indicator; click to open the Spaces menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
+        [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
         [button setAccessibilityHelp:@"Read-only Spaces indicator; click to open the Spaces menu."];
 
         NSRect frame = [_strip_view frame];
@@ -974,6 +1049,17 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return button;
 }
 
+- (YBMenuBarButton *)overflowButtonForOmitted:(size_t)omitted leading:(bool)leading frame:(NSRect)frame
+{
+    YBMenuBarButton *overflow = [self buttonWithTitle:yb_overflow_title(omitted, leading) frame:frame];
+    NSString *direction = leading ? @"before" : @"after";
+    [overflow setToolTip:[NSString stringWithFormat:@"%zu spaces %@ the visible interval are listed in the yabai Spaces menu",
+                                                        omitted, direction]];
+    [overflow setAccessibilityLabel:[NSString stringWithFormat:@"%zu spaces %@ the visible interval",
+                                                               omitted, direction]];
+    return overflow;
+}
+
 - (NSView *)buildExpandedStrip
 {
     size_t total = 0;
@@ -1002,13 +1088,24 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     total = output;
 
     struct yb_screen_selection selection = yb_select_screen_interval(entries, total, active);
-    size_t omitted = total - selection.count;
+    size_t omitted_before = selection.start;
+    size_t omitted_after = total - selection.start - selection.count;
     CGFloat strip_width = total
-                        ? yb_screen_interval_width(entries, selection.start, selection.count, omitted)
+                        ? yb_screen_interval_width(entries, total, selection.start, selection.count)
                         : YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, strip_width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
 
     CGFloat x = YB_MENU_BAR_OUTER_INSET;
+    if (omitted_before) {
+        CGFloat width = yb_overflow_width(omitted_before, true);
+        YBMenuBarButton *overflow = [self overflowButtonForOmitted:omitted_before
+                                                           leading:true
+                                                             frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
+        [strip addSubview:overflow];
+        x += width;
+        if (selection.count) x += YB_MENU_BAR_GAP;
+    }
+
     if (!selection.count) {
         YBMenuBarScreenCell *placeholder = [self screenCellForDisplay:NULL
                                                          displayIndex:0
@@ -1038,14 +1135,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         x += cell_width;
     }
 
-    if (omitted) {
-        x += YB_MENU_BAR_GAP;
-        NSString *title = [NSString stringWithFormat:@"…+%zu", omitted];
-        CGFloat width = yb_overflow_width(omitted);
-        YBMenuBarButton *overflow = [self buttonWithTitle:title
-                                                    frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
-        [overflow setToolTip:@"Additional spaces are listed in the yabai Spaces menu"];
-        [overflow setAccessibilityLabel:@"Additional spaces listed in the yabai Spaces menu"];
+    if (omitted_after) {
+        if (selection.count || omitted_before) x += YB_MENU_BAR_GAP;
+        CGFloat width = yb_overflow_width(omitted_after, false);
+        YBMenuBarButton *overflow = [self overflowButtonForOmitted:omitted_after
+                                                           leading:false
+                                                             frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
         [strip addSubview:overflow];
     }
 
@@ -1056,6 +1151,16 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (void)renderExpandedStatusItem
 {
     [self installStripView:[self buildExpandedStrip]];
+}
+
+- (void)renderAutomaticStatusItem
+{
+    NSView *expanded = [self buildExpandedStrip];
+    if (NSWidth([expanded frame]) <= YB_MENU_BAR_MAX_AUTOMATIC_WIDTH) {
+        [self installStripView:expanded];
+    } else {
+        [self installStripView:[self buildCompactStrip]];
+    }
 }
 
 - (void)sendAction:(struct menu_bar_action)action

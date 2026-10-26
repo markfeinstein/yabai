@@ -59,6 +59,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Reuse window, Space and managed-display topology metadata within each integrated
   menu-bar snapshot, avoiding redundant synchronous WindowServer queries per window,
   Space and display.
+- Improve the native Spaces indicator with per-display submenus and section headers,
+  directional overflow counts, structured accessibility summaries, and an automatic
+  layout that expands within a 260-point budget before falling back to compact mode.
 - Reuse managed-Space topology and ordered-display metadata across each window-query
   request, avoiding repeated IPC for Space enumeration and serialized Space/display indices.
 - Add non-mutating window diagnostics for raw parent id, WindowServer tags,

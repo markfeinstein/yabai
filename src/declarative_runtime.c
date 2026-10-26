@@ -222,7 +222,10 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_ANIMATION_EASING: return value->enumeration >= 0 && value->enumeration < EASING_TYPE_COUNT;
     case DECLARATIVE_CONFIG_SHADOW: return value->enumeration >= PURIFY_DISABLED && value->enumeration <= PURIFY_ALWAYS;
     case DECLARATIVE_CONFIG_MENUBAR: return value->enumeration == MENU_BAR_DISABLED || value->enumeration == MENU_BAR_ENABLED;
-    case DECLARATIVE_CONFIG_MENUBAR_STYLE: return value->enumeration == MENU_BAR_STYLE_COMPACT || value->enumeration == MENU_BAR_STYLE_EXPANDED;
+    case DECLARATIVE_CONFIG_MENUBAR_STYLE:
+        return value->enumeration == MENU_BAR_STYLE_COMPACT ||
+               value->enumeration == MENU_BAR_STYLE_EXPANDED ||
+               value->enumeration == MENU_BAR_STYLE_AUTOMATIC;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return value->enumeration == MENU_BAR_SPACE_FILTER_OCCUPIED || value->enumeration == MENU_BAR_SPACE_FILTER_ALL;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return value->real >= 0.0f && value->real <= 1.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:

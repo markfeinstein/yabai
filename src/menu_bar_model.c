@@ -11,7 +11,9 @@ static bool menu_bar_model_valid_enabled(enum menu_bar_enabled enabled)
 
 static bool menu_bar_model_valid_style(enum menu_bar_style style)
 {
-    return style == MENU_BAR_STYLE_COMPACT || style == MENU_BAR_STYLE_EXPANDED;
+    return style == MENU_BAR_STYLE_COMPACT ||
+           style == MENU_BAR_STYLE_EXPANDED ||
+           style == MENU_BAR_STYLE_AUTOMATIC;
 }
 
 static bool menu_bar_model_valid_filter(enum menu_bar_space_filter filter)
