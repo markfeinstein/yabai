@@ -13,6 +13,13 @@ static AXError (*window_ax_snapshot_copy_multiple)(AXUIElementRef, CFArrayRef,
                                                     CFArrayRef *) = AXUIElementCopyMultipleAttributeValues;
 static AXError (*window_ax_snapshot_copy_single)(AXUIElementRef, CFStringRef,
                                                   CFTypeRef *) = AXUIElementCopyAttributeValue;
+static uint32_t (*window_create_parent_id)(uint32_t) = window_parent;
+static bool (*window_create_shadow)(uint32_t) = window_shadow;
+static bool (*window_create_sticky)(uint32_t) = window_is_sticky;
+static uint64_t (*window_create_space_id)(uint32_t) = window_space;
+static bool (*window_create_space_is_fullscreen)(uint64_t) = space_is_fullscreen;
+static bool (*window_create_can_move)(struct window *) = window_ax_can_move;
+static bool (*window_create_can_resize)(struct window *) = window_ax_can_resize;
 static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
 static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
@@ -24,6 +31,13 @@ static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_dis
 #define window_ax_snapshot_create_attributes CFArrayCreate
 #define window_ax_snapshot_copy_multiple AXUIElementCopyMultipleAttributeValues
 #define window_ax_snapshot_copy_single AXUIElementCopyAttributeValue
+#define window_create_parent_id window_parent
+#define window_create_shadow window_shadow
+#define window_create_sticky window_is_sticky
+#define window_create_space_id window_space
+#define window_create_space_is_fullscreen space_is_fullscreen
+#define window_create_can_move window_ax_can_move
+#define window_create_can_resize window_ax_can_resize
 #define window_test_is_ordered_in SLSWindowIsOrderedIn
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
 #define window_test_serialization_space window_space
@@ -1027,7 +1041,9 @@ static bool window_ax_snapshot_error_allows_fallback(AXError error)
     return error == kAXErrorAttributeUnsupported ||
            error == kAXErrorNoValue ||
            error == kAXErrorCannotComplete ||
-           error == kAXErrorNotImplemented;
+           error == kAXErrorNotImplemented ||
+           error == kAXErrorFailure ||
+           error == kAXErrorInvalidUIElement;
 }
 
 static AXError window_ax_snapshot_store_value(struct window_ax_snapshot *snapshot, int slot, CFTypeRef value)
@@ -1154,11 +1170,11 @@ bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct wind
             }
         } else {
             for (CFIndex index = 0; index < attribute_count; ++index) {
-                snapshot->slot_error[attribute_slots[index]] = kAXErrorIllegalArgument;
+                snapshot->slot_error[attribute_slots[index]] = kAXErrorFailure;
             }
         }
     } else {
-        AXError error = batch_error == kAXErrorSuccess ? kAXErrorIllegalArgument : batch_error;
+        AXError error = batch_error == kAXErrorSuccess ? kAXErrorFailure : batch_error;
         for (CFIndex index = 0; index < attribute_count; ++index) {
             snapshot->slot_error[attribute_slots[index]] = error;
         }
@@ -1281,19 +1297,6 @@ bool window_is_undersized(struct window *window)
     if (window->frame.size.width  <= 500.0f) return true;
     if (window->frame.size.height <= 500.0f) return true;
     return false;
-}
-
-static bool window_is_minimized(struct window *window)
-{
-    Boolean result = 0;
-    CFTypeRef value;
-
-    if (AXUIElementCopyAttributeValue(window->ref, kAXMinimizedAttribute, &value) == kAXErrorSuccess) {
-        result = CFBooleanGetValue(value);
-        CFRelease(value);
-    }
-
-    return result;
 }
 
 bool window_is_fullscreen(struct window *window)
@@ -1557,19 +1560,6 @@ char *window_subrole_ts(struct window *window)
     return result;
 }
 
-static bool window_is_root(struct window *window)
-{
-    bool result = false;
-    CFTypeRef value = NULL;
-
-    if (AXUIElementCopyAttributeValue(window->ref, kAXParentAttribute, &value) == kAXErrorSuccess) {
-        result = !(value && !CFEqual(value, window->application->ref));
-    }
-
-    if (value) CFRelease(value);
-    return result;
-}
-
 bool window_is_real(struct window *window)
 {
     bool win = false;
@@ -1642,37 +1632,53 @@ struct window *window_create(struct application *application, AXUIElementRef win
     window->ref = window_ref;
     window->id = window_id;
     window->id_ptr = &window->id;
-    window->frame = window_ax_frame(window);
-    window->role = window_ax_role(window);
-    window->subrole = window_ax_subrole(window);
-    window->title = window_title(window);
-    window->is_root = !window_parent(window->id) || window_is_root(window);
 
-    if (window_shadow(window->id)) {
+    const uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE |
+                               WINDOW_AX_SUBROLE | WINDOW_AX_TITLE | WINDOW_AX_PARENT |
+                               WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+    (void) window_ax_snapshot_read(window->ref, requested, &snapshot);
+
+    CGRect frame;
+    if (window_ax_snapshot_frame(&snapshot, &frame)) window->frame = frame;
+    window->role = snapshot.role;
+    snapshot.role = NULL;
+    window->subrole = snapshot.subrole;
+    snapshot.subrole = NULL;
+    window->title = snapshot.title;
+    snapshot.title = NULL;
+
+    uint32_t parent_id = window_create_parent_id(window->id);
+    bool ax_root = (snapshot.valid & WINDOW_AX_PARENT) &&
+                   (!snapshot.parent || CFEqual(snapshot.parent, window->application->ref));
+    window->is_root = !parent_id || ax_root;
+
+    if (window_create_shadow(window->id)) {
         window_set_flag(window, WINDOW_SHADOW);
     }
 
-    if (window_is_minimized(window)) {
+    if ((snapshot.valid & WINDOW_AX_MINIMIZED) && snapshot.minimized) {
         window_set_flag(window, WINDOW_MINIMIZE);
     }
 
-    if (window_ax_can_move(window)) {
+    if (window_create_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
     }
 
-    if (window_ax_can_resize(window)) {
+    if (window_create_can_resize(window)) {
         window_set_flag(window, WINDOW_RESIZABLE);
     }
 
-    if ((window_is_fullscreen(window)) ||
-        (space_is_fullscreen(window_space(window->id)))) {
+    bool ax_fullscreen = (snapshot.valid & WINDOW_AX_FULLSCREEN) && snapshot.fullscreen;
+    if (ax_fullscreen || window_create_space_is_fullscreen(window_create_space_id(window->id))) {
         window_set_flag(window, WINDOW_FULLSCREEN);
     }
 
-    if (window_is_sticky(window->id)) {
+    if (window_create_sticky(window->id)) {
         window_set_flag(window, WINDOW_STICKY);
     }
 
+    window_ax_snapshot_destroy(&snapshot);
     return window;
 }
 
