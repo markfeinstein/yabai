@@ -825,7 +825,38 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     }
 
     uint64_t expected_space_ids[] = { 11, 12, 20 };
-    for (size_t i = 0; i < sizeof(expected_space_ids) / sizeof(expected_space_ids[0]); ++i) {
+    YBMenuBarScreenCell *first = [[strip subviews] firstObject];
+    NSPoint first_point = NSMakePoint(NSMidX([first frame]), NSMidY([first frame]));
+    NSPoint first_window_point = [strip convertPoint:first_point toView:nil];
+    NSInteger window_number = [[strip window] windowNumber];
+    NSEvent *down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                        location:first_window_point
+                                   modifierFlags:0
+                                       timestamp:1.0
+                                    windowNumber:window_number
+                                         context:nil
+                                     eventNumber:1
+                                      clickCount:1
+                                        pressure:1.0];
+    NSEvent *up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                      location:first_window_point
+                                 modifierFlags:0
+                                     timestamp:1.1
+                                  windowNumber:window_number
+                                       context:nil
+                                   eventNumber:2
+                                    clickCount:1
+                                      pressure:0.0];
+    [(YBMenuBarStripView *) strip mouseDown:down];
+    TEST_CHECK(((YBMenuBarStripView *) strip)->yb_long_press_timer != nil);
+    [(YBMenuBarStripView *) strip mouseUp:up];
+    TEST_CHECK(((YBMenuBarStripView *) strip)->yb_long_press_timer == nil);
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.generation[0] == 73);
+    TEST_CHECK(log.space_id[0] == expected_space_ids[0]);
+
+    for (size_t i = 1; i < sizeof(expected_space_ids) / sizeof(expected_space_ids[0]); ++i) {
         YBMenuBarScreenCell *direct = [[strip subviews] objectAtIndex:i];
         [(YBMenuBarStripView *) strip activatePoint:NSMakePoint(NSMidX([direct frame]), NSMidY([direct frame]))];
         TEST_CHECK(log.count == i + 1);
@@ -842,6 +873,52 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     TEST_CHECK(log.count == 3);
 
     [controller clearStatusItem];
+    [controller release];
+    return true;
+}
+
+static bool
+test_strip_long_press_uses_internal_timer(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    [controller testSetSnapshot:menu_bar_ui_default_layout_snapshot(74)];
+
+    YBMenuBarStripView *strip = (YBMenuBarStripView *) [controller testBuildExpandedStrip];
+    YBMenuBarScreenCell *cell = [[strip subviews] firstObject];
+    NSPoint point = NSMakePoint(NSMidX([cell frame]), NSMidY([cell frame]));
+    NSEvent *down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                        location:point
+                                   modifierFlags:0
+                                       timestamp:1.0
+                                    windowNumber:0
+                                         context:nil
+                                     eventNumber:1
+                                      clickCount:1
+                                        pressure:1.0];
+    NSEvent *up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                      location:point
+                                 modifierFlags:0
+                                     timestamp:1.5
+                                  windowNumber:0
+                                       context:nil
+                                   eventNumber:2
+                                    clickCount:1
+                                      pressure:0.0];
+
+    [strip mouseDown:down];
+    NSTimer *timer = strip->yb_long_press_timer;
+    TEST_CHECK(timer != nil);
+    [strip longPressTimerFired:timer];
+    TEST_CHECK(strip->yb_long_press_timer == nil);
+    TEST_CHECK(strip->yb_long_press_fired == true);
+    TEST_CHECK(log.count == 0);
+
+    [strip mouseUp:up];
+    TEST_CHECK(strip->yb_long_press_fired == false);
+    TEST_CHECK(log.count == 0);
+
     [controller release];
     return true;
 }
@@ -866,14 +943,6 @@ test_expanded_render_uses_direct_actions_and_context_menu(void)
     TEST_CHECK(button != nil);
     TEST_CHECK([button action] == @selector(showStatusMenu:));
     TEST_CHECK([button target] == controller);
-    bool found_long_press = false;
-    for (NSGestureRecognizer *recognizer in [button gestureRecognizers]) {
-        if (![recognizer isKindOfClass:[NSPressGestureRecognizer class]]) continue;
-        found_long_press = true;
-        TEST_CHECK([(NSPressGestureRecognizer *) recognizer buttonMask] == 0x1);
-        TEST_CHECK([(NSPressGestureRecognizer *) recognizer minimumPressDuration] == 0.45);
-    }
-    TEST_CHECK(found_long_press);
     TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);
 
@@ -1281,6 +1350,7 @@ int main(void)
             { "space_menu_focus_closes_without_animation", test_space_menu_focus_closes_without_animation },
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
             { "strip_cells_route_direct_focus_and_menu_actions", test_strip_cells_route_direct_focus_and_menu_actions },
+            { "strip_long_press_uses_internal_timer", test_strip_long_press_uses_internal_timer },
             { "expanded_render_uses_direct_actions_and_context_menu", test_expanded_render_uses_direct_actions_and_context_menu },
             { "automatic_layout_uses_width_budget_and_accessibility_summary", test_automatic_layout_uses_width_budget_and_accessibility_summary },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },

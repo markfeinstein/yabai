@@ -27,6 +27,8 @@
 #define YB_MENU_BAR_SCREEN_RADIUS        3.0
 #define YB_MENU_BAR_INDEX_FONT_SIZE     12.0
 #define YB_MENU_BAR_INDEX_PAD_X          8.0
+#define YB_MENU_BAR_LONG_PRESS_DURATION  0.45
+#define YB_MENU_BAR_DRAG_TOLERANCE       4.0
 
 static int g_yb_menu_bar_contrast_override = -1;
 
@@ -81,6 +83,10 @@ enum yb_menu_bar_control_kind
 @interface YBMenuBarStripView : NSView {
 @public
     YBMenuBarController *yb_controller;
+    NSTimer *yb_long_press_timer;
+    NSPoint yb_mouse_down_point;
+    bool yb_long_press_fired;
+    bool yb_click_cancelled;
 }
 - (void)activatePoint:(NSPoint)point;
 @end
@@ -120,7 +126,6 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     NSStatusItem *_status_item;
     NSMenu *_menu;
     NSView *_strip_view;
-    NSPressGestureRecognizer *_long_press_recognizer;
     struct menu_bar_snapshot *_snapshot;
     struct menu_bar_snapshot *_deferred_snapshot;
     bool _is_tracking_menu;
@@ -131,7 +136,6 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
 - (void)showStatusMenu:(id)sender;
-- (void)showStatusMenuForPress:(NSPressGestureRecognizer *)recognizer;
 - (void)performScreenAction:(id)sender;
 - (void)performMenuAction:(id)sender;
 - (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter;
@@ -159,6 +163,29 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 @end
 
 @implementation YBMenuBarStripView
+- (void)dealloc
+{
+    [yb_long_press_timer invalidate];
+    [yb_long_press_timer release];
+    [super dealloc];
+}
+
+- (void)cancelLongPressTimer
+{
+    [yb_long_press_timer invalidate];
+    [yb_long_press_timer release];
+    yb_long_press_timer = nil;
+}
+
+- (void)longPressTimerFired:(NSTimer *)timer
+{
+    if (timer != yb_long_press_timer || yb_click_cancelled) return;
+
+    yb_long_press_fired = true;
+    [self cancelLongPressTimer];
+    [yb_controller showStatusMenu:self];
+}
+
 - (NSView *)hitTest:(NSPoint)point
 {
     // Route the entire strip through one tracking view. Nested NSButton tracking
@@ -182,14 +209,46 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     [yb_controller showStatusMenu:self];
 }
 
+- (void)mouseDown:(NSEvent *)event
+{
+    [self cancelLongPressTimer];
+    yb_mouse_down_point = [self convertPoint:[event locationInWindow] fromView:nil];
+    yb_long_press_fired = false;
+    yb_click_cancelled = false;
+
+    yb_long_press_timer = [[NSTimer timerWithTimeInterval:YB_MENU_BAR_LONG_PRESS_DURATION
+                                                   target:self
+                                                 selector:@selector(longPressTimerFired:)
+                                                 userInfo:nil
+                                                  repeats:NO] retain];
+    [[NSRunLoop mainRunLoop] addTimer:yb_long_press_timer forMode:NSRunLoopCommonModes];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    if (hypot(point.x - yb_mouse_down_point.x, point.y - yb_mouse_down_point.y) <= YB_MENU_BAR_DRAG_TOLERANCE) return;
+
+    yb_click_cancelled = true;
+    [self cancelLongPressTimer];
+}
+
 - (void)mouseUp:(NSEvent *)event
 {
-    [self activatePoint:[self convertPoint:[event locationInWindow] fromView:nil]];
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    [self cancelLongPressTimer];
+    if (!yb_long_press_fired && !yb_click_cancelled && NSPointInRect(point, [self bounds])) {
+        [self activatePoint:point];
+    }
+    yb_long_press_fired = false;
+    yb_click_cancelled = false;
 }
 
 - (void)rightMouseDown:(NSEvent *)event
 {
     (void) event;
+    [self cancelLongPressTimer];
+    yb_click_cancelled = true;
     [yb_controller showStatusMenu:self];
 }
 
@@ -807,9 +866,6 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 
     if (_status_item) {
         NSStatusBarButton *button = [_status_item button];
-        if (_long_press_recognizer) [button removeGestureRecognizer:_long_press_recognizer];
-        [_long_press_recognizer release];
-        _long_press_recognizer = nil;
         [button setMenu:nil];
         [button setTarget:nil];
         [button setAction:NULL];
@@ -1083,13 +1139,6 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [button setImage:nil];
         [button setTarget:self];
         [button setAction:@selector(showStatusMenu:)];
-        if (!_long_press_recognizer) {
-            _long_press_recognizer = [[NSPressGestureRecognizer alloc] initWithTarget:self
-                                                                               action:@selector(showStatusMenuForPress:)];
-            [_long_press_recognizer setButtonMask:0x1];
-            [_long_press_recognizer setMinimumPressDuration:0.45];
-            [button addGestureRecognizer:_long_press_recognizer];
-        }
         [button setToolTip:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
@@ -1255,11 +1304,6 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [_status_item popUpStatusItemMenu:_menu];
 #pragma clang diagnostic pop
-}
-
-- (void)showStatusMenuForPress:(NSPressGestureRecognizer *)recognizer
-{
-    if ([recognizer state] == NSGestureRecognizerStateBegan) [self showStatusMenu:recognizer];
 }
 
 - (void)sendAction:(struct menu_bar_action)action
