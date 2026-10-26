@@ -867,6 +867,8 @@ Each \f(CRrules\fP entry accepts exactly \f(CRlabel\fP, \f(CRone_shot\fP, \f(CRm
 .sp
 A rule cannot specify both \f(CRscratchpad\fP and \f(CRmanage\fP. If both display and Space are present, Space wins and the shared \f(CRfollow\fP applies to it.
 .sp
+During daemon startup, target moves still apply while each pre\-existing application\(cqs initial window inventory converges, but \f(CRfollow\fP is suppressed so restarting yabai does not change the active Space. Window\-created retries retain that startup context. Later windows and explicit \f(CRrule \-\-apply\fP operations use normal follow behavior; native fullscreen continues to focus its target.
+.sp
 The native \f(CRsticky\fP, \f(CRsub_layer\fP and \f(CRopacity\fP effects call the scripting addition and require partial SIP disablement. Assigning a \f(CRscratchpad\fP label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting\-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
 .sp
 Native display and Space targets use one\-based indices only. Display indices resolve using the candidate \f(CRdisplay_arrangement_order\fP; equal coordinates use the captured managed\-display ordinal as the final tie\-break. Space indices use the captured global Mission Control order. A positive authored index absent from the current valid topology is accepted, and the native rule remains installed with its source order and label. Runtime preparation still strictly rejects malformed, incomplete, duplicate, zero\-ID or ambiguous display/Space topology instead of filtering it.

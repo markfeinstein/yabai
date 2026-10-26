@@ -36,6 +36,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   current display bounds without changing configured split ratios.
 - Leave actively dragged cross-display windows under mouse-up ownership instead
   of reconciling them into the destination Space early [#2843](https://github.com/asmvik/yabai/issues/2843).
+- Preserve the active Space during daemon startup by applying persistent rule
+  target moves without following them until each pre-existing application's
+  initial window inventory converges.
 - Ignore zero-area helper windows unless an explicit rule manages them.
 - Use modern Objective-C ivar accessors for scripting-addition compatibility
   with current Apple Silicon SDKs.

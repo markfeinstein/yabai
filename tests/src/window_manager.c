@@ -198,6 +198,88 @@ TEST_FUNC(rule_scratchpad_application_copy_failure_is_atomic,
     buf_free(wm.scratchpad_window);
 });
 
+static int startup_rule_move_count;
+static int startup_rule_focus_count;
+static uint64_t startup_rule_last_sid;
+static bool startup_rule_moved_by_rule;
+
+static bool startup_rule_not_fullscreen(struct window *window)
+{
+    (void) window;
+    return false;
+}
+
+static uint64_t startup_rule_window_space(uint32_t window_id)
+{
+    (void) window_id;
+    return 3;
+}
+
+static bool startup_rule_space_not_fullscreen(uint64_t sid)
+{
+    (void) sid;
+    return false;
+}
+
+static bool startup_rule_move(struct space_manager *sm, struct window_manager *wm, struct window *window,
+                              uint64_t sid, bool moved_by_rule)
+{
+    (void) sm;
+    (void) wm;
+    (void) window;
+    startup_rule_moved_by_rule = moved_by_rule;
+    ++startup_rule_move_count;
+    startup_rule_last_sid = sid;
+    return true;
+}
+
+static enum space_op_error startup_rule_focus(uint64_t sid)
+{
+    ++startup_rule_focus_count;
+    startup_rule_last_sid = sid;
+    return SPACE_OP_ERROR_SUCCESS;
+}
+
+TEST_FUNC(startup_inventory_moves_rule_targets_without_following_space,
+{
+    __auto_type saved_window_fullscreen = window_manager_rule_window_is_fullscreen;
+    __auto_type saved_window_space = window_manager_rule_window_space;
+    __auto_type saved_space_fullscreen = window_manager_rule_space_is_fullscreen;
+    __auto_type saved_move = window_manager_rule_send_window_to_space;
+    __auto_type saved_focus = window_manager_rule_focus_space;
+    window_manager_rule_window_is_fullscreen = startup_rule_not_fullscreen;
+    window_manager_rule_window_space = startup_rule_window_space;
+    window_manager_rule_space_is_fullscreen = startup_rule_space_not_fullscreen;
+    window_manager_rule_send_window_to_space = startup_rule_move;
+    window_manager_rule_focus_space = startup_rule_focus;
+
+    struct window_manager wm = {0};
+    struct window window = { .id = 61 };
+    struct rule_effects effects = { .sid = 9 };
+    rule_effects_set_flag(&effects, RULE_FOLLOW_SPACE);
+    startup_rule_move_count = 0;
+    startup_rule_focus_count = 0;
+    startup_rule_last_sid = 0;
+    startup_rule_moved_by_rule = false;
+
+    window_manager_apply_rule_effects_to_window_with_context(&g_space_manager, &wm, &window, &effects, true);
+    TEST_CHECK(startup_rule_move_count, 1);
+    TEST_CHECK(startup_rule_focus_count, 0);
+    TEST_CHECK(startup_rule_moved_by_rule, true);
+    TEST_CHECK(startup_rule_last_sid, 9U);
+
+    window_manager_apply_rule_effects_to_window_with_context(&g_space_manager, &wm, &window, &effects, false);
+    TEST_CHECK(startup_rule_move_count, 2);
+    TEST_CHECK(startup_rule_focus_count, 1);
+    TEST_CHECK(startup_rule_last_sid, 9U);
+
+    window_manager_rule_window_is_fullscreen = saved_window_fullscreen;
+    window_manager_rule_window_space = saved_window_space;
+    window_manager_rule_space_is_fullscreen = saved_space_fullscreen;
+    window_manager_rule_send_window_to_space = saved_move;
+    window_manager_rule_focus_space = saved_focus;
+});
+
 TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
 {
     struct window_manager wm = {0};

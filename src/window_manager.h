@@ -248,15 +248,16 @@ struct window_created_retry
     pid_t application_pid;
     bool one_shot_rules;
     pid_t one_shot_owner_pid;
+    bool suppress_rule_follow;
 };
 
-struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid);
+struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
 void window_manager_destroy_window_created_retry(struct window_created_retry *retry);
-void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid);
+void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
 struct application *window_manager_resolve_window_created_retry(struct window_manager *wm, struct window_created_retry *retry);
 pid_t window_manager_window_created_retry_owner(struct application *application, struct window_created_retry *retry);
 bool window_manager_window_created_retry_uses_one_shots(struct application *application, struct window_created_retry *retry);
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool *retry);
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry);
 struct window **window_manager_add_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int *count);
 bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index, struct window ***created_windows, int *created_count);
 bool window_manager_remove_application_refresh(struct window_manager *wm, struct application *application);

@@ -351,12 +351,13 @@ TEST_FUNC(inactive_space_launch_retry_survives_finalization_and_rejects_stale_pi
     table_init(&wm.application, 4, hash_wm, compare_wm);
     struct application application = { .pid = 81, .psn = { .highLongOfPSN = 1, .lowLongOfPSN = 2 }, .name = "Retry", .launch_refresh = true };
     table_add(&wm.application, &application.pid, &application);
-    struct window_created_retry *owned_retry = window_manager_create_window_created_retry((AXUIElementRef)(uintptr_t) 99, &application, true, 81);
+    struct window_created_retry *owned_retry = window_manager_create_window_created_retry((AXUIElementRef)(uintptr_t) 99, &application, true, 81, true);
     TEST_CHECK(launch_test_retain_count, 1);
     struct window_created_retry retry = *owned_retry;
     TEST_CHECK(window_manager_resolve_window_created_retry(&wm, &retry) == &application, true);
     TEST_CHECK(window_manager_window_created_retry_owner(&application, &retry), 81);
     TEST_CHECK(window_manager_window_created_retry_uses_one_shots(&application, &retry), true);
+    TEST_CHECK(retry.suppress_rule_follow, true);
     retry.application_psn.lowLongOfPSN = 3;
     TEST_CHECK(window_manager_resolve_window_created_retry(&wm, &retry) == NULL, true);
     retry.application_psn = application.psn;
@@ -401,7 +402,7 @@ TEST_FUNC(inactive_space_launch_window_creation_defers_all_rule_effects_until_re
     AXUIElementRef owned_ref = (AXUIElementRef) (uintptr_t) 99;
     TEST_CHECK(window_manager_create_and_add_window(&g_space_manager, &g_window_manager,
                                                     &pending, owned_ref, 900, true,
-                                                    pending.pid, &retry), NULL);
+                                                    pending.pid, false, &retry), NULL);
     TEST_CHECK(retry, true);
     TEST_CHECK(g_window_manager.window.count, 0);
     TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MANAGED), false);
@@ -412,7 +413,7 @@ TEST_FUNC(inactive_space_launch_window_creation_defers_all_rule_effects_until_re
     retry = false;
     TEST_CHECK(window_manager_create_and_add_window(&g_space_manager, &g_window_manager,
                                                     &pending, owned_ref, 900, true,
-                                                    pending.pid, &retry), &test_window);
+                                                    pending.pid, false, &retry), &test_window);
     TEST_CHECK(retry, false);
     TEST_CHECK(g_window_manager.window.count, 1);
     TEST_CHECK(window_check_rule_flag(&test_window, WINDOW_RULE_MANAGED), true);

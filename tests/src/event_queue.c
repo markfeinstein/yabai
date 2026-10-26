@@ -556,7 +556,7 @@ TEST_FUNC(window_created_retry_rejection_consumes_context_and_ax_reference_once,
         event_queue_retry_release_count = 0;
         unsigned destroys = window_manager_test_retry_destroy_count;
         AXUIElementRef ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("queue-retry-owner"));
-        struct window_created_retry *retry = window_manager_create_window_created_retry(ref, &application, true, application.pid);
+        struct window_created_retry *retry = window_manager_create_window_created_retry(ref, &application, true, application.pid, false);
         TEST_CHECK(retry != NULL, true);
         TEST_CHECK(event_loop_try_post(&event_loop, WINDOW_CREATED_RETRY, retry, 0), false);
         TEST_CHECK(event_queue_retry_retain_count, 1);

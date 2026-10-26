@@ -330,6 +330,8 @@ Each `rules` entry accepts exactly `label`, `one_shot`, `match` and `effects`. `
 
 A rule cannot specify both `scratchpad` and `manage`. If both display and Space are present, Space wins and the shared `follow` applies to it.
 
+During daemon startup, target moves still apply while each pre-existing application's initial window inventory converges, but `follow` is suppressed so restarting yabai does not change the active Space. Window-created retries retain that startup context. Later windows and explicit `rule --apply` operations use normal follow behavior; native fullscreen continues to focus its target.
+
 The native `sticky`, `sub_layer` and `opacity` effects call the scripting addition and require partial SIP disablement. Assigning a `scratchpad` label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
 
 Native display and Space targets use one-based indices only. Display indices resolve using the candidate `display_arrangement_order`; equal coordinates use the captured managed-display ordinal as the final tie-break. Space indices use the captured global Mission Control order. A positive authored index absent from the current valid topology is accepted, and the native rule remains installed with its source order and label. Runtime preparation still strictly rejects malformed, incomplete, duplicate, zero-ID or ambiguous display/Space topology instead of filtering it.

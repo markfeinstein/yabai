@@ -299,13 +299,13 @@ TEST_FUNC(window_created_replaces_only_same_id_window_elements,
     window_manager_test_window_unobserve = replacement_window_test_unobserve;
 
     AXUIElementRef replacement = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("new-window-element"));
-    event_loop_handle_window_created(replacement, &application, true, 0);
+    event_loop_handle_window_created(replacement, &application, true, 0, false);
     TEST_CHECK(window.ref == replacement, true);
     TEST_CHECK(window_manager_find_window(&g_window_manager, window.id), &window);
 
     event_loop_test_window_ref_is_window = replacement_window_test_is_not_window;
     AXUIElementRef child = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("child-element"));
-    event_loop_handle_window_created(child, &application, true, 0);
+    event_loop_handle_window_created(child, &application, true, 0, false);
     TEST_CHECK(window.ref == replacement, true);
 
     CFRelease(window.ref);
@@ -1194,16 +1194,20 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
         launch_path_reset_counts();
         application_test_reset(kAXErrorSuccess);
         process.launch_retries = 0;
+        process_initial_window_inventory_store(&process, false);
         table_test_fail_allocation_after(rehash ? 2 : 0);
         window_manager_begin(&g_space_manager, &g_window_manager);
         table_test_fail_allocation_after(-1);
         TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) == NULL, true);
+        TEST_CHECK(process_initial_window_inventory_load(&process), true);
         TEST_CHECK(launch_path_destroy_count, 1);
         TEST_CHECK(launch_path_remove_count, 7);
         TEST_CHECK(launch_path_retry_count, 1);
         application_test_reset(kAXErrorSuccess);
         window_manager_begin(&g_space_manager, &g_window_manager);
-        TEST_CHECK(window_manager_find_application(&g_window_manager, process.pid) != NULL, true);
+        struct application *startup_application = window_manager_find_application(&g_window_manager, process.pid);
+        TEST_CHECK(startup_application != NULL, true);
+        if (startup_application) TEST_CHECK(startup_application->initial_window_inventory, false);
         TEST_CHECK(process.launch_retries, 0U);
         launch_path_cleanup_application(&g_window_manager, process.pid);
         TEST_CHECK(launch_path_create_count, 2);
@@ -1215,6 +1219,7 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
         TEST_CHECK(process.ns_application, (void *) 1);
         table_free(&g_window_manager.application);
     }
+    process_initial_window_inventory_store(&process, false);
 
     struct event_loop saved_event_loop = g_event_loop;
     g_event_loop = (struct event_loop) {0};

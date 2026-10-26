@@ -269,6 +269,7 @@ struct application *application_create(struct process *process)
     application->psn = process->psn;
     application->pid = process->pid;
     application->name = process->name;
+    application->initial_window_inventory = process_initial_window_inventory_load(process);
 #ifdef TESTS
     application->is_hidden = application_create_is_hidden(application);
     if (application_create_connection) application_create_connection(application);

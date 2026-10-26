@@ -2938,6 +2938,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
     TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
+    TEST_ENTRY(application_create_copies_initial_window_inventory_context) \
     TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
@@ -3007,6 +3008,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
     TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
+    TEST_ENTRY(startup_inventory_moves_rule_targets_without_following_space) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \

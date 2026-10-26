@@ -88,6 +88,7 @@ struct application
     bool is_hidden;
     bool ax_retry;
     bool launch_refresh;
+    bool initial_window_inventory;
     uint8_t frame_recovery_unobserve_retries;
     bool frame_recovery_hint_pending;
     bool frame_recovery_hint_active;
