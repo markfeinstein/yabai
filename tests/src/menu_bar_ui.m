@@ -924,7 +924,7 @@ test_strip_long_press_uses_internal_timer(void)
 }
 
 static bool
-test_expanded_render_uses_direct_actions_and_context_menu(void)
+test_expanded_render_uses_direct_actions_and_manual_menu(void)
 {
     struct menu_bar_ui_action_log log = {0};
     struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
@@ -939,8 +939,10 @@ test_expanded_render_uses_direct_actions_and_context_menu(void)
     TEST_CHECK([controller testStatusItemCount] == 1);
     TEST_CHECK([controller testStatusButtonCount] == 4);
     TEST_CHECK([controller testStatusButtonOwnsStripView]);
-    TEST_CHECK([controller testStatusViewsOwnMenu]);
+    TEST_CHECK([controller testStatusViewsUseManualMenu]);
     TEST_CHECK(button != nil);
+    TEST_CHECK([button menu] == nil);
+    TEST_CHECK([[controller testStripView] menu] == nil);
     TEST_CHECK([button action] == @selector(showStatusMenu:));
     TEST_CHECK([button target] == controller);
     TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
@@ -1351,7 +1353,7 @@ int main(void)
             { "expanded_screen_cells_and_compact_option", test_expanded_screen_cells_and_compact_option },
             { "strip_cells_route_direct_focus_and_menu_actions", test_strip_cells_route_direct_focus_and_menu_actions },
             { "strip_long_press_uses_internal_timer", test_strip_long_press_uses_internal_timer },
-            { "expanded_render_uses_direct_actions_and_context_menu", test_expanded_render_uses_direct_actions_and_context_menu },
+            { "expanded_render_uses_direct_actions_and_manual_menu", test_expanded_render_uses_direct_actions_and_manual_menu },
             { "automatic_layout_uses_width_budget_and_accessibility_summary", test_automatic_layout_uses_width_budget_and_accessibility_summary },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },

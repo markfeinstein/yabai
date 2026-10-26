@@ -139,7 +139,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)performScreenAction:(id)sender;
 - (void)performMenuAction:(id)sender;
 - (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter;
-- (void)attachMenuToStatusViews;
+- (void)clearNativeMenusFromStatusViews;
 - (void)installStripView:(NSView *)strip;
 #if defined(YB_MENU_BAR_TEST)
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
@@ -152,7 +152,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (NSUInteger)testStatusItemCount;
 - (NSUInteger)testStatusButtonCount;
 - (bool)testStatusButtonOwnsStripView;
-- (bool)testStatusViewsOwnMenu;
+- (bool)testStatusViewsUseManualMenu;
 - (NSStatusBarButton *)testStatusButton;
 - (NSView *)testStripView;
 - (bool)testIsTrackingMenu;
@@ -1106,13 +1106,16 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     return strip;
 }
 
-- (void)attachMenuToStatusViews
+- (void)clearNativeMenusFromStatusViews
 {
     if (!_status_item) return;
 
+    // NSButton.menu captures the primary click before the custom strip sees it.
+    // Keep every native menu property empty and present _menu only through the
+    // explicit active/gap/right-click/long-press handlers.
     NSStatusBarButton *button = [_status_item button];
-    [button setMenu:_menu];
-    [_strip_view setMenu:_menu];
+    [button setMenu:nil];
+    [_strip_view setMenu:nil];
     for (NSView *view in [_strip_view subviews]) {
         if ([view isKindOfClass:[NSButton class]]) [(NSButton *) view setMenu:nil];
     }
@@ -1157,7 +1160,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [_status_item setView:_strip_view];
     }
 
-    [self attachMenuToStatusViews];
+    [self clearNativeMenusFromStatusViews];
 }
 
 - (void)renderCompactStatusItem
@@ -1392,7 +1395,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [_menu release];
     _menu = [menu retain];
     [_menu setDelegate:self];
-    [self attachMenuToStatusViews];
+    [self clearNativeMenusFromStatusViews];
 }
 
 - (void)testRebuildMenu
@@ -1436,12 +1439,12 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     return button && [_status_item view] == nil && [_strip_view superview] == button;
 }
 
-- (bool)testStatusViewsOwnMenu
+- (bool)testStatusViewsUseManualMenu
 {
-    if (!_status_item || [_status_item menu] != nil) return false;
+    if (!_status_item || !_menu || [_status_item menu] != nil) return false;
 
     NSStatusBarButton *button = [_status_item button];
-    if (!button || [button menu] != _menu || [_strip_view menu] != _menu) return false;
+    if (!button || [button menu] != nil || [_strip_view menu] != nil) return false;
     for (NSView *view in [_strip_view subviews]) {
         if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != nil) return false;
     }
