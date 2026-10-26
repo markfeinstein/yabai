@@ -361,6 +361,64 @@ static bool window_move_transport_fallback(uint64_t sid, uint32_t *windows, int 
     return window_move_transport_result[window_move_transport_count++];
 }
 
+static uint64_t window_move_observed_target;
+static int window_move_observed_success_after;
+static int window_move_observed_calls;
+static int window_move_wait_calls;
+static useconds_t window_move_wait_interval;
+
+static bool window_move_sa_transport_acknowledges(char *bytes, size_t length)
+{
+    return bytes && length > 0;
+}
+
+static uint64_t window_move_observe_space(uint32_t window_id)
+{
+    (void) window_id;
+    int call = window_move_observed_calls++;
+    return call >= window_move_observed_success_after
+         ? window_move_observed_target
+         : window_move_observed_target - 1;
+}
+
+static int window_move_wait_without_sleep(useconds_t interval)
+{
+    window_move_wait_interval = interval;
+    ++window_move_wait_calls;
+    return 0;
+}
+
+TEST_FUNC(window_space_move_sa_requires_observed_postcondition,
+{
+    bool (*saved_transport)(char *, size_t) = scripting_addition_transport;
+    __auto_type saved_window_space = space_manager_test_window_space;
+    __auto_type saved_wait = space_manager_test_move_wait;
+    scripting_addition_transport = window_move_sa_transport_acknowledges;
+    space_manager_test_window_space = window_move_observe_space;
+    space_manager_test_move_wait = window_move_wait_without_sleep;
+
+    uint32_t window_id = 41;
+    window_move_observed_target = 91;
+    window_move_observed_success_after = INT_MAX;
+    window_move_observed_calls = 0;
+    window_move_wait_calls = 0;
+    TEST_CHECK(space_manager_move_window_list_using_sa(window_move_observed_target, &window_id, 1), false);
+    TEST_CHECK(window_move_observed_calls, WINDOW_SPACE_MOVE_WAIT_ATTEMPTS);
+    TEST_CHECK(window_move_wait_calls, WINDOW_SPACE_MOVE_WAIT_ATTEMPTS);
+    TEST_CHECK(window_move_wait_interval, (useconds_t) WINDOW_SPACE_MOVE_WAIT_INTERVAL_US);
+
+    window_move_observed_success_after = 2;
+    window_move_observed_calls = 0;
+    window_move_wait_calls = 0;
+    TEST_CHECK(space_manager_move_window_list_using_sa(window_move_observed_target, &window_id, 1), true);
+    TEST_CHECK(window_move_observed_calls, 3);
+    TEST_CHECK(window_move_wait_calls, 2);
+
+    scripting_addition_transport = saved_transport;
+    space_manager_test_window_space = saved_window_space;
+    space_manager_test_move_wait = saved_wait;
+});
+
 TEST_FUNC(window_space_move_prefers_observable_sa_then_verified_fallbacks,
 {
     struct space_manager_window_move_ops ops = {
