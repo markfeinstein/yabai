@@ -97,6 +97,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "area.c"
 #include "display.c"
 #include "window.c"
+#include "accessibility_preferences.c"
 #include "window_server_snapshot.c"
 #include "space_window_inventory.c"
 #include "view.c"
@@ -2855,6 +2856,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
     TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
+    TEST_ENTRY(accessibility_preferences_publish_all_combinations_and_missing_readers) \
+    TEST_ENTRY(accessibility_preferences_live_updates_are_coherent_and_teardown_is_final) \
+    TEST_ENTRY(accessibility_preferences_observer_failure_preserves_initial_snapshot) \
     TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \

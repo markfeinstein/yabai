@@ -133,6 +133,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
+- (void)accessibilityPreferencesChanged;
 - (void)performMenuAction:(id)sender;
 - (void)performStripAction:(id)sender;
 - (void)openMenu:(id)sender;
@@ -788,6 +789,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     _status_item = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
 }
 
+- (void)accessibilityPreferencesChanged
+{
+    [_strip_view setNeedsDisplay:YES];
+    for (NSView *view in [_strip_view subviews]) [view setNeedsDisplay:YES];
+}
+
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear
 {
     if (clear || !snapshot || snapshot->settings.enabled != MENU_BAR_ENABLED) {
@@ -1377,6 +1384,14 @@ menu_bar_controller_shutdown_main(void *context)
     [controller release];
 }
 
+static void
+menu_bar_accessibility_preferences_changed_main(void *context)
+{
+    YBMenuBarController *controller = (YBMenuBarController *) context;
+    [controller accessibilityPreferencesChanged];
+    [controller release];
+}
+
 bool
 menu_bar_init(const struct menu_bar_callbacks *callbacks)
 {
@@ -1428,6 +1443,26 @@ menu_bar_shutdown(void)
         menu_bar_controller_shutdown_main(controller);
     } else {
         dispatch_async_f(dispatch_get_main_queue(), controller, menu_bar_controller_shutdown_main);
+    }
+}
+
+void
+menu_bar_accessibility_preferences_changed(void)
+{
+    YBMenuBarController *controller = nil;
+
+    pthread_mutex_lock(&g_menu_bar_lock);
+    if (g_menu_bar_initialized && g_menu_bar_controller) {
+        controller = [g_menu_bar_controller retain];
+    }
+    pthread_mutex_unlock(&g_menu_bar_lock);
+
+    if (!controller) return;
+    if (pthread_main_np()) {
+        menu_bar_accessibility_preferences_changed_main(controller);
+    } else {
+        dispatch_async_f(dispatch_get_main_queue(), controller,
+                         menu_bar_accessibility_preferences_changed_main);
     }
 }
 
