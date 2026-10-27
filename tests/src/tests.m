@@ -100,6 +100,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_constraints.c"
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"
+#include "native_tile_diagnostic.c"
 #include "window_corner_geometry.c"
 #include "window_server_snapshot.c"
 #include "window_server_tags.c"
@@ -2819,7 +2820,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 #define TEST_LIST                                              \
     TEST_ENTRY(window_management_bridge_exact_abi_runs_only_allowlisted_read) \
     TEST_ENTRY(window_management_bridge_missing_and_mismatched_abi_fails_closed) \
+    TEST_ENTRY(window_management_bridge_tile_membership_is_aggregate_read_only_and_fail_closed) \
     TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
+    TEST_ENTRY(native_tile_diagnostic_json_is_stable_aggregate_and_redacted) \
+    TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \

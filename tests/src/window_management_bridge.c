@@ -15,6 +15,8 @@ static struct wm_bridge_fake_class wm_fake_destroy;
 static struct wm_bridge_fake_class wm_fake_move;
 static struct wm_bridge_fake_class wm_fake_focus;
 static struct wm_bridge_fake_class wm_fake_space_id_result;
+static struct wm_bridge_fake_class wm_fake_tile_copy;
+static struct wm_bridge_fake_class wm_fake_numbers_result;
 static const char *wm_fake_missing_class;
 static const char *wm_fake_missing_selector;
 static const char *wm_fake_wrong_selector;
@@ -25,6 +27,9 @@ static bool wm_fake_nil_operation;
 static bool wm_fake_nil_result;
 static bool wm_fake_wrong_result_class;
 static id wm_fake_property_list;
+static NSDictionary *wm_fake_tile_numbers;
+static uint64_t wm_fake_last_tile_parent;
+static int wm_fake_tile_init_calls;
 static int wm_fake_manager_init_calls;
 static int wm_fake_copy_init_calls;
 static int wm_fake_mutation_init_calls;
@@ -37,6 +42,8 @@ static int wm_fake_close_calls;
 static int wm_fake_manager_token;
 static int wm_fake_operation_token;
 static int wm_fake_result_token;
+static int wm_fake_tile_operation_token;
+static int wm_fake_tile_result_token;
 static int wm_fake_skylight_token;
 static int wm_fake_window_management_token;
 
@@ -61,7 +68,10 @@ static const struct wm_bridge_fake_method wm_fake_methods[] = {
     { "SLSBridgedManagedDisplaySetCurrentSpaceOperation", "initWithDisplayIdentifier:spaceID:", "@32@0:8@16Q24" },
     { "SLSBridgedSpaceCreateOperation", "makeResultWithSpaceID:", "@24@0:8Q16" },
     { "SLSBridgedWindowManagementOperationSpaceIDResult", "initWithSpaceID:", "@24@0:8Q16" },
-    { "SLSBridgedWindowManagementOperationSpaceIDResult", "spaceID", "Q16@0:8" }
+    { "SLSBridgedWindowManagementOperationSpaceIDResult", "spaceID", "Q16@0:8" },
+    { "SLSBridgedSpaceCopyTileSpacesOperation", "initWithSpaceID:", "@24@0:8Q16" },
+    { "SLSBridgedSpaceCopyTileSpacesOperation", "makeResultWithNumbers:", "@24@0:8@16" },
+    { "SLSBridgedWindowManagementOperationNumbersResult", "numbers", "@16@0:8" }
 };
 
 static struct wm_bridge_fake_class *wm_fake_class_named(const char *name)
@@ -69,7 +79,8 @@ static struct wm_bridge_fake_class *wm_fake_class_named(const char *name)
     struct wm_bridge_fake_class *classes[] = {
         &wm_fake_client, &wm_fake_sync, &wm_fake_async, &wm_fake_result_base,
         &wm_fake_copy, &wm_fake_array_result, &wm_fake_create, &wm_fake_destroy,
-        &wm_fake_move, &wm_fake_focus, &wm_fake_space_id_result
+        &wm_fake_move, &wm_fake_focus, &wm_fake_space_id_result,
+        &wm_fake_tile_copy, &wm_fake_numbers_result
     };
     for (size_t i = 0; i < array_count(classes); ++i) {
         if (strcmp(classes[i]->name, name) == 0) return classes[i];
@@ -136,10 +147,25 @@ static id wm_fake_init_object(Class cls, const char *selector)
     return nil;
 }
 
+static id wm_fake_init_object_u64(Class cls, const char *selector, uint64_t value)
+{
+    struct wm_bridge_fake_class *fake = (struct wm_bridge_fake_class *) cls;
+    if (fake == &wm_fake_tile_copy && strcmp(selector, "initWithSpaceID:") == 0) {
+        ++wm_fake_tile_init_calls;
+        wm_fake_last_tile_parent = value;
+        return (id) &wm_fake_tile_operation_token;
+    }
+    ++wm_fake_mutation_init_calls;
+    return nil;
+}
+
 static id wm_fake_send_object0(id object, const char *selector)
 {
     if (object == (id) &wm_fake_result_token && strcmp(selector, "propertyListArray") == 0) {
         return wm_fake_property_list;
+    }
+    if (object == (id) &wm_fake_tile_result_token && strcmp(selector, "numbers") == 0) {
+        return [wm_fake_tile_numbers objectForKey:[NSNumber numberWithUnsignedLongLong:wm_fake_last_tile_parent]];
     }
     return nil;
 }
@@ -147,10 +173,14 @@ static id wm_fake_send_object0(id object, const char *selector)
 static id wm_fake_send_object1(id object, const char *selector, id argument)
 {
     if (object == (id) &wm_fake_manager_token &&
-        strcmp(selector, "performSynchronousBridgedWindowManagementOperation:") == 0 &&
-        argument == (id) &wm_fake_operation_token) {
+        strcmp(selector, "performSynchronousBridgedWindowManagementOperation:") == 0) {
         ++wm_fake_sync_dispatch_calls;
-        return wm_fake_nil_result ? nil : (id) &wm_fake_result_token;
+        if (argument == (id) &wm_fake_operation_token) {
+            return wm_fake_nil_result ? nil : (id) &wm_fake_result_token;
+        }
+        if (argument == (id) &wm_fake_tile_operation_token) {
+            return wm_fake_nil_result ? nil : (id) &wm_fake_tile_result_token;
+        }
     }
     if (strcmp(selector, "performAsynchronousBridgedWindowManagementOperation:") == 0) {
         ++wm_fake_async_dispatch_calls;
@@ -167,8 +197,9 @@ static void wm_fake_send_void0(id object, const char *selector)
 
 static bool wm_fake_object_is_kind_of(id object, Class cls)
 {
-    return object == (id) &wm_fake_result_token && cls == (Class) &wm_fake_array_result &&
-           !wm_fake_wrong_result_class;
+    if (wm_fake_wrong_result_class) return false;
+    return (object == (id) &wm_fake_result_token && cls == (Class) &wm_fake_array_result) ||
+           (object == (id) &wm_fake_tile_result_token && cls == (Class) &wm_fake_numbers_result);
 }
 
 static void wm_fake_release_object(id object)
@@ -183,6 +214,7 @@ static const struct wm_bridge_runtime wm_fake_runtime = {
     .superclass = wm_fake_superclass,
     .method_encoding = wm_fake_method_encoding,
     .init_object = wm_fake_init_object,
+    .init_object_u64 = wm_fake_init_object_u64,
     .send_object0 = wm_fake_send_object0,
     .send_object1 = wm_fake_send_object1,
     .send_void0 = wm_fake_send_void0,
@@ -203,6 +235,8 @@ static void wm_fake_begin(void)
     wm_fake_move = (struct wm_bridge_fake_class) { "SLSBridgedMoveManagedSpaceToDisplayIndexOperation", &wm_fake_async };
     wm_fake_focus = (struct wm_bridge_fake_class) { "SLSBridgedManagedDisplaySetCurrentSpaceOperation", &wm_fake_async };
     wm_fake_space_id_result = (struct wm_bridge_fake_class) { "SLSBridgedWindowManagementOperationSpaceIDResult", &wm_fake_result_base };
+    wm_fake_tile_copy = (struct wm_bridge_fake_class) { "SLSBridgedSpaceCopyTileSpacesOperation", &wm_fake_sync };
+    wm_fake_numbers_result = (struct wm_bridge_fake_class) { "SLSBridgedWindowManagementOperationNumbersResult", &wm_fake_result_base };
     wm_fake_missing_class = NULL;
     wm_fake_missing_selector = NULL;
     wm_fake_wrong_selector = NULL;
@@ -213,6 +247,9 @@ static void wm_fake_begin(void)
     wm_fake_nil_result = false;
     wm_fake_wrong_result_class = false;
     wm_fake_property_list = @[ @{ @"sentinel": @"DO_NOT_PRINT_UUID_TITLE_VALUE" }, @{} ];
+    wm_fake_tile_numbers = @{};
+    wm_fake_last_tile_parent = 0;
+    wm_fake_tile_init_calls = 0;
     wm_fake_manager_init_calls = 0;
     wm_fake_copy_init_calls = 0;
     wm_fake_mutation_init_calls = 0;
@@ -311,7 +348,7 @@ TEST_FUNC(window_management_bridge_missing_and_mismatched_abi_fails_closed,
     TEST_CHECK(wm_fake_manager_init_calls, 0);
     wm_fake_end();
 
-    for (size_t i = 7; i < array_count(wm_fake_methods); ++i) {
+    for (size_t i = 7; i < array_count(wm_fake_methods) - 3; ++i) {
         wm_fake_begin();
         wm_fake_wrong_selector = wm_fake_methods[i].selector;
         TEST_CHECK(window_management_bridge_diagnose_readonly(&diagnostic), true);
@@ -325,6 +362,45 @@ TEST_FUNC(window_management_bridge_missing_and_mismatched_abi_fails_closed,
         wm_fake_end();
     }
 });
+
+TEST_FUNC(window_management_bridge_tile_membership_is_aggregate_read_only_and_fail_closed,
+{
+    wm_fake_begin();
+    wm_fake_property_list = @[
+        @{ @"Spaces": @[ @{ @"id64": @11 }, @{ @"id64": @12 } ] },
+        @{ @"Spaces": @[ @{ @"id64": @13 } ], @"uuid": @"SECRET_UUID" }
+    ];
+    wm_fake_tile_numbers = @{ @11: @[], @12: @[ @101, @102 ], @13: @[] };
+    struct wm_tile_membership_diagnostic diagnostic;
+    TEST_CHECK(window_management_bridge_diagnose_tile_membership_readonly(&diagnostic), true);
+    TEST_CHECK(diagnostic.status, WM_TILE_MEMBERSHIP_OK);
+    TEST_CHECK(diagnostic.managed_display_count, 2U);
+    TEST_CHECK(diagnostic.managed_space_count, 3U);
+    TEST_CHECK(diagnostic.spaces_queried, 3U);
+    TEST_CHECK(diagnostic.tiled_parent_space_count, 1U);
+    TEST_CHECK(diagnostic.tile_space_count, 2U);
+    TEST_CHECK(diagnostic.failed_query_count, 0U);
+    TEST_CHECK(wm_fake_tile_init_calls, 3);
+    TEST_CHECK(wm_fake_sync_dispatch_calls, 4);
+    TEST_CHECK(wm_fake_async_dispatch_calls, 0);
+    TEST_CHECK(wm_fake_mutation_init_calls, 0);
+    wm_fake_end();
+
+    wm_fake_begin();
+    wm_fake_property_list = @[ @{ @"Spaces": @[ @{ @"id64": @11 }, @{ @"id64": @12 } ] } ];
+    wm_fake_tile_numbers = @{ @11: @[ @101 ], @12: @[ @101 ] };
+    TEST_CHECK(window_management_bridge_diagnose_tile_membership_readonly(&diagnostic), true);
+    TEST_CHECK(diagnostic.status, WM_TILE_MEMBERSHIP_PARTIAL);
+    TEST_CHECK(diagnostic.failed_query_count, 1U);
+    wm_fake_end();
+
+    wm_fake_begin();
+    wm_fake_missing_class = "SLSBridgedSpaceCopyTileSpacesOperation";
+    TEST_CHECK(window_management_bridge_diagnose_tile_membership_readonly(&diagnostic), true);
+    TEST_CHECK(diagnostic.status, WM_TILE_MEMBERSHIP_UNAVAILABLE);
+    TEST_CHECK(wm_fake_manager_init_calls, 0);
+    wm_fake_end();
+})
 
 TEST_FUNC(window_management_bridge_read_results_are_validated_and_metadata_is_advisory,
 {
