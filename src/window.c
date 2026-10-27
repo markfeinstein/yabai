@@ -1170,7 +1170,7 @@ int window_level(uint32_t wid)
 {
     int level = 0;
 
-    if (workspace_is_macos_ventura() || workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_ventura_or_newer()) {
         CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
         if (!window_ref) return 0;
 
@@ -1198,6 +1198,11 @@ int window_level(uint32_t wid)
     return level;
 }
 
+static uint32_t window_sub_level_message_id(void)
+{
+    return workspace_is_macos_tahoe_or_newer() ? 0x76E3 : 0x73C3;
+}
+
 static int SLSGetWindowSubLevel__Internal(int cid, uint32_t wid)
 {
     #pragma pack(push,4)
@@ -1216,7 +1221,7 @@ static int SLSGetWindowSubLevel__Internal(int cid, uint32_t wid)
     msg.header.msgh_bits = 0x1513;
     msg.header.msgh_remote_port = CGSGetConnectionPortById(cid);
     msg.header.msgh_local_port = mig_get_special_reply_port();
-    msg.header.msgh_id = workspace_is_macos_tahoe() ? 0x76E3 : 0x73C3;
+    msg.header.msgh_id = window_sub_level_message_id();
     mach_msg(&msg.header, MACH_SEND_MSG|MACH_RCV_MSG, 0x24, 0x30, msg.header.msgh_local_port, 0, 0);
 
     return msg.sub_level;

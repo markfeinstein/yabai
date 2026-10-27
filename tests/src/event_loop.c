@@ -2284,12 +2284,7 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     struct table saved_window_table = g_window_manager.window;
     uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
     bool saved_menu_bar_initialized = g_menu_bar_manager.initialized;
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     g_event_loop = (struct event_loop) {0};
     g_window_manager.window = (struct table) {0};
@@ -2345,12 +2340,7 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     g_window_manager.window = saved_window_table;
     g_window_manager.focused_window_id = saved_focused_window_id;
     g_menu_bar_manager.initialized = saved_menu_bar_initialized;
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_event_loop = saved_event_loop;
 });
 

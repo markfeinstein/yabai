@@ -1,3 +1,19 @@
+TEST_FUNC(window_sub_level_message_id_tracks_tahoe_protocol,
+{
+    long saved_macos_version = workspace_macos_major_version();
+
+    workspace_set_macos_version(15);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x73C3));
+    workspace_set_macos_version(26);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+    workspace_set_macos_version(27);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+    workspace_set_macos_version(28);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+
+    workspace_set_macos_version(saved_macos_version);
+});
+
 static AXError window_test_observe_result;
 static int window_test_observe_call_count;
 
