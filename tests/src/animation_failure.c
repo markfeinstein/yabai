@@ -105,6 +105,42 @@ static CGError animation_test_release_window(int cid, uint32_t wid)
     ++animation_test_release_window_count;
     return kCGErrorSuccess;
 }
+static CGContextRef animation_test_context_ok(int cid, uint32_t wid, CFDictionaryRef options)
+{
+    (void) cid; (void) wid; (void) options;
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    if (!color_space) return NULL;
+    CGContextRef context = CGBitmapContextCreate(NULL, 2, 2, 8, 8, color_space,
+                                                  kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(color_space);
+    return context;
+}
+static bool animation_test_disable_shadow(uint32_t wid) { (void) wid; return true; }
+static CGError animation_test_set_opacity(int cid, uint32_t wid, bool opaque)
+{ (void) cid; (void) wid; (void) opaque; return kCGErrorSuccess; }
+static CGError animation_test_set_resolution(int cid, uint32_t wid, double resolution)
+{ (void) cid; (void) wid; (void) resolution; return kCGErrorSuccess; }
+static CGError animation_test_set_alpha(int cid, uint32_t wid, float alpha)
+{ (void) cid; (void) wid; (void) alpha; return kCGErrorSuccess; }
+static CGError animation_test_set_level(int cid, uint32_t wid, int level)
+{ (void) cid; (void) wid; (void) level; return kCGErrorSuccess; }
+
+static int animation_test_corner_render_count;
+static int animation_test_corner_render_connection;
+static uint32_t animation_test_corner_render_window_id;
+static double animation_test_corner_render_radius[WINDOW_CORNER_GEOMETRY_RADIUS_COUNT];
+static bool animation_test_corner_render_result;
+static bool animation_test_corner_renderer(
+    int connection, uint32_t proxy_window_id,
+    const double radius[WINDOW_CORNER_GEOMETRY_RADIUS_COUNT])
+{
+    ++animation_test_corner_render_count;
+    animation_test_corner_render_connection = connection;
+    animation_test_corner_render_window_id = proxy_window_id;
+    memcpy(animation_test_corner_render_radius, radius,
+           sizeof(animation_test_corner_render_radius));
+    return animation_test_corner_render_result;
+}
 
 TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
 {
@@ -119,6 +155,13 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     __auto_type saved_window = window_manager_proxy_new_window;
     __auto_type saved_context = window_manager_proxy_new_context;
     __auto_type saved_release = window_manager_proxy_release_window;
+    __auto_type saved_shadow = window_manager_proxy_disable_shadow;
+    __auto_type saved_opacity = window_manager_proxy_set_opacity;
+    __auto_type saved_resolution = window_manager_proxy_set_resolution;
+    __auto_type saved_alpha = window_manager_proxy_set_alpha;
+    __auto_type saved_level = window_manager_proxy_set_level;
+    __auto_type saved_sub_level = window_manager_proxy_set_sub_level;
+    __auto_type saved_corner_renderer = window_corner_geometry_proxy_renderer;
     window_manager_proxy_release_window = animation_test_release_window;
 
     if (image) {
@@ -147,6 +190,61 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
         TEST_CHECK(proxy.id, 0U);
         TEST_CHECK(animation_test_release_window_count, 1);
 
+        window_manager_proxy_new_context = animation_test_context_ok;
+        window_manager_proxy_disable_shadow = animation_test_disable_shadow;
+        window_manager_proxy_set_opacity = animation_test_set_opacity;
+        window_manager_proxy_set_resolution = animation_test_set_resolution;
+        window_manager_proxy_set_alpha = animation_test_set_alpha;
+        window_manager_proxy_set_level = animation_test_set_level;
+        window_manager_proxy_set_sub_level = animation_test_set_level;
+        window_corner_geometry_proxy_renderer = animation_test_corner_renderer;
+        animation_test_corner_render_count = 0;
+        animation_test_corner_render_result = false;
+        proxy = (struct window_proxy) {
+            .image = (CGImageRef) CFRetain(image),
+            .frame = CGRectMake(0, 0, 100, 40),
+            .corner_geometry = {
+                .radius = { 100, 10, 30, 5 },
+                .valid_mask = WINDOW_CORNER_GEOMETRY_VALID_ALL,
+                .count = WINDOW_CORNER_GEOMETRY_RADIUS_COUNT,
+                .source = WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED
+            }
+        };
+        TEST_CHECK(window_manager_create_window_proxy(7, 1.0f, &proxy), true);
+        TEST_CHECK(animation_test_corner_render_count, 1);
+        TEST_CHECK(animation_test_corner_render_connection, 7);
+        TEST_CHECK(animation_test_corner_render_window_id, 99U);
+        TEST_CHECK(animation_test_corner_render_radius[0], 20.0);
+        TEST_CHECK(animation_test_corner_render_radius[1], 10.0);
+        TEST_CHECK(animation_test_corner_render_radius[2], 20.0);
+        TEST_CHECK(animation_test_corner_render_radius[3], 5.0);
+        TEST_CHECK(proxy.id, 99U);
+        window_manager_destroy_window_proxy(7, &proxy);
+
+        animation_test_corner_render_count = 0;
+        proxy = (struct window_proxy) {
+            .image = (CGImageRef) CFRetain(image), .frame = CGRectMake(0, 0, 100, 40),
+            .corner_geometry = { .radius = { 1, 2, 3, 4 } }
+        };
+        TEST_CHECK(window_manager_create_window_proxy(7, 1.0f, &proxy), true);
+        TEST_CHECK(animation_test_corner_render_count, 0);
+        window_manager_destroy_window_proxy(7, &proxy);
+
+        window_corner_geometry_proxy_renderer = NULL;
+        proxy = (struct window_proxy) {
+            .image = (CGImageRef) CFRetain(image),
+            .frame = CGRectMake(0, 0, 100, 40),
+            .corner_geometry = {
+                .radius = { 1, 2, 3, 4 },
+                .valid_mask = WINDOW_CORNER_GEOMETRY_VALID_ALL,
+                .count = WINDOW_CORNER_GEOMETRY_RADIUS_COUNT,
+                .source = WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED
+            }
+        };
+        TEST_CHECK(window_manager_create_window_proxy(7, 1.0f, &proxy), true);
+        TEST_CHECK(animation_test_corner_render_count, 0);
+        window_manager_destroy_window_proxy(7, &proxy);
+
         NSArray *empty = @[];
         NSArray *wrong = @[ @1 ];
         TEST_CHECK(window_manager_proxy_image_from_capture((CFArrayRef) empty, 1.0f) == NULL, true);
@@ -158,10 +256,44 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     window_manager_proxy_new_window = saved_window;
     window_manager_proxy_new_context = saved_context;
     window_manager_proxy_release_window = saved_release;
+    window_manager_proxy_disable_shadow = saved_shadow;
+    window_manager_proxy_set_opacity = saved_opacity;
+    window_manager_proxy_set_resolution = saved_resolution;
+    window_manager_proxy_set_alpha = saved_alpha;
+    window_manager_proxy_set_level = saved_level;
+    window_manager_proxy_set_sub_level = saved_sub_level;
+    window_corner_geometry_proxy_renderer = saved_corner_renderer;
     if (image) CGImageRelease(image);
     if (bitmap) CGContextRelease(bitmap);
     if (color_space) CGColorSpaceRelease(color_space);
 });
+
+TEST_FUNC(animation_replacement_proxy_preserves_corner_geometry,
+{
+    struct window_proxy existing = {
+        .tx = 10, .ty = 20, .tw = 300, .th = 200,
+        .level = 4, .sub_level = 2,
+        .corner_geometry = {
+            .radius = { 1, 2, 3, 4 },
+            .valid_mask = WINDOW_CORNER_GEOMETRY_VALID_ALL,
+            .count = WINDOW_CORNER_GEOMETRY_RADIUS_COUNT,
+            .source = WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED
+        }
+    };
+    struct window_proxy replacement = {0};
+    window_manager_prepare_replacement_proxy(&replacement, &existing);
+    TEST_CHECK(CGRectEqualToRect(replacement.frame, CGRectMake(10, 20, 300, 200)), true);
+    TEST_CHECK(replacement.tx, 10.0f);
+    TEST_CHECK(replacement.ty, 20.0f);
+    TEST_CHECK(replacement.tw, 300.0f);
+    TEST_CHECK(replacement.th, 200.0f);
+    TEST_CHECK(replacement.level, 4);
+    TEST_CHECK(replacement.sub_level, 2);
+    TEST_CHECK(window_corner_geometry_is_complete(&replacement.corner_geometry), true);
+    for (size_t i = 0; i < WINDOW_CORNER_GEOMETRY_RADIUS_COUNT; ++i) {
+        TEST_CHECK(replacement.corner_geometry.radius[i], existing.corner_geometry.radius[i]);
+    }
+})
 
 TEST_FUNC(animation_alpha_restoration_handles_partial_simd_tail,
 {

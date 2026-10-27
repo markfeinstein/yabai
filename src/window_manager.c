@@ -1061,6 +1061,12 @@ static CGError (*window_manager_proxy_new_window)(int, int, CFTypeRef, CFTypeRef
 static CGContextRef (*window_manager_proxy_new_context)(int, uint32_t, CFDictionaryRef) = SLWindowContextCreate;
 static CGError (*window_manager_proxy_release_window)(int, uint32_t) = SLSReleaseWindow;
 static CFArrayRef (*window_manager_proxy_capture)(int, uint32_t *, int, uint32_t) = SLSHWCaptureWindowList;
+static bool (*window_manager_proxy_disable_shadow)(uint32_t) = sls_window_disable_shadow;
+static CGError (*window_manager_proxy_set_opacity)(int, uint32_t, bool) = SLSSetWindowOpacity;
+static CGError (*window_manager_proxy_set_resolution)(int, uint32_t, double) = SLSSetWindowResolution;
+static CGError (*window_manager_proxy_set_alpha)(int, uint32_t, float) = SLSSetWindowAlpha;
+static CGError (*window_manager_proxy_set_level)(int, uint32_t, int) = SLSSetWindowLevel;
+static CGError (*window_manager_proxy_set_sub_level)(int, uint32_t, int) = SLSSetWindowSubLevel;
 #else
 #define window_manager_proxy_new_region CGSNewRegionWithRect
 #define window_manager_proxy_empty_region CGRegionCreateEmptyRegion
@@ -1068,6 +1074,12 @@ static CFArrayRef (*window_manager_proxy_capture)(int, uint32_t *, int, uint32_t
 #define window_manager_proxy_new_context SLWindowContextCreate
 #define window_manager_proxy_release_window SLSReleaseWindow
 #define window_manager_proxy_capture SLSHWCaptureWindowList
+#define window_manager_proxy_disable_shadow sls_window_disable_shadow
+#define window_manager_proxy_set_opacity SLSSetWindowOpacity
+#define window_manager_proxy_set_resolution SLSSetWindowResolution
+#define window_manager_proxy_set_alpha SLSSetWindowAlpha
+#define window_manager_proxy_set_level SLSSetWindowLevel
+#define window_manager_proxy_set_sub_level SLSSetWindowSubLevel
 #endif
 
 static bool window_manager_create_window_proxy(int animation_connection, float alpha, struct window_proxy *proxy)
@@ -1085,13 +1097,17 @@ static bool window_manager_create_window_proxy(int animation_connection, float a
                                         &tags, 0, 0, 64, &proxy->id, NULL) != kCGErrorSuccess || !proxy->id) goto fail;
     proxy->context = window_manager_proxy_new_context(animation_connection, proxy->id, 0);
     if (!proxy->context) goto fail;
+    // Corner rendering is cosmetic and proxy-only. A disabled or failing backend
+    // must preserve the existing rectangular animation proxy.
+    (void) window_corner_geometry_apply_to_proxy(animation_connection, proxy->id,
+                                                 proxy->frame.size, &proxy->corner_geometry);
     // Shadow suppression is cosmetic; keep the animation proxy usable if it fails.
-    (void) sls_window_disable_shadow(proxy->id);
-    SLSSetWindowOpacity(animation_connection, proxy->id, 0);
-    SLSSetWindowResolution(animation_connection, proxy->id, 2.0f);
-    SLSSetWindowAlpha(animation_connection, proxy->id, alpha);
-    SLSSetWindowLevel(animation_connection, proxy->id, proxy->level);
-    SLSSetWindowSubLevel(animation_connection, proxy->id, proxy->sub_level);
+    (void) window_manager_proxy_disable_shadow(proxy->id);
+    window_manager_proxy_set_opacity(animation_connection, proxy->id, 0);
+    window_manager_proxy_set_resolution(animation_connection, proxy->id, 2.0f);
+    window_manager_proxy_set_alpha(animation_connection, proxy->id, alpha);
+    window_manager_proxy_set_level(animation_connection, proxy->id, proxy->level);
+    window_manager_proxy_set_sub_level(animation_connection, proxy->id, proxy->sub_level);
 
     CGRect frame = { {0, 0}, proxy->frame.size };
     CGContextClearRect(proxy->context, frame);
@@ -1132,6 +1148,20 @@ static CGImageRef window_manager_proxy_image_from_capture(CFArrayRef image_array
     CFTypeRef image = CFArrayGetValueAtIndex(image_array, 0);
     if (!image || CFGetTypeID(image) != CGImageGetTypeID()) return NULL;
     return alpha == 1.0f ? (CGImageRef) CFRetain(image) : cgimage_restore_alpha((CGImageRef) image);
+}
+
+static void window_manager_prepare_replacement_proxy(struct window_proxy *replacement,
+                                                     const struct window_proxy *existing)
+{
+    replacement->frame = (CGRect) { { existing->tx, existing->ty }, { existing->tw, existing->th } };
+    replacement->tx = existing->tx;
+    replacement->ty = existing->ty;
+    replacement->tw = existing->tw;
+    replacement->th = existing->th;
+    replacement->level = existing->level;
+    replacement->sub_level = existing->sub_level;
+    replacement->corner_geometry = existing->corner_geometry;
+    replacement->image = existing->image ? (CGImageRef) CFRetain(existing->image) : NULL;
 }
 
 static void *window_manager_build_window_proxy_thread_proc(void *data)
@@ -1443,16 +1473,8 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
         bool add_to_table = true;
         struct window_animation *existing_animation = table_find(&g_window_manager.window_animations_table, &context->animation_list[i].wid);
         if (existing_animation) {
-            context->animation_list[i].proxy.frame = (CGRect) { { existing_animation->proxy.tx, existing_animation->proxy.ty },
-                                                                { existing_animation->proxy.tw, existing_animation->proxy.th } };
-            context->animation_list[i].proxy.tx = existing_animation->proxy.tx;
-            context->animation_list[i].proxy.ty = existing_animation->proxy.ty;
-            context->animation_list[i].proxy.tw = existing_animation->proxy.tw;
-            context->animation_list[i].proxy.th = existing_animation->proxy.th;
-            context->animation_list[i].proxy.level = existing_animation->proxy.level;
-            context->animation_list[i].proxy.sub_level = existing_animation->proxy.sub_level;
-            context->animation_list[i].proxy.image = existing_animation->proxy.image ?
-                                                     (CGImageRef) CFRetain(existing_animation->proxy.image) : NULL;
+            window_manager_prepare_replacement_proxy(&context->animation_list[i].proxy,
+                                                     &existing_animation->proxy);
 
             float alpha = 1.0f;
             SLSGetWindowAlpha(context->animation_connection, context->animation_list[i].wid, &alpha);
