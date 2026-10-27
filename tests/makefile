@@ -1,4 +1,4 @@
-.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock benchmark-window-server-tag-corpus benchmark-window-server-classifier benchmark-window-constraints test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
+.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock benchmark-window-server-tag-corpus benchmark-window-server-classifier benchmark-window-constraints benchmark-window-server-hit-test test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
 
 all: run
 
@@ -94,6 +94,9 @@ benchmark-window-server-classifier: core-build
 benchmark-window-constraints: core-build
 	$(CORE) --benchmark-window-constraints
 
+benchmark-window-server-hit-test: core-build
+	$(CORE) --benchmark-window-server-hit-test
+
 run-asan:
 	$(MAKE) CONFIG=asan sanitizer-run asan-focused-run
 
@@ -124,6 +127,7 @@ syntax:
 	$(CC) -fsyntax-only ../scripts/window_server_tag_corpus_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_classifier.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_constraints.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../src/window_server_hit_test.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ./src/public_header_compile.c -std=c11 -Wall -Wextra -Werror
 
 arch-arm64:

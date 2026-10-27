@@ -103,6 +103,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_server_snapshot.c"
 #include "window_server_tags.c"
 #include "window_server_classifier.c"
+#include "window_server_hit_test.c"
 #include "window_server_tag_corpus.c"
 #include "space_window_inventory.c"
 #include "view.c"
@@ -2885,6 +2886,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
     TEST_ENTRY(window_server_classifier_attribute_and_bit58_are_diagnostic_only) \
     TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
+    TEST_ENTRY(window_server_hit_test_comparison_is_optional_and_legacy_authoritative) \
+    TEST_ENTRY(window_manager_hit_test_preserves_proxy_and_border_skip_sequence) \
+    TEST_ENTRY(window_server_hit_test_concurrent_comparison_is_race_free) \
     TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
     TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
     TEST_ENTRY(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files) \
@@ -3449,6 +3453,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-constraints") == 0) {
         return window_constraints_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-hit-test") == 0) {
+        return window_server_hit_test_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
