@@ -1,21 +1,22 @@
 name: ci
 
 on:
-  pull_request:
   push:
+    branches:
+      - validation/native-tab-macos27-ephemeral-20261027
 
 permissions:
   contents: read
 
 jobs:
   macos-offline:
-    runs-on: macos-14
+    runs-on: [self-hosted, macOS, ARM64, yabai-macos27-native-tab-ephemeral-20261027]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Verify macOS 14 arm64 runner
+      - name: Verify supplemental macOS 27 arm64 runner
         run: |
           test "$(uname -m)" = arm64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 14
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 27
       - name: Install pinned documentation generator
         run: |
           gem install --no-document asciidoctor --version 2.0.26
