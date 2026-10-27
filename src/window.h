@@ -1,6 +1,8 @@
 #ifndef WINDOW_H
 #define WINDOW_H
 
+struct window_server_window_record;
+
 const CFStringRef kAXFullscreenAttribute = CFSTR("AXFullScreen");
 
 #define AX_WINDOW_MINIMIZED_INDEX      0
@@ -95,6 +97,7 @@ struct window_serialization_context
 {
     CFArrayRef managed_display_spaces;
     CFArrayRef ordered_display_uuids;
+    const struct window_server_window_record *window_server_record;
     bool has_managed_display_spaces_snapshot;
     bool has_ordered_display_uuids_snapshot;
 };

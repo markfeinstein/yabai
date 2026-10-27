@@ -154,6 +154,17 @@ fail:
     return NULL;
 }
 
+const struct window_server_window_record *window_server_snapshot_find(const struct window_server_snapshot *snapshot,
+                                                                      uint32_t window_id)
+{
+    if (!snapshot || !snapshot->records) return NULL;
+    for (size_t i = 0; i < snapshot->count; ++i) {
+        const struct window_server_window_record *record = snapshot->records + i;
+        if ((record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) && record->id == window_id) return record;
+    }
+    return NULL;
+}
+
 void window_server_snapshot_destroy(struct window_server_snapshot *snapshot)
 {
     if (!snapshot) return;

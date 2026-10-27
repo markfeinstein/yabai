@@ -55,10 +55,13 @@ inline uint32_t space_display_id(uint64_t sid)
     return id;
 }
 
-uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized, bool *success)
+uint32_t *space_window_list_for_connection_with_snapshot(uint64_t *space_list, int space_count, int cid, int *count,
+                                                         bool include_minimized, bool *success,
+                                                         struct window_server_snapshot **snapshot_out)
 {
     *count = 0;
     if (success) *success = false;
+    if (snapshot_out) *snapshot_out = NULL;
     uint32_t *window_list = NULL;
     struct window_server_snapshot *snapshot = NULL;
     uint64_t set_tags = 0;
@@ -99,6 +102,10 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
     window_list = ts_resize(window_list, sizeof(uint32_t) * *count, sizeof(uint32_t) * window_count);
     *count = window_count;
     if (success) *success = true;
+    if (snapshot_out) {
+        *snapshot_out = snapshot;
+        snapshot = NULL;
+    }
     goto out;
 
 inventory_failed:
@@ -110,6 +117,13 @@ out:
 err:
     CFRelease(space_list_ref);
     return window_list;
+}
+
+uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int space_count, int cid,
+                                                       int *count, bool include_minimized, bool *success)
+{
+    return space_window_list_for_connection_with_snapshot(space_list, space_count, cid, count,
+                                                          include_minimized, success, NULL);
 }
 
 uint32_t *space_window_list_for_connection(uint64_t *space_list, int space_count, int cid, int *count, bool include_minimized)

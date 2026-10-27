@@ -2863,6 +2863,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_window_inventory_fixed_seed_matches_frozen_legacy_filter) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
+    TEST_ENTRY(window_serialization_prefers_snapshot_fields_and_falls_back_independently) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
     TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
@@ -3110,6 +3111,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
     TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
+    TEST_ENTRY(message_window_query_reuses_inventory_snapshot_for_serialization) \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
@@ -3386,6 +3388,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-space-window-inventory") == 0) {
         return space_window_inventory_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-query-snapshot") == 0) {
+        return window_query_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

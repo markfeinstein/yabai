@@ -247,11 +247,16 @@ TEST_FUNC(space_window_inventory_preserves_duplicates_empty_success_and_independ
     uint64_t sid = 99;
     int count = 0;
     bool success = false;
-    uint32_t *output = space_window_list_for_connection_with_status(&sid, 1, 0, &count, false, &success);
+    struct window_server_snapshot *owned_snapshot = NULL;
+    uint32_t *output = space_window_list_for_connection_with_snapshot(&sid, 1, 0, &count, false,
+                                                                       &success, &owned_snapshot);
     uint32_t expected[] = { 30, 30, 32 };
     TEST_CHECK(success, true);
     TEST_CHECK(count, 3);
     TEST_CHECK(memcmp(output, expected, sizeof(expected)), 0);
+    TEST_CHECK(owned_snapshot == &space_window_inventory_test.snapshot, true);
+    TEST_CHECK(space_window_inventory_test.destroy_calls, 0);
+    space_window_destroy_snapshot(owned_snapshot);
     TEST_CHECK(space_window_inventory_test.destroy_calls, 1);
     TEST_CHECK(space_window_inventory_test.records[0].id, 0U);
     CFRelease(candidates);

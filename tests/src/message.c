@@ -750,8 +750,17 @@ static CGError message_query_active_display_failure(uint32_t capacity, CGDirectD
     return kCGErrorFailure;
 }
 
+static bool message_query_window_inventory_returns_snapshot;
+static int message_query_window_inventory_calls;
+static int message_query_window_inventory_count;
+static uint32_t message_query_window_inventory_windows[50];
+static struct window_server_window_record message_query_window_inventory_records[50];
+static struct window_server_snapshot message_query_window_inventory_snapshot;
+static int message_query_window_snapshot_destroy_calls;
+
 static uint32_t *message_query_window_inventory_failure(uint64_t *space_list, int space_count, int cid,
-                                                        int *count, bool include_minimized, bool *success)
+                                                        int *count, bool include_minimized, bool *success,
+                                                        struct window_server_snapshot **snapshot)
 {
     (void) space_list;
     (void) space_count;
@@ -759,6 +768,8 @@ static uint32_t *message_query_window_inventory_failure(uint64_t *space_list, in
     (void) include_minimized;
     *count = 0;
     *success = false;
+    *snapshot = message_query_window_inventory_returns_snapshot ?
+                &message_query_window_inventory_snapshot : NULL;
     return NULL;
 }
 
@@ -830,18 +841,35 @@ static uint64_t *message_query_display_spaces(uint32_t did, CFArrayRef topology,
     return spaces;
 }
 
+static void message_query_window_snapshot_destroy(struct window_server_snapshot *snapshot)
+{
+    if (snapshot == &message_query_window_inventory_snapshot) {
+        ++message_query_window_snapshot_destroy_calls;
+    }
+}
+
 static uint32_t *message_query_window_inventory_success(uint64_t *space_list, int space_count,
                                                         int cid, int *count,
-                                                        bool include_minimized, bool *success)
+                                                        bool include_minimized, bool *success,
+                                                        struct window_server_snapshot **snapshot)
 {
-    static uint32_t windows[] = { UINT32_C(0x7ffffffd), UINT32_C(0x7ffffffe), UINT32_C(0x7fffffff) };
+    static uint32_t default_windows[] = { UINT32_C(0x7ffffffd), UINT32_C(0x7ffffffe), UINT32_C(0x7fffffff) };
     (void) space_list;
     (void) space_count;
     (void) cid;
     (void) include_minimized;
-    *count = (int) array_count(windows);
+    ++message_query_window_inventory_calls;
+    if (message_query_window_inventory_count) {
+        *count = message_query_window_inventory_count;
+        *success = true;
+        *snapshot = message_query_window_inventory_returns_snapshot ?
+                    &message_query_window_inventory_snapshot : NULL;
+        return message_query_window_inventory_windows;
+    }
+    *count = (int) array_count(default_windows);
     *success = true;
-    return windows;
+    *snapshot = NULL;
+    return default_windows;
 }
 
 static uint64_t *message_query_window_spaces_empty(uint32_t wid, int *count, bool *success)
@@ -1147,6 +1175,202 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
     message_query_display_space_list_failure_did = 0;
     ts_reset();
 });
+
+static void message_query_prepare_window_snapshot(int count)
+{
+    message_query_window_inventory_count = count;
+    message_query_window_inventory_returns_snapshot = true;
+    for (int i = 0; i < count; ++i) {
+        uint32_t id = UINT32_C(0x70000000) + (uint32_t) i;
+        message_query_window_inventory_windows[i] = id;
+        message_query_window_inventory_records[i] = (struct window_server_window_record) {
+            .id = id,
+            .parent_id = i % 3 == 0 ? 0 : id - 1,
+            .level = i % 9,
+            .tags = i % 2 ? 0x8 : 0,
+            .attributes = 0,
+            .valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE
+        };
+    }
+    message_query_window_inventory_snapshot = (struct window_server_snapshot) {
+        .generation = 1,
+        .records = message_query_window_inventory_records,
+        .count = (size_t) count
+    };
+    message_query_window_inventory_calls = 0;
+    message_query_window_snapshot_destroy_calls = 0;
+}
+
+TEST_FUNC(message_window_query_reuses_inventory_snapshot_for_serialization,
+{
+    __auto_type saved_window_list = window_manager_query_window_list;
+    __auto_type saved_snapshot_destroy = window_manager_query_snapshot_destroy;
+    __auto_type saved_parent = window_test_serialization_parent;
+    __auto_type saved_level = window_test_serialization_level;
+    __auto_type saved_tags = window_test_serialization_tags;
+    __auto_type saved_shadow = window_test_serialization_shadow;
+    struct table saved_windows = g_window_manager.window;
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+
+    message_query_prepare_window_snapshot(3);
+    struct window tracked = { .id = message_query_window_inventory_windows[0], .is_root = true };
+    table_add(&g_window_manager.window, &tracked.id, &tracked);
+    window_manager_query_window_list = message_query_window_inventory_success;
+    window_manager_query_snapshot_destroy = message_query_window_snapshot_destroy;
+    window_test_serialization_parent = window_serialization_snapshot_parent;
+    window_test_serialization_level = window_serialization_snapshot_level;
+    window_test_serialization_tags = window_serialization_snapshot_tags;
+    window_test_serialization_shadow = window_serialization_snapshot_shadow;
+    window_serialization_snapshot_reset_calls();
+
+    uint64_t flags = WINDOW_PROPERTY_ID | WINDOW_PROPERTY_ROOT_WINDOW | WINDOW_PROPERTY_PARENT |
+                     WINDOW_PROPERTY_LEVEL | WINDOW_PROPERTY_LAYER | WINDOW_PROPERTY_TAGS |
+                     WINDOW_PROPERTY_HAS_SHADOW;
+    uint64_t sid = 1;
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, flags), true);
+        rewind(response);
+        char output[4096] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "\"id\":1879048192") != NULL, true);
+        TEST_CHECK(strstr(output, "\"root-window\":true") != NULL, true);
+        TEST_CHECK(strstr(output, "\"parent\":1879048192") != NULL, true);
+        TEST_CHECK(strstr(output, "\"has-shadow\":false") != NULL, true);
+        fclose(response);
+    }
+    TEST_CHECK(message_query_window_inventory_calls, 1);
+    TEST_CHECK(message_query_window_snapshot_destroy_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    window_manager_query_window_list = message_query_window_inventory_failure;
+    message_query_window_snapshot_destroy_calls = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(window_manager_query_windows_for_spaces(response, &sid, 1, flags), false);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    TEST_CHECK(message_query_window_snapshot_destroy_calls, 1);
+
+    window_manager_query_window_list = saved_window_list;
+    window_manager_query_snapshot_destroy = saved_snapshot_destroy;
+    window_test_serialization_parent = saved_parent;
+    window_test_serialization_level = saved_level;
+    window_test_serialization_tags = saved_tags;
+    window_test_serialization_shadow = saved_shadow;
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    message_query_window_inventory_count = 0;
+    message_query_window_inventory_returns_snapshot = false;
+});
+
+static int window_query_snapshot_benchmark_compare_u64(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *) left;
+    uint64_t b = *(const uint64_t *) right;
+    return (a > b) - (a < b);
+}
+
+static bool window_query_snapshot_benchmark_case(int window_count)
+{
+    enum { sample_count = 20, iterations_per_sample = 20 };
+    uint64_t elapsed[sample_count];
+    uint64_t checksum = 0;
+    __auto_type saved_window_list = window_manager_query_window_list;
+    __auto_type saved_snapshot_destroy = window_manager_query_snapshot_destroy;
+    __auto_type saved_parent = window_test_serialization_parent;
+    __auto_type saved_level = window_test_serialization_level;
+    __auto_type saved_tags = window_test_serialization_tags;
+    __auto_type saved_shadow = window_test_serialization_shadow;
+    struct table saved_windows = g_window_manager.window;
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
+
+    message_query_prepare_window_snapshot(window_count);
+    window_manager_query_window_list = message_query_window_inventory_success;
+    window_manager_query_snapshot_destroy = message_query_window_snapshot_destroy;
+    window_test_serialization_parent = window_serialization_snapshot_parent;
+    window_test_serialization_level = window_serialization_snapshot_level;
+    window_test_serialization_tags = window_serialization_snapshot_tags;
+    window_test_serialization_shadow = window_serialization_snapshot_shadow;
+    window_serialization_snapshot_reset_calls();
+    uint64_t flags = WINDOW_PROPERTY_ID | WINDOW_PROPERTY_ROOT_WINDOW | WINDOW_PROPERTY_PARENT |
+                     WINDOW_PROPERTY_LEVEL | WINDOW_PROPERTY_LAYER | WINDOW_PROPERTY_TAGS |
+                     WINDOW_PROPERTY_HAS_SHADOW;
+    uint64_t sid = 1;
+    int successes = 0;
+
+    for (int sample = 0; sample < sample_count; ++sample) {
+        uint64_t start = read_os_timer();
+        for (int iteration = 0; iteration < iterations_per_sample; ++iteration) {
+            char *output = NULL;
+            size_t length = 0;
+            FILE *response = open_memstream(&output, &length);
+            bool success = response && window_manager_query_windows_for_spaces(response, &sid, 1, flags);
+            if (response) fclose(response);
+            if (success) {
+                ++successes;
+                checksum += length;
+            }
+            free(output);
+        }
+        elapsed[sample] = (read_os_timer() - start) / iterations_per_sample;
+    }
+
+    qsort(elapsed, sample_count, sizeof(elapsed[0]), window_query_snapshot_benchmark_compare_u64);
+    int total = sample_count * iterations_per_sample;
+    int p95_index = (sample_count * 95 + 99) / 100 - 1;
+    printf("{\"case\":\"window-query-snapshot\",\"windows\":%d,\"iterations\":%d,"
+           "\"p50_ns\":%llu,\"p95_ns\":%llu,\"inventory_calls\":%d,"
+           "\"snapshot_destroys\":%d,\"legacy_parent_calls\":%d,\"legacy_level_calls\":%d,"
+           "\"legacy_tag_calls\":%d,\"legacy_shadow_calls\":%d,\"checksum\":%llu}\n",
+           window_count, total,
+           (unsigned long long) elapsed[sample_count / 2],
+           (unsigned long long) elapsed[p95_index],
+           message_query_window_inventory_calls,
+           message_query_window_snapshot_destroy_calls,
+           window_serialization_snapshot_parent_calls,
+           window_serialization_snapshot_level_calls,
+           window_serialization_snapshot_tags_calls,
+           window_serialization_snapshot_shadow_calls,
+           (unsigned long long) checksum);
+
+    bool valid = successes == total &&
+                 message_query_window_inventory_calls == total &&
+                 message_query_window_snapshot_destroy_calls == total &&
+                 window_serialization_snapshot_parent_calls == 0 &&
+                 window_serialization_snapshot_level_calls == 0 &&
+                 window_serialization_snapshot_tags_calls == 0 &&
+                 window_serialization_snapshot_shadow_calls == 0 && checksum != 0;
+
+    window_manager_query_window_list = saved_window_list;
+    window_manager_query_snapshot_destroy = saved_snapshot_destroy;
+    window_test_serialization_parent = saved_parent;
+    window_test_serialization_level = saved_level;
+    window_test_serialization_tags = saved_tags;
+    window_test_serialization_shadow = saved_shadow;
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    message_query_window_inventory_count = 0;
+    message_query_window_inventory_returns_snapshot = false;
+    return valid;
+}
+
+static bool window_query_snapshot_benchmark_run(void)
+{
+    bool valid = true;
+    valid &= window_query_snapshot_benchmark_case(1);
+    valid &= window_query_snapshot_benchmark_case(10);
+    valid &= window_query_snapshot_benchmark_case(50);
+    return valid;
+}
 
 TEST_FUNC(message_rule_filter_diagnostic_lists_all_matchers,
 {
