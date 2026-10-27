@@ -33,7 +33,7 @@ RELEASE_MODEL  = $(BUILD_PATH)/release/menu_bar_model.o
 ASAN_MODEL     = $(BUILD_PATH)/asan/menu_bar_model.o
 TSAN_MODEL     = $(BUILD_PATH)/tsan/menu_bar_model.o
 OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
-TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
+TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/misc/extern.h makefile
 NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
 CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_corner_geometry.c src/window_corner_geometry.h src/misc/extern.h makefile
@@ -138,7 +138,7 @@ integration: integration-hide-on-close
 
 $(TAG_CORPUS_BIN): $(TAG_CORPUS_DEPS)
 	@mkdir -p '$(dir $@)'
-	$(XCRUN) clang scripts/window_server_tag_corpus.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+	$(XCRUN) clang scripts/window_server_tag_corpus.m src/window_corner_geometry.c -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
 
 $(GEOMETRY_PROBE_BIN): $(GEOMETRY_PROBE_DEPS)
 	@mkdir -p '$(dir $@)'
