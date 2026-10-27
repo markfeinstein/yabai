@@ -88,7 +88,8 @@ enum native_tab_evidence
     NATIVE_TAB_EVIDENCE_AX_CREATED   = 1u << 3,
     NATIVE_TAB_EVIDENCE_AX_DESTROYED = 1u << 4,
     NATIVE_TAB_EVIDENCE_AX_MINIMIZED = 1u << 5,
-    NATIVE_TAB_EVIDENCE_INVENTORY    = 1u << 6
+    NATIVE_TAB_EVIDENCE_INVENTORY    = 1u << 6,
+    NATIVE_TAB_EVIDENCE_KNOWN_REAPPEAR = 1u << 7
 };
 
 struct native_tab_episode
@@ -103,6 +104,7 @@ struct native_tab_episode
     uint8_t disappeared_count;
     uint8_t appeared_count;
     uint32_t evidence;
+    uint8_t stable_inventory_polls;
     bool inventory_complete;
     bool overflowed;
 };
@@ -112,7 +114,10 @@ struct native_tab_ordinal_entry
     uint32_t window_id;
     uint16_t ordinal;
     struct native_tab_window_fact fact;
+    uint32_t appearance_count;
     bool has_fact;
+    bool ever_observed;
+    bool currently_present;
 };
 
 struct native_tab_recorder_metadata

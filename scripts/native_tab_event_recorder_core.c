@@ -191,13 +191,14 @@ static bool native_tab_write_evidence(struct native_tab_recorder *recorder)
     return fprintf(recorder->stream,
         "{\"sls_816\":%s,\"sls_815\":%s,\"sls_804\":%s,"
         "\"ax_created\":%s,\"ax_destroyed\":%s,\"ax_minimized\":%s,"
-        "\"inventory_complete\":%s}",
+        "\"known_id_reappeared\":%s,\"inventory_complete\":%s}",
         evidence & NATIVE_TAB_EVIDENCE_SLS_816 ? "true" : "false",
         evidence & NATIVE_TAB_EVIDENCE_SLS_815 ? "true" : "false",
         evidence & NATIVE_TAB_EVIDENCE_SLS_804 ? "true" : "false",
         evidence & NATIVE_TAB_EVIDENCE_AX_CREATED ? "true" : "false",
         evidence & NATIVE_TAB_EVIDENCE_AX_DESTROYED ? "true" : "false",
         evidence & NATIVE_TAB_EVIDENCE_AX_MINIMIZED ? "true" : "false",
+        evidence & NATIVE_TAB_EVIDENCE_KNOWN_REAPPEAR ? "true" : "false",
         recorder->episode.inventory_complete ? "true" : "false") >= 0;
 }
 
@@ -406,7 +407,16 @@ bool native_tab_recorder_baseline(struct native_tab_recorder *recorder, uint64_t
 {
     if (!recorder || !recorder->initialized || recorder->stopped || !inventory ||
         inventory->count > NATIVE_TAB_INVENTORY_CAPACITY) return false;
-    for (size_t i = 0; i < inventory->count; ++i) native_tab_record_fact(recorder, inventory->windows + i);
+    for (size_t i = 0; i < inventory->count; ++i) {
+        native_tab_record_fact(recorder, inventory->windows + i);
+        struct native_tab_ordinal_entry *entry = native_tab_ordinal_entry(
+            recorder, inventory->windows[i].window_id, true);
+        if (entry) {
+            entry->ever_observed = true;
+            entry->currently_present = true;
+            if (!entry->appearance_count) entry->appearance_count = 1;
+        }
+    }
     recorder->known = *inventory;
     return native_tab_write_inventory(recorder, now_ns, NULL, 0, NULL, 0, inventory->complete);
 }
@@ -443,20 +453,46 @@ bool native_tab_recorder_inventory(struct native_tab_recorder *recorder, uint64_
 
     if (!native_tab_write_inventory(recorder, now_ns, removed, removed_count,
                                     added, added_count, inventory->complete)) return false;
-    if (removed_count || added_count) native_tab_episode_begin(recorder, now_ns);
+    bool delta = removed_count || added_count;
+    if (delta) native_tab_episode_begin(recorder, now_ns);
+    bool same_episode_return = false;
     if (recorder->episode.state == NATIVE_TAB_EPISODE_COLLECTING) {
         recorder->episode.evidence |= NATIVE_TAB_EVIDENCE_INVENTORY;
         recorder->episode.inventory_complete &= inventory->complete && !overflow;
+        if (delta) recorder->episode.stable_inventory_polls = 0;
+        else if (inventory->complete && recorder->episode.stable_inventory_polls < UINT8_MAX) {
+            ++recorder->episode.stable_inventory_polls;
+        }
         for (uint8_t i = 0; i < removed_count; ++i) {
+            struct native_tab_ordinal_entry *entry = native_tab_ordinal_entry(recorder, removed[i], true);
+            if (entry) entry->currently_present = false;
             if (!native_tab_episode_add(recorder, false, removed[i], now_ns)) overflow = true;
         }
         for (uint8_t i = 0; i < added_count; ++i) {
+            struct native_tab_ordinal_entry *entry = native_tab_ordinal_entry(recorder, added[i], true);
+            bool reappeared = entry && entry->ever_observed && !entry->currently_present;
+            if (reappeared) recorder->episode.evidence |= NATIVE_TAB_EVIDENCE_KNOWN_REAPPEAR;
+            if (native_tab_episode_contains(recorder->episode.disappeared,
+                                            recorder->episode.disappeared_count, added[i])) {
+                same_episode_return = true;
+            }
+            if (entry) {
+                entry->ever_observed = true;
+                entry->currently_present = true;
+                if (entry->appearance_count != UINT32_MAX) ++entry->appearance_count;
+            }
             if (!native_tab_episode_add(recorder, true, added[i], now_ns)) overflow = true;
         }
         if (overflow) recorder->episode.overflowed = true;
     }
     if (inventory->complete) recorder->known = *inventory;
-    return native_tab_capacity_check(recorder, now_ns) && native_tab_episode_update(recorder, now_ns);
+    if (!native_tab_capacity_check(recorder, now_ns)) return false;
+    if (same_episode_return) return native_tab_resolution(recorder, now_ns, "same-id-reappeared");
+    if (recorder->episode.state == NATIVE_TAB_EPISODE_COLLECTING &&
+        recorder->episode.stable_inventory_polls >= 2) {
+        return native_tab_resolution(recorder, now_ns, native_tab_timeout_outcome(&recorder->episode));
+    }
+    return native_tab_episode_update(recorder, now_ns);
 }
 
 static bool native_tab_write_event(struct native_tab_recorder *recorder,

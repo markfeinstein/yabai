@@ -23,9 +23,14 @@ WindowServer notifications observed by the tool include visible (`815`), invisib
 
 Version 1 uses fixed diagnostic timing:
 
-- settle readback: 100 ms after the most recent related event;
-- hard terminal readback: 1000 ms after the first event;
+- inventory polling: 100 ms;
+- normal boundary: two consecutive complete, unchanged inventories (200 ms quiescence);
+- hard terminal readback: 1000 ms after the first event when quiescence is not established;
 - appeared/disappeared capacity: 8 IDs per episode.
+
+A single unchanged poll does not close an episode, so a split remove/add transition remains together. Once two unchanged polls close it, a later inventory delta starts a new episode instead of contaminating the earlier cardinality. Incomplete inventories neither establish quiescence nor replace the authoritative complete inventory.
+
+The recorder tracks redacted in-run presence history. `known_id_reappeared:true` means an ordinal observed in an earlier complete inventory was absent and later appeared again; it is evidence about WindowServer ID presence only, not a dormant-tab alias or proof of logical identity. A remove/add of the same ID inside one episode retains the `same-id-reappeared` outcome.
 
 An event exactly at the hard deadline still participates. Events after it begin a new episode. Outcomes such as `unexplained-one-to-one`, `appearance-only`, and `same-id-reappeared` describe event cardinality only. They are not identity matches and never change daemon state.
 
