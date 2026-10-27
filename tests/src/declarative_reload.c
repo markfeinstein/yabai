@@ -1607,8 +1607,8 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context committed = { .name = "home", .activate = true };
     TEST_CHECK(declarative_mode_run(&committed), true);
     TEST_CHECK(committed.result, true);
-    fixture.postcommit_fail = false;
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    fixture.postcommit_fail = false;
     TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
     TEST_CHECK(fixture.postcommit_failures > 0, true);
 
@@ -1957,6 +1957,7 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, false);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(mode.error.code, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED);
     TEST_CHECK(strcmp(mode.error.detail.message,
                       "mode topology changed during activation; reconciliation is required before retry"), 0);
@@ -1970,7 +1971,6 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
 
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
     fixture.mutate_topology_at_call = 0;
     fixture.topology.replacement_uuid_sid = 0;
@@ -1982,10 +1982,10 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     mode = (struct declarative_mode_worker_context) { .name = "work", .activate = true };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
 
     declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);
     declarative_reload_test_teardown(&fixture, &saved);
@@ -2125,12 +2125,12 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
         TEST_CHECK(declarative_mode_run(&attempt), true);
         TEST_CHECK(attempt.result, false);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
         TEST_CHECK(declarative_installed_selected_mode(), NULL);
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
         declarative_install_test_fail_allocation_at(0);
-        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_install_test_fail_allocation_at(0);
     for (size_t ordinal = 1; ordinal <= space_allocations; ++ordinal) {
@@ -2138,12 +2138,12 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
         TEST_CHECK(declarative_mode_run(&attempt), true);
         TEST_CHECK(attempt.result, false);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
         TEST_CHECK(declarative_installed_selected_mode(), NULL);
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
         declarative_space_test_fail_allocation_at(0);
-        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_space_test_fail_allocation_at(0);
     declarative_install_test_fail_allocation_at(0);
