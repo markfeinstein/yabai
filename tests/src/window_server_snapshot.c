@@ -6,6 +6,7 @@ struct window_server_snapshot_fake_record
     uint64_t tags;
     uint64_t attributes;
     struct window_constraint_observation constraints;
+    struct window_corner_geometry corner_geometry;
 };
 
 struct window_server_snapshot_fake_state
@@ -29,6 +30,8 @@ struct window_server_snapshot_fake_state
     int attributes_calls;
     int constraints_calls;
     bool constraints_available;
+    int corner_geometry_calls;
+    bool corner_geometry_available;
     int query_releases;
     int iterator_releases;
     int unknown_releases;
@@ -184,6 +187,19 @@ static uint64_t window_server_snapshot_fake_attributes(CFTypeRef iterator)
     return record ? record->attributes : 0;
 }
 
+static bool window_server_snapshot_fake_corner_geometry(
+    CFTypeRef iterator, uint32_t window_id, struct window_corner_geometry *geometry)
+{
+    (void) iterator;
+    ++window_server_snapshot_fake.corner_geometry_calls;
+    if (!window_server_snapshot_fake.corner_geometry_available || !geometry) return false;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record || record->id != window_id ||
+        !window_corner_geometry_is_complete(&record->corner_geometry)) return false;
+    *geometry = record->corner_geometry;
+    return true;
+}
+
 static void window_server_snapshot_fake_release(CFTypeRef value)
 {
     if (value == (CFTypeRef) &window_server_snapshot_fake_iterator_token) {
@@ -209,6 +225,7 @@ static const struct window_server_snapshot_backend window_server_snapshot_fake_b
     .iterator_tags = window_server_snapshot_fake_tags,
     .iterator_attributes = window_server_snapshot_fake_attributes,
     .iterator_constraints = window_server_snapshot_fake_constraints,
+    .iterator_corner_geometry = window_server_snapshot_fake_corner_geometry,
     .release = window_server_snapshot_fake_release,
     .allocate = window_server_snapshot_fake_allocate,
     .deallocate = window_server_snapshot_fake_deallocate
@@ -232,6 +249,12 @@ static void window_server_snapshot_fake_begin(int count)
                 .minimum = { 100 + i, 80 + i },
                 .maximum = { 2000 + i, 1200 + i },
                 .current = { 800 + i, 600 + i }
+            },
+            .corner_geometry = {
+                .radius = { i, i + 1, i + 2, i + 3 },
+                .valid_mask = WINDOW_CORNER_GEOMETRY_VALID_ALL,
+                .count = WINDOW_CORNER_GEOMETRY_RADIUS_COUNT,
+                .source = WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED
             }
         };
     }
@@ -447,6 +470,60 @@ TEST_FUNC(window_server_snapshot_allocation_failures_are_atomic_and_generation_i
     window_server_snapshot_fake_end();
 });
 
+TEST_FUNC(window_server_snapshot_corner_geometry_is_optional_owned_pod,
+{
+    window_server_snapshot_fake_begin(2);
+    window_server_snapshot_fake.corner_geometry_available = true;
+    window_server_snapshot_fake.destroy_storage_on_release = true;
+    CFArrayRef ids = window_server_snapshot_fake_window_ids(2);
+    struct window_server_snapshot *snapshot = window_server_snapshot_create(1, ids, 2);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields & WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY,
+                   WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY);
+        TEST_CHECK(snapshot->records[0].corner_geometry.radius[0], 0.0);
+        TEST_CHECK(snapshot->records[0].corner_geometry.radius[3], 3.0);
+        TEST_CHECK(snapshot->records[1].corner_geometry.radius[0], 1.0);
+        TEST_CHECK(snapshot->records[1].corner_geometry.radius[3], 4.0);
+        TEST_CHECK(window_corner_geometry_is_complete(&snapshot->records[1].corner_geometry), true);
+    }
+    TEST_CHECK(window_server_snapshot_fake.corner_geometry_calls, 2);
+    window_server_snapshot_destroy(snapshot);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    window_server_snapshot_fake_begin(1);
+    window_server_snapshot_fake.corner_geometry_available = true;
+    window_server_snapshot_fake.records[0].corner_geometry.valid_mask = 0;
+    ids = window_server_snapshot_fake_window_ids(1);
+    snapshot = window_server_snapshot_create(1, ids, 1);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields & WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY, 0ULL);
+        TEST_CHECK(window_corner_geometry_is_complete(&snapshot->records[0].corner_geometry), false);
+    }
+    TEST_CHECK(window_server_snapshot_fake.corner_geometry_calls, 1);
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    window_server_snapshot_fake_begin(1);
+    struct window_server_snapshot_backend without_corners = window_server_snapshot_fake_backend;
+    without_corners.iterator_corner_geometry = NULL;
+    window_server_snapshot_test_backend = &without_corners;
+    ids = window_server_snapshot_fake_window_ids(1);
+    snapshot = window_server_snapshot_create(1, ids, 1);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields & WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY, 0ULL);
+    }
+    TEST_CHECK(window_server_snapshot_fake.corner_geometry_calls, 0);
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+})
+
 TEST_FUNC(window_server_snapshot_constraints_are_optional_owned_pod,
 {
     window_server_snapshot_fake_begin(2);
@@ -527,7 +604,7 @@ static bool window_server_snapshot_benchmark_case(int window_count, bool constra
     printf("{\"case\":\"window-server-snapshot\",\"windows\":%d,\"iterations\":%d,"
            "\"constraints_available\":%s,\"p50_ns\":%llu,\"p95_ns\":%llu,\"query_calls\":%d,"
            "\"iterator_copy_calls\":%d,\"advance_calls\":%d,\"field_getter_calls\":%d,"
-           "\"constraint_getter_calls\":%d,"
+           "\"constraint_getter_calls\":%d,\"corner_geometry_getter_calls\":%d,"
            "\"peak_bytes\":%zu,\"retained_bytes\":%zu,\"checksum\":%llu}\n",
            window_count, total, constraints_available ? "true" : "false",
            (unsigned long long) elapsed[sample_count / 2],
@@ -537,6 +614,7 @@ static bool window_server_snapshot_benchmark_case(int window_count, bool constra
            window_server_snapshot_fake.iterator_advance_calls,
            field_getter_calls,
            window_server_snapshot_fake.constraints_calls,
+           window_server_snapshot_fake.corner_geometry_calls,
            window_server_snapshot_allocator.peak_bytes,
            window_server_snapshot_allocator.current_bytes,
            (unsigned long long) checksum);
@@ -550,6 +628,7 @@ static bool window_server_snapshot_benchmark_case(int window_count, bool constra
                  window_server_snapshot_fake.iterator_advance_calls == total * (window_count + 1) &&
                  field_getter_calls == total * window_count * 5 &&
                  window_server_snapshot_fake.constraints_calls == total * window_count &&
+                 window_server_snapshot_fake.corner_geometry_calls == total * window_count &&
                  window_server_snapshot_fake.query_releases == total &&
                  window_server_snapshot_fake.iterator_releases == total &&
                  window_server_snapshot_allocator.allocation_attempts == (size_t) total * 2 &&

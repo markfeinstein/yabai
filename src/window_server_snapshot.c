@@ -17,6 +17,8 @@ struct window_server_snapshot_backend
     uint64_t (*iterator_tags)(CFTypeRef iterator);
     uint64_t (*iterator_attributes)(CFTypeRef iterator);
     bool (*iterator_constraints)(CFTypeRef iterator, struct window_constraint_observation *observation);
+    bool (*iterator_corner_geometry)(CFTypeRef iterator, uint32_t window_id,
+                                     struct window_corner_geometry *geometry);
     void (*release)(CFTypeRef value);
     void *(*allocate)(size_t count, size_t size);
     void (*deallocate)(void *value);
@@ -64,6 +66,7 @@ static const struct window_server_snapshot_backend window_server_snapshot_produc
     .iterator_tags = SLSWindowIteratorGetTags,
     .iterator_attributes = SLSWindowIteratorGetAttributes,
     .iterator_constraints = window_server_snapshot_constraints,
+    .iterator_corner_geometry = window_corner_geometry_collect_resolved,
     .release = window_server_snapshot_release,
     .allocate = calloc,
     .deallocate = free
@@ -115,6 +118,12 @@ static void window_server_snapshot_copy_record(const struct window_server_snapsh
     if (backend->iterator_constraints &&
         backend->iterator_constraints(iterator, &record->constraints)) {
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS;
+    }
+    if ((record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) &&
+        backend->iterator_corner_geometry &&
+        backend->iterator_corner_geometry(iterator, record->id, &record->corner_geometry) &&
+        window_corner_geometry_is_complete(&record->corner_geometry)) {
+        record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY;
     }
 }
 
