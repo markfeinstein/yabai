@@ -3304,6 +3304,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
     TEST_ENTRY(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile) \
     TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \
+    TEST_ENTRY(declarative_reload_teardown_joins_reconcile_before_clearing_test_state) \
     TEST_ENTRY(declarative_modes_runtime_second_topology_gate_and_recovery) \
     TEST_ENTRY(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact) \
     TEST_ENTRY(declarative_reconcile_second_topology_gate_and_recovery) \
