@@ -213,9 +213,7 @@ static bool (*event_loop_test_native_resize_space_visible)(uint64_t);
 static void (*event_loop_test_native_resize_schedule)(uint32_t, uint64_t);
 static void (*event_loop_test_native_resize_restore)(uint32_t);
 static bool (*event_loop_test_native_resize_live_frame)(struct window *, CGRect *);
-static AXError (*event_loop_test_native_resize_ax_copy)(AXUIElementRef, CFStringRef, CFTypeRef *);
-static Boolean (*event_loop_test_native_resize_ax_get)(AXValueRef, AXValueType, void *);
-static void (*event_loop_test_native_resize_ax_release)(CFTypeRef);
+static bool (*event_loop_test_managed_window_correction_live_frame)(struct window *, CGRect *);
 static bool (*event_loop_test_managed_window_correction_space_visible)(uint64_t);
 static void (*event_loop_test_managed_window_correction_schedule)(struct event_loop *, uint64_t, uint64_t);
 static void (*event_loop_test_managed_window_correction_flush)(struct window_capture *);
@@ -634,67 +632,9 @@ static bool native_resize_frames_match(CGRect a, CGRect b)
            !AX_DIFF(a.size.width, b.size.width) && !AX_DIFF(a.size.height, b.size.height);
 }
 
-static AXError native_resize_ax_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
-{
-#ifdef TESTS
-    if (event_loop_test_native_resize_ax_copy) {
-        return event_loop_test_native_resize_ax_copy(element, attribute, value);
-    }
-#endif
-    return AXUIElementCopyAttributeValue(element, attribute, value);
-}
-
-static Boolean native_resize_ax_get(AXValueRef value, AXValueType type, void *result)
-{
-#ifdef TESTS
-    if (event_loop_test_native_resize_ax_get) {
-        return event_loop_test_native_resize_ax_get(value, type, result);
-    }
-#endif
-    return AXValueGetValue(value, type, result);
-}
-
-static void native_resize_ax_release(CFTypeRef value)
-{
-#ifdef TESTS
-    if (event_loop_test_native_resize_ax_release) {
-        event_loop_test_native_resize_ax_release(value);
-        return;
-    }
-#endif
-    CFRelease(value);
-}
-
 static bool native_resize_read_ax_frame(struct window *window, CGRect *frame)
 {
-    CFTypeRef position_ref = NULL;
-    CFTypeRef size_ref = NULL;
-    CGRect live = CGRectZero;
-    bool result = false;
-
-    if (native_resize_ax_copy(window->ref, kAXPositionAttribute, &position_ref) != kAXErrorSuccess ||
-        !position_ref) goto out;
-    if (native_resize_ax_copy(window->ref, kAXSizeAttribute, &size_ref) != kAXErrorSuccess ||
-        !size_ref) goto out;
-    if (CFGetTypeID(position_ref) != AXValueGetTypeID() ||
-        CFGetTypeID(size_ref) != AXValueGetTypeID()) goto out;
-
-    AXValueRef position = (AXValueRef) position_ref;
-    AXValueRef size = (AXValueRef) size_ref;
-    if (AXValueGetType(position) != kAXValueTypeCGPoint ||
-        AXValueGetType(size) != kAXValueTypeCGSize) goto out;
-    if (!native_resize_ax_get(position, kAXValueTypeCGPoint, &live.origin) ||
-        !native_resize_ax_get(size, kAXValueTypeCGSize, &live.size)) goto out;
-    if (!isfinite(live.origin.x) || !isfinite(live.origin.y) ||
-        !isfinite(live.size.width) || !isfinite(live.size.height) ||
-        live.size.width <= 0.0 || live.size.height <= 0.0) goto out;
-
-    *frame = live;
-    result = true;
-out:
-    if (position_ref) native_resize_ax_release(position_ref);
-    if (size_ref) native_resize_ax_release(size_ref);
-    return result;
+    return window_ax_frame_with_status(window, frame);
 }
 
 static bool native_resize_read_live_frame(struct window *window, CGRect *frame)
@@ -2003,12 +1943,16 @@ static bool managed_window_frame_differs(struct window_node *node, uint32_t wind
             AX_DIFF(node->zoom->area.h, frame.size.height));
 }
 
-static CGRect managed_window_correction_live_frame(struct window *window)
+static bool managed_window_correction_live_frame(struct window *window, CGRect *frame)
 {
 #ifdef TESTS
-    return window->frame;
+    if (event_loop_test_managed_window_correction_live_frame) {
+        return event_loop_test_managed_window_correction_live_frame(window, frame);
+    }
+    *frame = window->frame;
+    return true;
 #else
-    return window_ax_frame(window);
+    return window_ax_frame_with_status(window, frame);
 #endif
 }
 
@@ -2058,6 +2002,19 @@ static void managed_window_correction_log_converged(struct window *window, uint6
 {
     managed_window_correction_log(window, "converged", window->frame_correction_retry_index,
                                   os_timer_elapsed_milliseconds(window->frame_correction_started_at, now));
+}
+
+static void managed_window_correction_advance_retry(struct window *window, uint64_t now)
+{
+    if (window->frame_correction_retry_index < FRAME_CORRECTION_RETRY_WRITE_COUNT) {
+        ++window->frame_correction_retry_index;
+        window->frame_correction_retry_at = window->frame_correction_started_at +
+            frame_correction_retry_delay_ms[window->frame_correction_retry_index] * 1000000ULL;
+    } else {
+        window->frame_correction_retry_active = false;
+        managed_window_correction_log(window, "exhausted", window->frame_correction_retry_index,
+                                      os_timer_elapsed_milliseconds(window->frame_correction_started_at, now));
+    }
 }
 
 static void managed_window_correction_clear(struct window *window)
@@ -2359,7 +2316,14 @@ static void managed_window_correction_retry_window(struct window *window, bool h
         return;
     }
 
-    CGRect live_frame = managed_window_correction_live_frame(window);
+    CGRect live_frame;
+    if (!managed_window_correction_live_frame(window, &live_frame)) {
+        bool observes_recovery = application_observe_frame_recovery(window->application);
+        managed_window_correction_advance_retry(window, now);
+        if (!observes_recovery) managed_window_correction_clear(window);
+        return;
+    }
+
     window->frame = live_frame;
     if (!managed_window_frame_differs(node, window->id, live_frame)) {
         managed_window_correction_log_converged(window, now);
@@ -2371,15 +2335,11 @@ static void managed_window_correction_retry_window(struct window *window, bool h
     if (!managed_window_correction_space_visible(view->sid)) {
         view_set_flag(view, VIEW_IS_DIRTY);
         window->frame_correction_retry_active = false;
-    } else if (window->frame_correction_retry_index < FRAME_CORRECTION_RETRY_WRITE_COUNT) {
-        managed_window_correction_flush(node, window);
-        ++window->frame_correction_retry_index;
-        window->frame_correction_retry_at = window->frame_correction_started_at +
-            frame_correction_retry_delay_ms[window->frame_correction_retry_index] * 1000000ULL;
     } else {
-        window->frame_correction_retry_active = false;
-        managed_window_correction_log(window, "exhausted", window->frame_correction_retry_index,
-                                      os_timer_elapsed_milliseconds(window->frame_correction_started_at, now));
+        if (window->frame_correction_retry_index < FRAME_CORRECTION_RETRY_WRITE_COUNT) {
+            managed_window_correction_flush(node, window);
+        }
+        managed_window_correction_advance_retry(window, now);
     }
     if (!observes_recovery) managed_window_correction_clear(window);
 }

@@ -34,6 +34,9 @@ jobs:
           make man-contract
           make man-check
           git diff --check
+      - name: AX frame request benchmark
+        run: make test-benchmark-ax
+
       - name: Ordinary behavior and repository fixtures
         run: make test
       - name: Sanitized behavior

@@ -235,6 +235,7 @@ bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct wind
 void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot);
 bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame);
 CGPoint window_ax_origin(struct window *window);
+bool window_ax_frame_with_status(struct window *window, CGRect *frame);
 CGRect window_ax_frame(struct window *window);
 CFStringRef window_ax_role(struct window *window);
 CFStringRef window_role(struct window *window);
