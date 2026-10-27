@@ -46,8 +46,8 @@ jobs:
         run: |
           make debug release asan tsan
           for binary in bin/debug/yabai bin/release/yabai; do
-            lipo -verify_arch arm64 "$binary"
-            lipo -verify_arch x86_64 "$binary"
+            lipo "$binary" -verify_arch arm64
+            lipo "$binary" -verify_arch x86_64
           done
       - name: Offline config and bounded doctor paths
         run: |
