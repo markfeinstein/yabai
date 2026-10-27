@@ -2953,6 +2953,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_space_move_prefers_observable_sa_then_verified_fallbacks) \
     TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
+    TEST_ENTRY(window_animation_policy_honors_reduce_motion_without_mutating_configuration) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
     TEST_ENTRY(window_reconciliation_preserves_transient_fullscreen_exit_membership) \

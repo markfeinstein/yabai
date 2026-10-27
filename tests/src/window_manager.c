@@ -560,6 +560,94 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
     g_window_manager.window_animation_duration = saved_animation_duration;
 });
 
+static bool window_manager_animation_test_reduce_motion;
+static int window_manager_animation_test_async_calls;
+static int window_manager_animation_test_async_windows;
+static int window_manager_animation_test_direct_calls;
+
+static struct accessibility_display_preferences window_manager_animation_test_preferences(void)
+{
+    return (struct accessibility_display_preferences) {
+        .reduce_motion = window_manager_animation_test_reduce_motion
+    };
+}
+
+static void window_manager_animation_test_async(struct window_capture *captures, int count)
+{
+    if (captures && count > 0) {
+        ++window_manager_animation_test_async_calls;
+        window_manager_animation_test_async_windows += count;
+    }
+}
+
+static void window_manager_animation_test_direct(struct window *window, float x, float y,
+                                                 float width, float height)
+{
+    (void) window;
+    (void) x;
+    (void) y;
+    (void) width;
+    (void) height;
+    ++window_manager_animation_test_direct_calls;
+}
+
+TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configuration,
+{
+    __auto_type saved_preferences = window_manager_animation_preferences;
+    __auto_type saved_async = window_manager_animation_async_route;
+    __auto_type saved_direct = window_manager_animation_direct_route;
+    float saved_duration = g_window_manager.window_animation_duration;
+    window_manager_animation_preferences = window_manager_animation_test_preferences;
+    window_manager_animation_async_route = window_manager_animation_test_async;
+    window_manager_animation_direct_route = window_manager_animation_test_direct;
+
+    struct window first = { .id = 1 };
+    struct window second = { .id = 2 };
+    struct window_capture captures[] = {
+        { .window = &first, .x = 1, .y = 2, .w = 3, .h = 4 },
+        { .window = &second, .x = 5, .y = 6, .w = 7, .h = 8 }
+    };
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animation_test_async_calls = 0;
+    window_manager_animation_test_async_windows = 0;
+    window_manager_animation_test_direct_calls = 0;
+    g_window_manager.window_animation_duration = 0.0f;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 0);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+
+    window_manager_animation_test_direct_calls = 0;
+    g_window_manager.window_animation_duration = 0.25f;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 1);
+    TEST_CHECK(window_manager_animation_test_async_windows, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 0);
+
+    window_manager_animation_test_reduce_motion = true;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 1);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_async_calls, 2);
+    TEST_CHECK(window_manager_animation_test_async_windows, 3);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+
+    window_manager_animation_test_reduce_motion = true;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_async_calls, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 3);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+
+    g_window_manager.window_animation_duration = saved_duration;
+    window_manager_animation_preferences = saved_preferences;
+    window_manager_animation_async_route = saved_async;
+    window_manager_animation_direct_route = saved_direct;
+});
+
 TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
 {
     struct space_manager sm = {0};
