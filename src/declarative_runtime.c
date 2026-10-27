@@ -94,6 +94,7 @@ static void declarative_operation_set_normal_opacity(void *manager, float value)
 static void declarative_operation_set_shadow(void *manager, int value) { window_manager_set_purify_mode(manager, value); }
 static void declarative_operation_set_menu_enabled(int value) { menu_bar_manager_set_enabled(value); }
 static void declarative_operation_set_menu_interface(int value) { menu_bar_manager_set_interface(value); }
+static void declarative_operation_set_menu_thumbnails(int value) { menu_bar_manager_set_thumbnails(value); }
 static void declarative_operation_set_menu_style(int value) { menu_bar_manager_set_style(value); }
 static void declarative_operation_set_menu_space_filter(int value) { menu_bar_manager_set_space_filter(value); }
 static void declarative_operation_set_mouse_modifier(void *state, int value) { mouse_state_set_modifier(state, value); }
@@ -121,6 +122,7 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .set_shadow = declarative_operation_set_shadow, \
     .set_menu_enabled = declarative_operation_set_menu_enabled, \
     .set_menu_interface = declarative_operation_set_menu_interface, \
+    .set_menu_thumbnails = declarative_operation_set_menu_thumbnails, \
     .set_menu_style = declarative_operation_set_menu_style, \
     .set_menu_space_filter = declarative_operation_set_menu_space_filter, \
     .set_mouse_modifier = declarative_operation_set_mouse_modifier, \
@@ -225,6 +227,7 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_SHADOW: return value->enumeration >= PURIFY_DISABLED && value->enumeration <= PURIFY_ALWAYS;
     case DECLARATIVE_CONFIG_MENUBAR: return value->enumeration == MENU_BAR_DISABLED || value->enumeration == MENU_BAR_ENABLED;
     case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: return value->enumeration >= MENU_BAR_INTERFACE_MENU && value->enumeration <= MENU_BAR_INTERFACE_AUTO;
+    case DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS: return value->enumeration == MENU_BAR_THUMBNAILS_OFF || value->enumeration == MENU_BAR_THUMBNAILS_ON;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: return value->enumeration == MENU_BAR_STYLE_COMPACT || value->enumeration == MENU_BAR_STYLE_EXPANDED;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return value->enumeration == MENU_BAR_SPACE_FILTER_OCCUPIED || value->enumeration == MENU_BAR_SPACE_FILTER_ALL;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return value->real >= 0.0f && value->real <= 1.0f && isfinite(value->real);
@@ -318,6 +321,7 @@ static enum declarative_apply_result declarative_apply_runtime_setting_to_view(e
     case DECLARATIVE_CONFIG_SHADOW: declarative_runtime_operation_ops.set_shadow(&g_window_manager, value->enumeration); break;
     case DECLARATIVE_CONFIG_MENUBAR: declarative_runtime_operation_ops.set_menu_enabled(value->enumeration); break;
     case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: declarative_runtime_operation_ops.set_menu_interface(value->enumeration); break;
+    case DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS: declarative_runtime_operation_ops.set_menu_thumbnails(value->enumeration); break;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: declarative_runtime_operation_ops.set_menu_style(value->enumeration); break;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: declarative_runtime_operation_ops.set_menu_space_filter(value->enumeration); break;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: declarative_runtime_operation_ops.set_menubar_opacity(&g_window_manager, value->real); break;

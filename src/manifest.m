@@ -113,6 +113,7 @@
 #include "mouse_handler.h"
 #include "accessibility_preferences.h"
 #include "menu_bar_model.h"
+#include "menu_bar_thumbnails.h"
 #include "menu_bar.h"
 #include "menu_bar_manager.h"
 
@@ -120,6 +121,7 @@
 #include "mission_control.c"
 #include "event_queue.c"
 #include "accessibility_preferences.m"
+#include "menu_bar_thumbnails.m"
 #include "menu_bar.m"
 #include "menu_bar_manager.c"
 #include "event_loop.c"

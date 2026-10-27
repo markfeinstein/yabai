@@ -120,7 +120,7 @@ TEST_FUNC(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered,
     output[length] = '\0';
     const char *configuration = strstr(output, "PASS configuration");
     const char *screen = strstr(output,
-        "WARN screen recording   mechanism: configured window animations require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized; next: enable yabai in System Settings > Privacy & Security > Screen Recording, then restart yabai");
+        "WARN screen recording   mechanism: configured capture-dependent features require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized; next: enable yabai in System Settings > Privacy & Security > Screen Recording, then restart yabai");
     const char *arm64e = strstr(output, "PASS arm64e boot arg");
     TEST_CHECK(configuration != NULL, true);
     TEST_CHECK(screen != NULL, true);
@@ -134,14 +134,14 @@ TEST_FUNC(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered,
     stream = tmpfile();
     TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
     TEST_CHECK(doctor_test_output_contains(stream,
-        "PASS screen recording   mechanism: configured window animations are authorized by CGPreflightScreenCaptureAccess; next: no action required"), true);
+        "PASS screen recording   mechanism: configured capture-dependent features are authorized by CGPreflightScreenCaptureAccess; next: no action required"), true);
     fclose(stream);
 
     facts.screen_capture_access = DOCTOR_PROBE_UNKNOWN;
     stream = tmpfile();
     TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
     TEST_CHECK(doctor_test_output_contains(stream,
-        "UNKNOWN screen recording   mechanism: configured window animations require capture but nonprompting preflight is unavailable; next: verify Screen Recording permission manually"), true);
+        "UNKNOWN screen recording   mechanism: configured capture-dependent features require capture but nonprompting preflight is unavailable; next: verify Screen Recording permission manually"), true);
     fclose(stream);
 });
 
@@ -367,6 +367,13 @@ TEST_FUNC(doctor_screen_capture_requirement_uses_static_config_precedence_withou
     TEST_CHECK(facts.screen_capture_access, DOCTOR_PROBE_NO);
     TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
 
+    TEST_CHECK(doctor_test_write(native_xdg,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0,\"menubar_thumbnails\":\"on\"}}"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_YES);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 2);
+
     unlink(legacy_xdg);
     TEST_CHECK(doctor_test_write(native_xdg,
         "{\"version\":2,\"config\":{\"window_animation_duration\":0}}"), true);
@@ -375,13 +382,13 @@ TEST_FUNC(doctor_screen_capture_requirement_uses_static_config_precedence_withou
     facts = (struct doctor_facts) {0};
     doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
     TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_NO);
-    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 2);
 
     TEST_CHECK(doctor_test_write(native_xdg, "{ malformed"), true);
     facts = (struct doctor_facts) {0};
     doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
     TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
-    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 2);
 
     int oversized = open(native_xdg, O_TRUNC | O_WRONLY);
     TEST_CHECK(oversized >= 0, true);
@@ -390,7 +397,7 @@ TEST_FUNC(doctor_screen_capture_requirement_uses_static_config_precedence_withou
     facts = (struct doctor_facts) {0};
     doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
     TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
-    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 2);
 
     TEST_CHECK(doctor_test_write(native_xdg,
         "{\"version\":2,\"config\":{\"window_animation_duration\":0.25}}"), true);
@@ -399,7 +406,7 @@ TEST_FUNC(doctor_screen_capture_requirement_uses_static_config_precedence_withou
     doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
     TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_YES);
     TEST_CHECK(facts.screen_capture_access, DOCTOR_PROBE_UNKNOWN);
-    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 2);
 
     doctor_test_xdg = NULL;
     const char *rm_args[] = { "/bin/rm", "-rf", root, NULL };

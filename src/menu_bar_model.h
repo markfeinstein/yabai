@@ -41,6 +41,12 @@ enum menu_bar_interface
     MENU_BAR_INTERFACE_AUTO = 2
 };
 
+enum menu_bar_thumbnails
+{
+    MENU_BAR_THUMBNAILS_OFF = 0,
+    MENU_BAR_THUMBNAILS_ON  = 1
+};
+
 enum menu_bar_style
 {
     /* Show every space selected by the space filter. This is the default. */
@@ -59,11 +65,12 @@ enum menu_bar_space_filter
     MENU_BAR_SPACE_FILTER_ALL      = 1
 };
 
-/* A zero-initialized settings struct is the product default: off/menu/expanded/occupied. */
+/* A zero-initialized settings struct is the product default: off/menu/thumbnails-off/expanded/occupied. */
 struct menu_bar_settings
 {
     enum menu_bar_enabled enabled;
     enum menu_bar_interface interface;
+    enum menu_bar_thumbnails thumbnails;
     enum menu_bar_style style;
     enum menu_bar_space_filter space_filter;
 };

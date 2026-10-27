@@ -1,5 +1,5 @@
 FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
-FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
+FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework ScreenCaptureKit -framework SkyLight
 CLI_FLAGS      =
 MACOS_MIN_VERSION = 14.0
 COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
