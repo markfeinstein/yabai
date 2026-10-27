@@ -36,6 +36,8 @@ FAKE_MKTEMP="$PARENT/failing-mktemp"
 ATTEMPTS="$PARENT/mktemp-attempts"
 CREATED="$PARENT/mktemp-created"
 FAILURE_LOG="$PARENT/failure.log"
+SUCCESS_OUTPUT="$PARENT/success.out"
+SUCCESS_TRACE="$PARENT/success.trace"
 : > "$ATTEMPTS"
 : > "$CREATED"
 
@@ -96,7 +98,17 @@ if [ -e "$allocated_root" ]; then
 fi
 
 PHASE=successful-build
-TMPDIR="$TMP_BASE" /bin/sh "$ROOT/repository_build.sh"
+set +e
+TMPDIR="$TMP_BASE" /bin/sh -x "$ROOT/repository_build.sh" > "$SUCCESS_OUTPUT" 2> "$SUCCESS_TRACE"
+success_status=$?
+set -e
+if [ "$success_status" -ne 0 ]; then
+    printf 'repository build fixture: successful path returned status %s\n' "$success_status" >&2
+    cat "$SUCCESS_OUTPUT" >&2
+    cat "$SUCCESS_TRACE" >&2
+    exit 1
+fi
+cat "$SUCCESS_OUTPUT"
 
 PHASE=cleanup
 cleanup
