@@ -1,0 +1,68 @@
+name: trusted-macos27-validation
+
+on:
+  push:
+    branches:
+      - validation-macos27-window-server-tag-corpus
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.repository == 'markfeinstein/yabai'
+    runs-on: [self-hosted, macOS, ARM64, yabai-macos27-ephemeral]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify trusted macOS 27 arm64 host
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 27
+      - name: Syntax and diff hygiene
+        run: |
+          make syntax
+          git diff --check
+      - name: Ordinary and sanitized behavior
+        run: |
+          make test
+          make test-asan
+          make test-tsan
+      - name: Thin and universal architecture behavior
+        run: |
+          make test-arm64
+          make test-x86_64
+          make debug release asan tsan
+          for binary in bin/debug/yabai bin/release/yabai bin/asan/yabai bin/tsan/yabai; do
+            for arch in arm64 x86_64; do
+              lipo "$binary" -verify_arch "$arch"
+              test "$(otool -arch "$arch" -l "$binary" | awk '$1 == "minos" { print $2 }')" = 14.0
+            done
+          done
+      - name: Corpus tool and deterministic benchmarks
+        run: |
+          make window-server-tag-corpus
+          make test-benchmark-space-inventory
+          make test-benchmark-window-server-tag-corpus
+          output="$RUNNER_TEMP/yabai-window-server-tags.jsonl"
+          bin/debug/window-server-tag-corpus --scenario github-macos27 --output "$output"
+          python3 - "$output" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              rows = [json.loads(line) for line in stream]
+          assert rows and rows[0]["schema"] == "yabai.window-server-tag-corpus/v1"
+          assert len(rows) - 1 == rows[0]["counts"]["public_windows"]
+          PY
+          rm -f "$output"
+      - name: Offline config and bounded doctor
+        run: |
+          bin/debug/yabai --check-config examples/yabai.jsonc
+          doctor_log="$RUNNER_TEMP/yabai-doctor.txt"
+          set +e
+          bin/debug/yabai --doctor >"$doctor_log" 2>&1
+          doctor_status=$?
+          set -e
+          grep -Eq '^SUMMARY [0-9]+ failure(s)?; doctor made no changes$' "$doctor_log"
+          test "$doctor_status" -eq 0 -o "$doctor_status" -eq 1
+      - name: Working tree remains clean
+        run: test -z "$(git status --porcelain --untracked-files=all)"
