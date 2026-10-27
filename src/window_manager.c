@@ -2394,6 +2394,13 @@ static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
 static bool (*window_manager_test_window_observe)(struct window *, bool *);
 static void (*window_manager_test_window_unobserve)(struct window *);
 static AXError (*window_manager_test_set_attribute_value)(AXUIElementRef, CFStringRef, CFTypeRef);
+static AXError (*window_manager_identity_ax_pid)(AXUIElementRef, pid_t *) = AXUIElementGetPid;
+static struct window *(*window_manager_identity_create_candidate)(struct application *, AXUIElementRef, uint32_t) = window_create;
+static void (*window_manager_identity_release)(CFTypeRef) = CFRelease;
+#else
+#define window_manager_identity_ax_pid AXUIElementGetPid
+#define window_manager_identity_create_candidate window_create
+#define window_manager_identity_release CFRelease
 #endif
 
 uint32_t window_manager_ax_window_id(AXUIElementRef window_ref)
@@ -2435,6 +2442,266 @@ AXUIElementRef window_manager_copy_application_window_ref(struct application *ap
     }
     CFRelease(window_list);
     return result;
+}
+
+struct window_identity_tree_scan
+{
+    struct view *list_view;
+    struct view *order_view;
+    struct view *insertion_view;
+    struct window_node *list_node;
+    struct window_node *order_node;
+    uint32_t *list_slot;
+    uint32_t *order_slot;
+    uint32_t *insertion_slot;
+    int old_list_count;
+    int old_order_count;
+    int old_insertion_count;
+    int new_count;
+};
+
+static void window_manager_identity_scan_node(struct window_node *node, struct view *view,
+                                              uint32_t old_id, uint32_t new_id,
+                                              struct window_identity_tree_scan *scan)
+{
+    if (!node) return;
+    for (int i = 0; i < node->window_count; ++i) {
+        if (node->window_list[i] == old_id) {
+            ++scan->old_list_count;
+            scan->list_slot = &node->window_list[i];
+            scan->list_node = node;
+            scan->list_view = view;
+        } else if (node->window_list[i] == new_id) {
+            ++scan->new_count;
+        }
+        if (node->window_order[i] == old_id) {
+            ++scan->old_order_count;
+            scan->order_slot = &node->window_order[i];
+            scan->order_node = node;
+            scan->order_view = view;
+        } else if (node->window_order[i] == new_id) {
+            ++scan->new_count;
+        }
+    }
+    window_manager_identity_scan_node(node->left, view, old_id, new_id, scan);
+    window_manager_identity_scan_node(node->right, view, old_id, new_id, scan);
+}
+
+static bool window_manager_identity_correction_is_clear(const struct window *window)
+{
+    return !window->frame_correction_pending && !window->frame_correction_retry_active &&
+           !window->frame_correction_retry_index && !window->frame_correction_hint_rearms &&
+           !window->frame_correction_started_at && !window->frame_correction_retry_at;
+}
+
+static bool window_manager_identity_jankyborders_quiescent(void)
+{
+    pthread_mutex_lock(&g_jankyborders_desired.lock);
+    bool quiescent = g_jankyborders_desired.count == 0;
+    pthread_mutex_unlock(&g_jankyborders_desired.lock);
+    return quiescent;
+}
+
+static void window_manager_identity_release_candidate(struct window *candidate)
+{
+    if (candidate) window_destroy(candidate);
+}
+
+static enum window_identity_replace_error
+window_manager_identity_preflight(struct space_manager *sm, struct window_manager *wm,
+                                  struct mouse_state *ms, struct window *window,
+                                  struct window *candidate, uint32_t old_id, uint32_t new_id,
+                                  struct window_identity_tree_scan *scan,
+                                  struct view **managed_view, bool *lost_focus)
+{
+    const uint16_t forbidden_flags = WINDOW_FULLSCREEN | WINDOW_MINIMIZE |
+                                     WINDOW_WINDOWED | WINDOW_ORDERED_OUT;
+    if (!window->application || window->application != candidate->application ||
+        window->id != old_id || window->id_ptr != &window->id ||
+        candidate->id != new_id || candidate->id_ptr != &candidate->id) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+    if (window->notification || candidate->notification) return WINDOW_IDENTITY_REPLACE_OBSERVATION_ACTIVE;
+    if ((window->flags | candidate->flags) & forbidden_flags || window->application->is_hidden) {
+        return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+    }
+    if (!window->is_root || !candidate->is_root || !candidate->ref ||
+        (window->ref && CFEqual(window->ref, candidate->ref)) ||
+        !window->role || !candidate->role || !CFEqual(window->role, candidate->role) ||
+        !window->subrole || !candidate->subrole || !CFEqual(window->subrole, candidate->subrole) ||
+        !isfinite(candidate->frame.origin.x) || !isfinite(candidate->frame.origin.y) ||
+        !isfinite(candidate->frame.size.width) || !isfinite(candidate->frame.size.height) ||
+        candidate->frame.size.width <= 0.0 || candidate->frame.size.height <= 0.0) {
+        return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+    }
+    if (ms->current_action != MOUSE_MODE_NONE || ms->native_resize.window_id ||
+        ms->window || ms->feedback_node) return WINDOW_IDENTITY_REPLACE_BUSY_MOUSE;
+    if (wm->insert_feedback.count) return WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK;
+    if (wm->window_animations_table.count || !window_manager_identity_jankyborders_quiescent()) {
+        return WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION;
+    }
+    if (!window_manager_identity_correction_is_clear(window)) return WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION;
+
+    *managed_view = table_find(&wm->managed_window, &old_id);
+    if (table_find(&wm->managed_window, &new_id) ||
+        table_find(&wm->window_lost_focused_event, &new_id) ||
+        wm->focused_window_id == new_id || wm->last_window_id == new_id ||
+        window->application->adopt_attempted_window_id == new_id || ms->ffm_window_id == new_id) {
+        return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    }
+    *lost_focus = table_find(&wm->window_lost_focused_event, &old_id) != NULL;
+
+    table_for (struct view *view, sm->view, {
+        window_manager_identity_scan_node(view->root, view, old_id, new_id, scan);
+        if (view->insertion_point == old_id) {
+            ++scan->old_insertion_count;
+            scan->insertion_slot = &view->insertion_point;
+            scan->insertion_view = view;
+        } else if (view->insertion_point == new_id) {
+            ++scan->new_count;
+        }
+    })
+    if (scan->new_count) return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    if (*managed_view) {
+        if (!window->is_eligible || window_check_flag(window, WINDOW_FLOAT) ||
+            window_check_flag(candidate, WINDOW_STICKY) ||
+            !window_check_flag(candidate, WINDOW_MOVABLE)) {
+            return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+        }
+        if (scan->old_list_count != 1 || scan->old_order_count != 1 ||
+            scan->list_node != scan->order_node || scan->list_view != scan->order_view ||
+            scan->list_view != *managed_view || scan->old_insertion_count > 1 ||
+            (scan->old_insertion_count == 1 && scan->insertion_view != *managed_view)) {
+            return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+        }
+    } else if (scan->old_list_count || scan->old_order_count || scan->old_insertion_count) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+
+    int scratchpad_count = 0;
+    for (int i = 0; i < buf_len(wm->scratchpad_window); ++i) {
+        struct scratchpad *scratchpad = &wm->scratchpad_window[i];
+        if (scratchpad->window == window) {
+            ++scratchpad_count;
+            if (!window->scratchpad || scratchpad->label != window->scratchpad) {
+                return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+            }
+        } else if (scratchpad->window && scratchpad->window->id == new_id) {
+            return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+        }
+    }
+    if ((window->scratchpad && scratchpad_count != 1) || (!window->scratchpad && scratchpad_count)) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+
+    for (int i = 0; i < buf_len(wm->rules); ++i) {
+        if (wm->rules[i].one_shot_window_id == new_id &&
+            wm->rules[i].one_shot_window_id != old_id) {
+            return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+        }
+    }
+    return WINDOW_IDENTITY_REPLACE_SUCCESS;
+}
+
+static void window_manager_identity_rekey_or_abort(struct table *table,
+                                                   uint32_t old_id, uint32_t new_id)
+{
+    if (!table_rekey(table, &old_id, &new_id)) abort();
+}
+
+enum window_identity_replace_error
+window_manager_replace_window_identity(struct space_manager *sm, struct window_manager *wm,
+                                       struct mouse_state *ms, uint32_t old_id, uint32_t new_id,
+                                       AXUIElementRef new_ax_ref)
+{
+    if (!sm || !wm || !ms || !new_ax_ref || !old_id || !new_id) {
+        if (new_ax_ref) window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_INVALID_ARGUMENT;
+    }
+    if (old_id == new_id) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_SAME_ID;
+    }
+    struct window *window = table_find(&wm->window, &old_id);
+    if (!window) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_SOURCE_NOT_FOUND;
+    }
+    if (table_find(&wm->window, &new_id)) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    }
+    if (window_manager_ax_window_id(new_ax_ref) != new_id) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_AX_ID_MISMATCH;
+    }
+    pid_t candidate_pid = 0;
+    if (window_manager_identity_ax_pid(new_ax_ref, &candidate_pid) != kAXErrorSuccess ||
+        !window->application || candidate_pid != window->application->pid) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_AX_PID_MISMATCH;
+    }
+
+    struct window *candidate = window_manager_identity_create_candidate(
+        window->application, new_ax_ref, new_id);
+    if (!candidate) return WINDOW_IDENTITY_REPLACE_PREPARE_FAILED;
+
+    struct window_identity_tree_scan scan = {0};
+    struct view *managed_view = NULL;
+    bool lost_focus = false;
+    enum window_identity_replace_error error = window_manager_identity_preflight(
+        sm, wm, ms, window, candidate, old_id, new_id, &scan, &managed_view, &lost_focus);
+    if (error != WINDOW_IDENTITY_REPLACE_SUCCESS) {
+        window_manager_identity_release_candidate(candidate);
+        return error;
+    }
+
+    if (managed_view) window_manager_identity_rekey_or_abort(&wm->managed_window, old_id, new_id);
+    if (lost_focus) window_manager_identity_rekey_or_abort(&wm->window_lost_focused_event, old_id, new_id);
+    if (scan.list_slot) *scan.list_slot = new_id;
+    if (scan.order_slot) *scan.order_slot = new_id;
+    if (scan.insertion_slot) *scan.insertion_slot = new_id;
+    if (wm->focused_window_id == old_id) wm->focused_window_id = new_id;
+    if (wm->last_window_id == old_id) wm->last_window_id = new_id;
+    if (window->application->adopt_attempted_window_id == old_id) {
+        window->application->adopt_attempted_window_id = new_id;
+    }
+    if (ms->ffm_window_id == old_id) ms->ffm_window_id = new_id;
+    for (int i = 0; i < buf_len(wm->rules); ++i) {
+        if (wm->rules[i].one_shot_window_id == old_id) wm->rules[i].one_shot_window_id = new_id;
+    }
+    window_manager_identity_rekey_or_abort(&wm->window, old_id, new_id);
+
+    AXUIElementRef retired_ref = window->ref;
+    CFStringRef retired_role = window->role;
+    CFStringRef retired_subrole = window->subrole;
+    CFStringRef retired_title = window->title;
+    uint16_t logical_flags = window->flags & WINDOW_FLOAT;
+    window->id = new_id;
+    window->ref = candidate->ref; candidate->ref = NULL;
+    window->role = candidate->role; candidate->role = NULL;
+    window->subrole = candidate->subrole; candidate->subrole = NULL;
+    window->title = candidate->title; candidate->title = NULL;
+    window->frame = candidate->frame;
+    window->windowed_frame = CGRectZero;
+    window->is_root = candidate->is_root;
+    window->flags = logical_flags | (candidate->flags & (WINDOW_SHADOW | WINDOW_STICKY |
+                                                         WINDOW_MOVABLE | WINDOW_RESIZABLE));
+    window_constraints_invalidate(&window->constraints);
+    window->frame_correction_pending = false;
+    window->frame_correction_retry_active = false;
+    window->frame_correction_retry_index = 0;
+    window->frame_correction_hint_rearms = 0;
+    window->frame_correction_source = WINDOW_FRAME_CORRECTION_INITIAL;
+    window->frame_correction_started_at = 0;
+    window->frame_correction_retry_at = 0;
+
+    window_manager_identity_release_candidate(candidate);
+    if (retired_ref) window_manager_identity_release(retired_ref);
+    if (retired_role) window_manager_identity_release(retired_role);
+    if (retired_subrole) window_manager_identity_release(retired_subrole);
+    if (retired_title) window_manager_identity_release(retired_title);
+    return WINDOW_IDENTITY_REPLACE_SUCCESS;
 }
 
 bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window, AXUIElementRef window_ref)

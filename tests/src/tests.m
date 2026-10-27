@@ -2978,6 +2978,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
+    TEST_ENTRY(hashtable_rekey_is_allocation_free_and_preserves_value) \
+    TEST_ENTRY(window_identity_transaction_migrates_unmanaged_state_atomically) \
+    TEST_ENTRY(window_identity_transaction_migrates_managed_tree_without_geometry_changes) \
+    TEST_ENTRY(window_identity_transaction_rejects_collisions_busy_state_and_invariants_without_mutation) \
+    TEST_ENTRY(window_identity_transaction_consumes_refs_on_early_rejection) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
