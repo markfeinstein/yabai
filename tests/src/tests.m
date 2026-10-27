@@ -101,6 +101,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_management_bridge.c"
 #include "window_server_snapshot.c"
 #include "window_server_tags.c"
+#include "window_server_classifier.c"
 #include "window_server_tag_corpus.c"
 #include "space_window_inventory.c"
 #include "view.c"
@@ -2876,7 +2877,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
     TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
     TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
+    TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
+    TEST_ENTRY(window_server_classifier_attribute_and_bit58_are_diagnostic_only) \
+    TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
     TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
+    TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
     TEST_ENTRY(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files) \
     TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
     TEST_ENTRY(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle) \
@@ -3430,6 +3435,11 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-tag-corpus") == 0) {
         return window_server_tag_corpus_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-classifier") == 0) {
+        return (window_server_classifier_benchmark_run() &
+                window_server_classifier_comparison_benchmark_run())
+             ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

@@ -20,29 +20,12 @@ static void (*space_window_destroy_snapshot)(struct window_server_snapshot *) =
 static bool space_window_record_is_eligible(const struct window_server_window_record *record,
                                             struct window *window, bool include_minimized)
 {
-    if (window && (include_minimized || !window_check_flag(window, WINDOW_MINIMIZE))) return true;
-    /* Preserve the legacy fallthrough for a tracked minimized record whose
-     * WindowServer metadata still matches the root-window predicate. */
-    if (record->parent_id != 0 || (record->level != 0 && record->level != 3 && record->level != 8)) {
-        return false;
-    }
-
-    if (((record->attributes & 0x2) ||
-         (record->tags & WINDOW_SERVER_TAG_IGNORE_FOR_SCREEN_SHARING)) &&
-        ((record->tags & WINDOW_SERVER_TAG_DOCUMENT) ||
-         ((record->tags & WINDOW_SERVER_TAG_FLOATING) &&
-          (record->tags & WINDOW_SERVER_TAG_MODAL)))) {
-        return true;
-    }
-
-    return include_minimized &&
-           (record->attributes == 0x0 || record->attributes == 0x1) &&
-           ((record->tags & WINDOW_SERVER_TAG_MINIATURIZED) ||
-            (record->tags & (WINDOW_SERVER_TAG_FULLSCREEN_CAPABLE |
-                             WINDOW_SERVER_TAG_FULLSCREEN_TILE_CAPABLE))) &&
-           ((record->tags & WINDOW_SERVER_TAG_DOCUMENT) ||
-            ((record->tags & WINDOW_SERVER_TAG_FLOATING) &&
-             (record->tags & WINDOW_SERVER_TAG_MODAL)));
+    return ws_legacy_window_is_eligible(&(struct ws_legacy_eligibility_input) {
+        .record = record,
+        .tracked = window != NULL,
+        .tracked_minimized = window && window_check_flag(window, WINDOW_MINIMIZE),
+        .include_minimized = include_minimized
+    });
 }
 
 inline uint32_t space_display_id(uint64_t sid)

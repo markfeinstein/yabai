@@ -105,6 +105,80 @@ TEST_FUNC(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable
     free(output);
 });
 
+TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
+{
+    struct window_server_tag_corpus_metadata metadata;
+    struct window_server_tag_corpus_public_window windows[3];
+    struct window_server_window_record records[3];
+    struct window_server_snapshot snapshot;
+    window_server_tag_corpus_test_fixture(&metadata, windows, records, &snapshot);
+    struct window_server_tag_corpus_comparison_window comparison_windows[3] = {
+        {
+            .owner = WS_OWNER_REGULAR, .ax = WS_AX_STANDARD_WINDOW,
+            .title = WINDOW_SERVER_TITLE_NONEMPTY,
+            .label = { true, "primary-document", WS_WINDOW_CLASS_MANAGEABLE,
+                       WS_WINDOW_CLASS_MANAGEABLE }
+        },
+        {
+            .owner = WS_OWNER_REGULAR, .ax = WS_AX_DIALOG_WINDOW,
+            .title = WINDOW_SERVER_TITLE_NONEMPTY,
+            .label = { true, "child-sheet", WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE,
+                       WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE }
+        },
+        {
+            .owner = WS_OWNER_PROHIBITED, .ax = WS_AX_UNAVAILABLE,
+            .title = WINDOW_SERVER_TITLE_UNAVAILABLE,
+            .label = { true, "menu-negative", WS_WINDOW_CLASS_SYSTEM_OVERLAY,
+                       WS_WINDOW_CLASS_SYSTEM_OVERLAY }
+        }
+    };
+    struct window_server_tag_corpus_comparison comparison = {
+        .tag_layout = WS_TAG_LAYOUT_SAMPLED,
+        .normal_level = 0, .floating_level = 3, .modal_level = 8,
+        .windows = comparison_windows, .window_count = 3
+    };
+    char *output = NULL; size_t length = 0;
+    FILE *stream = open_memstream(&output, &length);
+    TEST_CHECK(stream != NULL, true);
+    TEST_CHECK(window_server_tag_corpus_serialize_comparison(
+        stream, &metadata, windows, 3, &snapshot, &comparison), true);
+    TEST_CHECK(fclose(stream), 0);
+    TEST_CHECK(output != NULL, true);
+    if (output) {
+        char *copy = strdup(output); char *save = NULL; int line_count = 0;
+        for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+            NSData *data = [NSData dataWithBytes:line length:strlen(line)];
+            id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+            TEST_CHECK([object isKindOfClass:[NSDictionary class]], true);
+            if (line_count == 0) {
+                TEST_CHECK([object[@"schema"] isEqualToString:@"yabai.window-server-classifier-comparison/v1"], true);
+                TEST_CHECK([object[@"counts"][@"labeled"] integerValue], 3L);
+                TEST_CHECK([object[@"counts"][@"false_positive"] integerValue], 0L);
+                TEST_CHECK([object[@"counts"][@"false_negative"] integerValue], 0L);
+            }
+            ++line_count;
+        }
+        TEST_CHECK(line_count, 4);
+        free(copy);
+        const char *redacted[] = { "SECRET_TITLE", "SECRET_OWNER", "SECRET_BUNDLE",
+                                   "/SECRET/PATH", "SECRET_UUID", "feedface" };
+        for (size_t i = 0; i < array_count(redacted); ++i) {
+            TEST_CHECK(strstr(output, redacted[i]) == NULL, true);
+        }
+        TEST_CHECK(strstr(output, "\"fixture_role\":\"primary-document\"") != NULL, true);
+        TEST_CHECK(strstr(output, "\"candidate_normal\":\"manageable\"") != NULL, true);
+        TEST_CHECK(strstr(output, "\"parent_kind\":\"captured\"") != NULL, true);
+    }
+    free(output);
+
+    comparison_windows[0].label.fixture_role = "invalid role";
+    char path[] = "/private/tmp/yabai-comparison-invalid.XXXXXX";
+    int fd = mkstemp(path); TEST_CHECK(fd >= 0, true); if (fd >= 0) close(fd); unlink(path);
+    TEST_CHECK(window_server_tag_corpus_write_comparison_file(
+        path, &metadata, windows, 3, &snapshot, &comparison), false);
+    TEST_CHECK(access(path, F_OK), -1);
+});
+
 TEST_FUNC(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files,
 {
     TEST_CHECK(window_server_tag_corpus_scenario_is_valid("baseline-27.0_1"), true);
@@ -224,4 +298,74 @@ static bool window_server_tag_corpus_benchmark_run(void)
     return window_server_tag_corpus_benchmark_case(10) &
            window_server_tag_corpus_benchmark_case(100) &
            window_server_tag_corpus_benchmark_case(1000);
+}
+
+static bool window_server_classifier_comparison_benchmark_case(size_t record_count)
+{
+    enum { sample_count = 20 };
+    int iterations = record_count <= 100 ? 50 : 10;
+    struct window_server_tag_corpus_public_window windows[1000] = {0};
+    struct window_server_window_record records[1000] = {0};
+    struct window_server_tag_corpus_comparison_window comparison_windows[1000] = {0};
+    struct window_server_tag_corpus_metadata metadata = {
+        .scenario = "benchmark", .os_version = "27.0.1",
+        .os_build = "26A434", .architecture = "arm64"
+    };
+    for (size_t i = 0; i < record_count; ++i) {
+        windows[i] = (struct window_server_tag_corpus_public_window) {
+            .window_id = 2000u + (uint32_t) i, .owner_pid = 200 + (int)(i % 17),
+            .cg_layer = (int)(i % 9), .on_screen = (i % 2) != 0,
+            .x = 10, .y = 20, .width = 800, .height = 600
+        };
+        records[i] = (struct window_server_window_record) {
+            .id = windows[i].window_id, .parent_id = i % 7 ? 0 : 999999,
+            .level = (int[]){0, 3, 8, 17}[i % 4],
+            .tags = WINDOW_SERVER_TAG_DOCUMENT | (UINT64_C(1) << (i % 63)),
+            .attributes = i % 4, .valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE
+        };
+        comparison_windows[i] = (struct window_server_tag_corpus_comparison_window) {
+            .owner = (enum ws_owner_kind)(i % 4),
+            .ax = (enum ws_ax_corroboration)(i % 6),
+            .title = (enum window_server_tag_corpus_title_state)(i % 3)
+        };
+    }
+    struct window_server_snapshot snapshot = { .generation = 1, .records = records, .count = record_count };
+    struct window_server_tag_corpus_comparison comparison = {
+        .tag_layout = WS_TAG_LAYOUT_SAMPLED, .normal_level = 0,
+        .floating_level = 3, .modal_level = 8,
+        .windows = comparison_windows, .window_count = record_count
+    };
+    uint64_t elapsed[sample_count] = {0}; size_t bytes = 0; uint64_t checksum = 0; bool valid = true;
+    for (int sample = 0; sample < sample_count; ++sample) {
+        uint64_t start = read_os_timer();
+        for (int iteration = 0; iteration < iterations; ++iteration) {
+            char *output = NULL; size_t length = 0; FILE *stream = open_memstream(&output, &length);
+            bool success = stream && window_server_tag_corpus_serialize_comparison(
+                stream, &metadata, windows, record_count, &snapshot, &comparison);
+            if (stream && fclose(stream) != 0) success = false;
+            if (!success) valid = false;
+            bytes += length; if (output && length) checksum += length + (unsigned char)output[length - 1];
+            free(output);
+        }
+        elapsed[sample] = (read_os_timer() - start) /
+                          ((uint64_t)iterations * (uint64_t)record_count);
+    }
+    qsort(elapsed, sample_count, sizeof(elapsed[0]), window_server_snapshot_benchmark_compare_u64);
+    int p95 = (sample_count * 95 + 99) / 100 - 1;
+    size_t total_records = (size_t)sample_count * (size_t)iterations * record_count;
+    printf("{\"case\":\"window-server-classifier-comparison\",\"records\":%zu,"
+           "\"iterations\":%d,\"p50_ns_per_record\":%llu,\"p95_ns_per_record\":%llu,"
+           "\"bytes_per_record\":%zu,\"checksum\":%llu}\n",
+           record_count, sample_count * iterations,
+           (unsigned long long)elapsed[sample_count / 2],
+           (unsigned long long)elapsed[p95], bytes / total_records,
+           (unsigned long long)checksum);
+    return valid && bytes && checksum;
+}
+
+static bool window_server_classifier_comparison_benchmark_run(void)
+{
+    return window_server_classifier_comparison_benchmark_case(10) &
+           window_server_classifier_comparison_benchmark_case(100) &
+           window_server_classifier_comparison_benchmark_case(1000);
 }
