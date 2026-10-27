@@ -19,8 +19,10 @@ jobs:
           test "$(sw_vers -productVersion | cut -d. -f1)" -eq 27
       - name: Install pinned documentation generator
         run: |
-          gem install --no-document asciidoctor --version 2.0.26
-          test "$(asciidoctor --version | awk 'NR == 1 { print $2 }')" = 2.0.26
+          gem_home="$RUNNER_TEMP/gems"
+          gem install --no-document --install-dir "$gem_home" asciidoctor --version 2.0.26
+          test "$("$gem_home/bin/asciidoctor" --version | awk 'NR == 1 { print $2 }')" = 2.0.26
+          echo "$gem_home/bin" >> "$GITHUB_PATH"
       - name: Syntax, generated documentation contract, and diff hygiene
         run: |
           make syntax
