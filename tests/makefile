@@ -1,4 +1,4 @@
-.PHONY: all clean build core-build run run-asan run-tsan test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
+.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
 
 all: run
 
@@ -66,6 +66,9 @@ run: build repository-build shell-fixtures
 	$(OUT)/scan_sa_patterns $(OUT)/scanner_success_fixture >/dev/null
 	/bin/sh ./install.sh
 	python3 ./seticon.py
+
+benchmark-ax: core-build
+	$(CORE) --benchmark-window-ax-frame
 
 run-asan:
 	$(MAKE) CONFIG=asan sanitizer-run asan-focused-run

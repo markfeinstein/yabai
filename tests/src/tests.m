@@ -1531,23 +1531,6 @@ static bool g_native_resize_live_frame_override;
 static CGRect g_native_resize_live_frame;
 static int g_native_resize_restore_count;
 
-enum native_resize_ax_frame_case
-{
-    NATIVE_RESIZE_AX_FRAME_VALID,
-    NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL,
-    NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL,
-    NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE,
-    NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE,
-    NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL,
-    NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL,
-    NATIVE_RESIZE_AX_FRAME_NONFINITE,
-    NATIVE_RESIZE_AX_FRAME_NONPOSITIVE
-};
-
-static enum native_resize_ax_frame_case g_native_resize_ax_frame_case;
-static CGRect g_native_resize_ax_frame;
-static int g_native_resize_ax_release_count;
-
 static bool test_native_resize_space_visible(uint64_t sid)
 {
     (void) sid;
@@ -1567,53 +1550,6 @@ static bool test_native_resize_live_frame(struct window *window, CGRect *frame)
     *frame = g_native_resize_live_frame_override ? g_native_resize_live_frame
                                                   : g_mouse_state.native_resize.latest_frame;
     return true;
-}
-
-static AXError test_native_resize_ax_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
-{
-    (void) element;
-    bool position = CFEqual(attribute, kAXPositionAttribute);
-    *value = NULL;
-    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL) {
-        return kAXErrorCannotComplete;
-    }
-    if (!position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL) {
-        return kAXErrorCannotComplete;
-    }
-    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE) {
-        *value = CFRetain(CFSTR("not-an-ax-value"));
-        return kAXErrorSuccess;
-    }
-    if (position) {
-        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE) {
-            CGSize size = g_native_resize_ax_frame.size;
-            *value = AXValueCreate(kAXValueTypeCGSize, &size);
-        } else {
-            CGPoint point = g_native_resize_ax_frame.origin;
-            if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONFINITE) point.x = NAN;
-            *value = AXValueCreate(kAXValueTypeCGPoint, &point);
-        }
-    } else {
-        CGSize size = g_native_resize_ax_frame.size;
-        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONPOSITIVE) size.width = 0.0;
-        *value = AXValueCreate(kAXValueTypeCGSize, &size);
-    }
-    return *value ? kAXErrorSuccess : kAXErrorFailure;
-}
-
-static Boolean test_native_resize_ax_get(AXValueRef value, AXValueType type, void *result)
-{
-    if (type == kAXValueTypeCGPoint &&
-        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL) return false;
-    if (type == kAXValueTypeCGSize &&
-        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL) return false;
-    return AXValueGetValue(value, type, result);
-}
-
-static void test_native_resize_ax_release(CFTypeRef value)
-{
-    ++g_native_resize_ax_release_count;
-    CFRelease(value);
 }
 
 static void test_native_resize_schedule(uint32_t generation, uint64_t delay)
@@ -1662,9 +1598,6 @@ struct native_resize_test_fixture
     void (*schedule_hook)(uint32_t, uint64_t);
     void (*restore_hook)(uint32_t);
     bool (*live_frame_hook)(struct window *, CGRect *);
-    AXError (*ax_copy_hook)(AXUIElementRef, CFStringRef, CFTypeRef *);
-    Boolean (*ax_get_hook)(AXValueRef, AXValueType, void *);
-    void (*ax_release_hook)(CFTypeRef);
     void (*drop_hook)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *);
     struct window window;
     struct window_node node;
@@ -1683,9 +1616,6 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->schedule_hook = event_loop_test_native_resize_schedule;
     fixture->restore_hook = event_loop_test_native_resize_restore;
     fixture->live_frame_hook = event_loop_test_native_resize_live_frame;
-    fixture->ax_copy_hook = event_loop_test_native_resize_ax_copy;
-    fixture->ax_get_hook = event_loop_test_native_resize_ax_get;
-    fixture->ax_release_hook = event_loop_test_native_resize_ax_release;
     fixture->drop_hook = event_loop_test_mouse_drop_try_adjust_bsp_grid;
 
     table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
@@ -1698,6 +1628,7 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->window = (struct window) {
         .id = wid, .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } }, .flags = WINDOW_RESIZABLE
     };
+    fixture->window.ref = AXUIElementCreateApplication(getpid());
     fixture->window.id_ptr = &fixture->window.id;
     table_add(&g_window_manager.window, &fixture->window.id, &fixture->window);
     table_add(&g_window_manager.managed_window, &fixture->window.id, &fixture->view);
@@ -1710,9 +1641,6 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     g_native_resize_live_frame_override = false;
     g_native_resize_live_frame = CGRectZero;
     g_native_resize_restore_count = 0;
-    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
-    g_native_resize_ax_frame = CGRectZero;
-    g_native_resize_ax_release_count = 0;
     g_mouse_drop_adjust_call_count = 0;
     event_loop_test_native_resize_space_visible = test_native_resize_space_visible;
     event_loop_test_native_resize_schedule = test_native_resize_schedule;
@@ -1727,11 +1655,9 @@ static void native_resize_test_end(struct native_resize_test_fixture *fixture)
     event_loop_test_native_resize_schedule = fixture->schedule_hook;
     event_loop_test_native_resize_restore = fixture->restore_hook;
     event_loop_test_native_resize_live_frame = fixture->live_frame_hook;
-    event_loop_test_native_resize_ax_copy = fixture->ax_copy_hook;
-    event_loop_test_native_resize_ax_get = fixture->ax_get_hook;
-    event_loop_test_native_resize_ax_release = fixture->ax_release_hook;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = fixture->drop_hook;
     g_mouse_state = fixture->mouse_state;
+    if (fixture->window.ref) CFRelease(fixture->window.ref);
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.managed_window);
     g_window_manager.window = fixture->windows;
@@ -1949,55 +1875,57 @@ TEST_FUNC(native_edge_resize_strict_live_ax_frame_validation_restores_failures,
     struct native_resize_test_fixture fixture;
     native_resize_test_begin(&fixture, 998);
     event_loop_test_native_resize_live_frame = NULL;
-    event_loop_test_native_resize_ax_copy = test_native_resize_ax_copy;
-    event_loop_test_native_resize_ax_get = test_native_resize_ax_get;
-    event_loop_test_native_resize_ax_release = test_native_resize_ax_release;
-    g_native_resize_ax_frame = CGRectMake(20.0f, 30.0f, 410.0f, 300.0f);
+    CGRect target = CGRectMake(20.0f, 30.0f, 410.0f, 300.0f);
 
-    struct {
-        enum native_resize_ax_frame_case test_case;
-        int released;
-    } failures[] = {
-        { NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL, 0 },
-        { NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL, 1 },
-        { NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL, 2 },
-        { NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL, 2 },
-        { NATIVE_RESIZE_AX_FRAME_NONFINITE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_NONPOSITIVE, 2 }
+    enum window_ax_snapshot_test_mode failures[] = {
+        WINDOW_AX_SNAPSHOT_TEST_NONFINITE,
+        WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE
     };
     for (size_t i = 0; i < array_count(failures); ++i) {
+        window_ax_snapshot_test_begin(failures[i]);
+        window_ax_snapshot_test_frame_value = target;
         native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
-        TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
-                                         g_native_resize_ax_frame, true), true);
+        TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
         native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
-        g_native_resize_ax_frame_case = failures[i].test_case;
-        g_native_resize_ax_release_count = 0;
         int restore_before = g_native_resize_restore_count;
         int adjust_before = g_mouse_drop_adjust_call_count;
         EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
             (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
-        TEST_CHECK(g_native_resize_ax_release_count, failures[i].released);
         TEST_CHECK(g_native_resize_restore_count, restore_before + 1);
         TEST_CHECK(g_mouse_drop_adjust_call_count, adjust_before);
         TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+        window_ax_snapshot_test_end();
     }
 
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    window_ax_snapshot_test_frame_value = target;
+    window_ax_snapshot_test_fallback_frame_value = target;
+    window_ax_snapshot_test_size_fallback_failure = true;
     native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
-    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
-                                     g_native_resize_ax_frame, true), true);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
     native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
-    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
-    g_native_resize_ax_release_count = 0;
     int restore_before = g_native_resize_restore_count;
     EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
         (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
-    TEST_CHECK(g_native_resize_ax_release_count, 2);
+    TEST_CHECK(g_native_resize_restore_count, restore_before + 1);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    window_ax_snapshot_test_fallback_frame_value = target;
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    restore_before = g_native_resize_restore_count;
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
     TEST_CHECK(g_native_resize_restore_count, restore_before);
     TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
     TEST_CHECK(g_mouse_drop_adjust_info.dw, 10.0f);
     TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+    window_ax_snapshot_test_end();
 
     native_resize_test_end(&fixture);
 });
@@ -2919,6 +2847,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ax_snapshot_reads_and_owns_valid_batch_values) \
     TEST_ENTRY(window_ax_snapshot_validates_slots_and_couples_frame_fallback) \
     TEST_ENTRY(window_ax_snapshot_rejects_malformed_batch_shapes_and_types) \
+    TEST_ENTRY(window_ax_frame_status_uses_complete_validated_snapshots) \
     TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
@@ -2970,6 +2899,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_loop_sync_submission_concurrent_with_shutdown_completes) \
     TEST_ENTRY(event_loop_bootstrap_failure_drains_queued_daemon_messages) \
     TEST_ENTRY(managed_window_correction_bounds_retries_and_rearms_from_signals) \
+    TEST_ENTRY(managed_window_correction_failed_reads_preserve_cache_and_advance_lease) \
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
@@ -3438,6 +3368,10 @@ static struct {
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-ax-frame") == 0) {
+        return window_ax_frame_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize animation test mutex\n");
         return EXIT_FAILURE;

@@ -1214,7 +1214,13 @@ bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect 
 {
     const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
     if (!snapshot || !frame || (snapshot->valid & frame_mask) != frame_mask) return false;
-    *frame = (CGRect) { snapshot->position, snapshot->size };
+
+    CGRect candidate = { snapshot->position, snapshot->size };
+    if (!isfinite(candidate.origin.x) || !isfinite(candidate.origin.y) ||
+        !isfinite(candidate.size.width) || !isfinite(candidate.size.height) ||
+        candidate.size.width <= 0.0 || candidate.size.height <= 0.0) return false;
+
+    *frame = candidate;
     return true;
 }
 
@@ -1233,25 +1239,25 @@ CGPoint window_ax_origin(struct window *window)
     return origin;
 }
 
+bool window_ax_frame_with_status(struct window *window, CGRect *frame)
+{
+    if (!window || !window->ref || !frame) return false;
+
+    struct window_ax_snapshot snapshot = {0};
+    (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE, &snapshot);
+    CGRect candidate;
+    bool result = window_ax_snapshot_frame(&snapshot, &candidate);
+    window_ax_snapshot_destroy(&snapshot);
+    if (!result) return false;
+
+    *frame = candidate;
+    return true;
+}
+
 CGRect window_ax_frame(struct window *window)
 {
-    CGRect frame = {0};
-    CFTypeRef position_ref = NULL;
-    CFTypeRef size_ref = NULL;
-
-    AXUIElementCopyAttributeValue(window->ref, kAXPositionAttribute, &position_ref);
-    AXUIElementCopyAttributeValue(window->ref, kAXSizeAttribute, &size_ref);
-
-    if (position_ref) {
-        AXValueGetValue(position_ref, kAXValueTypeCGPoint, &frame.origin);
-        CFRelease(position_ref);
-    }
-
-    if (size_ref) {
-        AXValueGetValue(size_ref, kAXValueTypeCGSize, &frame.size);
-        CFRelease(size_ref);
-    }
-
+    CGRect frame = window ? window->frame : CGRectZero;
+    (void) window_ax_frame_with_status(window, &frame);
     return frame;
 }
 

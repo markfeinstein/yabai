@@ -21,13 +21,17 @@ enum window_ax_snapshot_test_mode
     WINDOW_AX_SNAPSHOT_TEST_SHORT,
     WINDOW_AX_SNAPSHOT_TEST_OVERSIZED,
     WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE,
-    WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE
+    WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE,
+    WINDOW_AX_SNAPSHOT_TEST_NONFINITE,
+    WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE
 };
 
 static enum window_ax_snapshot_test_mode window_ax_snapshot_test_mode;
 static bool window_ax_snapshot_test_create_failure;
 static bool window_ax_snapshot_test_size_fallback_failure;
 static AXUIElementRef window_ax_snapshot_test_parent_value;
+static CGRect window_ax_snapshot_test_frame_value;
+static CGRect window_ax_snapshot_test_fallback_frame_value;
 static int window_ax_snapshot_test_create_calls;
 static int window_ax_snapshot_test_multiple_calls;
 static int window_ax_snapshot_test_single_calls;
@@ -49,12 +53,14 @@ static CFTypeRef window_ax_snapshot_test_value(CFStringRef attribute)
             CGSize size = CGSizeMake(300, 200);
             return AXValueCreate(kAXValueTypeCGSize, &size);
         }
-        CGPoint position = CGPointMake(10, 20);
+        CGPoint position = window_ax_snapshot_test_frame_value.origin;
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_NONFINITE) position.x = NAN;
         return AXValueCreate(kAXValueTypeCGPoint, &position);
     }
     if (CFEqual(attribute, kAXSizeAttribute)) {
         if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) return CFRetain(kCFNull);
-        CGSize size = CGSizeMake(300, 200);
+        CGSize size = window_ax_snapshot_test_frame_value.size;
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE) size.width = 0.0;
         return AXValueCreate(kAXValueTypeCGSize, &size);
     }
     if (CFEqual(attribute, kAXRoleAttribute)) {
@@ -146,11 +152,11 @@ static AXError window_ax_snapshot_test_copy_single(AXUIElementRef element, CFStr
     *value = NULL;
 
     if (CFEqual(attribute, kAXPositionAttribute)) {
-        CGPoint position = CGPointMake(40, 50);
+        CGPoint position = window_ax_snapshot_test_fallback_frame_value.origin;
         *value = AXValueCreate(kAXValueTypeCGPoint, &position);
     } else if (CFEqual(attribute, kAXSizeAttribute)) {
         if (window_ax_snapshot_test_size_fallback_failure) return kAXErrorCannotComplete;
-        CGSize size = CGSizeMake(600, 700);
+        CGSize size = window_ax_snapshot_test_fallback_frame_value.size;
         *value = AXValueCreate(kAXValueTypeCGSize, &size);
     } else if (CFEqual(attribute, kAXRoleAttribute) &&
                window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE) {
@@ -176,6 +182,8 @@ static void window_ax_snapshot_test_begin(enum window_ax_snapshot_test_mode mode
     window_ax_snapshot_test_create_failure = false;
     window_ax_snapshot_test_size_fallback_failure = false;
     window_ax_snapshot_test_parent_value = NULL;
+    window_ax_snapshot_test_frame_value = CGRectMake(10, 20, 300, 200);
+    window_ax_snapshot_test_fallback_frame_value = CGRectMake(40, 50, 600, 700);
     window_ax_snapshot_test_create_calls = 0;
     window_ax_snapshot_test_multiple_calls = 0;
     window_ax_snapshot_test_single_calls = 0;
@@ -314,6 +322,45 @@ TEST_FUNC(window_ax_snapshot_rejects_malformed_batch_shapes_and_types,
     CFRelease(ref);
 });
 
+TEST_FUNC(window_ax_frame_status_uses_complete_validated_snapshots,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window window = { .ref = ref, .frame = CGRectMake(5, 6, 700, 500) };
+    CGRect output = CGRectMake(1, 2, 3, 4);
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_ax_snapshot_test_frame_value = CGRectMake(-80, 25, 320, 240);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), true);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(-80, 25, 320, 240)), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    window_ax_snapshot_test_frame_value = CGRectMake(10, 20, 330, 250);
+    window_ax_snapshot_test_fallback_frame_value = CGRectMake(40, 50, 600, 700);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), true);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(40, 50, 600, 700)), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_NONFINITE);
+    output = CGRectMake(1, 2, 3, 4);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), false);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(1, 2, 3, 4)), true);
+    TEST_CHECK(CGRectEqualToRect(window_ax_frame(&window), window.frame), true);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE);
+    output = CGRectMake(1, 2, 3, 4);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), false);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(1, 2, 3, 4)), true);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
 TEST_FUNC(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure,
 {
     AXUIElementRef ref = AXUIElementCreateApplication(getpid());
@@ -345,6 +392,100 @@ TEST_FUNC(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failu
 
     CFRelease(ref);
 });
+
+static int window_ax_benchmark_compare_u64(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *) left;
+    uint64_t b = *(const uint64_t *) right;
+    return (a > b) - (a < b);
+}
+
+static bool window_ax_benchmark_legacy_frame(AXUIElementRef ref, CGRect *frame)
+{
+    CFTypeRef position = NULL;
+    CFTypeRef size = NULL;
+    struct window_ax_snapshot snapshot = {0};
+    AXError position_error = window_ax_snapshot_test_copy_single(ref, kAXPositionAttribute, &position);
+    AXError size_error = window_ax_snapshot_test_copy_single(ref, kAXSizeAttribute, &size);
+    bool success = position_error == kAXErrorSuccess && size_error == kAXErrorSuccess &&
+                   window_ax_snapshot_store_value(&snapshot, WINDOW_AX_POSITION_SLOT, position) == kAXErrorSuccess &&
+                   window_ax_snapshot_store_value(&snapshot, WINDOW_AX_SIZE_SLOT, size) == kAXErrorSuccess &&
+                   window_ax_snapshot_frame(&snapshot, frame);
+    if (position) CFRelease(position);
+    if (size) CFRelease(size);
+    return success;
+}
+
+static bool window_ax_benchmark_case(const char *name, enum window_ax_snapshot_test_mode mode,
+                                     bool legacy, bool fail_fallback)
+{
+    enum { sample_count = 20, iterations_per_sample = 1000 };
+    uint64_t elapsed[sample_count];
+    double checksum = 0.0;
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window window = { .ref = ref, .frame = CGRectMake(7, 8, 640, 480) };
+    window_ax_snapshot_test_begin(mode);
+    CGRect expected = CGRectMake(-40, 25, 320, 240);
+    window_ax_snapshot_test_frame_value = expected;
+    window_ax_snapshot_test_fallback_frame_value = expected;
+    window_ax_snapshot_test_size_fallback_failure = fail_fallback;
+    window_ax_snapshot_test_multiple_calls = 0;
+    window_ax_snapshot_test_single_calls = 0;
+    int successes = 0;
+
+    for (int sample = 0; sample < sample_count; ++sample) {
+        uint64_t start = read_os_timer();
+        for (int iteration = 0; iteration < iterations_per_sample; ++iteration) {
+            CGRect frame = CGRectZero;
+            bool success = legacy ? window_ax_benchmark_legacy_frame(ref, &frame)
+                                  : window_ax_frame_with_status(&window, &frame);
+            successes += success;
+            if (success) checksum += frame.origin.x + frame.origin.y + frame.size.width + frame.size.height;
+        }
+        elapsed[sample] = (read_os_timer() - start) / iterations_per_sample;
+    }
+
+    qsort(elapsed, sample_count, sizeof(elapsed[0]), window_ax_benchmark_compare_u64);
+    int total = sample_count * iterations_per_sample;
+    int p95_index = (sample_count * 95 + 99) / 100 - 1;
+    int ax_calls = window_ax_snapshot_test_multiple_calls + window_ax_snapshot_test_single_calls;
+    printf("{\"case\":\"%s\",\"iterations\":%d,\"p50_ns\":%llu,\"p95_ns\":%llu,"
+           "\"ax_calls\":%d,\"batch_calls\":%d,\"single_calls\":%d,"
+           "\"successes\":%d,\"checksum\":%.0f}\n",
+           name, total,
+           (unsigned long long) elapsed[sample_count / 2],
+           (unsigned long long) elapsed[p95_index],
+           ax_calls,
+           window_ax_snapshot_test_multiple_calls,
+           window_ax_snapshot_test_single_calls,
+           successes, checksum);
+
+    bool expected_success = !fail_fallback;
+    bool valid = successes == (expected_success ? total : 0);
+    if (legacy) {
+        valid = valid && window_ax_snapshot_test_multiple_calls == 0 &&
+                window_ax_snapshot_test_single_calls == total * 2;
+    } else {
+        int expected_single_calls = mode == WINDOW_AX_SNAPSHOT_TEST_VALID ? 0 : total * 2;
+        valid = valid && window_ax_snapshot_test_multiple_calls == total &&
+                window_ax_snapshot_test_single_calls == expected_single_calls;
+    }
+
+    window_ax_snapshot_test_end();
+    CFRelease(ref);
+    return valid;
+}
+
+static bool window_ax_frame_benchmark_run(void)
+{
+    bool valid = true;
+    valid &= window_ax_benchmark_case("legacy-two-single-success", WINDOW_AX_SNAPSHOT_TEST_VALID, true, false);
+    valid &= window_ax_benchmark_case("snapshot-batch-success", WINDOW_AX_SNAPSHOT_TEST_VALID, false, false);
+    valid &= window_ax_benchmark_case("snapshot-slot-error-fallback-success", WINDOW_AX_SNAPSHOT_TEST_MIXED, false, false);
+    valid &= window_ax_benchmark_case("snapshot-batch-error-fallback-success", WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE, false, false);
+    valid &= window_ax_benchmark_case("snapshot-total-failure", WINDOW_AX_SNAPSHOT_TEST_MIXED, false, true);
+    return valid;
+}
 
 static uint32_t window_create_test_parent_id;
 static bool window_create_test_shadow_result;
