@@ -37,7 +37,6 @@ extern CGError SLSSetWindowSubLevel(int cid, uint32_t wid, int sub_level);
 extern CGContextRef SLWindowContextCreate(int cid, uint32_t wid, CFDictionaryRef options);
 extern CFTypeRef CGRegionCreateEmptyRegion(void);
 extern CGError CGSNewRegionWithRect(CGRect *rect, CFTypeRef *region);
-extern CFUUIDRef CGDisplayCreateUUIDFromDisplayID(uint32_t did);
 extern CFArrayRef SLSCopyManagedDisplays(int cid);
 extern uint64_t SLSManagedDisplayGetCurrentSpace(int cid, CFStringRef uuid);
 extern CFStringRef SLSCopyActiveMenuBarDisplayIdentifier(int cid);

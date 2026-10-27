@@ -2928,6 +2928,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mission_control_fallback_concurrent_cancel_and_drain_is_owned) \
     TEST_ENTRY(display_area_is_in_direction)                   \
     TEST_ENTRY(closest_display_in_direction)                   \
+    TEST_ENTRY(display_identity_prefers_public_screen_display_id) \
+    TEST_ENTRY(display_identity_falls_back_to_legacy_screen_number) \
+    TEST_ENTRY(display_identity_treats_null_and_nonmatching_ids_as_unresolved) \
     TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
