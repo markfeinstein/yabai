@@ -228,6 +228,9 @@ done
 : > "$XCRUN_LOG"
 run_make release >/dev/null
 test ! -s "$XCRUN_LOG"
+# Older make/filesystem combinations can compare prerequisites at whole-second
+# granularity, so cross a timestamp boundary before testing source invalidation.
+/bin/sleep 1
 touch src/osax/payload.m
 run_make release >/dev/null
 grep -F 'xcrun-arg:./src/osax/payload.m' "$XCRUN_LOG" >/dev/null
