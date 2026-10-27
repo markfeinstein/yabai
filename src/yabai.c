@@ -461,6 +461,10 @@ int main(int argc, char **argv)
         error("yabai: could not acquire lock-file! abort..\n");
     }
 
+    if (!accessibility_preferences_begin()) {
+        warn("yabai: could not observe accessibility display preferences; using the initial snapshot\n");
+    }
+
     if (!menu_bar_manager_init()) {
         error("yabai: could not initialize menu bar manager! abort..\n");
     }
@@ -469,6 +473,7 @@ int main(int argc, char **argv)
     if (!event_loop_begin_bootstrap(&g_event_loop, declarative_startup_bootstrap, &g_declarative_startup)) {
         menu_bar_manager_startup_staging_abort();
         menu_bar_manager_shutdown();
+        accessibility_preferences_end();
         declarative_report_runtime(stderr, "runtime", g_declarative_startup.path, "$", 0, 0,
                                    "startup runtime preparation failed");
         declarative_startup_destroy(&g_declarative_startup);
@@ -535,6 +540,7 @@ int main(int argc, char **argv)
     }
 
     [NSApp run];
+    accessibility_preferences_end();
 
     return 0;
 }

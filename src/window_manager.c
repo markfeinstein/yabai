@@ -1553,7 +1553,23 @@ set_final_frames:
 }
 #ifdef TESTS
 static void (*window_manager_test_animate_observer)(struct window_capture *, int);
+static struct accessibility_display_preferences (*window_manager_animation_preferences)(void) =
+    accessibility_preferences_snapshot;
+static void (*window_manager_animation_async_route)(struct window_capture *, int) =
+    window_manager_animate_window_list_async;
+static void (*window_manager_animation_direct_route)(struct window *, float, float, float, float) =
+    window_manager_set_window_frame;
+#else
+#define window_manager_animation_preferences accessibility_preferences_snapshot
+#define window_manager_animation_async_route window_manager_animate_window_list_async
+#define window_manager_animation_direct_route window_manager_set_window_frame
 #endif
+
+static bool window_manager_should_animate(float configured_duration)
+{
+    struct accessibility_display_preferences preferences = window_manager_animation_preferences();
+    return configured_duration > 0.0f && !preferences.reduce_motion;
+}
 
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count)
 {
@@ -1565,11 +1581,13 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
     }
 #endif
 
-    if (g_window_manager.window_animation_duration) {
-        window_manager_animate_window_list_async(window_list, window_count);
+    if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        window_manager_animation_async_route(window_list, window_count);
     } else {
         for (int i = 0; i < window_count; ++i) {
-            window_manager_set_window_frame(window_list[i].window, window_list[i].x, window_list[i].y, window_list[i].w, window_list[i].h);
+            window_manager_animation_direct_route(window_list[i].window, window_list[i].x,
+                                                   window_list[i].y, window_list[i].w,
+                                                   window_list[i].h);
         }
     }
 }
@@ -1584,10 +1602,11 @@ void window_manager_animate_window(struct window_capture capture)
     }
 #endif
 
-    if (g_window_manager.window_animation_duration) {
-        window_manager_animate_window_list_async(&capture, 1);
+    if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        window_manager_animation_async_route(&capture, 1);
     } else {
-        window_manager_set_window_frame(capture.window, capture.x, capture.y, capture.w, capture.h);
+        window_manager_animation_direct_route(capture.window, capture.x, capture.y,
+                                              capture.w, capture.h);
     }
 }
 
