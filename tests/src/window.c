@@ -909,6 +909,185 @@ enum window_serialization_membership_fixture_mode
 };
 
 static enum window_serialization_membership_fixture_mode window_serialization_membership_mode;
+static int window_serialization_snapshot_parent_calls;
+static int window_serialization_snapshot_level_calls;
+static int window_serialization_snapshot_tags_calls;
+static int window_serialization_snapshot_shadow_calls;
+static bool window_serialization_snapshot_parent_success;
+static bool window_serialization_snapshot_tags_success;
+static uint32_t window_serialization_snapshot_parent_value;
+static int window_serialization_snapshot_level_value;
+static uint64_t window_serialization_snapshot_tags_value;
+static bool window_serialization_snapshot_shadow_value;
+
+static bool window_serialization_snapshot_parent(uint32_t wid, uint32_t *parent)
+{
+    (void) wid;
+    ++window_serialization_snapshot_parent_calls;
+    *parent = window_serialization_snapshot_parent_value;
+    return window_serialization_snapshot_parent_success;
+}
+
+static int window_serialization_snapshot_level(uint32_t wid)
+{
+    (void) wid;
+    ++window_serialization_snapshot_level_calls;
+    return window_serialization_snapshot_level_value;
+}
+
+static bool window_serialization_snapshot_tags(uint32_t wid, uint64_t *tags)
+{
+    (void) wid;
+    ++window_serialization_snapshot_tags_calls;
+    *tags = window_serialization_snapshot_tags_value;
+    return window_serialization_snapshot_tags_success;
+}
+
+static bool window_serialization_snapshot_shadow(uint32_t wid)
+{
+    (void) wid;
+    ++window_serialization_snapshot_shadow_calls;
+    return window_serialization_snapshot_shadow_value;
+}
+
+static void window_serialization_snapshot_reset_calls(void)
+{
+    window_serialization_snapshot_parent_calls = 0;
+    window_serialization_snapshot_level_calls = 0;
+    window_serialization_snapshot_tags_calls = 0;
+    window_serialization_snapshot_shadow_calls = 0;
+}
+
+static void window_serialization_snapshot_render(char *buffer, size_t buffer_size,
+                                                 struct window *window, uint32_t wid,
+                                                 uint64_t flags,
+                                                 const struct window_serialization_context *context)
+{
+    FILE *file = tmpfile();
+    if (!file) {
+        if (buffer_size) buffer[0] = '\0';
+        return;
+    }
+    if (window) window_serialize_with_context(file, window, flags, context);
+    else window_nonax_serialize_with_context(file, wid, flags, context);
+    rewind(file);
+    if (buffer_size) {
+        size_t length = fread(buffer, 1, buffer_size - 1, file);
+        buffer[length] = '\0';
+    }
+    fclose(file);
+}
+
+TEST_FUNC(window_serialization_prefers_snapshot_fields_and_falls_back_independently,
+{
+    __auto_type saved_parent = window_test_serialization_parent;
+    __auto_type saved_level = window_test_serialization_level;
+    __auto_type saved_tags = window_test_serialization_tags;
+    __auto_type saved_shadow = window_test_serialization_shadow;
+    window_test_serialization_parent = window_serialization_snapshot_parent;
+    window_test_serialization_level = window_serialization_snapshot_level;
+    window_test_serialization_tags = window_serialization_snapshot_tags;
+    window_test_serialization_shadow = window_serialization_snapshot_shadow;
+    window_serialization_snapshot_parent_success = true;
+    window_serialization_snapshot_tags_success = true;
+    window_serialization_snapshot_parent_value = 91;
+    window_serialization_snapshot_level_value = 7;
+    window_serialization_snapshot_tags_value = 0x8;
+    window_serialization_snapshot_shadow_value = false;
+
+    uint64_t flags = WINDOW_PROPERTY_ROOT_WINDOW | WINDOW_PROPERTY_PARENT |
+                     WINDOW_PROPERTY_LEVEL | WINDOW_PROPERTY_LAYER |
+                     WINDOW_PROPERTY_TAGS | WINDOW_PROPERTY_HAS_SHADOW;
+    struct window_server_window_record record = {
+        .id = 77,
+        .parent_id = 0,
+        .level = 0,
+        .tags = 0,
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE
+    };
+    struct window_serialization_context context = { .window_server_record = &record };
+    struct window window = { .id = 77, .is_root = false };
+    char output[1024];
+
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(strstr(output, "\"root-window\":true") != NULL, true);
+    TEST_CHECK(strstr(output, "\"parent\":0") != NULL, true);
+    TEST_CHECK(strstr(output, "\"level\":0") != NULL, true);
+    TEST_CHECK(strstr(output, "\"tags\":\"0x0000000000000000\"") != NULL, true);
+    TEST_CHECK(strstr(output, "\"has-shadow\":true") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    record.parent_id = 44;
+    record.level = 7;
+    record.tags = 0x8;
+    window.is_root = true;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), &window, 77, flags, &context);
+    TEST_CHECK(strstr(output, "\"root-window\":true") != NULL, true);
+    TEST_CHECK(strstr(output, "\"parent\":44") != NULL, true);
+    TEST_CHECK(strstr(output, "\"level\":7") != NULL, true);
+    TEST_CHECK(strstr(output, "\"has-shadow\":false") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    char legacy[1024];
+    char snapshot[1024];
+    window_serialization_snapshot_parent_value = record.parent_id;
+    window_serialization_snapshot_level_value = record.level;
+    window_serialization_snapshot_tags_value = record.tags;
+    window_serialization_snapshot_shadow_value = !(record.tags & 0x8);
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(legacy, sizeof(legacy), NULL, 77, flags, NULL);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(snapshot, sizeof(snapshot), NULL, 77, flags, &context);
+    TEST_CHECK(strcmp(snapshot, legacy), 0);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_LEVEL;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+
+    record.id = 78;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+
+    record.id = 77;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_LEVEL |
+                          WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window_serialization_snapshot_parent_success = false;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, WINDOW_PROPERTY_PARENT, &context);
+    TEST_CHECK(strstr(output, "\"parent\":null") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+
+    window_test_serialization_parent = saved_parent;
+    window_test_serialization_level = saved_level;
+    window_test_serialization_tags = saved_tags;
+    window_test_serialization_shadow = saved_shadow;
+});
+
 static int window_serialization_membership_copy_calls;
 static int window_serialization_membership_fallback_calls;
 static int window_serialization_membership_combined_calls;

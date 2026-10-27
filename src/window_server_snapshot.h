@@ -41,6 +41,8 @@ struct window_server_snapshot
 struct window_server_snapshot *window_server_snapshot_create(int connection,
                                                               CFArrayRef window_ids,
                                                               int expected_count);
+const struct window_server_window_record *window_server_snapshot_find(const struct window_server_snapshot *snapshot,
+                                                                      uint32_t window_id);
 void window_server_snapshot_destroy(struct window_server_snapshot *snapshot);
 
 #endif

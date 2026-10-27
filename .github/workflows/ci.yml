@@ -43,6 +43,9 @@ jobs:
       - name: Space inventory filter benchmark
         run: make test-benchmark-space-inventory
 
+      - name: Window query snapshot benchmark
+        run: make test-benchmark-window-query
+
       - name: Ordinary behavior and repository fixtures
         run: make test
       - name: Sanitized behavior

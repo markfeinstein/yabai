@@ -248,6 +248,9 @@ TEST_FUNC(window_server_snapshot_copies_ordered_owned_records_and_empty_inventor
     TEST_CHECK(snapshot->records[2].id, 1002U);
     TEST_CHECK(snapshot->records[2].level, 0);
     TEST_CHECK(snapshot->records[2].valid_fields, (uint64_t) WINDOW_SERVER_WINDOW_FIELD_BASE);
+    TEST_CHECK(window_server_snapshot_find(snapshot, 1001) == snapshot->records + 1, true);
+    TEST_CHECK(window_server_snapshot_find(snapshot, 9999) == NULL, true);
+    TEST_CHECK(window_server_snapshot_find(NULL, 1001) == NULL, true);
     TEST_CHECK(window_server_snapshot_fake.query_calls, 1);
     TEST_CHECK(window_server_snapshot_fake.iterator_copy_calls, 1);
     TEST_CHECK(window_server_snapshot_fake.iterator_count_calls, 1);

@@ -24,6 +24,10 @@ static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindo
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
 static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
 static bool (*window_test_serialization_is_sticky)(uint32_t) = window_is_sticky;
+static bool (*window_test_serialization_parent)(uint32_t, uint32_t *) = window_parent_with_status;
+static int (*window_test_serialization_level)(uint32_t) = window_level;
+static bool (*window_test_serialization_tags)(uint32_t, uint64_t *) = window_tags_with_status;
+static bool (*window_test_serialization_shadow)(uint32_t) = window_shadow;
 static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
 static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 #else
@@ -42,6 +46,10 @@ static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_dis
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
 #define window_test_serialization_space window_space
 #define window_test_serialization_is_sticky window_is_sticky
+#define window_test_serialization_parent window_parent_with_status
+#define window_test_serialization_level window_level
+#define window_test_serialization_tags window_tags_with_status
+#define window_test_serialization_shadow window_shadow
 #define window_test_space_display_id space_display_id
 #define window_test_display_id_arrangement display_manager_display_id_arrangement
 #endif
@@ -260,6 +268,14 @@ static uint64_t window_serialization_flags(uint64_t flags)
     return flags ? flags : ~WINDOW_PROPERTY_DIAGNOSTIC_FLAGS;
 }
 
+static const struct window_server_window_record *
+window_serialization_record(const struct window_serialization_context *context, uint32_t window_id)
+{
+    const struct window_server_window_record *record = context ? context->window_server_record : NULL;
+    if (!record || !(record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) || record->id != window_id) return NULL;
+    return record;
+}
+
 static int window_serialization_space_index(const struct window_serialization_context *context,
                                             uint64_t sid)
 {
@@ -299,7 +315,9 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     uint64_t tags = 0;
     bool parent_known = false;
     bool tags_known = false;
+    bool has_shadow = false;
     bool is_sticky = false;
+    const struct window_server_window_record *record = window_serialization_record(context, wid);
 
     if ((flags & WINDOW_PROPERTY_PID) ||
         (flags & WINDOW_PROPERTY_APP)) {
@@ -323,7 +341,8 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
         (flags & WINDOW_PROPERTY_LAYER)) {
-        level = window_level(wid);
+        level = record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_LEVEL) ?
+                record->level : window_test_serialization_level(wid);
     }
 
     if ((flags & WINDOW_PROPERTY_SUB_LEVEL) ||
@@ -333,10 +352,24 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
 
     if ((flags & WINDOW_PROPERTY_ROOT_WINDOW) ||
         (flags & WINDOW_PROPERTY_PARENT)) {
-        parent_known = window_parent_with_status(wid, &parent_wid);
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)) {
+            parent_wid = record->parent_id;
+            parent_known = true;
+        } else {
+            parent_known = window_test_serialization_parent(wid, &parent_wid);
+        }
     }
 
-    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(wid, &tags);
+    if ((flags & WINDOW_PROPERTY_TAGS) || (flags & WINDOW_PROPERTY_HAS_SHADOW)) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)) {
+            tags = record->tags;
+            tags_known = true;
+            has_shadow = !(tags & 0x8);
+        } else {
+            if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_test_serialization_tags(wid, &tags);
+            if (flags & WINDOW_PROPERTY_HAS_SHADOW) has_shadow = window_test_serialization_shadow(wid);
+        }
+    }
 
     bool did_output = false;
     fprintf(rsp, "{\n");
@@ -530,7 +563,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     if (flags & WINDOW_PROPERTY_HAS_SHADOW) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(window_shadow(wid)));
+        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(has_shadow));
         did_output = true;
     }
 
@@ -649,10 +682,12 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     uint64_t tags;
     bool parent_known;
     bool tags_known;
+    bool has_shadow = false;
     struct view *view;
     struct window_node *node;
     bool is_minimized;
     bool is_sticky;
+    const struct window_server_window_record *record = window_serialization_record(context, window->id);
 
     bool needs_sid = (flags & WINDOW_PROPERTY_DISPLAY) ||
                      (flags & WINDOW_PROPERTY_SPACE) ||
@@ -671,7 +706,8 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
         (flags & WINDOW_PROPERTY_LAYER)) {
-        level = window_level(window->id);
+        level = record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_LEVEL) ?
+                record->level : window_test_serialization_level(window->id);
     }
 
     if ((flags & WINDOW_PROPERTY_SUB_LEVEL) ||
@@ -679,8 +715,24 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
         sub_level = window_sub_level(window->id);
     }
 
-    if (flags & WINDOW_PROPERTY_PARENT) parent_known = window_parent_with_status(window->id, &parent_wid);
-    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(window->id, &tags);
+    if (flags & WINDOW_PROPERTY_PARENT) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)) {
+            parent_wid = record->parent_id;
+            parent_known = true;
+        } else {
+            parent_known = window_test_serialization_parent(window->id, &parent_wid);
+        }
+    }
+    if ((flags & WINDOW_PROPERTY_TAGS) || (flags & WINDOW_PROPERTY_HAS_SHADOW)) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)) {
+            tags = record->tags;
+            tags_known = true;
+            has_shadow = !(tags & 0x8);
+        } else {
+            if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_test_serialization_tags(window->id, &tags);
+            if (flags & WINDOW_PROPERTY_HAS_SHADOW) has_shadow = window_test_serialization_shadow(window->id);
+        }
+    }
 
     if ((flags & WINDOW_PROPERTY_SPLIT_TYPE) ||
         (flags & WINDOW_PROPERTY_SPLIT_CHILD) ||
@@ -888,7 +940,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_HAS_SHADOW) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(window_shadow(window->id)));
+        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(has_shadow));
         did_output = true;
     }
 

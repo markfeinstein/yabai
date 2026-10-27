@@ -42,14 +42,18 @@ void window_manager_query_window_rules(FILE *rsp)
 }
 
 #ifdef TESTS
-static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *) =
-    space_window_list_for_connection_with_status;
+static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *,
+                                                      struct window_server_snapshot **) =
+    space_window_list_for_connection_with_snapshot;
+static void (*window_manager_query_snapshot_destroy)(struct window_server_snapshot *) =
+    window_server_snapshot_destroy;
 static CFArrayRef (*window_manager_query_managed_display_spaces)(int) = SLSCopyManagedDisplaySpaces;
 static CFArrayRef (*window_manager_query_ordered_display_uuids)(void) = display_manager_copy_ordered_display_uuids;
 static uint64_t *(*window_manager_query_display_space_list)(uint32_t, CFArrayRef, int *) =
     display_space_list_with_topology;
 #else
-#define window_manager_query_window_list space_window_list_for_connection_with_status
+#define window_manager_query_window_list space_window_list_for_connection_with_snapshot
+#define window_manager_query_snapshot_destroy window_server_snapshot_destroy
 #define window_manager_query_managed_display_spaces SLSCopyManagedDisplaySpaces
 #define window_manager_query_ordered_display_uuids display_manager_copy_ordered_display_uuids
 #define window_manager_query_display_space_list display_space_list_with_topology
@@ -81,9 +85,14 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
 {
     int window_count = 0;
     bool inventory_succeeded = false;
+    struct window_server_snapshot *window_server_snapshot = NULL;
     uint32_t *window_list = window_manager_query_window_list(space_list, space_count, 0, &window_count,
-                                                             true, &inventory_succeeded);
-    if (!inventory_succeeded) return false;
+                                                             true, &inventory_succeeded,
+                                                             &window_server_snapshot);
+    if (!inventory_succeeded) {
+        if (window_server_snapshot) window_manager_query_snapshot_destroy(window_server_snapshot);
+        return false;
+    }
 
     bool owns_topology = false;
     if (!has_topology_snapshot && window_manager_query_needs_topology(flags)) {
@@ -102,12 +111,14 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
     struct window_serialization_context context = {
         .managed_display_spaces = topology,
         .ordered_display_uuids = ordered_display_uuids,
+        .window_server_record = NULL,
         .has_managed_display_spaces_snapshot = has_topology_snapshot,
         .has_ordered_display_uuids_snapshot = has_ordered_display_uuids_snapshot
     };
 
     fprintf(rsp, "[");
     for (int i = 0; i < window_count; ++i) {
+        context.window_server_record = window_server_snapshot_find(window_server_snapshot, window_list[i]);
         struct window *window = window_manager_find_window(&g_window_manager, window_list[i]);
         if (window) {
             window_serialize_with_context(rsp, window, flags, &context);
@@ -117,6 +128,7 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
         if (i < window_count - 1) fprintf(rsp, ",");
     }
     fprintf(rsp, "]\n");
+    if (window_server_snapshot) window_manager_query_snapshot_destroy(window_server_snapshot);
     if (owns_ordered_display_uuids) CFRelease(ordered_display_uuids);
     if (owns_topology) CFRelease(topology);
     return true;
