@@ -98,6 +98,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "display.c"
 #include "window.c"
 #include "window_server_snapshot.c"
+#include "space_window_inventory.c"
 #include "view.c"
 #include "accordion.c"
 #include "window_manager.c"
@@ -2856,6 +2857,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
+    TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
+    TEST_ENTRY(space_window_inventory_preserves_duplicates_empty_success_and_independent_output) \
+    TEST_ENTRY(space_window_inventory_fails_closed_for_candidates_snapshots_and_required_fields) \
+    TEST_ENTRY(space_window_inventory_fixed_seed_matches_frozen_legacy_filter) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
@@ -3378,6 +3383,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-snapshot") == 0) {
         return window_server_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-space-window-inventory") == 0) {
+        return space_window_inventory_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

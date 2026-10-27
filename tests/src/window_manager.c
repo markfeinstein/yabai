@@ -506,11 +506,6 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
     view_test_set_platform_ops(&ops);
     space_manager_test_swap_window_list = space_swap_test_inventory;
 
-    TEST_CHECK(space_window_inventory_is_complete(0, 0, 0), true);
-    TEST_CHECK(space_window_inventory_is_complete(2, 1, 1), false);
-    TEST_CHECK(space_window_inventory_is_complete(2, 2, 1), false);
-    TEST_CHECK(space_window_inventory_is_complete(2, 2, 2), true);
-
     for (int failed_inventory = 1; failed_inventory <= 2; ++failed_inventory) {
         memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
         table_init(&g_space_manager.view, 4, hash_view, compare_view);
