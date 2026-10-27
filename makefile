@@ -1,7 +1,8 @@
 FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
 FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
-COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
+MACOS_MIN_VERSION = 14.0
+COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
 DEBUG_FLAGS    = $(COMMON_FLAGS) -O0
 RELEASE_FLAGS  = $(COMMON_FLAGS) -DNDEBUG -O3
 ASAN_FLAGS     = $(COMMON_FLAGS) -O0 -fsanitize=address,undefined
@@ -121,8 +122,8 @@ $(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS)
 	dir='$(BUILD_PATH)/$(1)/osax'; mkdir -p "$$$$dir"; \
 	payload=$$$$(mktemp "$$$$dir/.payload.XXXXXX"); loader=$$$$(mktemp "$$$$dir/.loader.XXXXXX"); generated=$$$$(mktemp "$$$$dir/.generated.c.XXXXXX"); \
 	trap 'rm -f "$$$$payload" "$$$$loader" "$$$$generated"' 0 HUP INT TERM; \
-	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
-	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
+	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
+	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
 	$(XXD) -i -n __src_osax_payload "$$$$payload" > "$$$$generated"; \
 	$(XXD) -i -n __src_osax_loader "$$$$loader" >> "$$$$generated"; \
 	if [ -f "$$$$dir/generated.c" ] && cmp -s "$$$$generated" "$$$$dir/generated.c"; then touch "$$$$dir/generated.c"; rm -f "$$$$generated"; else mv -f "$$$$generated" "$$$$dir/generated.c"; fi; \

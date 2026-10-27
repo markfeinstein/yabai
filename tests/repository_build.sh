@@ -216,6 +216,14 @@ grep -Fq 'codesign:--deep --force --verbose --sign CCCC /bin/sh' "$LOG"
 
 # Configuration products coexist; generated.c is the sole published OSAX input.
 run_make debug release asan tsan >/dev/null
+# Every daemon and scripting-addition compiler invocation must preserve the
+# declared macOS deployment floor.
+awk '
+    /^xcrun$/ { if (seen && !floor) bad = 1; seen = 1; floor = 0; next }
+    /^xcrun-arg:-mmacosx-version-min=14.0$/ { floor = 1 }
+    END { if (!seen || !floor) bad = 1; exit bad }
+' "$XCRUN_LOG"
+! grep -F 'xcrun-arg:-mmacosx-version-min=11.0' "$XCRUN_LOG"
 for config in debug release asan tsan; do
     test -x "$WORK/bin/$config/yabai"
     test -f "$WORK/bin/$config/osax/generated.c"
