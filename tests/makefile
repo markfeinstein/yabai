@@ -46,8 +46,8 @@ build: core-build opaque-context
 	@if nm -g $(OUT)/macho_parser_production.o | grep -q 'macho_test_'; then echo "production parser exports test seam"; exit 1; fi
 	@if $(CC) ./src/runtime_paths_no_nofollow.c -o $(OUT)/runtime_paths_no_nofollow $(ARCH_FLAG) -std=c11 >/dev/null 2>&1; then echo "runtime paths compiled without O_NOFOLLOW"; rm -f $(OUT)/runtime_paths_no_nofollow; exit 1; fi
 
-repository-build:
-	@set -eu; root=$$(/usr/bin/mktemp -d "$${TMPDIR:-/tmp}/yabai-repository-parent.XXXXXX"); cleanup() { [ ! -L "$$root" ] && [ -d "$$root" ] && /usr/bin/find "$$root" -depth -delete; }; trap cleanup 0 HUP INT TERM; mkdir "$$root/temporary path with spaces"; fake="$$root/failing-mktemp"; count="$$root/mktemp-count"; first="$$root/first-root"; printf '%s\n' '#!/bin/sh' 'set -eu' 'n=$$(cat "$$MKTEMP_COUNT")' 'n=$$((n + 1))' 'printf "%s\n" "$$n" > "$$MKTEMP_COUNT"' '[ "$$n" -ne 2 ] || exit 72' 'made=$$(/usr/bin/mktemp "$$@")' 'printf "%s\n" "$$made" > "$$FIRST_ROOT"' 'printf "%s\n" "$$made"' > "$$fake"; chmod 0755 "$$fake"; printf '0\n' > "$$count"; if TMPDIR="$$root/temporary path with spaces" REPOSITORY_MKTEMP="$$fake" MKTEMP_COUNT="$$count" FIRST_ROOT="$$first" /bin/sh ./repository_build.sh >/dev/null 2>&1; then exit 1; fi; [ -s "$$first" ]; leaked=$$(cat "$$first"); [ ! -e "$$leaked" ]; TMPDIR="$$root/temporary path with spaces" /bin/sh ./repository_build.sh; cleanup; trap - 0 HUP INT TERM
+repository-build: ./repository_build_fixture.sh ./repository_build.sh
+	/bin/sh ./repository_build_fixture.sh
 
 shell-fixtures:
 	./integration_hide_on_close_fixture.sh
