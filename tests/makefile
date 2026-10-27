@@ -46,8 +46,8 @@ build: core-build opaque-context
 	@if nm -g $(OUT)/macho_parser_production.o | grep -q 'macho_test_'; then echo "production parser exports test seam"; exit 1; fi
 	@if $(CC) ./src/runtime_paths_no_nofollow.c -o $(OUT)/runtime_paths_no_nofollow $(ARCH_FLAG) -std=c11 >/dev/null 2>&1; then echo "runtime paths compiled without O_NOFOLLOW"; rm -f $(OUT)/runtime_paths_no_nofollow; exit 1; fi
 
-repository-build:
-	@set -eu; root=$$(/usr/bin/mktemp -d "$${TMPDIR:-/tmp}/yabai-repository-parent.XXXXXX"); cleanup() { [ ! -L "$$root" ] && [ -d "$$root" ] && /usr/bin/find "$$root" -depth -delete; }; trap cleanup 0 HUP INT TERM; mkdir "$$root/temporary path with spaces"; fake="$$root/failing-mktemp"; count="$$root/mktemp-count"; first="$$root/first-root"; printf '%s\n' '#!/bin/sh' 'set -eu' 'n=$$(cat "$$MKTEMP_COUNT")' 'n=$$((n + 1))' 'printf "%s\n" "$$n" > "$$MKTEMP_COUNT"' '[ "$$n" -ne 2 ] || exit 72' 'made=$$(/usr/bin/mktemp "$$@")' 'printf "%s\n" "$$made" > "$$FIRST_ROOT"' 'printf "%s\n" "$$made"' > "$$fake"; chmod 0755 "$$fake"; printf '0\n' > "$$count"; if TMPDIR="$$root/temporary path with spaces" REPOSITORY_MKTEMP="$$fake" MKTEMP_COUNT="$$count" FIRST_ROOT="$$first" /bin/sh ./repository_build.sh >/dev/null 2>&1; then exit 1; fi; [ -s "$$first" ]; leaked=$$(cat "$$first"); [ ! -e "$$leaked" ]; TMPDIR="$$root/temporary path with spaces" /bin/sh ./repository_build.sh; cleanup; trap - 0 HUP INT TERM
+repository-build: ./repository_build_fixture.sh ./repository_build.sh
+	/bin/sh ./repository_build_fixture.sh
 
 shell-fixtures:
 	./integration_hide_on_close_fixture.sh
@@ -99,15 +99,15 @@ syntax:
 arch-arm64:
 	$(MAKE) CONFIG=arch ARCH=arm64 core-build
 	$(CC) ./src/osax_payload.m -o ./bin/arch-arm64/osax_payload -arch arm64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
-	@lipo -verify_arch arm64 ./bin/arch-arm64/tests
-	@lipo -verify_arch arm64 ./bin/arch-arm64/osax_payload
+	@lipo ./bin/arch-arm64/tests -verify_arch arm64
+	@lipo ./bin/arch-arm64/osax_payload -verify_arch arm64
 	@if [ "$$(uname -m)" = arm64 ]; then ./bin/arch-arm64/tests && ./bin/arch-arm64/osax_payload; else echo "SKIP arm64 execution: host is not arm64"; fi
 
 arch-x86_64:
 	$(MAKE) CONFIG=arch ARCH=x86_64 core-build
 	$(CC) ./src/osax_payload.m -o ./bin/arch-x86_64/osax_payload -arch x86_64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
-	@lipo -verify_arch x86_64 ./bin/arch-x86_64/tests
-	@lipo -verify_arch x86_64 ./bin/arch-x86_64/osax_payload
+	@lipo ./bin/arch-x86_64/tests -verify_arch x86_64
+	@lipo ./bin/arch-x86_64/osax_payload -verify_arch x86_64
 	@if [ "$$(uname -m)" = x86_64 ]; then ./bin/arch-x86_64/tests && ./bin/arch-x86_64/osax_payload; elif /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then /usr/bin/arch -x86_64 ./bin/arch-x86_64/tests && /usr/bin/arch -x86_64 ./bin/arch-x86_64/osax_payload; else echo "SKIP x86_64 execution: Rosetta is unavailable"; fi
 
 integration-hide-on-close:
