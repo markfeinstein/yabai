@@ -106,6 +106,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_server_classifier.c"
 #include "window_server_hit_test.c"
 #include "window_server_tag_corpus.c"
+#include "native_tab_event_recorder.c"
 #include "space_window_inventory.c"
 #include "view.c"
 #include "accordion.c"
@@ -2898,6 +2899,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
     TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
     TEST_ENTRY(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files) \
+    TEST_ENTRY(native_tab_event_recorder_pairs_both_switch_event_orders_without_identity_decision) \
+    TEST_ENTRY(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle_explanations) \
+    TEST_ENTRY(native_tab_event_recorder_enforces_deadlines_stale_events_capacity_and_stop) \
+    TEST_ENTRY(native_tab_event_recorder_marks_incomplete_inventory_and_secures_output) \
     TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
     TEST_ENTRY(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle) \
     TEST_ENTRY(space_window_inventory_preserves_duplicates_empty_success_and_independent_output) \

@@ -11,7 +11,7 @@ FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Co
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
-CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h
+CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h ../scripts/native_tab_event_recorder_core.c ../scripts/native_tab_event_recorder_core.h
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
 SANITIZERS_tsan = -fsanitize=thread,undefined
@@ -125,6 +125,7 @@ syntax:
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/window_server_tag_corpus_core.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../scripts/native_tab_event_recorder_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_classifier.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_constraints.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_corner_geometry.c -std=c11 -Wall -Wextra -Werror
