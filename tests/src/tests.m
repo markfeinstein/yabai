@@ -2812,8 +2812,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
     TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
+    TEST_ENTRY(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered) \
     TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
     TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
+    TEST_ENTRY(doctor_screen_capture_requirement_uses_static_config_precedence_without_prompting) \
+    TEST_ENTRY(doctor_screen_capture_native_snapshot_failures_are_unknown) \
     TEST_ENTRY(doctor_service_requires_canonical_fields_mode_and_executable) \
     TEST_ENTRY(doctor_root_permission_checks_use_resolved_supplementary_groups) \
     TEST_ENTRY(doctor_root_permission_checks_use_effective_target_access) \

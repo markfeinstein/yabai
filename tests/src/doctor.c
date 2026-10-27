@@ -15,6 +15,8 @@ static struct doctor_facts doctor_test_healthy_facts(void)
         .legacy_service_collision = DOCTOR_PROBE_NO,
         .config_present = DOCTOR_PROBE_YES,
         .config_readable = DOCTOR_PROBE_YES,
+        .screen_capture_required = DOCTOR_PROBE_NO,
+        .screen_capture_access = DOCTOR_PROBE_UNKNOWN,
         .sa_install = DOCTOR_SA_CURRENT,
         .sa_socket = DOCTOR_PROBE_YES,
         .sa_runtime = DOCTOR_SA_RUNTIME_CURRENT,
@@ -39,6 +41,7 @@ TEST_FUNC(doctor_healthy_fixture_returns_success,
     if (stream) {
         TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
         TEST_CHECK(doctor_test_output_contains(stream, "UNKNOWN service runtime"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "PASS screen recording   mechanism: selected static configuration does not enable capture-dependent features; next: no action required"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "PASS scripting status"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures; doctor made no changes"), true);
         fclose(stream);
@@ -81,7 +84,47 @@ TEST_FUNC(doctor_all_unknown_and_optional_warnings_return_success,
     facts.sa_install = DOCTOR_SA_ABSENT;
     FILE *stream = tmpfile();
     TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+    TEST_CHECK(doctor_test_output_contains(stream, "UNKNOWN screen recording   mechanism: static configuration cannot determine whether capture-dependent features are enabled; next: validate yabai.jsonc and inspect yabairc for window_animation_duration"), true);
     TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures"), true);
+    fclose(stream);
+});
+
+TEST_FUNC(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered,
+{
+    struct doctor_facts facts = doctor_test_healthy_facts();
+    facts.screen_capture_required = DOCTOR_PROBE_YES;
+    facts.screen_capture_access = DOCTOR_PROBE_NO;
+    FILE *stream = tmpfile();
+    TEST_CHECK(stream != NULL, true);
+    TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+    char output[16384] = {0};
+    rewind(stream);
+    size_t length = fread(output, 1, sizeof(output) - 1, stream);
+    output[length] = '\0';
+    const char *configuration = strstr(output, "PASS configuration");
+    const char *screen = strstr(output,
+        "WARN screen recording   mechanism: configured window animations require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized; next: enable yabai in System Settings > Privacy & Security > Screen Recording, then restart yabai");
+    const char *arm64e = strstr(output, "PASS arm64e boot arg");
+    TEST_CHECK(configuration != NULL, true);
+    TEST_CHECK(screen != NULL, true);
+    TEST_CHECK(arm64e != NULL, true);
+    TEST_CHECK(configuration < screen, true);
+    TEST_CHECK(screen < arm64e, true);
+    TEST_CHECK(strstr(output, "SUMMARY 0 failures; doctor made no changes") != NULL, true);
+    fclose(stream);
+
+    facts.screen_capture_access = DOCTOR_PROBE_YES;
+    stream = tmpfile();
+    TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+    TEST_CHECK(doctor_test_output_contains(stream,
+        "PASS screen recording   mechanism: configured window animations are authorized by CGPreflightScreenCaptureAccess; next: no action required"), true);
+    fclose(stream);
+
+    facts.screen_capture_access = DOCTOR_PROBE_UNKNOWN;
+    stream = tmpfile();
+    TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+    TEST_CHECK(doctor_test_output_contains(stream,
+        "UNKNOWN screen recording   mechanism: configured window animations require capture but nonprompting preflight is unavailable; next: verify Screen Recording permission manually"), true);
     fclose(stream);
 });
 
@@ -124,6 +167,15 @@ static bool doctor_test_touch(const char *path)
     int fd = open(path, O_CREAT | O_WRONLY, 0600);
     if (fd < 0) return false;
     return close(fd) == 0;
+}
+
+static bool doctor_test_write(const char *path, const char *text)
+{
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (fd < 0) return false;
+    size_t length = strlen(text);
+    bool success = write(fd, text, length) == (ssize_t) length;
+    return close(fd) == 0 && success;
 }
 static char *doctor_test_xdg;
 static char *doctor_test_config_getenv(const char *name)
@@ -194,6 +246,111 @@ TEST_FUNC(doctor_config_selection_stops_at_preferred_regular_candidate,
     const char *rm_args[] = { "/bin/rm", "-rf", root, NULL }; safe_exec((char *const *) rm_args, true);
 });
 
+static enum doctor_probe doctor_test_screen_capture_preflight_result;
+static int doctor_test_screen_capture_preflight_calls;
+
+static enum doctor_probe doctor_test_screen_capture_preflight(void)
+{
+    ++doctor_test_screen_capture_preflight_calls;
+    return doctor_test_screen_capture_preflight_result;
+}
+
+TEST_FUNC(doctor_screen_capture_requirement_uses_static_config_precedence_without_prompting,
+{
+    char root[] = "/tmp/yabai-doctor-capture.XXXXXX";
+    TEST_CHECK(mkdtemp(root) != NULL, true);
+    char xdg[PATH_MAX], xdg_yabai[PATH_MAX], home_config[PATH_MAX], home_yabai[PATH_MAX];
+    snprintf(xdg, sizeof(xdg), "%s/xdg", root); TEST_CHECK(doctor_test_mkdir(xdg), true);
+    snprintf(xdg_yabai, sizeof(xdg_yabai), "%s/yabai", xdg); TEST_CHECK(doctor_test_mkdir(xdg_yabai), true);
+    snprintf(home_config, sizeof(home_config), "%s/.config", root); TEST_CHECK(doctor_test_mkdir(home_config), true);
+    snprintf(home_yabai, sizeof(home_yabai), "%s/yabai", home_config); TEST_CHECK(doctor_test_mkdir(home_yabai), true);
+    char native_xdg[PATH_MAX], native_home[PATH_MAX], legacy_xdg[PATH_MAX];
+    snprintf(native_xdg, sizeof(native_xdg), "%s/yabai.jsonc", xdg_yabai);
+    snprintf(native_home, sizeof(native_home), "%s/yabai.jsonc", home_yabai);
+    snprintf(legacy_xdg, sizeof(legacy_xdg), "%s/yabairc", xdg_yabai);
+
+    doctor_test_xdg = xdg;
+    struct doctor_collect_ops ops = doctor_production_ops;
+    ops.getenv_fn = doctor_test_config_getenv;
+    ops.screen_capture_preflight_fn = doctor_test_screen_capture_preflight;
+    struct doctor_identity identity = {
+        .uid = getuid(), .gid = getgid(), .name = "doctor-fixture", .home = root
+    };
+    struct doctor_facts facts = {0};
+
+    doctor_test_screen_capture_preflight_calls = 0;
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 0);
+
+    TEST_CHECK(doctor_test_write(native_xdg, "{\"version\":2,\"config\":{}}"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 0);
+    unlink(native_xdg);
+
+    TEST_CHECK(doctor_test_write(legacy_xdg, "window_animation_duration=0.5\n"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 0);
+
+    TEST_CHECK(doctor_test_write(native_xdg,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0}}"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 0);
+
+    TEST_CHECK(doctor_test_write(native_xdg,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0.5}}"), true);
+    doctor_test_screen_capture_preflight_result = DOCTOR_PROBE_NO;
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_YES);
+    TEST_CHECK(facts.screen_capture_access, DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+
+    unlink(legacy_xdg);
+    TEST_CHECK(doctor_test_write(native_xdg,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0}}"), true);
+    TEST_CHECK(doctor_test_write(native_home,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":1}}"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_NO);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+
+    TEST_CHECK(doctor_test_write(native_xdg, "{ malformed"), true);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+
+    int oversized = open(native_xdg, O_TRUNC | O_WRONLY);
+    TEST_CHECK(oversized >= 0, true);
+    TEST_CHECK(ftruncate(oversized, DECLARATIVE_CONFIG_MAX_FILE_SIZE + 1), 0);
+    close(oversized);
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+
+    TEST_CHECK(doctor_test_write(native_xdg,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0.25}}"), true);
+    ops.screen_capture_preflight_fn = NULL;
+    facts = (struct doctor_facts) {0};
+    doctor_collect_paths(&facts, &ops, &identity, "/bin/true");
+    TEST_CHECK(facts.screen_capture_required, DOCTOR_PROBE_YES);
+    TEST_CHECK(facts.screen_capture_access, DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(doctor_test_screen_capture_preflight_calls, 1);
+
+    doctor_test_xdg = NULL;
+    const char *rm_args[] = { "/bin/rm", "-rf", root, NULL };
+    safe_exec((char *const *) rm_args, true);
+});
+
 static const char *doctor_test_fifo_replace_path;
 static int doctor_test_fifo_replace_open(const char *path, int flags)
 {
@@ -223,6 +380,47 @@ static int doctor_test_fstat_override(int fd, struct stat *st)
     if (result == 0 && doctor_test_fstat_mode == 3 && doctor_test_fstat_count > 1) st->st_mtimespec.tv_nsec += 1;
     return result;
 }
+
+TEST_FUNC(doctor_screen_capture_native_snapshot_failures_are_unknown,
+{
+    char root[] = "/private/tmp/yabai-doctor-capture-snapshot.XXXXXX";
+    TEST_CHECK(mkdtemp(root) != NULL, true);
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/yabai.jsonc", root);
+    TEST_CHECK(doctor_test_write(path,
+        "{\"version\":2,\"config\":{\"window_animation_duration\":0.5}}"), true);
+    struct doctor_identity identity = {
+        .uid = getuid(), .gid = getgid(), .name = "fixture", .home = root
+    };
+
+    struct doctor_collect_ops ops = doctor_production_ops;
+    ops.fstat_fn = doctor_test_fstat_override;
+    doctor_test_fstat_mode = 3;
+    doctor_test_fstat_count = 0;
+    TEST_CHECK(doctor_native_screen_capture_requirement(
+        &ops, &identity, path, DOCTOR_CONFIG_OK), DOCTOR_PROBE_UNKNOWN);
+
+    doctor_test_fstat_mode = 0;
+    doctor_test_fstat_count = 0;
+    ops = doctor_production_ops;
+    ops.read_fn = doctor_test_read_failure;
+    doctor_test_read_error = EIO;
+    TEST_CHECK(doctor_native_screen_capture_requirement(
+        &ops, &identity, path, DOCTOR_CONFIG_OK), DOCTOR_PROBE_UNKNOWN);
+
+    TEST_CHECK(doctor_native_screen_capture_requirement(
+        &doctor_production_ops, &identity, path, DOCTOR_CONFIG_BAD), DOCTOR_PROBE_UNKNOWN);
+
+    ops = doctor_production_ops;
+    ops.open_fn = doctor_test_fifo_replace_open;
+    doctor_test_fifo_replace_path = path;
+    TEST_CHECK(doctor_native_screen_capture_requirement(
+        &ops, &identity, path, DOCTOR_CONFIG_OK), DOCTOR_PROBE_UNKNOWN);
+    doctor_test_fifo_replace_path = NULL;
+
+    const char *rm_args[] = { "/bin/rm", "-rf", root, NULL };
+    safe_exec((char *const *) rm_args, true);
+});
 
 static const char *doctor_test_replaced_path;
 static int doctor_test_replaced_count;

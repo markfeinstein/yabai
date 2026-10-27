@@ -55,6 +55,8 @@ struct doctor_facts {
     enum doctor_probe legacy_service_collision;
     enum doctor_probe config_present;
     enum doctor_probe config_readable;
+    enum doctor_probe screen_capture_required;
+    enum doctor_probe screen_capture_access;
     enum doctor_sa_install sa_install;
     enum doctor_probe sa_socket;
     enum doctor_sa_runtime sa_runtime;
