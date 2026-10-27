@@ -23,6 +23,16 @@ struct window_server_hit_test_result
     bool invoked;
 };
 
+enum window_server_hit_test_relation
+{
+    WINDOW_SERVER_HIT_TEST_RELATION_UNAVAILABLE,
+    WINDOW_SERVER_HIT_TEST_RELATION_SAME_WINDOW,
+    WINDOW_SERVER_HIT_TEST_RELATION_PARENT_CHILD,
+    WINDOW_SERVER_HIT_TEST_RELATION_ASSOCIATED,
+    WINDOW_SERVER_HIT_TEST_RELATION_SAME_OWNER,
+    WINDOW_SERVER_HIT_TEST_RELATION_UNRELATED
+};
+
 struct window_server_hit_test_comparison
 {
     struct window_server_hit_test_result legacy;
@@ -37,5 +47,8 @@ void window_server_hit_test_legacy(const struct window_server_hit_test_request *
                                    struct window_server_hit_test_result *result);
 void window_server_hit_test_compare(const struct window_server_hit_test_request *request,
                                     struct window_server_hit_test_comparison *comparison);
+enum window_server_hit_test_relation window_server_hit_test_classify_relation(
+    bool valid, bool same_window, bool parent_child, bool associated, bool same_owner);
+const char *window_server_hit_test_relation_string(enum window_server_hit_test_relation relation);
 
 #endif

@@ -32,6 +32,58 @@ static bool result_valid(const struct window_server_hit_test_result *result)
             isfinite(result->window_point.x) && isfinite(result->window_point.y));
 }
 
+static uint32_t parent_id(int cid, uint32_t wid)
+{
+    int32_t value = (int32_t)wid;
+    CFNumberRef number = CFNumberCreate(NULL, kCFNumberSInt32Type, &value);
+    if (!number) return 0;
+    const void *values[] = { number };
+    CFArrayRef ids = CFArrayCreate(NULL, values, 1, &kCFTypeArrayCallBacks);
+    CFRelease(number);
+    if (!ids) return 0;
+    CFTypeRef query = SLSWindowQueryWindows(cid, ids, 1);
+    CFRelease(ids);
+    if (!query) return 0;
+    CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+    uint32_t parent = 0;
+    if (iterator && SLSWindowIteratorGetCount(iterator) == 1 && SLSWindowIteratorAdvance(iterator)) {
+        parent = SLSWindowIteratorGetParentID(iterator);
+    }
+    if (iterator) CFRelease(iterator);
+    CFRelease(query);
+    return parent;
+}
+
+static bool associated(int cid, uint32_t a, uint32_t b)
+{
+    CFArrayRef values = SLSCopyAssociatedWindows(cid, a);
+    bool result = false;
+    if (values && CFGetTypeID(values) == CFArrayGetTypeID()) {
+        for (CFIndex i = 0; i < CFArrayGetCount(values); ++i) {
+            CFTypeRef item = CFArrayGetValueAtIndex(values, i);
+            uint32_t wid = 0;
+            if (item && CFGetTypeID(item) == CFNumberGetTypeID() &&
+                CFNumberGetValue((CFNumberRef)item, kCFNumberSInt32Type, &wid) && wid == b) {
+                result = true; break;
+            }
+        }
+    }
+    if (values) CFRelease(values);
+    return result;
+}
+
+static bool bounds_contain(int cid, uint32_t wid, CGPoint point, CGRect *bounds)
+{
+    return wid && SLSGetWindowBounds(cid, wid, bounds) == kCGErrorSuccess &&
+           CGRectContainsPoint(*bounds, point);
+}
+
+static bool local_point_matches(CGPoint screen, CGPoint local, CGRect bounds)
+{
+    return fabs(local.x - (screen.x - bounds.origin.x)) < 1.0 &&
+           fabs(local.y - (screen.y - bounds.origin.y)) < 1.0;
+}
+
 static uint64_t now_ns(void)
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -58,7 +110,7 @@ int main(int argc, char **argv)
         struct window_server_hit_test_comparison basic;
         window_server_hit_test_compare(&request, &basic);
         if (!basic.geometry_available) {
-            puts("{\"schema\":\"yabai.window-server-geometry-probe/v1\",\"geometry_available\":false}");
+            puts("{\"schema\":\"yabai.window-server-geometry-probe/v2\",\"geometry_available\":false}");
             return 2;
         }
         if (!result_valid(&basic.legacy) || !result_valid(&basic.geometry)) return EXIT_FAILURE;
@@ -71,6 +123,28 @@ int main(int argc, char **argv)
             window_server_hit_test_compare(&request, &filtered);
             if (!result_valid(&filtered.legacy) || !result_valid(&filtered.geometry)) return EXIT_FAILURE;
         }
+
+        uint32_t legacy_parent = basic.legacy.status == kCGErrorSuccess
+                               ? parent_id(cid, basic.legacy.window_id) : 0;
+        uint32_t geometry_parent = basic.geometry.status == kCGErrorSuccess
+                                 ? parent_id(cid, basic.geometry.window_id) : 0;
+        bool parent_child = basic.legacy.window_id && basic.geometry.window_id &&
+            (legacy_parent == basic.geometry.window_id || geometry_parent == basic.legacy.window_id);
+        bool is_associated = basic.legacy.window_id && basic.geometry.window_id &&
+            (associated(cid, basic.legacy.window_id, basic.geometry.window_id) ||
+             associated(cid, basic.geometry.window_id, basic.legacy.window_id));
+        enum window_server_hit_test_relation relation = window_server_hit_test_classify_relation(
+            basic.legacy.status == kCGErrorSuccess && basic.geometry.status == kCGErrorSuccess,
+            basic.same_window, parent_child, is_associated, basic.same_owner);
+        CGRect legacy_bounds = CGRectZero, geometry_bounds = CGRectZero;
+        bool legacy_contains = basic.legacy.status == kCGErrorSuccess &&
+            bounds_contain(cid, basic.legacy.window_id, point, &legacy_bounds);
+        bool geometry_contains = basic.geometry.status == kCGErrorSuccess &&
+            bounds_contain(cid, basic.geometry.window_id, point, &geometry_bounds);
+        bool legacy_local_matches = legacy_contains &&
+            local_point_matches(point, basic.legacy.window_point, legacy_bounds);
+        bool geometry_local_matches = geometry_contains &&
+            local_point_matches(point, basic.geometry.window_point, geometry_bounds);
 
         sls_find_window_by_geometry_fn geometry = window_server_hit_test_geometry();
         uint64_t *legacy_ns = calloc((size_t)iterations, sizeof(*legacy_ns));
@@ -109,9 +183,14 @@ int main(int argc, char **argv)
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         char build[256] = {0}; size_t build_size = sizeof(build); struct utsname system;
         if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0 || uname(&system) != 0) return EXIT_FAILURE;
-        printf("{\"schema\":\"yabai.window-server-geometry-probe/v1\","
+        printf("{\"schema\":\"yabai.window-server-geometry-probe/v2\","
                "\"os_version\":\"%ld.%ld.%ld\",\"os_build\":\"%s\","
                "\"architecture\":\"%s\",\"geometry_available\":true,"
+               "\"legacy_internal_mode\":0,\"geometry_internal_mode\":1,"
+               "\"basic_relation\":\"%s\",\"basic_parent_child\":%s,"
+               "\"basic_associated\":%s,\"legacy_bounds_contain_point\":%s,"
+               "\"geometry_bounds_contain_point\":%s,\"legacy_local_point_matches_bounds\":%s,"
+               "\"geometry_local_point_matches_bounds\":%s,"
                "\"basic_same_window\":%s,\"basic_same_owner\":%s,"
                "\"basic_same_window_point\":%s,\"filtered_ran\":%s,"
                "\"filtered_same_window\":%s,\"filtered_same_owner\":%s,"
@@ -120,6 +199,10 @@ int main(int argc, char **argv)
                "\"geometry_p50_ns\":%llu,\"geometry_p95_ns\":%llu,"
                "\"legacy_errors\":%d,\"geometry_errors\":%d,\"disagreements\":%d",
                version.majorVersion, version.minorVersion, version.patchVersion, build, system.machine,
+               window_server_hit_test_relation_string(relation), parent_child ? "true" : "false",
+               is_associated ? "true" : "false", legacy_contains ? "true" : "false",
+               geometry_contains ? "true" : "false", legacy_local_matches ? "true" : "false",
+               geometry_local_matches ? "true" : "false",
                basic.same_window ? "true" : "false", basic.same_owner ? "true" : "false",
                basic.same_window_point ? "true" : "false", filtered_ran ? "true" : "false",
                filtered.same_window ? "true" : "false", filtered.same_owner ? "true" : "false",

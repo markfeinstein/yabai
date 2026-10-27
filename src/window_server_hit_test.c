@@ -44,6 +44,30 @@ static sls_find_window_by_geometry_fn window_server_hit_test_geometry(void)
 #endif
 }
 
+enum window_server_hit_test_relation window_server_hit_test_classify_relation(
+    bool valid, bool same_window, bool parent_child, bool associated, bool same_owner)
+{
+    if (!valid) return WINDOW_SERVER_HIT_TEST_RELATION_UNAVAILABLE;
+    if (same_window) return WINDOW_SERVER_HIT_TEST_RELATION_SAME_WINDOW;
+    if (parent_child) return WINDOW_SERVER_HIT_TEST_RELATION_PARENT_CHILD;
+    if (associated) return WINDOW_SERVER_HIT_TEST_RELATION_ASSOCIATED;
+    if (same_owner) return WINDOW_SERVER_HIT_TEST_RELATION_SAME_OWNER;
+    return WINDOW_SERVER_HIT_TEST_RELATION_UNRELATED;
+}
+
+const char *window_server_hit_test_relation_string(enum window_server_hit_test_relation relation)
+{
+    switch (relation) {
+    case WINDOW_SERVER_HIT_TEST_RELATION_UNAVAILABLE: return "unavailable";
+    case WINDOW_SERVER_HIT_TEST_RELATION_SAME_WINDOW: return "same-window";
+    case WINDOW_SERVER_HIT_TEST_RELATION_PARENT_CHILD: return "parent-child";
+    case WINDOW_SERVER_HIT_TEST_RELATION_ASSOCIATED: return "associated";
+    case WINDOW_SERVER_HIT_TEST_RELATION_SAME_OWNER: return "same-owner";
+    case WINDOW_SERVER_HIT_TEST_RELATION_UNRELATED: return "unrelated";
+    }
+    return "unavailable";
+}
+
 void window_server_hit_test_legacy(const struct window_server_hit_test_request *request,
                                    struct window_server_hit_test_result *result)
 {

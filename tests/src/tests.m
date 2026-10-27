@@ -2897,6 +2897,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
     TEST_ENTRY(window_server_classifier_attribute_and_bit58_are_diagnostic_only) \
     TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
+    TEST_ENTRY(window_server_hit_test_relation_classification_is_conservative) \
     TEST_ENTRY(window_server_hit_test_comparison_is_optional_and_legacy_authoritative) \
     TEST_ENTRY(window_manager_hit_test_preserves_proxy_and_border_skip_sequence) \
     TEST_ENTRY(window_server_hit_test_concurrent_comparison_is_race_free) \
