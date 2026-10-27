@@ -56,6 +56,7 @@ struct declarative_runtime_operation_ops
     void (*refresh_insert_feedback)(void);
     void (*set_shadow)(void *, int);
     void (*set_menu_enabled)(int);
+    void (*set_menu_interface)(int);
     void (*set_menu_style)(int);
     void (*set_menu_space_filter)(int);
     void (*set_mouse_modifier)(void *, int);

@@ -1708,6 +1708,20 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_INTERFACE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", menu_bar_manager_interface_string(menu_bar_manager_interface()));
+            } else {
+                enum menu_bar_interface interface;
+                if (menu_bar_manager_parse_interface(value.text, value.length, &interface)) {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_INTERFACE,
+                        &(struct declarative_value) { .present = true, .enumeration = interface }, 0);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                                value.length, value.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_STYLE)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {

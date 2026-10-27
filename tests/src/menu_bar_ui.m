@@ -11,6 +11,8 @@ struct menu_bar_ui_action_log
     uint64_t generation[16];
     bool is_tracking[16];
     uint32_t focused_display_id[16];
+    enum menu_bar_style style[16];
+    enum menu_bar_space_filter filter[16];
 };
 
 static void
@@ -28,6 +30,8 @@ menu_bar_ui_record_action(const struct menu_bar_action *action, void *context)
     log->focused_display_id[index] = action->type == MENU_BAR_ACTION_MENU_TRACKING_CHANGED
                                    ? action->data.menu_tracking.focused_display_id
                                    : 0;
+    if (action->type == MENU_BAR_ACTION_SET_STYLE) log->style[index] = action->data.set_style.style;
+    if (action->type == MENU_BAR_ACTION_SET_SPACE_FILTER) log->filter[index] = action->data.set_space_filter.filter;
 }
 
 static void
@@ -175,6 +179,17 @@ menu_bar_ui_overflow_snapshot(uint64_t generation, size_t active_index)
         return false; \
     } \
 } while (0)
+
+@interface YBMenuBarTestExpandedSession : NSObject {
+@public
+    NSUInteger cancel_count;
+}
+- (void)cancel;
+@end
+
+@implementation YBMenuBarTestExpandedSession
+- (void)cancel { ++cancel_count; }
+@end
 
 @interface YBMenuBarSynchronousCloseMenu : NSMenu
 @end
@@ -1405,6 +1420,121 @@ test_generation_ordering_without_status_item_delivery(void)
     return true;
 }
 
+static bool
+menu_bar_ui_view_tree_contains_class(NSView *root, Class class_value)
+{
+    if ([root isKindOfClass:class_value]) return true;
+    for (NSView *view in [root subviews]) {
+        if (menu_bar_ui_view_tree_contains_class(view, class_value)) return true;
+    }
+    return false;
+}
+
+static bool
+test_expanded_panel_lifecycle_actions_and_deferred_snapshot(void)
+{
+    g_yb_menu_bar_panel_capability_override = 2;
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(200);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK([controller testWantsExpandedPanel]);
+    TEST_CHECK(![controller testStatusItemHasMenu]);
+    TEST_CHECK(![controller testStatusItemOwnsStripView]);
+    TEST_CHECK([[controller testStatusItemButton] image] != nil);
+
+    YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:session];
+    TEST_CHECK([controller testExpandedPanel] != nil);
+    TEST_CHECK([controller testExpandedSpaceCardCount] == 2);
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
+    TEST_CHECK(log.is_tracking[0]);
+    TEST_CHECK(log.generation[0] == 200);
+    TEST_CHECK(log.focused_display_id[0] == 1);
+    TEST_CHECK(!menu_bar_ui_view_tree_contains_class([[controller testExpandedPanel] contentView], [NSImageView class]));
+
+    struct menu_bar_snapshot *deferred = menu_bar_ui_detailed_snapshot(201);
+    deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:deferred clear:false];
+    deferred = menu_bar_ui_detailed_snapshot(202);
+    deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:deferred clear:false];
+    TEST_CHECK([controller testHasDeferredSnapshot]);
+    TEST_CHECK([controller testDeferredSnapshotGeneration] == 202);
+
+    [controller performPanelFilterAction:nil];
+    TEST_CHECK(session->cancel_count == 1);
+    TEST_CHECK(log.count == 2);
+    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_SET_SPACE_FILTER);
+    TEST_CHECK(log.generation[1] == 200);
+    TEST_CHECK(log.filter[1] == MENU_BAR_SPACE_FILTER_ALL);
+    [controller testEndExpandedInterface];
+    TEST_CHECK([controller testExpandedPanel] == nil);
+    TEST_CHECK(![controller testHasDeferredSnapshot]);
+    TEST_CHECK([controller testSnapshotGeneration] == 202);
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.type[2] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
+    TEST_CHECK(!log.is_tracking[2]);
+    TEST_CHECK(log.generation[2] == 200);
+    [session release];
+
+    YBMenuBarTestExpandedSession *style_session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:style_session];
+    NSPopUpButton *style = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 100, 24)] autorelease];
+    [style addItemsWithTitles:@[ @"Compact", @"Expanded" ]];
+    [style selectItemAtIndex:0];
+    [controller performPanelStyleAction:style];
+    TEST_CHECK(style_session->cancel_count == 1);
+    TEST_CHECK(log.type[4] == MENU_BAR_ACTION_SET_STYLE);
+    TEST_CHECK(log.generation[4] == 202);
+    TEST_CHECK(log.style[4] == MENU_BAR_STYLE_COMPACT);
+    [controller testEndExpandedInterface];
+    [style_session release];
+
+    [controller shutdown];
+    [controller release];
+    g_yb_menu_bar_panel_capability_override = -1;
+    return true;
+}
+
+static bool
+test_expanded_panel_modes_and_unavailable_fallback(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+
+    g_yb_menu_bar_panel_capability_override = 0;
+    struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(300);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK(![controller testWantsExpandedPanel]);
+    YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:session];
+    TEST_CHECK(session->cancel_count == 1);
+    TEST_CHECK([controller testExpandedPanel] == nil);
+    TEST_CHECK(log.count == 0);
+    [session release];
+
+    g_yb_menu_bar_panel_capability_override = 2;
+    snapshot = menu_bar_ui_detailed_snapshot(301);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_MENU;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK(![controller testWantsExpandedPanel]);
+    snapshot = menu_bar_ui_detailed_snapshot(302);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_AUTO;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK([controller testWantsExpandedPanel]);
+
+    [controller shutdown];
+    [controller release];
+    g_yb_menu_bar_panel_capability_override = -1;
+    return true;
+}
+
 struct menu_bar_ui_test_case
 {
     const char *name;
@@ -1433,6 +1563,8 @@ int main(void)
             { "pressed_screen_cell_clears_when_strip_tears_down_during_open", test_pressed_screen_cell_clears_when_strip_tears_down_during_open },
             { "overflow_keeps_active_and_nearest_source_neighbors", test_overflow_keeps_active_and_nearest_source_neighbors },
             { "generation_ordering_without_status_item_delivery", test_generation_ordering_without_status_item_delivery },
+            { "expanded_panel_lifecycle_actions_and_deferred_snapshot", test_expanded_panel_lifecycle_actions_and_deferred_snapshot },
+            { "expanded_panel_modes_and_unavailable_fallback", test_expanded_panel_modes_and_unavailable_fallback },
         };
 
         size_t passed = 0;

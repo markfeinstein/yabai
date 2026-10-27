@@ -432,6 +432,17 @@ Enum fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
+\f(CRmenubar_interface\fP: \f(CRmenu\fP, \f(CRpanel\fP, \f(CRauto\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
 \f(CRmenubar_style\fP: \f(CRcompact\fP, \f(CRexpanded\fP;
 .RE
 .sp
@@ -1026,6 +1037,19 @@ Specify top and bottom padding for a potential custom bar that you may be runnin
 Show yabai Spaces as a read\-only native macOS menu bar status item. Default is \fIoff\fP.
 .br
 The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and \fBmenubar_opacity\fP settings.
+.RE
+.sp
+\fBmenubar_interface\fP [\fImenu|panel|auto\fP]
+.RS 4
+Select the read\-only menu bar item\(cqs expanded interface. Default is \fImenu\fP.
+.br
+\fImenu\fP: Use the existing native informational menu.
+.br
+\fIpanel\fP: On macOS 27 or newer, use a transient keyboard\-accessible read\-only panel; fall back to the native menu when unavailable.
+.br
+\fIauto\fP: Use the panel on macOS 27 or newer and the native menu on older systems.
+.br
+The panel uses the existing display/Space snapshot and exposes only the existing space\-filter and indicator\-layout settings. It never shows window titles, geometry, screenshots, previews, or thumbnails and does not require Screen Recording permission.
 .RE
 .sp
 \fBmenubar_style\fP [\fIcompact|expanded\fP]
