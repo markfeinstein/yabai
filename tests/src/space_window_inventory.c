@@ -426,6 +426,47 @@ static void space_window_inventory_generate(struct window_server_window_record *
     }
 }
 
+TEST_FUNC(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle,
+{
+    static const uint64_t raw_bits[] = {
+        UINT64_C(0x1), UINT64_C(0x2), UINT64_C(0x80000000),
+        UINT64_C(0x100000000000000), UINT64_C(0x200000000000000),
+        UINT64_C(0x400000000000000), UINT64_C(0x1000000000000000)
+    };
+    static const int levels[] = { 0, 3, 8, 17 };
+    struct window tracked = { .id = 1 };
+    for (uint32_t combination = 0; combination < (1u << array_count(raw_bits)); ++combination) {
+        uint64_t tags = 0;
+        for (size_t bit = 0; bit < array_count(raw_bits); ++bit) {
+            if (combination & (1u << bit)) tags |= raw_bits[bit];
+        }
+        for (uint64_t attributes = 0; attributes < 4; ++attributes) {
+            for (int parent_case = 0; parent_case < 2; ++parent_case) {
+                for (size_t level_case = 0; level_case < array_count(levels); ++level_case) {
+                    struct window_server_window_record record = {
+                        .id = 1,
+                        .parent_id = parent_case ? 99 : 0,
+                        .level = levels[level_case],
+                        .tags = tags,
+                        .attributes = attributes,
+                        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE
+                    };
+                    for (int tracked_case = 0; tracked_case < 3; ++tracked_case) {
+                        struct window *window = tracked_case ? &tracked : NULL;
+                        tracked.flags = tracked_case == 2 ? WINDOW_MINIMIZE : 0;
+                        for (int include_minimized = 0; include_minimized < 2; ++include_minimized) {
+                            TEST_CHECK(space_window_record_is_eligible(
+                                           &record, window, include_minimized != 0),
+                                       space_window_inventory_legacy_eligible(
+                                           &record, window, include_minimized != 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+});
+
 TEST_FUNC(space_window_inventory_fixed_seed_matches_frozen_legacy_filter,
 {
     struct space_window_inventory_test_fixture fixture;

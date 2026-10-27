@@ -1,3 +1,5 @@
+#include "window_server_tags.h"
+
 extern int g_connection;
 
 #ifdef TESTS
@@ -25,15 +27,22 @@ static bool space_window_record_is_eligible(const struct window_server_window_re
         return false;
     }
 
-    if (((record->attributes & 0x2) || (record->tags & 0x400000000000000)) &&
-        ((record->tags & 0x1) || ((record->tags & 0x2) && (record->tags & 0x80000000)))) {
+    if (((record->attributes & 0x2) ||
+         (record->tags & WINDOW_SERVER_TAG_IGNORE_FOR_SCREEN_SHARING)) &&
+        ((record->tags & WINDOW_SERVER_TAG_DOCUMENT) ||
+         ((record->tags & WINDOW_SERVER_TAG_FLOATING) &&
+          (record->tags & WINDOW_SERVER_TAG_MODAL)))) {
         return true;
     }
 
     return include_minimized &&
            (record->attributes == 0x0 || record->attributes == 0x1) &&
-           ((record->tags & 0x1000000000000000) || (record->tags & 0x300000000000000)) &&
-           ((record->tags & 0x1) || ((record->tags & 0x2) && (record->tags & 0x80000000)));
+           ((record->tags & WINDOW_SERVER_TAG_MINIATURIZED) ||
+            (record->tags & (WINDOW_SERVER_TAG_FULLSCREEN_CAPABLE |
+                             WINDOW_SERVER_TAG_FULLSCREEN_TILE_CAPABLE))) &&
+           ((record->tags & WINDOW_SERVER_TAG_DOCUMENT) ||
+            ((record->tags & WINDOW_SERVER_TAG_FLOATING) &&
+             (record->tags & WINDOW_SERVER_TAG_MODAL)));
 }
 
 inline uint32_t space_display_id(uint64_t sid)
