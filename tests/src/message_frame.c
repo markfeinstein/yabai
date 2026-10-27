@@ -503,10 +503,15 @@ TEST_FUNC(client_response_fragmented_stream_refreshes_inactivity_deadline,
     const char response[] = "streamed response over many fragments";
     char wire[sizeof(struct daemon_response_frame) + sizeof(response) - 1];
     size_t wire_length = daemon_test_make_response(wire, sizeof(wire), response, sizeof(response) - 1, false);
+    size_t frame_length = sizeof(struct daemon_response_frame);
     if (!standard_output || !standard_error || !wire_length || socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0) {
         result = false;
+    } else if (write(fd[1], wire, frame_length) != (ssize_t) frame_length) {
+        result = false;
     } else {
-        struct socket_io_test_write context = { fd[1], wire, wire_length, 0, 10000, false };
+        struct socket_io_test_write context = {
+            fd[1], wire + frame_length, wire_length - frame_length, 0, 10000, false
+        };
         pthread_t writer;
         if (pthread_create(&writer, NULL, socket_io_test_fragment_writer, &context) != 0) {
             result = false;
