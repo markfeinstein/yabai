@@ -3120,6 +3120,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \
     TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
     TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
+    TEST_ENTRY(animation_replacement_proxy_preserves_corner_geometry) \
     TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
     TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
     TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
