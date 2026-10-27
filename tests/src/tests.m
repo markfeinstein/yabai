@@ -110,6 +110,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "event_queue.c"
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
+#include "snapshot_reuse.c"
 #include "message.c"
 #include "declarative_config.c"
 #include "declarative_modes.c"
@@ -2853,6 +2854,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
+    TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
     TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
@@ -2883,6 +2885,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
+    TEST_ENTRY(inactive_space_launch_invalid_snapshot_is_atomic_and_retried) \
     TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
     TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
     TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \
@@ -3017,6 +3020,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(view_padding_sum_widens_before_addition)         \
     TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
+    TEST_ENTRY(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks) \
+    TEST_ENTRY(window_visibility_handlers_query_order_before_snapshot_diagnostics) \
     TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
     TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
     TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
@@ -3391,6 +3396,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-query-snapshot") == 0) {
         return window_query_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-snapshot-reuse") == 0) {
+        return snapshot_reuse_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

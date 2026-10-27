@@ -1,16 +1,46 @@
 static uint32_t launch_test_inventory[8];
 static int launch_test_inventory_count;
 static bool launch_test_inventory_success;
+static bool launch_test_snapshot_missing;
+static bool launch_test_snapshot_mismatch;
 static int launch_test_probe_count;
 static int launch_test_probe_limit;
+static int launch_test_server_record_count;
+static int launch_test_server_record_mismatch_count;
 static struct window launch_test_windows[8];
 
-static bool launch_test_inventory_op(struct application *application, uint32_t **window_list, int *window_count)
+static bool launch_test_inventory_op(struct application *application, uint32_t **window_list,
+                                     int *window_count, struct window_server_snapshot **snapshot_out)
 {
     (void) application;
     *window_list = launch_test_inventory;
     *window_count = launch_test_inventory_count;
-    return launch_test_inventory_success;
+    *snapshot_out = NULL;
+    if (!launch_test_inventory_success || launch_test_inventory_count == 0 ||
+        launch_test_snapshot_missing) {
+        return launch_test_inventory_success;
+    }
+
+    window_server_snapshot_fake_begin(launch_test_inventory_count);
+    uint32_t ids[8];
+    for (int i = 0; i < launch_test_inventory_count; ++i) {
+        int source_index = launch_test_inventory_count - i - 1;
+        uint32_t id = launch_test_inventory[source_index];
+        ids[i] = id;
+        window_server_snapshot_fake.records[i] = (struct window_server_snapshot_fake_record) {
+            .id = launch_test_snapshot_mismatch && i == 0 ? id + 10000 : id,
+            .parent_id = id + 100,
+            .level = i,
+            .tags = (id & 1) ? UINT64_C(0x8) : 0,
+            .attributes = 0
+        };
+    }
+    CFArrayRef id_array = cfarray_of_cfnumbers(ids, sizeof(ids[0]), launch_test_inventory_count,
+                                                kCFNumberSInt32Type);
+    *snapshot_out = window_server_snapshot_create(17, id_array, launch_test_inventory_count);
+    if (id_array) CFRelease(id_array);
+    window_server_snapshot_fake_end();
+    return *snapshot_out != NULL;
 }
 
 static CFArrayRef launch_test_ax_list_op(struct application *application)
@@ -71,13 +101,21 @@ static void launch_test_cf_release_op(CFTypeRef value)
     ++launch_test_release_count;
 }
 
-static struct window *launch_test_create_window_op(struct space_manager *sm, struct window_manager *wm, struct application *application,
-                                                    AXUIElementRef element_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid)
+static struct window *launch_test_create_window_op(
+    struct space_manager *sm, struct window_manager *wm, struct application *application,
+    AXUIElementRef element_ref, uint32_t window_id,
+    const struct window_server_window_record *server_record,
+    bool one_shot_rules, pid_t one_shot_owner_pid)
 {
     (void) sm;
     (void) element_ref;
     (void) one_shot_rules;
     (void) one_shot_owner_pid;
+    if (server_record && server_record->id == window_id) {
+        ++launch_test_server_record_count;
+    } else {
+        ++launch_test_server_record_mismatch_count;
+    }
     if (launch_test_probe_limit <= 0) return NULL;
     --launch_test_probe_limit;
     struct window *window = &launch_test_windows[window_id % array_count(launch_test_windows)];
@@ -93,10 +131,14 @@ static void launch_test_begin(struct window_manager *wm)
     table_init(&wm->window, 16, hash_wm, compare_wm);
     launch_test_inventory_count = 0;
     launch_test_inventory_success = true;
+    launch_test_snapshot_missing = false;
+    launch_test_snapshot_mismatch = false;
     launch_test_probe_count = 0;
     launch_test_release_count = 0;
     launch_test_retain_count = 0;
     launch_test_probe_limit = 8;
+    launch_test_server_record_count = 0;
+    launch_test_server_record_mismatch_count = 0;
     memset(launch_test_windows, 0, sizeof(launch_test_windows));
     window_manager_test_existing_application_window_list = launch_test_inventory_op;
     window_manager_test_application_window_list = launch_test_ax_list_op;
@@ -150,6 +192,11 @@ TEST_FUNC(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queu
     TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &wm, &application, -1, &created, &created_count), false);
     TEST_CHECK(created_count, 2);
     TEST_CHECK(buf_len(wm.applications_to_refresh), 1);
+    TEST_CHECK(launch_test_server_record_count > 0, true);
+    TEST_CHECK(launch_test_server_record_mismatch_count, 0);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
     TEST_CHECK(application.launch_refresh, true);
     buf_free(created);
 
@@ -180,6 +227,34 @@ TEST_FUNC(inactive_space_launch_inventory_failure_is_deduplicated_and_retried,
     launch_test_inventory_count = 0;
     TEST_CHECK(window_manager_add_existing_application_windows(&g_space_manager, &wm, &application, 0, NULL, NULL), true);
     TEST_CHECK(buf_len(wm.applications_to_refresh), 0);
+    launch_test_end(&wm);
+})
+
+TEST_FUNC(inactive_space_launch_invalid_snapshot_is_atomic_and_retried,
+{
+    struct window_manager wm;
+    launch_test_begin(&wm);
+    struct application application = { .pid = 43, .name = "Snapshot", .launch_refresh = true };
+    launch_test_inventory_count = 2;
+    launch_test_inventory[0] = 11;
+    launch_test_inventory[1] = 12;
+    launch_test_snapshot_missing = true;
+    TEST_CHECK(window_manager_add_existing_application_windows(
+        &g_space_manager, &wm, &application, -1, NULL, NULL), false);
+    TEST_CHECK(launch_test_probe_count, 0);
+    TEST_CHECK(wm.window.count, 0U);
+    TEST_CHECK(buf_len(wm.applications_to_refresh), 1);
+
+    launch_test_snapshot_missing = false;
+    launch_test_snapshot_mismatch = true;
+    TEST_CHECK(window_manager_add_existing_application_windows(
+        &g_space_manager, &wm, &application, 0, NULL, NULL), false);
+    TEST_CHECK(launch_test_probe_count, 0);
+    TEST_CHECK(wm.window.count, 0U);
+    TEST_CHECK(buf_len(wm.applications_to_refresh), 1);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
     launch_test_end(&wm);
 })
 

@@ -1673,7 +1673,9 @@ bool window_is_unknown(struct window *window)
     return result;
 }
 
-struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+                                                uint32_t window_id,
+                                                const struct window_server_window_record *server_record)
 {
     if (!window_ref) return NULL;
     if (!application || !window_id) {
@@ -1706,14 +1708,22 @@ struct window *window_create(struct application *application, AXUIElementRef win
     window->title = snapshot.title;
     snapshot.title = NULL;
 
-    uint32_t parent_id = window_create_parent_id(window->id);
+    bool record_matches = server_record &&
+                          (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) &&
+                          server_record->id == window->id;
+    uint32_t parent_id = record_matches &&
+                         (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)
+                       ? server_record->parent_id
+                       : window_create_parent_id(window->id);
     bool ax_root = (snapshot.valid & WINDOW_AX_PARENT) &&
                    (!snapshot.parent || CFEqual(snapshot.parent, window->application->ref));
     window->is_root = !parent_id || ax_root;
 
-    if (window_create_shadow(window->id)) {
-        window_set_flag(window, WINDOW_SHADOW);
-    }
+    bool has_shadow = record_matches &&
+                      (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)
+                    ? !(server_record->tags & UINT64_C(0x8))
+                    : window_create_shadow(window->id);
+    if (has_shadow) window_set_flag(window, WINDOW_SHADOW);
 
     if ((snapshot.valid & WINDOW_AX_MINIMIZED) && snapshot.minimized) {
         window_set_flag(window, WINDOW_MINIMIZE);
@@ -1738,6 +1748,11 @@ struct window *window_create(struct application *application, AXUIElementRef win
 
     window_ax_snapshot_destroy(&snapshot);
     return window;
+}
+
+struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
+{
+    return window_create_with_server_record(application, window_ref, window_id, NULL);
 }
 
 #ifdef TESTS

@@ -1,4 +1,4 @@
-.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
+.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
 
 all: run
 
@@ -78,6 +78,9 @@ benchmark-space-inventory: core-build
 
 benchmark-window-query: core-build
 	$(CORE) --benchmark-window-query-snapshot
+
+benchmark-snapshot-reuse: core-build
+	$(CORE) --benchmark-snapshot-reuse
 
 run-asan:
 	$(MAKE) CONFIG=asan sanitizer-run asan-focused-run

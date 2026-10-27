@@ -44,6 +44,8 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
 static sem_t g_menu_bar_manager_test_sem;
 static bool g_menu_bar_manager_test_raw_contains_window;
 static bool g_menu_bar_manager_test_raw_queries_fail;
+static bool g_menu_bar_manager_test_snapshot_missing;
+static bool g_menu_bar_manager_test_snapshot_mismatch;
 static bool g_menu_bar_manager_test_native_fullscreen_space;
 static bool g_menu_bar_manager_test_native_sticky_window;
 static int g_menu_bar_manager_test_inventory_call_count;
@@ -123,12 +125,38 @@ static uint64_t *menu_bar_manager_test_window_space_list(uint32_t wid, int *coun
     return spaces;
 }
 
-static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *count,
-                                                         bool include_minimized, bool *success)
+static struct window_server_snapshot *menu_bar_manager_test_window_snapshot(
+    const uint32_t *window_ids, int window_count)
+{
+    if (window_count <= 0 || g_menu_bar_manager_test_snapshot_missing) return NULL;
+
+    window_server_snapshot_fake_begin(window_count);
+    for (int i = 0; i < window_count; ++i) {
+        uint32_t id = window_ids[window_count - i - 1];
+        window_server_snapshot_fake.records[i] = (struct window_server_snapshot_fake_record) {
+            .id = g_menu_bar_manager_test_snapshot_mismatch && i == 0 ? id + 10000 : id,
+            .parent_id = 0,
+            .level = 0,
+            .tags = 0,
+            .attributes = 0
+        };
+    }
+    CFArrayRef id_array = cfarray_of_cfnumbers(window_ids, sizeof(window_ids[0]), window_count,
+                                                kCFNumberSInt32Type);
+    struct window_server_snapshot *snapshot = window_server_snapshot_create(21, id_array, window_count);
+    if (id_array) CFRelease(id_array);
+    window_server_snapshot_fake_end();
+    return snapshot;
+}
+
+static uint32_t *menu_bar_manager_test_space_window_list(
+    uint64_t sid, int *count, bool include_minimized, bool *success,
+    struct window_server_snapshot **snapshot_out)
 {
     static uint32_t windows[] = { 1001 };
     (void) include_minimized;
     ++g_menu_bar_manager_test_inventory_call_count;
+    *snapshot_out = NULL;
 
     if (g_menu_bar_manager_test_raw_queries_fail || sid != 42) {
         if (count) *count = 0;
@@ -143,6 +171,7 @@ static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *coun
     }
 
     if (count) *count = 1;
+    *snapshot_out = menu_bar_manager_test_window_snapshot(windows, 1);
     return windows;
 }
 
@@ -347,6 +376,8 @@ static void menu_bar_manager_test_reset(void)
 
     g_menu_bar_manager_test_raw_contains_window = false;
     g_menu_bar_manager_test_raw_queries_fail = false;
+    g_menu_bar_manager_test_snapshot_missing = false;
+    g_menu_bar_manager_test_snapshot_mismatch = false;
     g_menu_bar_manager_test_native_fullscreen_space = false;
     g_menu_bar_manager_test_native_sticky_window = false;
     g_menu_bar_manager_test_inventory_call_count = 0;
@@ -916,14 +947,17 @@ TEST_FUNC(menu_bar_manager_late_close_after_disable_does_not_overemit, {
 });
 
 static int menu_bar_manager_test_raw_capture_calls;
-static uint32_t *menu_bar_manager_test_two_raw_windows(uint64_t sid, int *count,
-                                                       bool include_minimized, bool *success)
+static uint32_t *menu_bar_manager_test_two_raw_windows(
+    uint64_t sid, int *count, bool include_minimized, bool *success,
+    struct window_server_snapshot **snapshot_out)
 {
     static uint32_t windows[] = {1001, 1002};
     (void) include_minimized;
     ++menu_bar_manager_test_raw_capture_calls;
+    *snapshot_out = NULL;
     if (success) *success = sid == 42;
     if (count) *count = sid == 42 ? 2 : 0;
+    if (sid == 42) *snapshot_out = menu_bar_manager_test_window_snapshot(windows, 2);
     return sid == 42 ? windows : NULL;
 }
 
@@ -960,10 +994,44 @@ TEST_FUNC(menu_bar_manager_raw_membership_is_captured_once_per_space,
     TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &second, transient_flags), true);
     TEST_CHECK(menu_bar_manager_test_raw_capture_calls, 1);
     TEST_CHECK(builder.raw_window_count, 2U);
+    TEST_CHECK(builder.raw_window_ids[0], 1001U);
+    TEST_CHECK(builder.raw_window_ids[1], 1002U);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
 
     free(builder.raw_window_ids);
     free(builder.windows);
     free((void *) input.apps);
+
+    input.apps = NULL;
+    input.app_count = 0;
+    input.membership = MENU_BAR_SPACE_MEMBERSHIP_EMPTY;
+    builder = (struct menu_bar_space_builder) { .input = &input };
+    g_menu_bar_manager_test_snapshot_missing = true;
+    TEST_CHECK(menu_bar_manager_collect_raw_untracked(&display, 1), true);
+    TEST_CHECK(builder.raw_query_succeeded, false);
+    TEST_CHECK(builder.raw_window_ids == NULL, true);
+    TEST_CHECK(builder.window_count, 1U);
+    TEST_CHECK(builder.windows[0].flags & MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN,
+               MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN);
+    free(builder.windows);
+
+    input.membership = MENU_BAR_SPACE_MEMBERSHIP_EMPTY;
+    builder = (struct menu_bar_space_builder) { .input = &input };
+    g_menu_bar_manager_test_snapshot_missing = false;
+    g_menu_bar_manager_test_snapshot_mismatch = true;
+    TEST_CHECK(menu_bar_manager_collect_raw_untracked(&display, 1), true);
+    TEST_CHECK(builder.raw_query_succeeded, false);
+    TEST_CHECK(builder.raw_window_ids == NULL, true);
+    TEST_CHECK(builder.window_count, 1U);
+    TEST_CHECK(builder.windows[0].flags & MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN,
+               MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
+    free(builder.windows);
+
     table_free(&g_window_manager.window);
     g_window_manager.window = saved_windows;
     menu_bar_manager_test_reset();

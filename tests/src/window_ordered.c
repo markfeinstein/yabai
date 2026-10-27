@@ -48,6 +48,194 @@ static CGError test_ordered_query_out(int connection, uint32_t wid, uint8_t *ord
     return kCGErrorSuccess;
 }
 
+static struct window_server_window_record visibility_snapshot_record;
+static struct window_server_snapshot visibility_snapshot;
+static bool visibility_snapshot_fails;
+static bool visibility_expect_order;
+static bool visibility_order_valid;
+static int visibility_sequence;
+static int visibility_ordered_calls;
+static int visibility_snapshot_calls;
+static int visibility_snapshot_destroys;
+static int visibility_space_calls;
+static int visibility_on_screen_calls;
+static int visibility_parent_calls;
+static int visibility_level_calls;
+static int visibility_sub_level_calls;
+static int visibility_tags_calls;
+
+static CGError visibility_ordered_query(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    (void) wid;
+    ++visibility_ordered_calls;
+    visibility_sequence = 1;
+    *ordered_in = 0;
+    return kCGErrorSuccess;
+}
+
+static struct window_server_snapshot *visibility_snapshot_create(int connection, CFArrayRef window_ids,
+                                                                  int expected_count)
+{
+    (void) connection;
+    ++visibility_snapshot_calls;
+    if (visibility_expect_order) {
+        visibility_order_valid = visibility_sequence == 1;
+        visibility_sequence = 2;
+    }
+    if (visibility_snapshot_fails || !window_ids || expected_count != 1) return NULL;
+    return &visibility_snapshot;
+}
+
+static void visibility_snapshot_destroy(struct window_server_snapshot *snapshot)
+{
+    if (snapshot) ++visibility_snapshot_destroys;
+}
+
+static uint64_t *visibility_space_list(uint32_t wid, int *count, bool *success)
+{
+    static uint64_t spaces[] = { 42, 84 };
+    (void) wid;
+    ++visibility_space_calls;
+    *count = 2;
+    *success = true;
+    return spaces;
+}
+
+static bool visibility_on_screen(uint32_t wid, bool *known)
+{
+    (void) wid;
+    ++visibility_on_screen_calls;
+    *known = true;
+    return true;
+}
+
+static bool visibility_parent(uint32_t wid, uint32_t *parent_wid)
+{
+    (void) wid;
+    ++visibility_parent_calls;
+    *parent_wid = 700;
+    return true;
+}
+
+static int visibility_level(uint32_t wid)
+{
+    (void) wid;
+    ++visibility_level_calls;
+    return 6;
+}
+
+static int visibility_sub_level(uint32_t wid)
+{
+    (void) wid;
+    ++visibility_sub_level_calls;
+    return 2;
+}
+
+static bool visibility_tags(uint32_t wid, uint64_t *tags)
+{
+    (void) wid;
+    ++visibility_tags_calls;
+    *tags = UINT64_C(0x55);
+    return true;
+}
+
+static void visibility_reset_counts(void)
+{
+    visibility_order_valid = true;
+    visibility_sequence = 0;
+    visibility_ordered_calls = 0;
+    visibility_snapshot_calls = 0;
+    visibility_snapshot_destroys = 0;
+    visibility_space_calls = 0;
+    visibility_on_screen_calls = 0;
+    visibility_parent_calls = 0;
+    visibility_level_calls = 0;
+    visibility_sub_level_calls = 0;
+    visibility_tags_calls = 0;
+}
+
+static void visibility_test_begin(uint32_t wid)
+{
+    visibility_snapshot_record = (struct window_server_window_record) {
+        .id = wid,
+        .parent_id = 0,
+        .level = 0,
+        .tags = 0,
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_LEVEL |
+                        WINDOW_SERVER_WINDOW_FIELD_TAGS
+    };
+    visibility_snapshot = (struct window_server_snapshot) {
+        .generation = 1,
+        .records = &visibility_snapshot_record,
+        .count = 1
+    };
+    visibility_snapshot_fails = false;
+    visibility_expect_order = false;
+    visibility_reset_counts();
+    event_loop_debug_window_space_list = visibility_space_list;
+    event_loop_debug_window_is_on_screen = visibility_on_screen;
+    event_loop_debug_window_parent = visibility_parent;
+    event_loop_debug_window_level = visibility_level;
+    event_loop_debug_window_sub_level = visibility_sub_level;
+    event_loop_debug_window_tags = visibility_tags;
+    event_loop_debug_snapshot_create = visibility_snapshot_create;
+    event_loop_debug_snapshot_destroy = visibility_snapshot_destroy;
+    space_manager_test_active_space_id = 99;
+    g_verbose = true;
+}
+
+static void visibility_test_end(void)
+{
+    event_loop_debug_window_space_list = window_space_list_with_status;
+    event_loop_debug_window_is_on_screen = window_is_on_screen;
+    event_loop_debug_window_parent = window_parent_with_status;
+    event_loop_debug_window_level = window_level;
+    event_loop_debug_window_sub_level = window_sub_level;
+    event_loop_debug_window_tags = window_tags_with_status;
+    event_loop_debug_snapshot_create = window_server_snapshot_create;
+    event_loop_debug_snapshot_destroy = window_server_snapshot_destroy;
+    event_loop_window_is_ordered_in = SLSWindowIsOrderedIn;
+    space_manager_test_active_space_id = 0;
+    g_verbose = false;
+}
+
+static char *visibility_capture_line(const char *event_name, uint32_t wid,
+                                     bool ordered_known, bool ordered_in)
+{
+    fflush(stdout);
+    int saved_stdout = dup(STDOUT_FILENO);
+    FILE *capture = tmpfile();
+    if (saved_stdout == -1 || !capture || dup2(fileno(capture), STDOUT_FILENO) == -1) {
+        if (saved_stdout != -1) close(saved_stdout);
+        if (capture) fclose(capture);
+        return NULL;
+    }
+
+    event_loop_debug_window_visibility(event_name, wid, ordered_known, ordered_in);
+    fflush(stdout);
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+    if (fseek(capture, 0, SEEK_END) != 0) {
+        fclose(capture);
+        return NULL;
+    }
+    long length = ftell(capture);
+    if (length < 0 || fseek(capture, 0, SEEK_SET) != 0) {
+        fclose(capture);
+        return NULL;
+    }
+    char *line = calloc((size_t) length + 1, 1);
+    if (line && fread(line, 1, (size_t) length, capture) != (size_t) length) {
+        free(line);
+        line = NULL;
+    }
+    fclose(capture);
+    return line;
+}
+
 static uint32_t test_ordered_layout_inventory[2];
 static bool test_ordered_layout_inventory_fails;
 static bool test_ordered_layout_user_space(uint64_t sid) { (void) sid; return true; }
@@ -157,6 +345,120 @@ static void test_ordered_free(struct test_ordered *t)
     space_manager_test_layout_window_list = NULL;
     space_manager_test_layout_space_is_user = NULL;
 }
+
+TEST_FUNC(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks,
+{
+    visibility_test_begin(77);
+    char *line = visibility_capture_line("VISIBILITY", 77, true, true);
+    TEST_CHECK(line != NULL, true);
+    if (line) {
+        TEST_CHECK(strcmp(line,
+            "VISIBILITY: wid=77 ordered-in=true on-screen=true level=0 sub-level=2 parent=0 "
+            "tags=0x0000000000000000 active-space=99 spaces-known=true spaces=[42,84]\n"), 0);
+    }
+    free(line);
+    TEST_CHECK(visibility_snapshot_calls, 1);
+    TEST_CHECK(visibility_snapshot_destroys, 1);
+    TEST_CHECK(visibility_parent_calls, 0);
+    TEST_CHECK(visibility_level_calls, 0);
+    TEST_CHECK(visibility_tags_calls, 0);
+
+    visibility_reset_counts();
+    visibility_snapshot_record.valid_fields &= ~WINDOW_SERVER_WINDOW_FIELD_PARENT_ID;
+    line = visibility_capture_line("VISIBILITY", 77, true, true);
+    free(line);
+    TEST_CHECK(visibility_parent_calls, 1);
+    TEST_CHECK(visibility_level_calls, 0);
+    TEST_CHECK(visibility_tags_calls, 0);
+    TEST_CHECK(visibility_snapshot_destroys, 1);
+
+    visibility_reset_counts();
+    visibility_snapshot_record.valid_fields |= WINDOW_SERVER_WINDOW_FIELD_PARENT_ID;
+    visibility_snapshot_record.valid_fields &= ~WINDOW_SERVER_WINDOW_FIELD_LEVEL;
+    line = visibility_capture_line("VISIBILITY", 77, true, true);
+    free(line);
+    TEST_CHECK(visibility_parent_calls, 0);
+    TEST_CHECK(visibility_level_calls, 1);
+    TEST_CHECK(visibility_tags_calls, 0);
+    TEST_CHECK(visibility_snapshot_destroys, 1);
+
+    visibility_reset_counts();
+    visibility_snapshot_record.valid_fields |= WINDOW_SERVER_WINDOW_FIELD_LEVEL;
+    visibility_snapshot_record.valid_fields &= ~WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    line = visibility_capture_line("VISIBILITY", 77, true, true);
+    free(line);
+    TEST_CHECK(visibility_parent_calls, 0);
+    TEST_CHECK(visibility_level_calls, 0);
+    TEST_CHECK(visibility_tags_calls, 1);
+    TEST_CHECK(visibility_snapshot_destroys, 1);
+
+    visibility_reset_counts();
+    visibility_snapshot_record.valid_fields |= WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    visibility_snapshot_fails = true;
+    line = visibility_capture_line("VISIBILITY", 77, false, false);
+    TEST_CHECK(line != NULL, true);
+    if (line) {
+        TEST_CHECK(strcmp(line,
+            "VISIBILITY: wid=77 ordered-in=unknown on-screen=true level=6 sub-level=2 parent=700 "
+            "tags=0x0000000000000055 active-space=99 spaces-known=true spaces=[42,84]\n"), 0);
+    }
+    free(line);
+    TEST_CHECK(visibility_parent_calls, 1);
+    TEST_CHECK(visibility_level_calls, 1);
+    TEST_CHECK(visibility_tags_calls, 1);
+    TEST_CHECK(visibility_snapshot_calls, 1);
+    TEST_CHECK(visibility_snapshot_destroys, 0);
+
+    visibility_reset_counts();
+    g_verbose = false;
+    line = visibility_capture_line("VISIBILITY", 77, true, true);
+    TEST_CHECK(line != NULL, true);
+    if (line) TEST_CHECK(line[0], '\0');
+    free(line);
+    TEST_CHECK(visibility_snapshot_calls, 0);
+    TEST_CHECK(visibility_space_calls, 0);
+    TEST_CHECK(visibility_on_screen_calls, 0);
+    TEST_CHECK(visibility_parent_calls, 0);
+    TEST_CHECK(visibility_level_calls, 0);
+    TEST_CHECK(visibility_sub_level_calls, 0);
+    TEST_CHECK(visibility_tags_calls, 0);
+    visibility_test_end();
+});
+
+TEST_FUNC(window_visibility_handlers_query_order_before_snapshot_diagnostics,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    visibility_test_begin(t.a.id);
+    visibility_expect_order = true;
+    event_loop_window_is_ordered_in = visibility_ordered_query;
+
+    fflush(stdout);
+    int saved_stdout = dup(STDOUT_FILENO);
+    FILE *capture = tmpfile();
+    TEST_CHECK(saved_stdout != -1, true);
+    TEST_CHECK(capture != NULL, true);
+    if (saved_stdout != -1 && capture && dup2(fileno(capture), STDOUT_FILENO) != -1) {
+        EVENT_HANDLER_SLS_WINDOW_IS_INVISIBLE((void *)(intptr_t) t.a.id, 0);
+        fflush(stdout);
+        dup2(saved_stdout, STDOUT_FILENO);
+    }
+    if (saved_stdout != -1) close(saved_stdout);
+    if (capture) fclose(capture);
+
+    TEST_CHECK(visibility_ordered_calls, 1);
+    TEST_CHECK(visibility_snapshot_calls, 1);
+    TEST_CHECK(visibility_snapshot_destroys, 1);
+    TEST_CHECK(visibility_order_valid, true);
+    TEST_CHECK(visibility_sequence, 2);
+    TEST_CHECK(window_check_flag(&t.a, WINDOW_ORDERED_OUT), true);
+
+    visibility_test_end();
+    test_ordered_free(&t);
+});
 
 TEST_FUNC(imperative_layout_transaction_exhausts_preparation_faults_without_publication,
 {

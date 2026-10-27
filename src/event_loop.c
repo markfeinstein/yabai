@@ -2523,8 +2523,27 @@ static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 
 #ifdef TESTS
 static CGError (*event_loop_window_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
+static uint64_t *(*event_loop_debug_window_space_list)(uint32_t, int *, bool *) =
+    window_space_list_with_status;
+static bool (*event_loop_debug_window_is_on_screen)(uint32_t, bool *) = window_is_on_screen;
+static bool (*event_loop_debug_window_parent)(uint32_t, uint32_t *) = window_parent_with_status;
+static int (*event_loop_debug_window_level)(uint32_t) = window_level;
+static int (*event_loop_debug_window_sub_level)(uint32_t) = window_sub_level;
+static bool (*event_loop_debug_window_tags)(uint32_t, uint64_t *) = window_tags_with_status;
+static struct window_server_snapshot *(*event_loop_debug_snapshot_create)(int, CFArrayRef, int) =
+    window_server_snapshot_create;
+static void (*event_loop_debug_snapshot_destroy)(struct window_server_snapshot *) =
+    window_server_snapshot_destroy;
 #else
 #define event_loop_window_is_ordered_in SLSWindowIsOrderedIn
+#define event_loop_debug_window_space_list window_space_list_with_status
+#define event_loop_debug_window_is_on_screen window_is_on_screen
+#define event_loop_debug_window_parent window_parent_with_status
+#define event_loop_debug_window_level window_level
+#define event_loop_debug_window_sub_level window_sub_level
+#define event_loop_debug_window_tags window_tags_with_status
+#define event_loop_debug_snapshot_create window_server_snapshot_create
+#define event_loop_debug_snapshot_destroy window_server_snapshot_destroy
 #endif
 
 static void event_loop_debug_window_visibility(const char *event_name, uint32_t wid,
@@ -2534,20 +2553,44 @@ static void event_loop_debug_window_visibility(const char *event_name, uint32_t 
 
     int space_count = 0;
     bool spaces_known = false;
-    uint64_t *space_list = window_space_list_with_status(wid, &space_count, &spaces_known);
+    uint64_t *space_list = event_loop_debug_window_space_list(wid, &space_count, &spaces_known);
     bool on_screen_known = false;
-    bool on_screen = window_is_on_screen(wid, &on_screen_known);
+    bool on_screen = event_loop_debug_window_is_on_screen(wid, &on_screen_known);
+
+    CFArrayRef window_ids = cfarray_of_cfnumbers(&wid, sizeof(wid), 1, kCFNumberSInt32Type);
+    struct window_server_snapshot *window_server_snapshot = window_ids
+        ? event_loop_debug_snapshot_create(g_connection, window_ids, 1)
+        : NULL;
+    if (window_ids) CFRelease(window_ids);
+    const struct window_server_window_record *server_record =
+        window_server_snapshot_find(window_server_snapshot, wid);
+
+    int level = server_record && (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_LEVEL)
+              ? server_record->level
+              : event_loop_debug_window_level(wid);
     uint32_t parent_wid = 0;
-    bool parent_known = window_parent_with_status(wid, &parent_wid);
+    bool parent_known = false;
+    if (server_record && (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)) {
+        parent_wid = server_record->parent_id;
+        parent_known = true;
+    } else {
+        parent_known = event_loop_debug_window_parent(wid, &parent_wid);
+    }
     uint64_t tags = 0;
-    bool tags_known = window_tags_with_status(wid, &tags);
+    bool tags_known = false;
+    if (server_record && (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)) {
+        tags = server_record->tags;
+        tags_known = true;
+    } else {
+        tags_known = event_loop_debug_window_tags(wid, &tags);
+    }
 
     fprintf(stdout,
             "%s: wid=%u ordered-in=%s on-screen=%s level=%d sub-level=%d parent=",
             event_name, wid,
             ordered_known ? json_bool(ordered_in) : "unknown",
             on_screen_known ? json_bool(on_screen) : "unknown",
-            window_level(wid), window_sub_level(wid));
+            level, event_loop_debug_window_sub_level(wid));
     if (parent_known) fprintf(stdout, "%u", parent_wid); else fputs("unknown", stdout);
     fputs(" tags=", stdout);
     if (tags_known) fprintf(stdout, "0x%016llx", (unsigned long long) tags); else fputs("unknown", stdout);
@@ -2560,6 +2603,7 @@ static void event_loop_debug_window_visibility(const char *event_name, uint32_t 
         }
     }
     fputs("]\n", stdout);
+    event_loop_debug_snapshot_destroy(window_server_snapshot);
 }
 
 // NOTE: Apps that hide a window on close (e.g. Electron) order it out without minimizing it or

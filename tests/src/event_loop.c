@@ -1138,11 +1138,13 @@ static CFArrayRef launch_path_empty_window_list(struct application *application)
     return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
 }
 
-static bool launch_path_empty_inventory(struct application *application, uint32_t **list, int *count)
+static bool launch_path_empty_inventory(struct application *application, uint32_t **list, int *count,
+                                        struct window_server_snapshot **snapshot_out)
 {
     (void) application;
     *list = NULL;
     *count = 0;
+    *snapshot_out = NULL;
     return true;
 }
 

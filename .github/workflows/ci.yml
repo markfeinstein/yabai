@@ -46,6 +46,9 @@ jobs:
       - name: Window query snapshot benchmark
         run: make test-benchmark-window-query
 
+      - name: Startup, menu, and visibility snapshot reuse benchmark
+        run: make test-benchmark-snapshot-reuse
+
       - name: Ordinary behavior and repository fixtures
         run: make test
       - name: Sanitized behavior
