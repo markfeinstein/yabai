@@ -1,8 +1,39 @@
 extern int g_connection;
 
-static bool space_window_inventory_is_complete(int expected_count, int iterator_count, int advanced_count)
+#ifdef TESTS
+static CFArrayRef (*space_window_copy_candidates)(int, uint32_t, CFArrayRef, uint32_t, uint64_t *, uint64_t *) =
+    SLSCopyWindowsWithOptionsAndTags;
+static CFIndex (*space_window_candidate_count)(CFArrayRef) = CFArrayGetCount;
+static struct window_server_snapshot *(*space_window_capture_snapshot)(int, CFArrayRef, int) =
+    window_server_snapshot_create;
+static void (*space_window_destroy_snapshot)(struct window_server_snapshot *) =
+    window_server_snapshot_destroy;
+#else
+#define space_window_copy_candidates SLSCopyWindowsWithOptionsAndTags
+#define space_window_candidate_count CFArrayGetCount
+#define space_window_capture_snapshot window_server_snapshot_create
+#define space_window_destroy_snapshot window_server_snapshot_destroy
+#endif
+
+static bool space_window_record_is_eligible(const struct window_server_window_record *record,
+                                            struct window *window, bool include_minimized)
 {
-    return expected_count >= 0 && iterator_count == expected_count && advanced_count == expected_count;
+    if (window && (include_minimized || !window_check_flag(window, WINDOW_MINIMIZE))) return true;
+    /* Preserve the legacy fallthrough for a tracked minimized record whose
+     * WindowServer metadata still matches the root-window predicate. */
+    if (record->parent_id != 0 || (record->level != 0 && record->level != 3 && record->level != 8)) {
+        return false;
+    }
+
+    if (((record->attributes & 0x2) || (record->tags & 0x400000000000000)) &&
+        ((record->tags & 0x1) || ((record->tags & 0x2) && (record->tags & 0x80000000)))) {
+        return true;
+    }
+
+    return include_minimized &&
+           (record->attributes == 0x0 || record->attributes == 0x1) &&
+           ((record->tags & 0x1000000000000000) || (record->tags & 0x300000000000000)) &&
+           ((record->tags & 0x1) || ((record->tags & 0x2) && (record->tags & 0x80000000)));
 }
 
 inline uint32_t space_display_id(uint64_t sid)
@@ -29,6 +60,7 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
     *count = 0;
     if (success) *success = false;
     uint32_t *window_list = NULL;
+    struct window_server_snapshot *snapshot = NULL;
     uint64_t set_tags = 0;
     uint64_t clear_tags = 0;
     uint32_t options = include_minimized ? 0x7 : 0x2;
@@ -36,83 +68,44 @@ uint32_t *space_window_list_for_connection_with_status(uint64_t *space_list, int
     CFArrayRef space_list_ref = cfarray_of_cfnumbers(space_list, sizeof(uint64_t), space_count, kCFNumberSInt64Type);
     if (!space_list_ref) return NULL;
 
-    CFArrayRef window_list_ref = SLSCopyWindowsWithOptionsAndTags(g_connection, cid, space_list_ref, options, &set_tags, &clear_tags);
+    CFArrayRef window_list_ref = space_window_copy_candidates(g_connection, cid, space_list_ref,
+                                                               options, &set_tags, &clear_tags);
     if (!cf_is_type(window_list_ref, CFArrayGetTypeID())) {
         if (window_list_ref) CFRelease(window_list_ref);
         goto err;
     }
 
-    if (!cfindex_to_int(CFArrayGetCount(window_list_ref), count)) goto query_failed;
+    if (!cfindex_to_int(space_window_candidate_count(window_list_ref), count)) goto inventory_failed;
     if (!*count) {
         if (success) *success = true;
         goto out;
     }
 
-    CFTypeRef query = SLSWindowQueryWindows(g_connection, window_list_ref, *count);
-    if (!query) goto query_failed;
+    snapshot = space_window_capture_snapshot(g_connection, window_list_ref, *count);
+    if (!snapshot || snapshot->count != (size_t) *count || !snapshot->records) goto inventory_failed;
 
-    CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
-    if (!iterator) goto iterator_failed;
-
-    int iterator_count = SLSWindowIteratorGetCount(iterator);
-    if (iterator_count != *count) goto incomplete_iterator;
-
-    int advanced_count = 0;
+    const uint64_t required_fields = WINDOW_SERVER_WINDOW_FIELD_BASE;
     int window_count = 0;
     window_list = ts_alloc_list(uint32_t, *count);
-
-    while (SLSWindowIteratorAdvance(iterator)) {
-        ++advanced_count;
-        uint64_t tags = SLSWindowIteratorGetTags(iterator);
-        uint64_t attributes = SLSWindowIteratorGetAttributes(iterator);
-        uint32_t parent_wid = SLSWindowIteratorGetParentID(iterator);
-        uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
-        int level = SLSWindowIteratorGetLevel(iterator);
-
-        if (include_minimized) {
-            struct window *window = window_manager_find_window(&g_window_manager, wid);
-            if (window) {
-                window_list[window_count++] = wid;
-            } else if (parent_wid == 0) {
-                if (level == 0 || level == 3 || level == 8) {
-                    if (((attributes & 0x2) || (tags & 0x400000000000000)) && (((tags & 0x1)) || ((tags & 0x2) && (tags & 0x80000000)))) {
-                        window_list[window_count++] = wid;
-                    } else if ((attributes == 0x0 || attributes == 0x1) && ((tags & 0x1000000000000000) || (tags & 0x300000000000000)) && (((tags & 0x1)) || ((tags & 0x2) && (tags & 0x80000000)))) {
-                        window_list[window_count++] = wid;
-                    }
-                }
-            }
-        } else {
-            struct window *window = window_manager_find_window(&g_window_manager, wid);
-            if (window && !window_check_flag(window, WINDOW_MINIMIZE)) {
-                window_list[window_count++] = wid;
-            } else if (parent_wid == 0) {
-                if (level == 0 || level == 3 || level == 8) {
-                    if (((attributes & 0x2) || (tags & 0x400000000000000)) && (((tags & 0x1)) || ((tags & 0x2) && (tags & 0x80000000)))) {
-                        window_list[window_count++] = wid;
-                    }
-                }
-            }
+    for (size_t i = 0; i < snapshot->count; ++i) {
+        const struct window_server_window_record *record = snapshot->records + i;
+        if ((record->valid_fields & required_fields) != required_fields) goto inventory_failed;
+        struct window *window = window_manager_find_window(&g_window_manager, record->id);
+        if (space_window_record_is_eligible(record, window, include_minimized)) {
+            window_list[window_count++] = record->id;
         }
     }
-
-    if (!space_window_inventory_is_complete(*count, iterator_count, advanced_count)) goto incomplete_iterator;
 
     window_list = ts_resize(window_list, sizeof(uint32_t) * *count, sizeof(uint32_t) * window_count);
     *count = window_count;
     if (success) *success = true;
-
-    CFRelease(iterator);
-    CFRelease(query);
     goto out;
-incomplete_iterator:
+
+inventory_failed:
     window_list = NULL;
-    CFRelease(iterator);
-iterator_failed:
-    CFRelease(query);
-query_failed:
     *count = 0;
 out:
+    if (snapshot) space_window_destroy_snapshot(snapshot);
     CFRelease(window_list_ref);
 err:
     CFRelease(space_list_ref);

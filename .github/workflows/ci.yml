@@ -40,6 +40,9 @@ jobs:
       - name: WindowServer snapshot benchmark
         run: make test-benchmark-ws-snapshot
 
+      - name: Space inventory filter benchmark
+        run: make test-benchmark-space-inventory
+
       - name: Ordinary behavior and repository fixtures
         run: make test
       - name: Sanitized behavior
