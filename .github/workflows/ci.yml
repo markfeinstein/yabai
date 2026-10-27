@@ -1,25 +1,30 @@
 name: ci
 
 on:
-  pull_request:
   push:
+    branches:
+      - validation/final-macos27-ephemeral-20261027
 
 permissions:
   contents: read
 
 jobs:
   macos-offline:
-    runs-on: macos-14
+    runs-on: [self-hosted, macOS, ARM64, yabai-macos27-final-ephemeral-20261027]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Verify macOS 14 arm64 runner
+      - name: Verify supplemental macOS 27 arm64 runner
         run: |
           test "$(uname -m)" = arm64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 14
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 27
       - name: Install pinned documentation generator
         run: |
-          gem install --no-document asciidoctor --version 2.0.26
-          test "$(asciidoctor --version | awk 'NR == 1 { print $2 }')" = 2.0.26
+          gem_home="$RUNNER_TEMP/gems"
+          gem install --no-document --install-dir "$gem_home" asciidoctor --version 2.0.26
+          test "$(GEM_HOME="$gem_home" GEM_PATH="$gem_home" "$gem_home/bin/asciidoctor" --version | awk 'NR == 1 { print $2 }')" = 2.0.26
+          echo "GEM_HOME=$gem_home" >> "$GITHUB_ENV"
+          echo "GEM_PATH=$gem_home" >> "$GITHUB_ENV"
+          echo "$gem_home/bin" >> "$GITHUB_PATH"
       - name: Syntax, generated documentation contract, and diff hygiene
         run: |
           make syntax
