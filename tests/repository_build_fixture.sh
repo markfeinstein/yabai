@@ -1,14 +1,33 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
-PARENT=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/yabai-repository-parent.XXXXXX")
+PHASE=resolve-root
+PARENT=
 cleanup()
 {
-    [ ! -L "$PARENT" ] && [ -d "$PARENT" ] && /usr/bin/find "$PARENT" -depth -delete
+    if [ -n "$PARENT" ] && [ ! -L "$PARENT" ] && [ -d "$PARENT" ]; then
+        /usr/bin/find "$PARENT" -depth -delete
+    fi
 }
-trap cleanup 0 HUP INT TERM
+report_exit()
+{
+    status=$?
+    trap - 0 HUP INT TERM
+    if [ "$status" -ne 0 ]; then
+        printf 'repository build fixture: phase "%s" failed with status %s\n' "$PHASE" "$status" >&2
+    fi
+    cleanup
+    exit "$status"
+}
+trap report_exit 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
+ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
+PHASE=allocate-parent
+PARENT=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/yabai-repository-parent.XXXXXX")
+PHASE=prepare-fixture
 TMP_PARENT="$PARENT/temporary path with spaces"
 mkdir "$TMP_PARENT"
 TMP_BASE=$(CDPATH= cd -- "$TMP_PARENT" && pwd -P)
@@ -36,6 +55,7 @@ printf '%s\n' "$made"
 FIXTURE
 chmod 0755 "$FAKE_MKTEMP"
 
+PHASE=inject-tool-allocation-failure
 set +e
 TMPDIR="$TMP_BASE" \
 REPOSITORY_MKTEMP="$FAKE_MKTEMP" \
@@ -52,6 +72,7 @@ if [ "$failure_status" -ne 72 ]; then
     exit 1
 fi
 
+PHASE=verify-allocation-sequence
 expected_attempts=$(printf '%s\n%s\n' \
     "$TMP_BASE/yabai-repository-build.XXXXXX" \
     "$TOOL_BASE/yabai-repository-tools.XXXXXX")
@@ -62,6 +83,7 @@ if [ "$actual_attempts" != "$expected_attempts" ]; then
     exit 1
 fi
 
+PHASE=verify-failure-cleanup
 created_count=$(awk 'END { print NR }' "$CREATED")
 if [ "$created_count" -ne 1 ]; then
     printf 'repository build fixture: expected one allocated root, got %s\n' "$created_count" >&2
@@ -73,8 +95,10 @@ if [ -e "$allocated_root" ]; then
     exit 1
 fi
 
+PHASE=successful-build
 TMPDIR="$TMP_BASE" /bin/sh "$ROOT/repository_build.sh"
 
+PHASE=cleanup
 cleanup
 trap - 0 HUP INT TERM
 printf 'repository build allocation failure and success fixtures passed\n'
