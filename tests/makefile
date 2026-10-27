@@ -1,4 +1,4 @@
-.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
+.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock benchmark-window-server-tag-corpus test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
 
 all: run
 
@@ -11,7 +11,7 @@ FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Co
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
-CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h)
+CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
 SANITIZERS_tsan = -fsanitize=thread,undefined
@@ -85,6 +85,9 @@ benchmark-snapshot-reuse: core-build
 benchmark-animation-clock: core-build
 	$(CORE) --benchmark-animation-clock
 
+benchmark-window-server-tag-corpus: core-build
+	$(CORE) --benchmark-window-server-tag-corpus
+
 run-asan:
 	$(MAKE) CONFIG=asan sanitizer-run asan-focused-run
 
@@ -112,6 +115,7 @@ syntax:
 	$(CC) -fsyntax-only ../src/menu_bar_model.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../scripts/window_server_tag_corpus_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ./src/public_header_compile.c -std=c11 -Wall -Wextra -Werror
 
 arch-arm64:

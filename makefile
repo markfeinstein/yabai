@@ -22,6 +22,7 @@ DEBUG_BIN      = $(BUILD_PATH)/debug/yabai
 RELEASE_BIN    = $(BUILD_PATH)/release/yabai
 ASAN_BIN       = $(BUILD_PATH)/asan/yabai
 TSAN_BIN       = $(BUILD_PATH)/tsan/yabai
+TAG_CORPUS_BIN = $(BUILD_PATH)/debug/window-server-tag-corpus
 YABAI_COMMON   = ./src/manifest.m
 YABAI_DEPS     = $(filter-out ./src/menu_bar_model.c ./src/menu_bar_model.h,$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
 DEBUG_MODEL    = $(BUILD_PATH)/debug/menu_bar_model.o
@@ -29,6 +30,7 @@ RELEASE_MODEL  = $(BUILD_PATH)/release/menu_bar_model.o
 ASAN_MODEL     = $(BUILD_PATH)/asan/menu_bar_model.o
 TSAN_MODEL     = $(BUILD_PATH)/tsan/menu_bar_model.o
 OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
+TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_server_tags.h src/misc/extern.h makefile
 OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
 XCRUN          ?= xcrun
 XXD            ?= xxd
@@ -50,8 +52,8 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-arm64 test-x86_64 test-architectures test-all syntax \
+.PHONY: all debug release asan tsan window-server-tag-corpus install man man-check man-contract icon archive publish sign deploy \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
@@ -62,6 +64,7 @@ debug: $(DEBUG_BIN)
 release: $(RELEASE_BIN)
 asan: $(ASAN_BIN)
 tsan: $(TSAN_BIN)
+window-server-tag-corpus: $(TAG_CORPUS_BIN)
 # Historical "install" builds the optimized artifact; it does not copy files.
 install: release
 
@@ -92,6 +95,9 @@ test-benchmark-snapshot-reuse:
 test-benchmark-animation-clock:
 	$(MAKE) -C tests benchmark-animation-clock
 
+test-benchmark-window-server-tag-corpus:
+	$(MAKE) -C tests benchmark-window-server-tag-corpus
+
 test-arm64:
 	$(MAKE) -C tests arch-arm64
 
@@ -111,6 +117,10 @@ integration-hide-on-close: debug
 	$(MAKE) -C tests integration-hide-on-close
 
 integration: integration-hide-on-close
+
+$(TAG_CORPUS_BIN): $(TAG_CORPUS_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/window_server_tag_corpus.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
 
 # Generate both native scripting-addition artifacts as private temporaries,
 # then publish only one combined compiler input. Explicit source and makefile
