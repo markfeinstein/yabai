@@ -75,7 +75,14 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     struct window window = {
         .application = &application,
         .ref = stale_ref_test_old,
-        .id = stale_ref_test_window_id
+        .id = stale_ref_test_window_id,
+        .constraints = {
+            .generation = 7,
+            .observed_at = 9,
+            .validity = WINDOW_CONSTRAINT_MINIMUM_VALID | WINDOW_CONSTRAINT_MAXIMUM_VALID |
+                        WINDOW_CONSTRAINT_LIMITS_ORDERED,
+            .source = WINDOW_CONSTRAINT_SOURCE_ITERATOR
+        }
     };
 
     window_manager_test_application_window_list = stale_ref_test_window_list;
@@ -89,6 +96,9 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     TEST_CHECK(stale_ref_test_unobserve_calls, 1);
     TEST_CHECK(stale_ref_test_observe_calls, 1);
     TEST_CHECK(window.ref == stale_ref_test_fresh, true);
+    TEST_CHECK(window.constraints.validity, 0);
+    TEST_CHECK(window.constraints.observed_at, 0ULL);
+    TEST_CHECK(window.constraints.generation > 7, true);
     TEST_CHECK(window_manager_refresh_window_ref(&g_window_manager, &window), false);
 
     CFRelease(window.ref);
@@ -102,6 +112,22 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     window_manager_test_window_unobserve = saved_unobserve;
     table_free(&g_window_manager.managed_window);
     g_window_manager.managed_window = saved_managed;
+});
+
+TEST_FUNC(window_manager_invalidates_all_constraint_caches,
+{
+    struct window_manager wm = {0};
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+    struct window first = { .id = 1, .constraints = { .generation = 1, .validity = WINDOW_CONSTRAINT_CURRENT_VALID } };
+    struct window second = { .id = 2, .constraints = { .generation = 2, .validity = WINDOW_CONSTRAINT_CURRENT_VALID } };
+    table_add(&wm.window, &first.id, &first);
+    table_add(&wm.window, &second.id, &second);
+    window_manager_invalidate_window_constraints(&wm);
+    TEST_CHECK(first.constraints.validity, 0);
+    TEST_CHECK(second.constraints.validity, 0);
+    TEST_CHECK(first.constraints.generation > 1, true);
+    TEST_CHECK(second.constraints.generation > 2, true);
+    table_free(&wm.window);
 });
 
 TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,

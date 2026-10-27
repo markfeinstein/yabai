@@ -153,6 +153,7 @@ struct window
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
+    struct window_constraints constraints;
     bool is_root;
     bool is_eligible;
     bool frame_correction_pending;

@@ -1,6 +1,8 @@
 #include "window_server_snapshot.h"
 
 #include <stdbool.h>
+#include <dlfcn.h>
+#include <pthread.h>
 #include <stdlib.h>
 
 struct window_server_snapshot_backend
@@ -14,6 +16,7 @@ struct window_server_snapshot_backend
     int (*iterator_level)(CFTypeRef iterator);
     uint64_t (*iterator_tags)(CFTypeRef iterator);
     uint64_t (*iterator_attributes)(CFTypeRef iterator);
+    bool (*iterator_constraints)(CFTypeRef iterator, struct window_constraint_observation *observation);
     void (*release)(CFTypeRef value);
     void *(*allocate)(size_t count, size_t size);
     void (*deallocate)(void *value);
@@ -22,6 +25,32 @@ struct window_server_snapshot_backend
 static void window_server_snapshot_release(CFTypeRef value)
 {
     CFRelease(value);
+}
+
+typedef void (*window_server_snapshot_constraints_getter)(CFTypeRef iterator,
+                                                           CGSize *minimum,
+                                                           CGSize *maximum,
+                                                           CGSize *current);
+
+static window_server_snapshot_constraints_getter window_server_snapshot_constraints_impl;
+static pthread_once_t window_server_snapshot_constraints_once = PTHREAD_ONCE_INIT;
+
+static void window_server_snapshot_resolve_constraints(void)
+{
+    window_server_snapshot_constraints_impl = (window_server_snapshot_constraints_getter)
+        dlsym(RTLD_DEFAULT, "SLSWindowIteratorGetConstraints");
+}
+
+static bool window_server_snapshot_constraints(CFTypeRef iterator,
+                                               struct window_constraint_observation *observation)
+{
+    pthread_once(&window_server_snapshot_constraints_once,
+                 window_server_snapshot_resolve_constraints);
+    if (!window_server_snapshot_constraints_impl || !observation) return false;
+    *observation = (struct window_constraint_observation) {0};
+    window_server_snapshot_constraints_impl(iterator, &observation->minimum,
+                                            &observation->maximum, &observation->current);
+    return true;
 }
 
 static const struct window_server_snapshot_backend window_server_snapshot_production_backend = {
@@ -34,6 +63,7 @@ static const struct window_server_snapshot_backend window_server_snapshot_produc
     .iterator_level = SLSWindowIteratorGetLevel,
     .iterator_tags = SLSWindowIteratorGetTags,
     .iterator_attributes = SLSWindowIteratorGetAttributes,
+    .iterator_constraints = window_server_snapshot_constraints,
     .release = window_server_snapshot_release,
     .allocate = calloc,
     .deallocate = free
@@ -81,6 +111,10 @@ static void window_server_snapshot_copy_record(const struct window_server_snapsh
     if (backend->iterator_attributes) {
         record->attributes = backend->iterator_attributes(iterator);
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_ATTRIBUTES;
+    }
+    if (backend->iterator_constraints &&
+        backend->iterator_constraints(iterator, &record->constraints)) {
+        record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS;
     }
 }
 

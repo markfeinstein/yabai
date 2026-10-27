@@ -1711,6 +1711,12 @@ struct window *window_create_with_server_record(struct application *application,
     bool record_matches = server_record &&
                           (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) &&
                           server_record->id == window->id;
+    if (record_matches &&
+        (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS)) {
+        const CGSize *ax_size = (snapshot.valid & WINDOW_AX_SIZE) ? &snapshot.size : NULL;
+        window_constraints_update(&window->constraints, &server_record->constraints,
+                                  WINDOW_CONSTRAINT_SOURCE_ITERATOR, ax_size, 0);
+    }
     uint32_t parent_id = record_matches &&
                          (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)
                        ? server_record->parent_id

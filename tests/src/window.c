@@ -719,9 +719,13 @@ TEST_FUNC(window_create_reuses_matching_server_record_and_falls_back_by_field,
         .id = 80,
         .parent_id = 45,
         .tags = UINT64_C(0x8),
+        .constraints = {
+            .minimum = { 120, 90 }, .maximum = { 1600, 1000 }, .current = { 280, 176 }
+        },
         .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
                         WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
-                        WINDOW_SERVER_WINDOW_FIELD_TAGS
+                        WINDOW_SERVER_WINDOW_FIELD_TAGS |
+                        WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS
     };
     struct window *window = window_create_with_server_record(
         &application, AXUIElementCreateApplication(getpid()), 80, &record);
@@ -729,6 +733,12 @@ TEST_FUNC(window_create_reuses_matching_server_record_and_falls_back_by_field,
     if (window) {
         TEST_CHECK(window->is_root, false);
         TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), false);
+        TEST_CHECK(window_constraints_has_limits(&window->constraints), true);
+        TEST_CHECK(window_constraints_has_current(&window->constraints), true);
+        TEST_CHECK(window_constraints_has_ax_corroboration(&window->constraints), true);
+        TEST_CHECK(window->constraints.decoration_delta.width, 20.0);
+        TEST_CHECK(window->constraints.decoration_delta.height, 24.0);
+        TEST_CHECK(window->constraints.source, WINDOW_CONSTRAINT_SOURCE_ITERATOR);
         window_destroy(window);
     }
     TEST_CHECK(window_create_test_parent_calls, 0);
@@ -759,7 +769,10 @@ TEST_FUNC(window_create_reuses_matching_server_record_and_falls_back_by_field,
     window = window_create_with_server_record(
         &application, AXUIElementCreateApplication(getpid()), 82, &record);
     TEST_CHECK(window != NULL, true);
-    if (window) window_destroy(window);
+    if (window) {
+        TEST_CHECK(window->constraints.validity, 0);
+        window_destroy(window);
+    }
     TEST_CHECK(window_create_test_parent_calls, 1);
     TEST_CHECK(window_create_test_shadow_calls, 0);
 
