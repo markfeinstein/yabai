@@ -97,6 +97,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "area.c"
 #include "display.c"
 #include "window.c"
+#include "window_server_snapshot.c"
 #include "view.c"
 #include "accordion.c"
 #include "window_manager.c"
@@ -2851,6 +2852,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
+    TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
+    TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
+    TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
+    TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
@@ -3370,6 +3375,9 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-ax-frame") == 0) {
         return window_ax_frame_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-snapshot") == 0) {
+        return window_server_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
