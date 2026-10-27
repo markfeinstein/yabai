@@ -2853,6 +2853,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
+    TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
     TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
@@ -2883,6 +2884,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
+    TEST_ENTRY(inactive_space_launch_invalid_snapshot_is_atomic_and_retried) \
     TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
     TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
     TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \

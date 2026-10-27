@@ -2537,7 +2537,11 @@ bool window_manager_window_created_retry_uses_one_shots(struct application *appl
     return retry->one_shot_owner_pid ? window_manager_window_created_retry_owner(application, retry) != 0 : retry->one_shot_rules;
 }
 
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool *retry)
+static struct window *window_manager_create_and_add_window_with_server_record(
+    struct space_manager *sm, struct window_manager *wm, struct application *application,
+    AXUIElementRef window_ref, uint32_t window_id,
+    const struct window_server_window_record *server_record,
+    bool one_shot_rules, pid_t one_shot_owner_pid, bool *retry)
 {
     if (retry) *retry = false;
     if (one_shot_rules && !rule_retry_pending_one_shots()) {
@@ -2555,7 +2559,8 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
 #ifdef TESTS
     bool test_rule_window = window_manager_test_rule_window != NULL;
     struct window *window = test_rule_window ? window_manager_test_rule_window
-                                             : window_create(application, window_ref, window_id);
+                                             : window_create_with_server_record(application, window_ref,
+                                                                                window_id, server_record);
     if (!window) return NULL;
     if (test_rule_window) {
         window->application = application;
@@ -2568,7 +2573,8 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     char *window_role = test_rule_window ? "AXWindow" : window_role_ts(window);
     char *window_subrole = test_rule_window ? "AXStandardWindow" : window_subrole_ts(window);
 #else
-    struct window *window = window_create(application, window_ref, window_id);
+    struct window *window = window_create_with_server_record(application, window_ref,
+                                                             window_id, server_record);
     if (!window) return NULL;
     char *window_title = window_title_ts(window);
     char *window_role = window_role_ts(window);
@@ -2722,6 +2728,16 @@ out:
     return window;
 }
 
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm,
+                                                    struct application *application, AXUIElementRef window_ref,
+                                                    uint32_t window_id, bool one_shot_rules,
+                                                    pid_t one_shot_owner_pid, bool *retry)
+{
+    return window_manager_create_and_add_window_with_server_record(
+        sm, wm, application, window_ref, window_id, NULL,
+        one_shot_rules, one_shot_owner_pid, retry);
+}
+
 static void window_manager_enqueue_application_refresh(struct window_manager *wm,
                                                        struct application *application);
 
@@ -2766,51 +2782,90 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
 }
 
 #ifdef TESTS
-static bool (*window_manager_test_existing_application_window_list)(struct application *, uint32_t **, int *);
+static bool (*window_manager_test_existing_application_window_list)(
+    struct application *, uint32_t **, int *, struct window_server_snapshot **);
 static AXUIElementRef (*window_manager_test_remote_token)(CFDataRef);
 static AXError (*window_manager_test_copy_role)(AXUIElementRef, CFTypeRef *);
 static bool (*window_manager_test_role_is_window)(CFTypeRef);
 static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
 static void (*window_manager_test_cf_release)(CFTypeRef);
-static struct window *(*window_manager_test_create_window)(struct space_manager *, struct window_manager *, struct application *, AXUIElementRef, uint32_t, bool, pid_t);
+static struct window *(*window_manager_test_create_window)(
+    struct space_manager *, struct window_manager *, struct application *, AXUIElementRef,
+    uint32_t, const struct window_server_window_record *, bool, pid_t);
 #endif
 
-static bool window_manager_existing_application_window_list_with_status(struct application *application, uint32_t **window_list, int *window_count)
+static bool window_manager_existing_application_window_list_with_snapshot(
+    struct application *application, uint32_t **window_list, int *window_count,
+    struct window_server_snapshot **snapshot_out)
 {
-#ifdef TESTS
-    if (window_manager_test_existing_application_window_list) {
-        return window_manager_test_existing_application_window_list(application, window_list, window_count);
-    }
-#endif
     *window_list = NULL;
     *window_count = 0;
-    int display_count;
-    uint32_t *display_list = display_manager_active_display_list(&display_count);
-    if (!display_list) return false;
+    if (snapshot_out) *snapshot_out = NULL;
 
-    int space_count = 0;
-    uint64_t *space_list = NULL;
+    bool inventory_succeeded = false;
+    struct window_server_snapshot *snapshot = NULL;
+#ifdef TESTS
+    if (window_manager_test_existing_application_window_list) {
+        inventory_succeeded = window_manager_test_existing_application_window_list(
+            application, window_list, window_count, &snapshot);
+    } else
+#endif
+    {
+        int display_count;
+        uint32_t *display_list = display_manager_active_display_list(&display_count);
+        if (!display_list) return false;
 
-    for (int i = 0; i < display_count; ++i) {
-        int count;
-        uint64_t *list = display_space_list(display_list[i], &count);
-        if (!list) return false;
+        int space_count = 0;
+        uint64_t *space_list = NULL;
 
-        //
-        // NOTE(asmvik): display_space_list(..) uses a linear allocator,
-        // and so we only need to track the beginning of the first list along
-        // with the total number of windows that have been allocated.
-        //
+        for (int i = 0; i < display_count; ++i) {
+            int count;
+            uint64_t *list = display_space_list(display_list[i], &count);
+            if (!list) return false;
 
-        if (!space_list) space_list = list;
-        space_count += count;
+            //
+            // NOTE(asmvik): display_space_list(..) uses a linear allocator,
+            // and so we only need to track the beginning of the first list along
+            // with the total number of windows that have been allocated.
+            //
+
+            if (!space_list) space_list = list;
+            space_count += count;
+        }
+
+        if (!space_list) return display_count == 0;
+        *window_list = space_window_list_for_connection_with_snapshot(
+            space_list, space_count, application ? application->connection : 0,
+            window_count, true, &inventory_succeeded, &snapshot);
     }
 
-    if (!space_list) return display_count == 0;
-    bool inventory_succeeded = false;
-    *window_list = space_window_list_for_connection_with_status(space_list, space_count, application ? application->connection : 0,
-                                                                 window_count, true, &inventory_succeeded);
-    return inventory_succeeded;
+    if (!inventory_succeeded || *window_count < 0 || (*window_count > 0 && !*window_list)) goto fail;
+    if (*window_count > 0) {
+        if (!snapshot) goto fail;
+        for (int i = 0; i < *window_count; ++i) {
+            if (!window_server_snapshot_find(snapshot, (*window_list)[i])) goto fail;
+        }
+    }
+
+    if (snapshot_out) {
+        *snapshot_out = snapshot;
+    } else {
+        window_server_snapshot_destroy(snapshot);
+    }
+    return true;
+
+fail:
+    window_server_snapshot_destroy(snapshot);
+    *window_list = NULL;
+    *window_count = 0;
+    return false;
+}
+
+static bool window_manager_existing_application_window_list_with_status(
+    struct application *application, uint32_t **window_list, int *window_count)
+{
+    return window_manager_existing_application_window_list_with_snapshot(
+        application, window_list, window_count, NULL);
 }
 
 static bool window_manager_window_list_is_resolved(struct window_manager *wm, uint32_t *window_list, int window_count)
@@ -2878,7 +2933,9 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 
     int global_window_count;
     uint32_t *global_window_list;
-    if (!window_manager_existing_application_window_list_with_status(application, &global_window_list, &global_window_count)) {
+    struct window_server_snapshot *window_server_snapshot = NULL;
+    if (!window_manager_existing_application_window_list_with_snapshot(
+            application, &global_window_list, &global_window_count, &window_server_snapshot)) {
         window_manager_enqueue_application_refresh(wm, application);
         return false;
     }
@@ -2906,7 +2963,11 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
         if (!window_id) continue;
 
         if (!window_manager_find_window(wm, window_id)) {
-            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, one_shot_rules, one_shot_owner_pid, NULL);
+            const struct window_server_window_record *server_record =
+                window_server_snapshot_find(window_server_snapshot, window_id);
+            struct window *window = window_manager_create_and_add_window_with_server_record(
+                sm, wm, application, CFRetain(window_ref), window_id, server_record,
+                one_shot_rules, one_shot_owner_pid, NULL);
             if (window && created_windows) buf_push(*created_windows, window);
         }
     }
@@ -3005,11 +3066,20 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                             if (matched) {
                                 element_consumed = true;
 #ifdef TESTS
+                                const struct window_server_window_record *server_record =
+                                    window_server_snapshot_find(window_server_snapshot, element_wid);
                                 struct window *window = window_manager_test_create_window ?
-                                    window_manager_test_create_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid) :
-                                    window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid, NULL);
+                                    window_manager_test_create_window(sm, wm, application, element_ref, element_wid,
+                                                                      server_record, one_shot_rules, one_shot_owner_pid) :
+                                    window_manager_create_and_add_window_with_server_record(
+                                        sm, wm, application, element_ref, element_wid, server_record,
+                                        one_shot_rules, one_shot_owner_pid, NULL);
 #else
-                                struct window *window = window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid, NULL);
+                                const struct window_server_window_record *server_record =
+                                    window_server_snapshot_find(window_server_snapshot, element_wid);
+                                struct window *window = window_manager_create_and_add_window_with_server_record(
+                                    sm, wm, application, element_ref, element_wid, server_record,
+                                    one_shot_rules, one_shot_owner_pid, NULL);
 #endif
                                 if (window) {
                                     if (created_windows) buf_push(*created_windows, window);
@@ -3060,6 +3130,7 @@ probe_complete:
     }
 
     if (window_list_ref) CFRelease(window_list_ref);
+    window_server_snapshot_destroy(window_server_snapshot);
     if (created_count && created_windows) *created_count = buf_len(*created_windows);
     if (fully_resolved && finalization_ok) {
         application->inactive_probe_cursor = 0;

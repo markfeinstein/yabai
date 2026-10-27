@@ -703,6 +703,97 @@ TEST_FUNC(window_create_preserves_partial_snapshot_root_and_space_fallbacks,
     CFRelease(application.ref);
 });
 
+TEST_FUNC(window_create_reuses_matching_server_record_and_falls_back_by_field,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_create_test_begin();
+
+    struct application application = {0};
+    application.ref = AXUIElementCreateApplication(getpid());
+    AXUIElementRef other_parent = AXUIElementCreateSystemWide();
+    window_ax_snapshot_test_parent_value = other_parent;
+    window_create_test_parent_id = 91;
+    window_create_test_shadow_result = true;
+
+    struct window_server_window_record record = {
+        .id = 80,
+        .parent_id = 45,
+        .tags = UINT64_C(0x8),
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_TAGS
+    };
+    struct window *window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 80, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->is_root, false);
+        TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), false);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 81;
+    record.parent_id = 0;
+    record.tags = 0;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 81, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->is_root, true);
+        TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), true);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 82;
+    record.parent_id = 12;
+    record.tags = UINT64_C(0x8);
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 82, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) window_destroy(window);
+    TEST_CHECK(window_create_test_parent_calls, 1);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 83;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_PARENT_ID;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 83, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) window_destroy(window);
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 1);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 999;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
+                          WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
+                          WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 84, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) window_destroy(window);
+    TEST_CHECK(window_create_test_parent_calls, 1);
+    TEST_CHECK(window_create_test_shadow_calls, 1);
+
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 5);
+    CFRelease(other_parent);
+    CFRelease(application.ref);
+    window_create_test_end();
+    window_ax_snapshot_test_end();
+});
+
 static AXError window_test_observe_result;
 static int window_test_observe_call_count;
 
