@@ -160,6 +160,45 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
                     "validate yabai.jsonc and inspect yabairc for window_animation_duration");
     }
 
+    switch (facts->window_management.read_status) {
+    case WM_BRIDGE_READ_OK: {
+        char mechanism[192];
+        snprintf(mechanism, sizeof(mechanism),
+                 "private bridge ABI matched and the read-only topology query returned %u managed-display record%s",
+                 facts->window_management.managed_display_record_count,
+                 facts->window_management.managed_display_record_count == 1 ? "" : "s");
+        doctor_emit(stream, "PASS", "WindowManagement", mechanism, "no action required");
+    } break;
+    case WM_BRIDGE_READ_ABI_MISMATCH:
+        doctor_emit(stream, "WARN", "WindowManagement",
+                    "the optional private bridge class hierarchy or method encoding does not match the validated ABI",
+                    "do not use bridged operations on this macOS build");
+        break;
+    case WM_BRIDGE_READ_FAILED:
+        doctor_emit(stream, "WARN", "WindowManagement",
+                    "the validated read-only topology operation returned no usable property-list array",
+                    "do not use bridged operations on this macOS build");
+        break;
+    case WM_BRIDGE_READ_UNAVAILABLE:
+    default:
+        doctor_emit(stream, "UNKNOWN", "WindowManagement",
+                    "the optional private bridge framework, class, or selector is unavailable",
+                    "continue using existing fallbacks");
+        break;
+    }
+
+    const struct wm_bridge_capabilities *wm = &facts->window_management.capabilities;
+    if (wm->create_space_metadata && wm->destroy_space_metadata && wm->move_space_metadata &&
+        wm->set_current_space_metadata && wm->create_space_result_metadata) {
+        doctor_emit(stream, "UNKNOWN", "WM Space mutation",
+                    "create, destroy, reorder, and focus operation metadata is present; mutation was not attempted",
+                    "validate Dock and Mission Control coherence only in a disposable VM");
+    } else {
+        doctor_emit(stream, "UNKNOWN", "WM Space mutation",
+                    "one or more create, destroy, reorder, or focus operation ABIs are unavailable",
+                    "retain the existing scripting-addition and gesture paths");
+    }
+
     if (facts->arm64e_applicable == DOCTOR_PROBE_YES) {
         if (facts->arm64e_bootarg == DOCTOR_PROBE_YES) {
             doctor_emit(stream, "PASS", "arm64e boot arg", "kern.bootargs contains -arm64e_preview_abi",
@@ -971,6 +1010,12 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
         size_t bootargs_size = sizeof(bootargs) - 1;
         if (sysctlbyname("kern.bootargs", bootargs, &bootargs_size, NULL, 0) == 0) facts->arm64e_bootarg = doctor_classify_arm64e_bootargs(bootargs, bootargs_size);
         else facts->arm64e_bootarg = DOCTOR_PROBE_UNKNOWN;
+    }
+
+    if (!window_management_bridge_diagnose_readonly(&facts->window_management)) {
+        facts->window_management = (struct wm_bridge_diagnostic) {
+            .read_status = WM_BRIDGE_READ_UNAVAILABLE
+        };
     }
 
     if (identity_resolved) {
