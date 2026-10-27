@@ -1835,8 +1835,17 @@ struct window *window_manager_find_window_on_space_by_rank_filtering_window(stru
     return result;
 }
 
+#ifdef TESTS
+static bool (*window_manager_test_connection_is_jankyborders)(int);
+#endif
+
 static inline bool window_manager_window_connection_is_jankyborders(int window_cid)
 {
+#ifdef TESTS
+    if (window_manager_test_connection_is_jankyborders) {
+        return window_manager_test_connection_is_jankyborders(window_cid);
+    }
+#endif
     static char process_name[PROC_PIDPATHINFO_MAXSIZE];
 
     pid_t window_pid = 0;
@@ -1847,20 +1856,36 @@ static inline bool window_manager_window_connection_is_jankyborders(int window_c
     return strcmp(process_name, "borders") == 0;
 }
 
+static bool window_manager_legacy_hit_test(CGPoint point, uint32_t filter_wid, int flags,
+                                           uint32_t *window_id, int *window_cid)
+{
+    struct window_server_hit_test_result result;
+    window_server_hit_test_legacy(&(struct window_server_hit_test_request) {
+        .connection = g_connection,
+        .filter_window_id = filter_wid,
+        .flags = flags,
+        .reserved = 0,
+        .screen_point = point
+    }, &result);
+    if (!result.invoked || result.status != kCGErrorSuccess) return false;
+    *window_id = result.window_id;
+    *window_cid = result.window_connection;
+    return true;
+}
+
 struct window *window_manager_find_window_at_point_filtering_window(struct window_manager *wm, CGPoint point, uint32_t filter_wid)
 {
-    CGPoint window_point = CGPointZero;
     uint32_t window_id = 0;
     int window_cid = 0;
 
-    if (SLSFindWindowAndOwner(g_connection, filter_wid, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+    if (!window_manager_legacy_hit_test(point, filter_wid, -1, &window_id, &window_cid)) return NULL;
     if (g_connection == window_cid &&
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
 
     if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        if (!window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
         if (g_connection == window_cid &&
-            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+            !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
     }
 
     return window_manager_find_window(wm, window_id);
@@ -1868,18 +1893,17 @@ struct window *window_manager_find_window_at_point_filtering_window(struct windo
 
 struct window *window_manager_find_window_at_point(struct window_manager *wm, CGPoint point)
 {
-    CGPoint window_point = CGPointZero;
     uint32_t window_id = 0;
     int window_cid = 0;
 
-    if (SLSFindWindowAndOwner(g_connection, 0, 1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+    if (!window_manager_legacy_hit_test(point, 0, 1, &window_id, &window_cid)) return NULL;
     if (g_connection == window_cid &&
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
 
     if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+        if (!window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
         if (g_connection == window_cid &&
-            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
+            !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
     }
 
     return window_manager_find_window(wm, window_id);
