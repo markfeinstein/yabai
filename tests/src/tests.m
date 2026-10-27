@@ -110,6 +110,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "event_queue.c"
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
+#include "snapshot_reuse.c"
 #include "message.c"
 #include "declarative_config.c"
 #include "declarative_modes.c"
@@ -3019,6 +3020,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(view_padding_sum_widens_before_addition)         \
     TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
+    TEST_ENTRY(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks) \
+    TEST_ENTRY(window_visibility_handlers_query_order_before_snapshot_diagnostics) \
     TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
     TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
     TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
@@ -3393,6 +3396,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-query-snapshot") == 0) {
         return window_query_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-snapshot-reuse") == 0) {
+        return snapshot_reuse_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
