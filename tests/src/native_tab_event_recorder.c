@@ -73,6 +73,13 @@ static bool native_tab_test_jsonl_is_parseable(const char *output)
     return valid;
 }
 
+static size_t native_tab_test_count(const char *text, const char *needle)
+{
+    size_t count = 0, length = strlen(needle);
+    for (const char *match = text; (match = strstr(match, needle)); match += length) ++count;
+    return count;
+}
+
 static bool native_tab_test_switch_case(bool reversed, char **output)
 {
     struct native_tab_test_trace trace;
@@ -134,6 +141,64 @@ TEST_FUNC(native_tab_event_recorder_pairs_both_switch_event_orders_without_ident
         }
         free(output);
     }
+})
+
+TEST_FUNC(native_tab_event_recorder_separates_quiescent_inventory_episodes_and_tracks_reappearance,
+{
+    struct native_tab_window_fact a = native_tab_test_fact(610001, 0, 7, 1, 0, 0, 100, 100, 0);
+    struct native_tab_window_fact b = native_tab_test_fact(610002, 0, 7, 1, 0, 0, 100, 100, 1);
+    struct native_tab_window_fact c = native_tab_test_fact(610003, 0, 7, 1, 0, 0, 100, 100, 2);
+    struct native_tab_test_trace trace;
+    struct native_tab_inventory inventory;
+
+    TEST_CHECK(native_tab_test_begin(&trace, "split-transition"), true);
+    inventory = native_tab_test_inventory(&a, 1, true);
+    TEST_CHECK(native_tab_recorder_baseline(&trace.recorder, trace.start, &inventory), true);
+    inventory = native_tab_test_inventory(NULL, 0, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(100000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(200000000), &inventory), true);
+    inventory = native_tab_test_inventory(&b, 1, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(250000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(350000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(450000000), &inventory), true);
+    TEST_CHECK(trace.recorder.resolution_count, 1U);
+    TEST_CHECK(strstr(trace.output, "\"outcome\":\"unexplained-one-to-one\"") != NULL, true);
+    TEST_CHECK(native_tab_test_end(&trace, 500), true);
+    free(trace.output);
+
+    TEST_CHECK(native_tab_test_begin(&trace, "separated-reappearance"), true);
+    inventory = native_tab_test_inventory(&a, 1, true);
+    TEST_CHECK(native_tab_recorder_baseline(&trace.recorder, trace.start, &inventory), true);
+    inventory = native_tab_test_inventory(&b, 1, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(100000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(200000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(300000000), &inventory), true);
+    TEST_CHECK(trace.recorder.resolution_count, 1U);
+    inventory = native_tab_test_inventory(&a, 1, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(700000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(800000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(900000000), &inventory), true);
+    TEST_CHECK(trace.recorder.resolution_count, 2U);
+    TEST_CHECK(native_tab_test_count(trace.output, "\"outcome\":\"unexplained-one-to-one\""), 2U);
+    TEST_CHECK(strstr(trace.output, "\"known_id_reappeared\":true") != NULL, true);
+    TEST_CHECK(native_tab_test_end(&trace, 950), true);
+    TEST_CHECK(native_tab_test_jsonl_is_parseable(trace.output), true);
+    free(trace.output);
+
+    TEST_CHECK(native_tab_test_begin(&trace, "two-actions"), true);
+    inventory = native_tab_test_inventory(&a, 1, true);
+    TEST_CHECK(native_tab_recorder_baseline(&trace.recorder, trace.start, &inventory), true);
+    inventory = native_tab_test_inventory(&b, 1, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(100000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(200000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(300000000), &inventory), true);
+    inventory = native_tab_test_inventory(&c, 1, true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(700000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(800000000), &inventory), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder, trace.start + UINT64_C(900000000), &inventory), true);
+    TEST_CHECK(trace.recorder.resolution_count, 2U);
+    TEST_CHECK(native_tab_test_end(&trace, 950), true);
+    free(trace.output);
 })
 
 TEST_FUNC(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle_explanations,
