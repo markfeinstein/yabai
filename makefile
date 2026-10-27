@@ -53,7 +53,7 @@ DEPLOY_OWNER_UID ?= 0
 DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan window-server-tag-corpus install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-arm64 test-x86_64 test-architectures test-all syntax \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
@@ -100,6 +100,9 @@ test-benchmark-window-server-tag-corpus:
 
 test-benchmark-window-server-classifier:
 	$(MAKE) -C tests benchmark-window-server-classifier
+
+test-benchmark-window-constraints:
+	$(MAKE) -C tests benchmark-window-constraints
 
 test-arm64:
 	$(MAKE) -C tests arch-arm64

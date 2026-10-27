@@ -97,6 +97,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "area.c"
 #include "display.c"
 #include "window.c"
+#include "window_constraints.c"
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"
 #include "window_server_snapshot.c"
@@ -2868,6 +2869,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
     TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
+    TEST_ENTRY(window_constraints_normalize_validity_and_decoration_without_policy) \
+    TEST_ENTRY(window_constraints_reject_invalid_contradictory_and_out_of_range_fields) \
+    TEST_ENTRY(window_constraints_tolerance_and_absent_ax_are_explicit) \
     TEST_ENTRY(accessibility_preferences_publish_all_combinations_and_missing_readers) \
     TEST_ENTRY(accessibility_preferences_live_updates_are_coherent_and_teardown_is_final) \
     TEST_ENTRY(accessibility_preferences_observer_failure_preserves_initial_snapshot) \
@@ -2875,6 +2879,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
+    TEST_ENTRY(window_server_snapshot_constraints_are_optional_owned_pod) \
     TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
     TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
     TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
@@ -2968,6 +2973,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
+    TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
@@ -3440,6 +3446,9 @@ int main(int argc, char **argv)
         return (window_server_classifier_benchmark_run() &
                 window_server_classifier_comparison_benchmark_run())
              ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-constraints") == 0) {
+        return window_constraints_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

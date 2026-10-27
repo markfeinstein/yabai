@@ -2432,6 +2432,7 @@ bool window_manager_replace_window_ref(struct window_manager *wm, struct window 
 #endif
     if (window->ref) CFRelease(window->ref);
     window->ref = window_ref;
+    window_constraints_invalidate(&window->constraints);
 
     bool retry = false;
 #ifdef TESTS
@@ -2452,6 +2453,14 @@ bool window_manager_replace_window_ref(struct window_manager *wm, struct window 
     struct view *view = window_manager_find_managed_window(wm, window);
     if (view) space_manager_flush_tiled_window(view, window);
     return true;
+}
+
+void window_manager_invalidate_window_constraints(struct window_manager *wm)
+{
+    if (!wm) return;
+    table_for (struct window *window, wm->window, {
+        if (window) window_constraints_invalidate(&window->constraints);
+    });
 }
 
 bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window)

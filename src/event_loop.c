@@ -2194,6 +2194,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     }
 
     if (was_fullscreen != is_fullscreen) {
+        window_constraints_invalidate(&window->constraints);
         if (window_ax_can_move(window)) {
             window_set_flag(window, WINDOW_MOVABLE);
         } else {
@@ -2399,6 +2400,7 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
     if (g_mouse_state.native_resize.window_id == window->id) native_resize_clear(&g_mouse_state);
     managed_window_correction_clear(window);
     window_set_flag(window, WINDOW_MINIMIZE);
+    window_constraints_invalidate(&window->constraints);
 
     if (window_ax_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
@@ -2450,6 +2452,7 @@ static EVENT_HANDLER(WINDOW_DEMINIMIZED)
     }
 
     window_clear_flag(window, WINDOW_MINIMIZE);
+    window_constraints_invalidate(&window->constraints);
 
     if (window_ax_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
@@ -2843,6 +2846,7 @@ static EVENT_HANDLER(DISPLAY_ADDED)
         event_loop_topology_lifecycle_failed();
         return;
     }
+    window_manager_invalidate_window_constraints(&g_window_manager);
     event_signal_push(SIGNAL_DISPLAY_ADDED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();
@@ -2858,6 +2862,7 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
         event_loop_topology_lifecycle_failed();
         return;
     }
+    window_manager_invalidate_window_constraints(&g_window_manager);
     event_signal_push(SIGNAL_DISPLAY_REMOVED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();
@@ -2868,6 +2873,7 @@ static EVENT_HANDLER(DISPLAY_MOVED)
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid(&g_space_manager);
+    window_manager_invalidate_window_constraints(&g_window_manager);
     event_signal_push(SIGNAL_DISPLAY_MOVED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();
@@ -2878,6 +2884,7 @@ static EVENT_HANDLER(DISPLAY_RESIZED)
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid_for_display(&g_space_manager, did);
+    window_manager_invalidate_window_constraints(&g_window_manager);
     event_signal_push(SIGNAL_DISPLAY_RESIZED, context);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY);
     declarative_configuration_request_reconcile();

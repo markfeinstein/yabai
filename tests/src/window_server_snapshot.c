@@ -5,6 +5,7 @@ struct window_server_snapshot_fake_record
     int level;
     uint64_t tags;
     uint64_t attributes;
+    struct window_constraint_observation constraints;
 };
 
 struct window_server_snapshot_fake_state
@@ -26,6 +27,8 @@ struct window_server_snapshot_fake_state
     int level_calls;
     int tags_calls;
     int attributes_calls;
+    int constraints_calls;
+    bool constraints_available;
     int query_releases;
     int iterator_releases;
     int unknown_releases;
@@ -161,6 +164,18 @@ static uint64_t window_server_snapshot_fake_tags(CFTypeRef iterator)
     return record ? record->tags : 0;
 }
 
+static bool window_server_snapshot_fake_constraints(
+    CFTypeRef iterator, struct window_constraint_observation *observation)
+{
+    (void) iterator;
+    ++window_server_snapshot_fake.constraints_calls;
+    if (!window_server_snapshot_fake.constraints_available || !observation) return false;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record) return false;
+    *observation = record->constraints;
+    return true;
+}
+
 static uint64_t window_server_snapshot_fake_attributes(CFTypeRef iterator)
 {
     (void) iterator;
@@ -193,6 +208,7 @@ static const struct window_server_snapshot_backend window_server_snapshot_fake_b
     .iterator_level = window_server_snapshot_fake_level,
     .iterator_tags = window_server_snapshot_fake_tags,
     .iterator_attributes = window_server_snapshot_fake_attributes,
+    .iterator_constraints = window_server_snapshot_fake_constraints,
     .release = window_server_snapshot_fake_release,
     .allocate = window_server_snapshot_fake_allocate,
     .deallocate = window_server_snapshot_fake_deallocate
@@ -211,7 +227,12 @@ static void window_server_snapshot_fake_begin(int count)
             .parent_id = i ? 500u + (uint32_t) i : 0,
             .level = i - 2,
             .tags = UINT64_C(0x1000000000000000) | (uint64_t) i,
-            .attributes = (uint64_t) (i % 4)
+            .attributes = (uint64_t) (i % 4),
+            .constraints = {
+                .minimum = { 100 + i, 80 + i },
+                .maximum = { 2000 + i, 1200 + i },
+                .current = { 800 + i, 600 + i }
+            }
         };
     }
     window_server_snapshot_test_backend = &window_server_snapshot_fake_backend;
@@ -426,6 +447,44 @@ TEST_FUNC(window_server_snapshot_allocation_failures_are_atomic_and_generation_i
     window_server_snapshot_fake_end();
 });
 
+TEST_FUNC(window_server_snapshot_constraints_are_optional_owned_pod,
+{
+    window_server_snapshot_fake_begin(2);
+    window_server_snapshot_fake.constraints_available = true;
+    window_server_snapshot_fake.records[1].constraints.maximum = CGSizeMake(50, 40);
+    CFArrayRef ids = window_server_snapshot_fake_window_ids(2);
+    struct window_server_snapshot *snapshot = window_server_snapshot_create(1, ids, 2);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields & WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS,
+                   WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS);
+        TEST_CHECK(snapshot->records[0].constraints.minimum.width, 100.0);
+        TEST_CHECK(snapshot->records[0].constraints.current.height, 600.0);
+        TEST_CHECK(snapshot->records[1].constraints.maximum.width, 50.0);
+        TEST_CHECK(snapshot->records[1].constraints.minimum.width, 101.0);
+    }
+    TEST_CHECK(window_server_snapshot_fake.constraints_calls, 2);
+    window_server_snapshot_destroy(snapshot);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    window_server_snapshot_fake_begin(1);
+    struct window_server_snapshot_backend without_constraints = window_server_snapshot_fake_backend;
+    without_constraints.iterator_constraints = NULL;
+    window_server_snapshot_test_backend = &without_constraints;
+    ids = window_server_snapshot_fake_window_ids(1);
+    snapshot = window_server_snapshot_create(1, ids, 1);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields & WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS, 0ULL);
+    }
+    TEST_CHECK(window_server_snapshot_fake.constraints_calls, 0);
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+});
+
 static int window_server_snapshot_benchmark_compare_u64(const void *left, const void *right)
 {
     uint64_t a = *(const uint64_t *) left;
@@ -433,13 +492,14 @@ static int window_server_snapshot_benchmark_compare_u64(const void *left, const 
     return (a > b) - (a < b);
 }
 
-static bool window_server_snapshot_benchmark_case(int window_count)
+static bool window_server_snapshot_benchmark_case(int window_count, bool constraints_available)
 {
     enum { sample_count = 20, iterations_per_sample = 200 };
     uint64_t elapsed[sample_count];
     uint64_t checksum = 0;
     int successes = 0;
     window_server_snapshot_fake_begin(window_count);
+    window_server_snapshot_fake.constraints_available = constraints_available;
     CFArrayRef ids = window_server_snapshot_fake_window_ids(window_count);
 
     for (int sample = 0; sample < sample_count; ++sample) {
@@ -465,16 +525,18 @@ static bool window_server_snapshot_benchmark_case(int window_count)
                              window_server_snapshot_fake.tags_calls +
                              window_server_snapshot_fake.attributes_calls;
     printf("{\"case\":\"window-server-snapshot\",\"windows\":%d,\"iterations\":%d,"
-           "\"p50_ns\":%llu,\"p95_ns\":%llu,\"query_calls\":%d,"
+           "\"constraints_available\":%s,\"p50_ns\":%llu,\"p95_ns\":%llu,\"query_calls\":%d,"
            "\"iterator_copy_calls\":%d,\"advance_calls\":%d,\"field_getter_calls\":%d,"
+           "\"constraint_getter_calls\":%d,"
            "\"peak_bytes\":%zu,\"retained_bytes\":%zu,\"checksum\":%llu}\n",
-           window_count, total,
+           window_count, total, constraints_available ? "true" : "false",
            (unsigned long long) elapsed[sample_count / 2],
            (unsigned long long) elapsed[p95_index],
            window_server_snapshot_fake.query_calls,
            window_server_snapshot_fake.iterator_copy_calls,
            window_server_snapshot_fake.iterator_advance_calls,
            field_getter_calls,
+           window_server_snapshot_fake.constraints_calls,
            window_server_snapshot_allocator.peak_bytes,
            window_server_snapshot_allocator.current_bytes,
            (unsigned long long) checksum);
@@ -487,6 +549,7 @@ static bool window_server_snapshot_benchmark_case(int window_count)
                  window_server_snapshot_fake.iterator_count_calls == total &&
                  window_server_snapshot_fake.iterator_advance_calls == total * (window_count + 1) &&
                  field_getter_calls == total * window_count * 5 &&
+                 window_server_snapshot_fake.constraints_calls == total * window_count &&
                  window_server_snapshot_fake.query_releases == total &&
                  window_server_snapshot_fake.iterator_releases == total &&
                  window_server_snapshot_allocator.allocation_attempts == (size_t) total * 2 &&
@@ -503,8 +566,11 @@ static bool window_server_snapshot_benchmark_case(int window_count)
 static bool window_server_snapshot_benchmark_run(void)
 {
     bool valid = true;
-    valid &= window_server_snapshot_benchmark_case(10);
-    valid &= window_server_snapshot_benchmark_case(50);
-    valid &= window_server_snapshot_benchmark_case(200);
+    valid &= window_server_snapshot_benchmark_case(10, false);
+    valid &= window_server_snapshot_benchmark_case(50, false);
+    valid &= window_server_snapshot_benchmark_case(200, false);
+    valid &= window_server_snapshot_benchmark_case(10, true);
+    valid &= window_server_snapshot_benchmark_case(50, true);
+    valid &= window_server_snapshot_benchmark_case(200, true);
     return valid;
 }
