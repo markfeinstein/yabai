@@ -25,6 +25,7 @@ TSAN_BIN       = $(BUILD_PATH)/tsan/yabai
 TAG_CORPUS_BIN = $(BUILD_PATH)/debug/window-server-tag-corpus
 GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-server-geometry-probe
 NATIVE_TAB_RECORDER_BIN = $(BUILD_PATH)/debug/native-tab-event-recorder
+NATIVE_TILE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/native-tile-diagnostic
 CORNER_GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-corner-geometry-probe
 YABAI_COMMON   = ./src/manifest.m
 YABAI_DEPS     = $(filter-out ./src/menu_bar_model.c ./src/menu_bar_model.h,$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
@@ -36,6 +37,7 @@ OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s 
 TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/misc/extern.h makefile
 NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
+NATIVE_TILE_DIAGNOSTIC_DEPS = scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c scripts/native_tile_diagnostic_core.h src/window_management_bridge.m src/window_management_bridge.h makefile
 CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_corner_geometry.c src/window_corner_geometry.h src/misc/extern.h makefile
 OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
 XCRUN          ?= xcrun
@@ -58,7 +60,7 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan window-server-tag-corpus window-server-geometry-probe window-corner-geometry-probe native-tab-event-recorder install man man-check man-contract icon archive publish sign deploy \
+.PHONY: all debug release asan tsan window-server-tag-corpus window-server-geometry-probe window-corner-geometry-probe native-tab-event-recorder native-tile-diagnostic install man man-check man-contract icon archive publish sign deploy \
         test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
@@ -74,6 +76,7 @@ window-server-tag-corpus: $(TAG_CORPUS_BIN)
 window-server-geometry-probe: $(GEOMETRY_PROBE_BIN)
 window-corner-geometry-probe: $(CORNER_GEOMETRY_PROBE_BIN)
 native-tab-event-recorder: $(NATIVE_TAB_RECORDER_BIN)
+native-tile-diagnostic: $(NATIVE_TILE_DIAGNOSTIC_BIN)
 # Historical "install" builds the optimized artifact; it does not copy files.
 install: release
 
@@ -151,6 +154,10 @@ $(CORNER_GEOMETRY_PROBE_BIN): $(CORNER_GEOMETRY_PROBE_DEPS)
 $(NATIVE_TAB_RECORDER_BIN): $(NATIVE_TAB_RECORDER_DEPS)
 	@mkdir -p '$(dir $@)'
 	$(XCRUN) clang scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(NATIVE_TILE_DIAGNOSTIC_BIN): $(NATIVE_TILE_DIAGNOSTIC_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c src/window_management_bridge.m -o '$@' $(COMMON_FLAGS) -O0 -framework Foundation
 
 # Generate both native scripting-addition artifacts as private temporaries,
 # then publish only one combined compiler input. Explicit source and makefile

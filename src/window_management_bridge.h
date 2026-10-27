@@ -25,6 +25,26 @@ struct wm_bridge_capabilities
     bool create_space_result_metadata;
 };
 
+enum wm_tile_membership_status
+{
+    WM_TILE_MEMBERSHIP_UNAVAILABLE,
+    WM_TILE_MEMBERSHIP_ABI_MISMATCH,
+    WM_TILE_MEMBERSHIP_QUERY_FAILED,
+    WM_TILE_MEMBERSHIP_PARTIAL,
+    WM_TILE_MEMBERSHIP_OK
+};
+
+struct wm_tile_membership_diagnostic
+{
+    enum wm_tile_membership_status status;
+    uint32_t managed_display_count;
+    uint32_t managed_space_count;
+    uint32_t spaces_queried;
+    uint32_t tiled_parent_space_count;
+    uint32_t tile_space_count;
+    uint32_t failed_query_count;
+};
+
 struct wm_bridge_diagnostic
 {
     enum wm_bridge_read_status read_status;
@@ -36,5 +56,7 @@ struct wm_bridge_diagnostic
  * private Objective-C ABI. Mutation classes are metadata-only and are never
  * allocated or dispatched. */
 bool window_management_bridge_diagnose_readonly(struct wm_bridge_diagnostic *diagnostic);
+bool window_management_bridge_diagnose_tile_membership_readonly(
+    struct wm_tile_membership_diagnostic *diagnostic);
 
 #endif
