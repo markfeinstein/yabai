@@ -100,6 +100,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"
 #include "window_server_snapshot.c"
+#include "window_server_tags.c"
 #include "space_window_inventory.c"
 #include "view.c"
 #include "accordion.c"
@@ -2872,7 +2873,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
+    TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
+    TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
     TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
+    TEST_ENTRY(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle) \
     TEST_ENTRY(space_window_inventory_preserves_duplicates_empty_success_and_independent_output) \
     TEST_ENTRY(space_window_inventory_fails_closed_for_candidates_snapshots_and_required_fields) \
     TEST_ENTRY(space_window_inventory_fixed_seed_matches_frozen_legacy_filter) \
