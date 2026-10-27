@@ -136,6 +136,30 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
                     "use yabai --check-config for JSONC schema validation");
     }
 
+    if (facts->screen_capture_required == DOCTOR_PROBE_NO) {
+        doctor_emit(stream, "PASS", "screen recording",
+                    "selected static configuration does not enable capture-dependent features",
+                    "no action required");
+    } else if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
+               facts->screen_capture_access == DOCTOR_PROBE_YES) {
+        doctor_emit(stream, "PASS", "screen recording",
+                    "configured window animations are authorized by CGPreflightScreenCaptureAccess",
+                    "no action required");
+    } else if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
+               facts->screen_capture_access == DOCTOR_PROBE_NO) {
+        doctor_emit(stream, "WARN", "screen recording",
+                    "configured window animations require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized",
+                    "enable yabai in System Settings > Privacy & Security > Screen Recording, then restart yabai");
+    } else if (facts->screen_capture_required == DOCTOR_PROBE_YES) {
+        doctor_emit(stream, "UNKNOWN", "screen recording",
+                    "configured window animations require capture but nonprompting preflight is unavailable",
+                    "verify Screen Recording permission manually");
+    } else {
+        doctor_emit(stream, "UNKNOWN", "screen recording",
+                    "static configuration cannot determine whether capture-dependent features are enabled",
+                    "validate yabai.jsonc and inspect yabairc for window_animation_duration");
+    }
+
     if (facts->arm64e_applicable == DOCTOR_PROBE_YES) {
         if (facts->arm64e_bootarg == DOCTOR_PROBE_YES) {
             doctor_emit(stream, "PASS", "arm64e boot arg", "kern.bootargs contains -arm64e_preview_abi",
@@ -227,6 +251,7 @@ struct doctor_collect_ops {
     int (*open_fn)(const char *, int);
     int (*fstat_fn)(int, struct stat *);
     ssize_t (*read_fn)(int, void *, size_t);
+    enum doctor_probe (*screen_capture_preflight_fn)(void);
     int (*close_fn)(int);
 };
 
@@ -263,12 +288,21 @@ static enum doctor_probe doctor_access_as_identity(const struct doctor_identity 
     }
 }
 
+static enum doctor_probe doctor_screen_capture_preflight(void)
+{
+    if (@available(macOS 10.15, *)) {
+        return CGPreflightScreenCaptureAccess() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
+    }
+    return DOCTOR_PROBE_UNKNOWN;
+}
+
 static struct doctor_collect_ops doctor_production_ops = {
     .getuid_fn = getuid, .getpwuid_fn = getpwuid, .getenv_fn = getenv,
     .stat_fn = stat, .lstat_fn = lstat, .access_fn = access,
     .target_access_fn = doctor_access_as_identity,
     .getgrouplist_fn = getgrouplist, .realpath_fn = realpath,
-    .open_fn = doctor_open_readonly, .fstat_fn = fstat, .read_fn = read, .close_fn = close
+    .open_fn = doctor_open_readonly, .fstat_fn = fstat, .read_fn = read, .close_fn = close,
+    .screen_capture_preflight_fn = doctor_screen_capture_preflight
 };
 
 static bool doctor_parse_uid(const char *text, uid_t *uid)
@@ -692,6 +726,52 @@ static __attribute__((unused)) enum doctor_probe doctor_classify_arm64e_bootargs
     return DOCTOR_PROBE_NO;
 }
 
+static enum doctor_probe doctor_native_screen_capture_requirement(
+    const struct doctor_collect_ops *ops, const struct doctor_identity *identity,
+    const char *path, enum doctor_config_result result)
+{
+    if (result == DOCTOR_CONFIG_ABSENT) return DOCTOR_PROBE_NO;
+    if (result != DOCTOR_CONFIG_OK || !path) return DOCTOR_PROBE_UNKNOWN;
+
+    char canonical[PATH_MAX];
+    if (doctor_target_path_traversal(ops, identity, path, canonical, NULL) != DOCTOR_PROBE_YES) {
+        return DOCTOR_PROBE_UNKNOWN;
+    }
+    struct stat st;
+    if (ops->stat_fn(canonical, &st) != 0 || !S_ISREG(st.st_mode) ||
+        doctor_target_permission(ops, identity, canonical, &st, R_OK) != DOCTOR_PROBE_YES) {
+        return DOCTOR_PROBE_UNKNOWN;
+    }
+
+    NSData *data = nil;
+    if (doctor_read_regular_snapshot(ops, canonical, &st, DECLARATIVE_CONFIG_MAX_FILE_SIZE,
+                                     &data, NULL) != DOCTOR_PROBE_YES) {
+        return DOCTOR_PROBE_UNKNOWN;
+    }
+
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    if (!declarative_config_parse_bytes([data bytes], [data length], path, &model, &error) || !model) {
+        declarative_config_destroy(model);
+        return DOCTOR_PROBE_UNKNOWN;
+    }
+
+    struct declarative_value animation = model->config[DECLARATIVE_CONFIG_ANIMATION_DURATION];
+    enum doctor_probe required = animation.present && animation.real > 0.0
+                               ? DOCTOR_PROBE_YES
+                               : DOCTOR_PROBE_NO;
+    declarative_config_destroy(model);
+    return required;
+}
+
+static enum doctor_probe doctor_screen_capture_requirement(enum doctor_probe native_requirement,
+                                                            enum doctor_config_result legacy_result)
+{
+    if (native_requirement == DOCTOR_PROBE_YES) return DOCTOR_PROBE_YES;
+    if (native_requirement == DOCTOR_PROBE_UNKNOWN) return DOCTOR_PROBE_UNKNOWN;
+    return legacy_result == DOCTOR_CONFIG_ABSENT ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
+}
+
 static void doctor_collect_paths(struct doctor_facts *facts, const struct doctor_collect_ops *ops,
                                  const struct doctor_identity *identity,
                                  const char *intended_executable)
@@ -703,12 +783,19 @@ static void doctor_collect_paths(struct doctor_facts *facts, const struct doctor
     bool legacy_dot_ok = doctor_format(legacy_dot, sizeof(legacy_dot), "%s/.yabairc", identity->home);
 
     enum doctor_config_result native_result = DOCTOR_CONFIG_ABSENT;
+    const char *native_path = NULL;
     if (xdg && xdg[0] == '/') {
-        if (!doctor_format(native_xdg, sizeof(native_xdg), "%s/yabai/yabai.jsonc", xdg)) native_result = DOCTOR_CONFIG_UNKNOWN;
-        else native_result = doctor_config_candidate(ops, identity, native_xdg, false);
+        if (!doctor_format(native_xdg, sizeof(native_xdg), "%s/yabai/yabai.jsonc", xdg)) {
+            native_result = DOCTOR_CONFIG_UNKNOWN;
+        } else {
+            native_path = native_xdg;
+            native_result = doctor_config_candidate(ops, identity, native_xdg, false);
+        }
     }
     if (native_result == DOCTOR_CONFIG_ABSENT) {
-        native_result = native_home_ok ? doctor_config_candidate(ops, identity, native_home, false) : DOCTOR_CONFIG_UNKNOWN;
+        native_path = native_home_ok ? native_home : NULL;
+        native_result = native_home_ok ? doctor_config_candidate(ops, identity, native_home, false)
+                                       : DOCTOR_CONFIG_UNKNOWN;
     }
 
     enum doctor_config_result legacy_result = DOCTOR_CONFIG_ABSENT;
@@ -727,6 +814,15 @@ static void doctor_collect_paths(struct doctor_facts *facts, const struct doctor
     facts->config_readable = DOCTOR_PROBE_YES;
     doctor_merge_config_result(facts, native_result);
     doctor_merge_config_result(facts, legacy_result);
+
+    enum doctor_probe native_capture = doctor_native_screen_capture_requirement(
+        ops, identity, native_path, native_result);
+    facts->screen_capture_required = doctor_screen_capture_requirement(native_capture, legacy_result);
+    facts->screen_capture_access = DOCTOR_PROBE_UNKNOWN;
+    if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
+        ops->screen_capture_preflight_fn) {
+        facts->screen_capture_access = ops->screen_capture_preflight_fn();
+    }
 
     char path[PATH_MAX];
     if (doctor_format(path, sizeof(path), "%s/Library/LaunchAgents/com.asmvik.yabai.plist", identity->home)) {
@@ -882,7 +978,9 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
     } else {
         facts->identity = DOCTOR_PROBE_UNKNOWN;
         facts->service_plist = DOCTOR_SERVICE_UNKNOWN;
-        facts->legacy_service_collision = facts->config_present = facts->config_readable = facts->sa_socket = DOCTOR_PROBE_UNKNOWN;
+        facts->legacy_service_collision = facts->config_present = facts->config_readable =
+            facts->screen_capture_required = facts->screen_capture_access = facts->sa_socket =
+                DOCTOR_PROBE_UNKNOWN;
     }
 
     facts->sa_install = doctor_inspect_sa(&doctor_production_ops,
