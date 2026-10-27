@@ -100,6 +100,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_constraints.c"
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"
+#include "window_corner_geometry.c"
 #include "window_server_snapshot.c"
 #include "window_server_tags.c"
 #include "window_server_classifier.c"
@@ -2877,10 +2878,15 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(accessibility_preferences_publish_all_combinations_and_missing_readers) \
     TEST_ENTRY(accessibility_preferences_live_updates_are_coherent_and_teardown_is_final) \
     TEST_ENTRY(accessibility_preferences_observer_failure_preserves_initial_snapshot) \
+    TEST_ENTRY(window_corner_geometry_rejects_nonarrays_counts_and_nonnumbers) \
+    TEST_ENTRY(window_corner_geometry_rejects_negative_nan_and_infinity) \
+    TEST_ENTRY(window_corner_geometry_preserves_zero_equal_and_asymmetric_source_order) \
+    TEST_ENTRY(window_corner_geometry_capability_is_resolved_but_production_paths_are_disabled) \
     TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
+    TEST_ENTRY(window_server_snapshot_corner_geometry_is_optional_owned_pod) \
     TEST_ENTRY(window_server_snapshot_constraints_are_optional_owned_pod) \
     TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
     TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
@@ -3119,6 +3125,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \
     TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
     TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
+    TEST_ENTRY(animation_replacement_proxy_preserves_corner_geometry) \
     TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
     TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
     TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \

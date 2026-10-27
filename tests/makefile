@@ -128,6 +128,7 @@ syntax:
 	$(CC) -fsyntax-only ../scripts/native_tab_event_recorder_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_classifier.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_constraints.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../src/window_corner_geometry.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_hit_test.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ./src/public_header_compile.c -std=c11 -Wall -Wextra -Werror
 

@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "declarative_space_identity.h"
+#include "window_corner_geometry.h"
 
 #define AX_ABS(a, b) (((a) - (b) < 0) ? (((a) - (b)) * -1) : ((a) - (b)))
 #define AX_DIFF(a, b) (AX_ABS(a, b) >= 1.5f)
@@ -66,6 +67,7 @@ struct window_proxy
     CGRect frame;
     int level;
     int sub_level;
+    struct window_corner_geometry corner_geometry;
     CGImageRef image;
 };
 
