@@ -151,3 +151,49 @@ TEST_FUNC(window_server_classifier_names_and_reasons_are_stable,
     }
     TEST_CHECK(combined != 0, true);
 });
+
+static bool window_server_classifier_benchmark_case(size_t record_count)
+{
+    enum { sample_count = 20 };
+    int iterations = record_count <= 100 ? 1000 : 200;
+    struct ws_window_classification_input inputs[1000];
+    for (size_t i = 0; i < record_count; ++i) {
+        inputs[i] = ws_classifier_test_base();
+        inputs[i].tags |= UINT64_C(1) << (i % 63);
+        inputs[i].attributes = i % 4;
+        inputs[i].parent_id = i % 7 ? 0 : 500;
+        inputs[i].level = (int[]){0, 3, 8, 17}[i % 4];
+        inputs[i].ax = (enum ws_ax_corroboration) (i % 6);
+        inputs[i].owner = (enum ws_owner_kind) (i % 4);
+        inputs[i].include_minimized = (i % 2) != 0;
+    }
+    uint64_t elapsed[sample_count] = {0};
+    uint64_t checksum = 0;
+    for (int sample = 0; sample < sample_count; ++sample) {
+        uint64_t start = read_os_timer();
+        for (int iteration = 0; iteration < iterations; ++iteration) {
+            for (size_t i = 0; i < record_count; ++i) {
+                struct ws_window_classification result = ws_classify_window_candidate(inputs + i);
+                checksum += (uint64_t) result.window_class + result.reasons;
+            }
+        }
+        elapsed[sample] = (read_os_timer() - start) /
+                          ((uint64_t) iterations * (uint64_t) record_count);
+    }
+    qsort(elapsed, sample_count, sizeof(elapsed[0]), window_server_snapshot_benchmark_compare_u64);
+    int p95 = (sample_count * 95 + 99) / 100 - 1;
+    printf("{\"case\":\"window-server-classifier\",\"records\":%zu,"
+           "\"iterations\":%d,\"p50_ns_per_record\":%llu,"
+           "\"p95_ns_per_record\":%llu,\"allocations\":0,\"checksum\":%llu}\n",
+           record_count, sample_count * iterations,
+           (unsigned long long) elapsed[sample_count / 2],
+           (unsigned long long) elapsed[p95], (unsigned long long) checksum);
+    return checksum != 0;
+}
+
+static bool window_server_classifier_benchmark_run(void)
+{
+    return window_server_classifier_benchmark_case(10) &
+           window_server_classifier_benchmark_case(100) &
+           window_server_classifier_benchmark_case(1000);
+}
