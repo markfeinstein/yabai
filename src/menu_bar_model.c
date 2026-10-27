@@ -15,6 +15,11 @@ static bool menu_bar_model_valid_interface(enum menu_bar_interface interface)
            interface == MENU_BAR_INTERFACE_AUTO;
 }
 
+static bool menu_bar_model_valid_thumbnails(enum menu_bar_thumbnails thumbnails)
+{
+    return thumbnails == MENU_BAR_THUMBNAILS_OFF || thumbnails == MENU_BAR_THUMBNAILS_ON;
+}
+
 static bool menu_bar_model_valid_style(enum menu_bar_style style)
 {
     return style == MENU_BAR_STYLE_COMPACT || style == MENU_BAR_STYLE_EXPANDED;
@@ -36,6 +41,7 @@ static bool menu_bar_model_valid_settings(struct menu_bar_settings settings)
 {
     return menu_bar_model_valid_enabled(settings.enabled) &&
            menu_bar_model_valid_interface(settings.interface) &&
+           menu_bar_model_valid_thumbnails(settings.thumbnails) &&
            menu_bar_model_valid_style(settings.style) &&
            menu_bar_model_valid_filter(settings.space_filter);
 }
@@ -516,6 +522,7 @@ bool menu_bar_model_snapshot_equal(const struct menu_bar_snapshot *a,
 
     if (a->settings.enabled != b->settings.enabled ||
         a->settings.interface != b->settings.interface ||
+        a->settings.thumbnails != b->settings.thumbnails ||
         a->settings.style != b->settings.style ||
         a->settings.space_filter != b->settings.space_filter ||
         a->has_focused_display != b->has_focused_display ||

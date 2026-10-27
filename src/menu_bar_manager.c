@@ -74,6 +74,11 @@ static bool menu_bar_manager_valid_interface(enum menu_bar_interface interface)
            interface == MENU_BAR_INTERFACE_AUTO;
 }
 
+static bool menu_bar_manager_valid_thumbnails(enum menu_bar_thumbnails thumbnails)
+{
+    return thumbnails == MENU_BAR_THUMBNAILS_OFF || thumbnails == MENU_BAR_THUMBNAILS_ON;
+}
+
 static bool menu_bar_manager_valid_style(enum menu_bar_style style)
 {
     return style == MENU_BAR_STYLE_COMPACT || style == MENU_BAR_STYLE_EXPANDED;
@@ -914,6 +919,11 @@ enum menu_bar_interface menu_bar_manager_interface(void)
     return g_menu_bar_manager.settings.interface;
 }
 
+enum menu_bar_thumbnails menu_bar_manager_thumbnails(void)
+{
+    return g_menu_bar_manager.settings.thumbnails;
+}
+
 enum menu_bar_style menu_bar_manager_style(void)
 {
     return g_menu_bar_manager.settings.style;
@@ -942,6 +952,11 @@ const char *menu_bar_manager_interface_string(enum menu_bar_interface interface)
     case MENU_BAR_INTERFACE_AUTO:  return MENU_BAR_INTERFACE_AUTO_STR;
     }
     return MENU_BAR_INTERFACE_MENU_STR;
+}
+
+const char *menu_bar_manager_thumbnails_string(enum menu_bar_thumbnails thumbnails)
+{
+    return thumbnails == MENU_BAR_THUMBNAILS_ON ? MENU_BAR_THUMBNAILS_ON_STR : MENU_BAR_THUMBNAILS_OFF_STR;
 }
 
 const char *menu_bar_manager_style_string(enum menu_bar_style style)
@@ -992,6 +1007,20 @@ bool menu_bar_manager_parse_interface(const char *text, size_t length,
     }
     if (menu_bar_manager_text_equals(text, length, MENU_BAR_INTERFACE_AUTO_STR)) {
         if (interface) *interface = MENU_BAR_INTERFACE_AUTO;
+        return true;
+    }
+    return false;
+}
+
+bool menu_bar_manager_parse_thumbnails(const char *text, size_t length,
+                                       enum menu_bar_thumbnails *thumbnails)
+{
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_THUMBNAILS_OFF_STR)) {
+        if (thumbnails) *thumbnails = MENU_BAR_THUMBNAILS_OFF;
+        return true;
+    }
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_THUMBNAILS_ON_STR)) {
+        if (thumbnails) *thumbnails = MENU_BAR_THUMBNAILS_ON;
         return true;
     }
     return false;
@@ -1070,6 +1099,13 @@ bool menu_bar_manager_startup_stage_interface(enum menu_bar_interface interface)
     return true;
 }
 
+bool menu_bar_manager_startup_stage_thumbnails(enum menu_bar_thumbnails thumbnails)
+{
+    if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_thumbnails(thumbnails)) return false;
+    g_menu_bar_manager.settings.thumbnails = thumbnails;
+    return true;
+}
+
 bool menu_bar_manager_startup_stage_style(enum menu_bar_style style)
 {
     if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_style(style)) return false;
@@ -1089,6 +1125,7 @@ bool menu_bar_manager_startup_settings_can_commit(const struct menu_bar_settings
     return settings && menu_bar_manager_startup_staging_is_open &&
            menu_bar_manager_valid_enabled(settings->enabled) &&
            menu_bar_manager_valid_interface(settings->interface) &&
+           menu_bar_manager_valid_thumbnails(settings->thumbnails) &&
            menu_bar_manager_valid_style(settings->style) &&
            menu_bar_manager_valid_space_filter(settings->space_filter);
 }
@@ -1103,6 +1140,7 @@ void menu_bar_manager_settings_commit_no_post(const struct menu_bar_settings *se
 {
     assert(settings && menu_bar_manager_valid_enabled(settings->enabled) &&
            menu_bar_manager_valid_interface(settings->interface) &&
+           menu_bar_manager_valid_thumbnails(settings->thumbnails) &&
            menu_bar_manager_valid_style(settings->style) &&
            menu_bar_manager_valid_space_filter(settings->space_filter));
     g_menu_bar_manager.settings = *settings;
@@ -1131,6 +1169,7 @@ void menu_bar_manager_settings_postcommit(const struct menu_bar_settings *previo
     if (g_menu_bar_manager.settings.enabled == MENU_BAR_ENABLED &&
         (previous->enabled != g_menu_bar_manager.settings.enabled ||
          previous->interface != g_menu_bar_manager.settings.interface ||
+         previous->thumbnails != g_menu_bar_manager.settings.thumbnails ||
          previous->style != g_menu_bar_manager.settings.style ||
          previous->space_filter != g_menu_bar_manager.settings.space_filter)) {
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_STARTUP);
@@ -1168,6 +1207,16 @@ bool menu_bar_manager_set_interface(enum menu_bar_interface interface)
     if (!menu_bar_manager_valid_interface(interface)) return false;
     if (g_menu_bar_manager.settings.interface == interface) return true;
     g_menu_bar_manager.settings.interface = interface;
+    menu_bar_manager_clear_action_failure();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
+    return true;
+}
+
+bool menu_bar_manager_set_thumbnails(enum menu_bar_thumbnails thumbnails)
+{
+    if (!menu_bar_manager_valid_thumbnails(thumbnails)) return false;
+    if (g_menu_bar_manager.settings.thumbnails == thumbnails) return true;
+    g_menu_bar_manager.settings.thumbnails = thumbnails;
     menu_bar_manager_clear_action_failure();
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
     return true;

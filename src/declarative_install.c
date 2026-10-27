@@ -280,6 +280,7 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_SHADOW: wm->purify_mode = value->enumeration; break;
     case DECLARATIVE_CONFIG_MENUBAR: bundle->menu_settings.enabled = value->enumeration; break;
     case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: bundle->menu_settings.interface = value->enumeration; break;
+    case DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS: bundle->menu_settings.thumbnails = value->enumeration; break;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: bundle->menu_settings.style = value->enumeration; break;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: bundle->menu_settings.space_filter = value->enumeration; break;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: wm->menubar_opacity = value->real; break;

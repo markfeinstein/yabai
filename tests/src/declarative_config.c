@@ -1,5 +1,5 @@
 TEST_FUNC(declarative_inventory_is_canonical,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 44);
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 45);
     TEST_CHECK(DECLARATIVE_RULE_FIELD_COUNT, 17);
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         const char *name = declarative_config_descriptors[i].name;
@@ -189,6 +189,7 @@ TEST_FUNC(declarative_enums_are_runtime_values,
         {"window_shadow","off",PURIFY_ALWAYS},{"window_shadow","float",PURIFY_MANAGED},{"window_shadow","on",PURIFY_DISABLED},
         {"menubar","off",MENU_BAR_DISABLED},{"menubar","on",MENU_BAR_ENABLED},
         {"menubar_interface","menu",MENU_BAR_INTERFACE_MENU},{"menubar_interface","panel",MENU_BAR_INTERFACE_PANEL},{"menubar_interface","auto",MENU_BAR_INTERFACE_AUTO},
+        {"menubar_thumbnails","off",MENU_BAR_THUMBNAILS_OFF},{"menubar_thumbnails","on",MENU_BAR_THUMBNAILS_ON},
         {"menubar_style","compact",MENU_BAR_STYLE_COMPACT},{"menubar_style","expanded",MENU_BAR_STYLE_EXPANDED},
         {"menubar_space_filter","occupied",MENU_BAR_SPACE_FILTER_OCCUPIED},{"menubar_space_filter","all",MENU_BAR_SPACE_FILTER_ALL},
         {"layout","bsp",VIEW_BSP},{"layout","stack",VIEW_STACK},{"layout","float",VIEW_FLOAT},

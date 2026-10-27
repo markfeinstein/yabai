@@ -143,16 +143,16 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
     } else if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
                facts->screen_capture_access == DOCTOR_PROBE_YES) {
         doctor_emit(stream, "PASS", "screen recording",
-                    "configured window animations are authorized by CGPreflightScreenCaptureAccess",
+                    "configured capture-dependent features are authorized by CGPreflightScreenCaptureAccess",
                     "no action required");
     } else if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
                facts->screen_capture_access == DOCTOR_PROBE_NO) {
         doctor_emit(stream, "WARN", "screen recording",
-                    "configured window animations require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized",
+                    "configured capture-dependent features require Screen Recording and CGPreflightScreenCaptureAccess reports not authorized",
                     "enable yabai in System Settings > Privacy & Security > Screen Recording, then restart yabai");
     } else if (facts->screen_capture_required == DOCTOR_PROBE_YES) {
         doctor_emit(stream, "UNKNOWN", "screen recording",
-                    "configured window animations require capture but nonprompting preflight is unavailable",
+                    "configured capture-dependent features require capture but nonprompting preflight is unavailable",
                     "verify Screen Recording permission manually");
     } else {
         doctor_emit(stream, "UNKNOWN", "screen recording",
@@ -796,9 +796,10 @@ static enum doctor_probe doctor_native_screen_capture_requirement(
     }
 
     struct declarative_value animation = model->config[DECLARATIVE_CONFIG_ANIMATION_DURATION];
-    enum doctor_probe required = animation.present && animation.real > 0.0
-                               ? DOCTOR_PROBE_YES
-                               : DOCTOR_PROBE_NO;
+    struct declarative_value thumbnails = model->config[DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS];
+    enum doctor_probe required = (animation.present && animation.real > 0.0) ||
+                                 (thumbnails.present && thumbnails.enumeration == MENU_BAR_THUMBNAILS_ON)
+                               ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
     declarative_config_destroy(model);
     return required;
 }
