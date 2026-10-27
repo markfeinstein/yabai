@@ -1,4 +1,5 @@
 #include "menu_bar.h"
+#include "accessibility_preferences.h"
 
 #import <AppKit/AppKit.h>
 #include <dispatch/dispatch.h>
@@ -28,6 +29,10 @@
 #define YB_MENU_BAR_INDEX_PAD_X          8.0
 
 static int g_yb_menu_bar_contrast_override = -1;
+#if defined(YB_MENU_BAR_TEST)
+static bool g_yb_menu_bar_accessibility_override = true;
+static struct accessibility_display_preferences g_yb_menu_bar_accessibility_preferences;
+#endif
 
 enum yb_menu_bar_screen_state
 {
@@ -87,15 +92,31 @@ enum yb_menu_bar_control_kind
 
 static bool yb_increased_contrast(void);
 
+static struct accessibility_display_preferences
+yb_accessibility_preferences(void)
+{
+#if defined(YB_MENU_BAR_TEST)
+    if (g_yb_menu_bar_accessibility_override) return g_yb_menu_bar_accessibility_preferences;
+#endif
+    return accessibility_preferences_snapshot();
+}
+
 static void
-yb_draw_display_group(NSRect group_rect, size_t display_index)
+yb_draw_display_group(NSRect group_rect, size_t display_index,
+                      struct accessibility_display_preferences preferences)
 {
     bool alternate = display_index % 2;
-    NSColor *color = alternate ? [NSColor controlAccentColor] : [NSColor labelColor];
-    CGFloat alpha = alternate
-                  ? (yb_increased_contrast() ? 0.12 : YB_MENU_BAR_DISPLAY_TINT_ALPHA)
-                  : (yb_increased_contrast() ? 0.07 : YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA);
-    [[color colorWithAlphaComponent:alpha] setFill];
+    if (preferences.reduce_transparency) {
+        NSColor *color = alternate ? [NSColor selectedContentBackgroundColor]
+                                   : [NSColor controlBackgroundColor];
+        [color setFill];
+    } else {
+        NSColor *color = alternate ? [NSColor controlAccentColor] : [NSColor labelColor];
+        CGFloat alpha = alternate
+                      ? (yb_increased_contrast() ? 0.12 : YB_MENU_BAR_DISPLAY_TINT_ALPHA)
+                      : (yb_increased_contrast() ? 0.07 : YB_MENU_BAR_DISPLAY_NEUTRAL_ALPHA);
+        [[color colorWithAlphaComponent:alpha] setFill];
+    }
     [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(group_rect, -1.0, 2.0)
                                       xRadius:4.0
                                       yRadius:4.0] fill];
@@ -128,6 +149,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 #if defined(YB_MENU_BAR_TEST)
     bool _test_has_strip_action_point;
     NSPoint _test_strip_action_point;
+    NSUInteger _test_accessibility_redraw_count;
 #endif
 }
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
@@ -152,6 +174,10 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point;
 - (bool)testIsTrackingMenu;
 - (uint64_t)testTrackingGeneration;
+- (uint64_t)testSnapshotGeneration;
+- (uint64_t)testDeferredSnapshotGeneration;
+- (CGFloat)testStatusItemLength;
+- (NSUInteger)testAccessibilityRedrawCount;
 - (NSView *)testBuildCompactStrip;
 - (NSView *)testBuildExpandedStrip;
 #endif
@@ -181,6 +207,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     if (group_count < 2) return;
 
     NSAppearance *appearance = [self effectiveAppearance];
+    struct accessibility_display_preferences preferences = yb_accessibility_preferences();
     void (^draw_groups)(void) = ^{
         NSRect group_rect = NSZeroRect;
         size_t group_display_index = SIZE_MAX;
@@ -193,7 +220,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
             NSRect cell_frame = [cell frame];
 
             if (has_group && cell->yb_display_index != group_display_index) {
-                yb_draw_display_group(group_rect, group_display_index);
+                yb_draw_display_group(group_rect, group_display_index, preferences);
                 yb_draw_display_separator(self, previous_cell_frame, cell_frame);
                 group_rect = cell_frame;
                 group_display_index = cell->yb_display_index;
@@ -207,7 +234,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
             previous_cell_frame = cell_frame;
         }
 
-        if (has_group) yb_draw_display_group(group_rect, group_display_index);
+        if (has_group) yb_draw_display_group(group_rect, group_display_index, preferences);
     };
 
     if (appearance) {
@@ -228,6 +255,18 @@ yb_increased_contrast(void)
 static CGFloat
 yb_screen_line_width(enum yb_menu_bar_screen_state state)
 {
+    struct accessibility_display_preferences preferences = yb_accessibility_preferences();
+    if (preferences.differentiate_without_color) {
+        switch (state) {
+        case YB_MENU_BAR_SCREEN_ACTIVE:        return 2.5;
+        case YB_MENU_BAR_SCREEN_VISIBLE_OTHER: return 1.75;
+        case YB_MENU_BAR_SCREEN_OCCUPIED:      return 1.25;
+        case YB_MENU_BAR_SCREEN_UNKNOWN:
+        case YB_MENU_BAR_SCREEN_EMPTY:
+        case YB_MENU_BAR_SCREEN_PLACEHOLDER:   return 1.0;
+        }
+    }
+
     switch (state) {
     case YB_MENU_BAR_SCREEN_ACTIVE:        return 2.25;
     case YB_MENU_BAR_SCREEN_VISIBLE_OTHER: return 1.40625;
@@ -262,15 +301,25 @@ yb_screen_is_dashed(enum yb_menu_bar_screen_state state)
     return state == YB_MENU_BAR_SCREEN_UNKNOWN || state == YB_MENU_BAR_SCREEN_PLACEHOLDER;
 }
 
+static bool
+yb_screen_has_noncolor_marker(enum yb_menu_bar_screen_state state)
+{
+    return yb_accessibility_preferences().differentiate_without_color &&
+           state == YB_MENU_BAR_SCREEN_VISIBLE_OTHER;
+}
+
 static NSColor *
 yb_screen_pressed_color(void)
 {
-    return [NSColor systemOrangeColor];
+    return yb_accessibility_preferences().differentiate_without_color
+         ? [NSColor labelColor]
+         : [NSColor systemOrangeColor];
 }
 
 static CGFloat
 yb_screen_pressed_fill_alpha(void)
 {
+    if (yb_accessibility_preferences().reduce_transparency) return 1.0;
     return yb_increased_contrast() ? 0.34 : 0.22;
 }
 
@@ -353,6 +402,7 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
 {
     (void) dirty_rect;
     NSAppearance *appearance = [self effectiveAppearance];
+    struct accessibility_display_preferences preferences = yb_accessibility_preferences();
     void (^draw_screen)(void) = ^{
         NSRect screen = yb_screen_rect([self bounds], yb_index);
         NSBezierPath *outline = [NSBezierPath bezierPathWithRoundedRect:screen
@@ -367,7 +417,11 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
         bool pressed = yb_pressed;
         NSColor *pressed_ink = yb_screen_pressed_color();
         if (pressed) {
-            [[pressed_ink colorWithAlphaComponent:yb_screen_pressed_fill_alpha()] setFill];
+            if (preferences.reduce_transparency) {
+                [[NSColor selectedContentBackgroundColor] setFill];
+            } else {
+                [[pressed_ink colorWithAlphaComponent:yb_screen_pressed_fill_alpha()] setFill];
+            }
             [outline fill];
         }
 
@@ -376,6 +430,15 @@ yb_screen_state(const struct menu_bar_display *display, const struct menu_bar_sp
                              : [[NSColor labelColor] colorWithAlphaComponent:yb_screen_alpha(yb_state)];
         [outline_ink setStroke];
         [outline stroke];
+
+        if (yb_screen_has_noncolor_marker(yb_state)) {
+            NSBezierPath *marker = [NSBezierPath bezierPath];
+            [marker moveToPoint:NSMakePoint(NSMinX(screen) + 5.0, NSMinY(screen) + 3.0)];
+            [marker lineToPoint:NSMakePoint(NSMaxX(screen) - 5.0, NSMinY(screen) + 3.0)];
+            [marker setLineWidth:1.5];
+            [[NSColor labelColor] setStroke];
+            [marker stroke];
+        }
 
         NSString *index = yb_screen_index_text(yb_index);
         if (index) {
@@ -791,6 +854,9 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)accessibilityPreferencesChanged
 {
+#if defined(YB_MENU_BAR_TEST)
+    ++_test_accessibility_redraw_count;
+#endif
     [_strip_view setNeedsDisplay:YES];
     for (NSView *view in [_strip_view subviews]) [view setNeedsDisplay:YES];
 }
@@ -1312,6 +1378,26 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (uint64_t)testTrackingGeneration
 {
     return _tracking_generation;
+}
+
+- (uint64_t)testSnapshotGeneration
+{
+    return _snapshot ? _snapshot->generation : 0;
+}
+
+- (uint64_t)testDeferredSnapshotGeneration
+{
+    return _deferred_snapshot ? _deferred_snapshot->generation : 0;
+}
+
+- (CGFloat)testStatusItemLength
+{
+    return _status_item ? [_status_item length] : 0.0;
+}
+
+- (NSUInteger)testAccessibilityRedrawCount
+{
+    return _test_accessibility_redraw_count;
 }
 
 - (NSView *)testBuildCompactStrip
