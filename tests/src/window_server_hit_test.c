@@ -53,6 +53,24 @@ static void hit_test_end(void)
     window_server_hit_test_geometry_test_available = false;
 }
 
+TEST_FUNC(window_server_hit_test_relation_classification_is_conservative,
+{
+    TEST_CHECK(window_server_hit_test_classify_relation(false, false, false, false, false),
+               WINDOW_SERVER_HIT_TEST_RELATION_UNAVAILABLE);
+    TEST_CHECK(window_server_hit_test_classify_relation(true, true, true, true, true),
+               WINDOW_SERVER_HIT_TEST_RELATION_SAME_WINDOW);
+    TEST_CHECK(window_server_hit_test_classify_relation(true, false, true, true, true),
+               WINDOW_SERVER_HIT_TEST_RELATION_PARENT_CHILD);
+    TEST_CHECK(window_server_hit_test_classify_relation(true, false, false, true, true),
+               WINDOW_SERVER_HIT_TEST_RELATION_ASSOCIATED);
+    TEST_CHECK(window_server_hit_test_classify_relation(true, false, false, false, true),
+               WINDOW_SERVER_HIT_TEST_RELATION_SAME_OWNER);
+    TEST_CHECK(window_server_hit_test_classify_relation(true, false, false, false, false),
+               WINDOW_SERVER_HIT_TEST_RELATION_UNRELATED);
+    TEST_CHECK(strcmp(window_server_hit_test_relation_string(WINDOW_SERVER_HIT_TEST_RELATION_PARENT_CHILD),
+                      "parent-child"), 0);
+})
+
 TEST_FUNC(window_server_hit_test_comparison_is_optional_and_legacy_authoritative,
 {
     hit_test_begin();
