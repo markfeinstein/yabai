@@ -32,6 +32,7 @@ static struct menu_bar_settings test_settings(enum menu_bar_enabled enabled,
 {
     struct menu_bar_settings settings;
     settings.enabled = enabled;
+    settings.interface = MENU_BAR_INTERFACE_MENU;
     settings.style = style;
     settings.space_filter = filter;
     return settings;
@@ -77,6 +78,7 @@ MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_defaults_and_zero_counts)
     TEST_CHECK_NOT_NULL(empty);
     if (empty) {
         TEST_CHECK(empty->settings.enabled, MENU_BAR_DISABLED);
+        TEST_CHECK(empty->settings.interface, MENU_BAR_INTERFACE_MENU);
         TEST_CHECK(empty->settings.style, MENU_BAR_STYLE_EXPANDED);
         TEST_CHECK(empty->settings.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
         TEST_CHECK(empty->display_count, 0);
@@ -360,6 +362,10 @@ MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_exact_effective_equality_and_focus_only
     TEST_CHECK(menu_bar_model_snapshot_equal(left, different_generation_and_failure, MENU_BAR_MODEL_COMPARE_ACTION_FAILURE), false);
     TEST_CHECK(menu_bar_model_snapshot_equal(left, different_generation_and_failure, MENU_BAR_MODEL_COMPARE_EXACT), false);
     TEST_CHECK(menu_bar_model_snapshot_equal(left, different_focus, 0), false);
+    struct menu_bar_snapshot *different_interface = menu_bar_model_snapshot_clone(left);
+    TEST_CHECK_NOT_NULL(different_interface);
+    if (different_interface) different_interface->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    TEST_CHECK(menu_bar_model_snapshot_equal(left, different_interface, 0), false);
 
     static const struct menu_bar_space_input renamed_space[] = {
         { 100, 1, "renamed", false, false, MENU_BAR_SPACE_MEMBERSHIP_EMPTY, NULL, 0 },
@@ -382,6 +388,7 @@ MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_exact_effective_equality_and_focus_only
     TEST_CHECK(menu_bar_model_snapshot_equal(left, NULL, 0), false);
 
     menu_bar_model_snapshot_destroy(different_content);
+    menu_bar_model_snapshot_destroy(different_interface);
     menu_bar_model_snapshot_destroy(different_focus);
     menu_bar_model_snapshot_destroy(different_generation_and_failure);
     menu_bar_model_snapshot_destroy(left);
