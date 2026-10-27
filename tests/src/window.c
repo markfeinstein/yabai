@@ -14,6 +14,311 @@ TEST_FUNC(window_sub_level_message_id_tracks_tahoe_protocol,
     workspace_set_macos_version(saved_macos_version);
 });
 
+enum window_ax_snapshot_test_mode
+{
+    WINDOW_AX_SNAPSHOT_TEST_VALID,
+    WINDOW_AX_SNAPSHOT_TEST_MIXED,
+    WINDOW_AX_SNAPSHOT_TEST_SHORT,
+    WINDOW_AX_SNAPSHOT_TEST_OVERSIZED,
+    WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE,
+    WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE
+};
+
+static enum window_ax_snapshot_test_mode window_ax_snapshot_test_mode;
+static bool window_ax_snapshot_test_create_failure;
+static bool window_ax_snapshot_test_size_fallback_failure;
+static int window_ax_snapshot_test_create_calls;
+static int window_ax_snapshot_test_multiple_calls;
+static int window_ax_snapshot_test_single_calls;
+
+static CFArrayRef window_ax_snapshot_test_create(CFAllocatorRef allocator, const void **values,
+                                                  CFIndex count, const CFArrayCallBacks *callbacks)
+{
+    ++window_ax_snapshot_test_create_calls;
+    return window_ax_snapshot_test_create_failure ? NULL : CFArrayCreate(allocator, values, count, callbacks);
+}
+
+static CFTypeRef window_ax_snapshot_test_value(CFStringRef attribute)
+{
+    if (CFEqual(attribute, kAXPositionAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE) {
+            CGSize size = CGSizeMake(300, 200);
+            return AXValueCreate(kAXValueTypeCGSize, &size);
+        }
+        CGPoint position = CGPointMake(10, 20);
+        return AXValueCreate(kAXValueTypeCGPoint, &position);
+    }
+    if (CFEqual(attribute, kAXSizeAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) return CFRetain(kCFNull);
+        CGSize size = CGSizeMake(300, 200);
+        return AXValueCreate(kAXValueTypeCGSize, &size);
+    }
+    if (CFEqual(attribute, kAXRoleAttribute)) {
+        return CFRetain(window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED
+                        ? (CFTypeRef) kCFBooleanTrue : (CFTypeRef) kAXWindowRole);
+    }
+    if (CFEqual(attribute, kAXSubroleAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            AXError error = kAXErrorNoValue;
+            return AXValueCreate(kAXValueTypeAXError, &error);
+        }
+        return CFRetain(kAXStandardWindowSubrole);
+    }
+    if (CFEqual(attribute, kAXTitleAttribute)) {
+        return CFRetain(window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED
+                        ? (CFTypeRef) kCFNull : (CFTypeRef) CFSTR("snapshot-title"));
+    }
+    if (CFEqual(attribute, kAXParentAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            return CFRetain(CFSTR("not-an-ax-element"));
+        }
+        return AXUIElementCreateApplication(getpid());
+    }
+    if (CFEqual(attribute, kAXMinimizedAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            AXError error = kAXErrorAttributeUnsupported;
+            return AXValueCreate(kAXValueTypeAXError, &error);
+        }
+        return CFRetain(kCFBooleanFalse);
+    }
+    if (CFEqual(attribute, kAXFullscreenAttribute)) return CFRetain(kCFBooleanTrue);
+    return CFRetain(kCFNull);
+}
+
+static AXError window_ax_snapshot_test_copy_multiple(AXUIElementRef element, CFArrayRef attributes,
+                                                      AXCopyMultipleAttributeOptions options,
+                                                      CFArrayRef *values)
+{
+    (void) element;
+    (void) options;
+    ++window_ax_snapshot_test_multiple_calls;
+    *values = NULL;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE) {
+        return kAXErrorCannotComplete;
+    }
+
+    CFIndex attribute_count = CFArrayGetCount(attributes);
+    CFIndex value_count = attribute_count;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_SHORT && value_count > 0) --value_count;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_OVERSIZED) ++value_count;
+
+    CFTypeRef result_values[WINDOW_AX_SNAPSHOT_SLOT_COUNT + 1] = {0};
+    for (CFIndex index = 0; index < value_count; ++index) {
+        if (index < attribute_count) {
+            CFStringRef attribute = CFArrayGetValueAtIndex(attributes, index);
+            result_values[index] = window_ax_snapshot_test_value(attribute);
+        } else {
+            result_values[index] = CFRetain(kCFNull);
+        }
+    }
+
+    *values = CFArrayCreate(NULL, (const void **) result_values, value_count, &kCFTypeArrayCallBacks);
+    for (CFIndex index = 0; index < value_count; ++index) CFRelease(result_values[index]);
+    return *values ? kAXErrorSuccess : kAXErrorFailure;
+}
+
+static AXError window_ax_snapshot_test_copy_single(AXUIElementRef element, CFStringRef attribute,
+                                                    CFTypeRef *value)
+{
+    (void) element;
+    ++window_ax_snapshot_test_single_calls;
+    *value = NULL;
+
+    if (CFEqual(attribute, kAXPositionAttribute)) {
+        CGPoint position = CGPointMake(40, 50);
+        *value = AXValueCreate(kAXValueTypeCGPoint, &position);
+    } else if (CFEqual(attribute, kAXSizeAttribute)) {
+        if (window_ax_snapshot_test_size_fallback_failure) return kAXErrorCannotComplete;
+        CGSize size = CGSizeMake(600, 700);
+        *value = AXValueCreate(kAXValueTypeCGSize, &size);
+    } else if (CFEqual(attribute, kAXRoleAttribute) &&
+               window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE) {
+        *value = CFRetain(kAXWindowRole);
+    } else if (CFEqual(attribute, kAXSubroleAttribute)) {
+        *value = CFRetain(kAXDialogSubrole);
+    } else if (CFEqual(attribute, kAXMinimizedAttribute)) {
+        *value = CFRetain(kCFBooleanTrue);
+    } else if (CFEqual(attribute, kAXTitleAttribute)) {
+        return kAXErrorCannotComplete;
+    } else {
+        return kAXErrorAttributeUnsupported;
+    }
+
+    return *value ? kAXErrorSuccess : kAXErrorFailure;
+}
+
+static void window_ax_snapshot_test_begin(enum window_ax_snapshot_test_mode mode)
+{
+    window_ax_snapshot_test_mode = mode;
+    window_ax_snapshot_test_create_failure = false;
+    window_ax_snapshot_test_size_fallback_failure = false;
+    window_ax_snapshot_test_create_calls = 0;
+    window_ax_snapshot_test_multiple_calls = 0;
+    window_ax_snapshot_test_single_calls = 0;
+    window_ax_snapshot_create_attributes = window_ax_snapshot_test_create;
+    window_ax_snapshot_copy_multiple = window_ax_snapshot_test_copy_multiple;
+    window_ax_snapshot_copy_single = window_ax_snapshot_test_copy_single;
+}
+
+static void window_ax_snapshot_test_end(void)
+{
+    window_ax_snapshot_create_attributes = CFArrayCreate;
+    window_ax_snapshot_copy_multiple = AXUIElementCopyMultipleAttributeValues;
+    window_ax_snapshot_copy_single = AXUIElementCopyAttributeValue;
+}
+
+TEST_FUNC(window_ax_snapshot_reads_and_owns_valid_batch_values,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
+                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), true);
+    TEST_CHECK(snapshot.requested, requested);
+    TEST_CHECK(snapshot.valid, requested);
+    TEST_CHECK(snapshot.position.x, 10.0);
+    TEST_CHECK(snapshot.position.y, 20.0);
+    TEST_CHECK(snapshot.size.width, 300.0);
+    TEST_CHECK(snapshot.size.height, 200.0);
+    TEST_CHECK(snapshot.role != NULL, true);
+    if (snapshot.role) TEST_CHECK(CFEqual(snapshot.role, kAXWindowRole), true);
+    TEST_CHECK(snapshot.subrole != NULL, true);
+    if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXStandardWindowSubrole), true);
+    TEST_CHECK(snapshot.title != NULL, true);
+    if (snapshot.title) TEST_CHECK(CFEqual(snapshot.title, CFSTR("snapshot-title")), true);
+    TEST_CHECK(snapshot.parent != NULL, true);
+    if (snapshot.parent) TEST_CHECK(CFGetTypeID(snapshot.parent), AXUIElementGetTypeID());
+    TEST_CHECK(snapshot.minimized, false);
+    TEST_CHECK(snapshot.fullscreen, true);
+    TEST_CHECK(window_ax_snapshot_test_create_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+
+    CGRect frame = CGRectZero;
+    TEST_CHECK(window_ax_snapshot_frame(&snapshot, &frame), true);
+    TEST_CHECK(CGRectEqualToRect(frame, CGRectMake(10, 20, 300, 200)), true);
+
+    window_ax_snapshot_destroy(&snapshot);
+    TEST_CHECK(snapshot.requested, 0U);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.role == NULL, true);
+    TEST_CHECK(snapshot.parent == NULL, true);
+    window_ax_snapshot_destroy(&snapshot);
+    CFRelease(ref);
+    window_ax_snapshot_test_end();
+});
+
+TEST_FUNC(window_ax_snapshot_validates_slots_and_couples_frame_fallback,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
+                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), false);
+    uint32_t expected_valid = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_SUBROLE |
+                              WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    TEST_CHECK(snapshot.valid, expected_valid);
+    TEST_CHECK(snapshot.position.x, 40.0);
+    TEST_CHECK(snapshot.position.y, 50.0);
+    TEST_CHECK(snapshot.size.width, 600.0);
+    TEST_CHECK(snapshot.size.height, 700.0);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_SUBROLE_SLOT], kAXErrorSuccess);
+    TEST_CHECK(snapshot.subrole != NULL, true);
+    if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXDialogSubrole), true);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_TITLE_SLOT], kAXErrorCannotComplete);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_PARENT_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_MINIMIZED_SLOT], kAXErrorSuccess);
+    TEST_CHECK(snapshot.minimized, true);
+    TEST_CHECK(snapshot.fullscreen, true);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 5);
+
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_single_calls = 0;
+    window_ax_snapshot_test_size_fallback_failure = true;
+    uint32_t frame_fields = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    TEST_CHECK(window_ax_snapshot_read(ref, frame_fields, &snapshot), false);
+    TEST_CHECK(snapshot.valid & frame_fields, 0U);
+    TEST_CHECK(CGPointEqualToPoint(snapshot.position, CGPointZero), true);
+    TEST_CHECK(CGSizeEqualToSize(snapshot.size, CGSizeZero), true);
+    CGRect frame = CGRectZero;
+    TEST_CHECK(window_ax_snapshot_frame(&snapshot, &frame), false);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+
+    window_ax_snapshot_destroy(&snapshot);
+    CFRelease(ref);
+    window_ax_snapshot_test_end();
+});
+
+TEST_FUNC(window_ax_snapshot_rejects_malformed_batch_shapes_and_types,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window_ax_snapshot snapshot = {0};
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_SHORT);
+    uint32_t text_fields = WINDOW_AX_ROLE | WINDOW_AX_TITLE;
+    TEST_CHECK(window_ax_snapshot_read(ref, text_fields, &snapshot), false);
+    TEST_CHECK(snapshot.valid, WINDOW_AX_ROLE);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_TITLE_SLOT], kAXErrorCannotComplete);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 1);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_OVERSIZED);
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_ROLE, &snapshot), false);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE);
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_POSITION, &snapshot), false);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_POSITION_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
+TEST_FUNC(window_ax_snapshot_recovers_batch_failure_and_reports_allocation_failure,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window_ax_snapshot snapshot = {0};
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE;
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), true);
+    TEST_CHECK(snapshot.valid, requested);
+    TEST_CHECK(snapshot.position.x, 40.0);
+    TEST_CHECK(snapshot.size.width, 600.0);
+    TEST_CHECK(snapshot.role != NULL, true);
+    if (snapshot.role) TEST_CHECK(CFEqual(snapshot.role, kAXWindowRole), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 3);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_ax_snapshot_test_create_failure = true;
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_ROLE, &snapshot), false);
+    TEST_CHECK(snapshot.requested, WINDOW_AX_ROLE);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorFailure);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 0);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
 static AXError window_test_observe_result;
 static int window_test_observe_call_count;
 
