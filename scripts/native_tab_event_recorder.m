@@ -506,7 +506,7 @@ int main(int argc, char **argv)
         FILE *stream = NULL;
         if (!native_tab_trace_open(output, &stream)) return EXIT_FAILURE;
 
-        struct native_tab_tool tool = {
+        __block struct native_tab_tool tool = {
             .target_pid = (pid_t) pid_value,
             .connection = SLSMainConnectionID(),
             .output_path = output,
