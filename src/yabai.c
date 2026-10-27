@@ -35,7 +35,6 @@ struct event_loop g_event_loop;
 void *g_workspace_context;
 
 enum mission_control_mode g_mission_control_mode;
-double g_cv_host_clock_frequency;
 int g_layer_normal_window_level;
 int g_layer_below_window_level;
 int g_layer_above_window_level;
@@ -169,7 +168,6 @@ static inline bool configure_settings_and_acquire_lock(void)
     g_event_bytes = calloc(1, 0x100);
     if (!g_event_bytes) error("yabai: could not allocate event storage! abort..\n");
     g_connection = SLSMainConnectionID();
-    g_cv_host_clock_frequency   = CVGetHostClockFrequency();
     g_layer_normal_window_level = CGWindowLevelForKey(LAYER_NORMAL);
     g_layer_below_window_level  = CGWindowLevelForKey(LAYER_BELOW);
     g_layer_above_window_level  = CGWindowLevelForKey(LAYER_ABOVE);

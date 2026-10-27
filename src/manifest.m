@@ -76,6 +76,7 @@
 #include "osax/common.h"
 
 #include "declarative_runtime_types.h"
+#include "animation_clock.h"
 #include "view.h"
 #include "sa.h"
 #include "event_loop.h"
@@ -134,6 +135,7 @@
 #include "space.c"
 #include "space_gesture.c"
 #include "view.c"
+#include "animation_clock.c"
 #include "window.c"
 #include "process_manager.c"
 #include "application.c"

@@ -4,7 +4,6 @@ extern struct event_loop g_event_loop;
 extern void *g_workspace_context;
 extern struct process_manager g_process_manager;
 extern struct mouse_state g_mouse_state;
-extern double g_cv_host_clock_frequency;
 
 #ifdef TESTS
 static struct window *window_manager_test_rule_window;
@@ -1177,17 +1176,12 @@ static bool window_manager_animation_claim_completion(struct window_animation_co
     return !__atomic_exchange_n(&context->completion_claimed, true, __ATOMIC_ACQ_REL);
 }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-parameter"
-static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef link, const CVTimeStamp *now, const CVTimeStamp *output_time, CVOptionFlags flags, CVOptionFlags *flags_out, void *data)
+static void window_manager_animation_tick(void *data, const struct animation_clock_tick *tick)
 {
     struct window_animation_context *context = data;
     int animation_count = context->animation_count;
 
-    uint64_t current_clock = output_time->hostTime;
-    if (!context->animation_clock) context->animation_clock = now->hostTime;
-
-    double t = (double)(current_clock - context->animation_clock) / (double)(context->animation_duration * g_cv_host_clock_frequency);
+    double t = tick->elapsed_ticks / (double)(context->animation_duration * tick->ticks_per_second);
     if (t <= 0.0) t = 0.0f;
     if (t >= 1.0) t = 1.0f;
 
@@ -1224,26 +1218,23 @@ static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef 
 
     if (t != 1.0f) {
         pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-        goto out;
+        return;
     }
 
     bool claimed = window_manager_animation_claim_completion(context);
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
     if (claimed) window_manager_animation_teardown_scheduler(context);
-
-out:
-    return kCVReturnSuccess;
 }
-#pragma clang diagnostic pop
 
 #ifdef TESTS
 static void *(*window_manager_animation_allocate)(size_t) = malloc;
 static CGError (*window_manager_animation_new_connection)(int, int *) = SLSNewConnection;
-static CVReturn (*window_manager_animation_display_link_create)(CVDisplayLinkRef *) = CVDisplayLinkCreateWithActiveCGDisplays;
-static CVReturn (*window_manager_animation_display_link_set_callback)(CVDisplayLinkRef, CVDisplayLinkOutputCallback, void *) = CVDisplayLinkSetOutputCallback;
-static CVReturn (*window_manager_animation_display_link_start)(CVDisplayLinkRef) = CVDisplayLinkStart;
-static CVReturn (*window_manager_animation_display_link_stop)(CVDisplayLinkRef) = CVDisplayLinkStop;
-static void (*window_manager_animation_display_link_release)(CVDisplayLinkRef) = CVDisplayLinkRelease;
+static struct animation_clock *(*window_manager_animation_clock_create)(animation_clock_tick_fn, void *) =
+    animation_clock_create;
+static bool (*window_manager_animation_clock_start)(struct animation_clock *) = animation_clock_start;
+static enum animation_clock_stop_result (*window_manager_animation_clock_stop)(struct animation_clock *) =
+    animation_clock_stop;
+static void (*window_manager_animation_clock_destroy)(struct animation_clock *) = animation_clock_destroy;
 static CGError (*window_manager_animation_release_connection)(int) = SLSReleaseConnection;
 static CGError (*window_manager_animation_disable_update)(int) = SLSDisableUpdate;
 static CGError (*window_manager_animation_reenable_update)(int) = SLSReenableUpdate;
@@ -1251,11 +1242,10 @@ static void (*window_manager_animation_set_frame)(struct window *, float, float,
 #else
 #define window_manager_animation_allocate malloc
 #define window_manager_animation_new_connection SLSNewConnection
-#define window_manager_animation_display_link_create CVDisplayLinkCreateWithActiveCGDisplays
-#define window_manager_animation_display_link_set_callback CVDisplayLinkSetOutputCallback
-#define window_manager_animation_display_link_start CVDisplayLinkStart
-#define window_manager_animation_display_link_stop CVDisplayLinkStop
-#define window_manager_animation_display_link_release CVDisplayLinkRelease
+#define window_manager_animation_clock_create animation_clock_create
+#define window_manager_animation_clock_start animation_clock_start
+#define window_manager_animation_clock_stop animation_clock_stop
+#define window_manager_animation_clock_destroy animation_clock_destroy
 #define window_manager_animation_release_connection SLSReleaseConnection
 #define window_manager_animation_disable_update SLSDisableUpdate
 #define window_manager_animation_reenable_update SLSReenableUpdate
@@ -1284,18 +1274,16 @@ static struct window_animation_context *window_manager_animation_create_context(
     return context;
 }
 
-static bool window_manager_animation_start_display_link(struct window_animation_context *context)
+static bool window_manager_animation_start_clock(struct window_animation_context *context)
 {
-    if (window_manager_animation_display_link_create(&context->display_link) != kCVReturnSuccess || !context->display_link) return false;
-    if (window_manager_animation_display_link_set_callback(context->display_link, window_manager_animate_window_list_thread_proc, context) != kCVReturnSuccess) return false;
-    context->display_link_may_be_running = true;
-    return window_manager_animation_display_link_start(context->display_link) == kCVReturnSuccess;
+    context->clock = window_manager_animation_clock_create(window_manager_animation_tick, context);
+    return context->clock && window_manager_animation_clock_start(context->clock);
 }
 
 static void window_manager_animation_release_context(struct window_animation_context *context, bool update_disabled)
 {
     if (update_disabled) (void) window_manager_animation_reenable_update(context->animation_connection);
-    if (context->display_link) window_manager_animation_display_link_release(context->display_link);
+    if (context->clock) window_manager_animation_clock_destroy(context->clock);
     if (context->animation_connection) (void) window_manager_animation_release_connection(context->animation_connection);
     free(context->animation_list);
     free(context);
@@ -1340,13 +1328,9 @@ static void window_manager_animation_retry(struct window_animation_context *cont
 static void window_manager_animation_teardown_attempt(void *data)
 {
     struct window_animation_context *context = data;
-    if (context->display_link_may_be_running) {
-        CVReturn stop_result = window_manager_animation_display_link_stop(context->display_link);
-        if (stop_result != kCVReturnSuccess && stop_result != kCVReturnDisplayLinkNotRunning) {
-            window_manager_animation_retry(context);
-            return;
-        }
-        context->display_link_may_be_running = false;
+    if (window_manager_animation_clock_stop(context->clock) == ANIMATION_CLOCK_STOP_RETRY) {
+        window_manager_animation_retry(context);
+        return;
     }
 
     (void) window_manager_animation_disable_update(context->animation_connection);
@@ -1536,7 +1520,7 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
 
     (void) window_manager_animation_reenable_update(context->animation_connection);
     update_disabled = false;
-    if (!window_manager_animation_start_display_link(context)) goto cleanup_ready;
+    if (!window_manager_animation_start_clock(context)) goto cleanup_ready;
     return;
 
 cleanup_ready:

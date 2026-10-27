@@ -142,6 +142,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "daemon_identity.c"
 #include "sa_message.c"
 #include "deferred_convergence.c"
+#include "animation_clock.c"
 #include "animation_failure.c"
 #include "doctor.c"
 #undef TEST_ENTRY
@@ -3086,6 +3087,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(mach_send_uses_bounded_timeout) \
     TEST_ENTRY(animation_payload_packers_bound_batches_and_preserve_order) \
     TEST_ENTRY(jankyborders_generations_supersede_stale_retries) \
+    TEST_ENTRY(animation_clock_cv_setup_stop_and_destroy_states_are_exact) \
+    TEST_ENTRY(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread) \
+    TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \
     TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
     TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
     TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
@@ -3093,6 +3097,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
     TEST_ENTRY(animation_context_setup_allocation_and_connection_failures_cleanup) \
     TEST_ENTRY(animation_teardown_has_single_non_callback_owner) \
+    TEST_ENTRY(animation_teardown_order_stops_before_updates_and_releases_clock_before_connection) \
     TEST_ENTRY(animation_out_failure_retains_resources_until_confirmed) \
     TEST_ENTRY(animation_teardown_skips_replaced_ownership) \
     TEST_ENTRY(daemon_message_admission_bounds_and_reuses_slots) \
@@ -3412,6 +3417,9 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-snapshot-reuse") == 0) {
         return snapshot_reuse_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-animation-clock") == 0) {
+        return animation_clock_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {

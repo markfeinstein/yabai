@@ -50,7 +50,7 @@ DEPLOY_OWNER_UID ?= 0
 DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-arm64 test-x86_64 test-architectures test-all syntax \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
@@ -87,6 +87,9 @@ test-benchmark-window-query:
 
 test-benchmark-snapshot-reuse:
 	$(MAKE) -C tests benchmark-snapshot-reuse
+
+test-benchmark-animation-clock:
+	$(MAKE) -C tests benchmark-animation-clock
 
 test-arm64:
 	$(MAKE) -C tests arch-arm64

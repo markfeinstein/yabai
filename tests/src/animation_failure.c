@@ -15,10 +15,8 @@ TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
 {
     __auto_type saved_create = window_manager_animation_transaction_create;
     __auto_type saved_scheduler = window_manager_animation_teardown_scheduler;
-    double saved_frequency = g_cv_host_clock_frequency;
     window_manager_animation_transaction_create = animation_test_null_transaction;
     window_manager_animation_teardown_scheduler = animation_test_terminal_schedule;
-    g_cv_host_clock_frequency = 1.0;
     animation_test_terminal_schedule_count = 0;
 
     struct window_animation animation = {
@@ -32,14 +30,12 @@ TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
     struct window_animation_context context = {
         .animation_duration = 1.0f,
         .animation_easing = 0,
-        .animation_clock = 1,
         .animation_list = &animation,
         .animation_count = 1
     };
-    CVTimeStamp now = { .hostTime = 1 };
-    CVTimeStamp nonterminal = { .hostTime = 1 };
-    CVTimeStamp terminal = { .hostTime = 2 };
-    TEST_CHECK(window_manager_animate_window_list_thread_proc(NULL, &now, &nonterminal, 0, NULL, &context), kCVReturnSuccess);
+    struct animation_clock_tick nonterminal = { .elapsed_ticks = 0.0, .ticks_per_second = 1.0 };
+    struct animation_clock_tick terminal = { .elapsed_ticks = 1.0, .ticks_per_second = 1.0 };
+    window_manager_animation_tick(&context, &nonterminal);
     TEST_CHECK(context.completion_claimed, false);
     TEST_CHECK(animation_test_terminal_schedule_count, 0);
     TEST_CHECK(animation.proxy.tx, 11.0f);
@@ -47,7 +43,7 @@ TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
     TEST_CHECK(animation.proxy.tw, 33.0f);
     TEST_CHECK(animation.proxy.th, 44.0f);
 
-    TEST_CHECK(window_manager_animate_window_list_thread_proc(NULL, &now, &terminal, 0, NULL, &context), kCVReturnSuccess);
+    window_manager_animation_tick(&context, &terminal);
     TEST_CHECK(context.completion_claimed, true);
     TEST_CHECK(animation_test_terminal_schedule_count, 1);
     TEST_CHECK(animation.proxy.tx, 11.0f);
@@ -55,12 +51,11 @@ TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
     TEST_CHECK(animation.proxy.tw, 33.0f);
     TEST_CHECK(animation.proxy.th, 44.0f);
 
-    TEST_CHECK(window_manager_animate_window_list_thread_proc(NULL, &now, &terminal, 0, NULL, &context), kCVReturnSuccess);
+    window_manager_animation_tick(&context, &terminal);
     TEST_CHECK(animation_test_terminal_schedule_count, 1);
 
     window_manager_animation_transaction_create = saved_create;
     window_manager_animation_teardown_scheduler = saved_scheduler;
-    g_cv_host_clock_frequency = saved_frequency;
 });
 
 static bool animation_test_send_result;
@@ -221,88 +216,53 @@ TEST_FUNC(animation_alpha_restoration_handles_partial_simd_tail,
     }
 });
 
-static int animation_test_display_stage;
-static int animation_test_display_create_calls;
-static int animation_test_display_callback_calls;
-static int animation_test_display_start_calls;
-static CVReturn animation_test_display_create(CVDisplayLinkRef *link)
-{
-    ++animation_test_display_create_calls;
-    if (animation_test_display_stage == 1) return kCVReturnError;
-    *link = (CVDisplayLinkRef) (intptr_t) 1;
-    return kCVReturnSuccess;
-}
-static CVReturn animation_test_display_callback(CVDisplayLinkRef link, CVDisplayLinkOutputCallback callback, void *data)
-{
-    (void) link; (void) callback; (void) data;
-    ++animation_test_display_callback_calls;
-    return animation_test_display_stage == 2 ? kCVReturnError : kCVReturnSuccess;
-}
-static CVReturn animation_test_display_start(CVDisplayLinkRef link)
-{
-    (void) link;
-    ++animation_test_display_start_calls;
-    return animation_test_display_stage == 3 ? kCVReturnError : kCVReturnSuccess;
-}
-
 static int animation_test_stop_count;
 static int animation_test_link_release_count;
 static CVReturn animation_test_stop_result;
-static CVReturn animation_test_stop_sequence(CVDisplayLinkRef link);
-static void animation_test_link_release(CVDisplayLinkRef link);
+static bool animation_test_clock_quiesced;
+static enum animation_clock_stop_result animation_test_clock_stop(struct animation_clock *clock);
+static void animation_test_clock_destroy(struct animation_clock *clock);
 static CGError animation_test_update(int cid);
 
 TEST_FUNC(animation_display_link_setup_stages_propagate_failures,
 {
-    __auto_type saved_create = window_manager_animation_display_link_create;
-    __auto_type saved_callback = window_manager_animation_display_link_set_callback;
-    __auto_type saved_start = window_manager_animation_display_link_start;
-    __auto_type saved_stop = window_manager_animation_display_link_stop;
-    __auto_type saved_release = window_manager_animation_display_link_release;
     __auto_type saved_disable = window_manager_animation_disable_update;
     __auto_type saved_reenable = window_manager_animation_reenable_update;
-    window_manager_animation_display_link_create = animation_test_display_create;
-    window_manager_animation_display_link_set_callback = animation_test_display_callback;
-    window_manager_animation_display_link_start = animation_test_display_start;
-    window_manager_animation_display_link_stop = animation_test_stop_sequence;
-    window_manager_animation_display_link_release = animation_test_link_release;
     window_manager_animation_disable_update = animation_test_update;
     window_manager_animation_reenable_update = animation_test_update;
 
     for (int stage = 1; stage <= 3; ++stage) {
+        animation_clock_test_begin();
+        animation_clock_test_stage = stage;
+        animation_clock_test_stop_result = stage == 3 ? kCVReturnDisplayLinkNotRunning
+                                                       : kCVReturnSuccess;
         struct window_animation_context *context = calloc(1, sizeof(*context));
-        animation_test_display_stage = stage;
-        animation_test_display_create_calls = 0;
-        animation_test_display_callback_calls = 0;
-        animation_test_display_start_calls = 0;
-        animation_test_stop_count = 0;
-        animation_test_link_release_count = 0;
-        animation_test_stop_result = stage == 3 ? kCVReturnDisplayLinkNotRunning : kCVReturnSuccess;
-        TEST_CHECK(window_manager_animation_start_display_link(context), false);
-        TEST_CHECK(animation_test_display_create_calls, 1);
-        TEST_CHECK(animation_test_display_callback_calls, stage >= 2 ? 1 : 0);
-        TEST_CHECK(animation_test_display_start_calls, stage >= 3 ? 1 : 0);
-        TEST_CHECK(context->display_link_may_be_running, stage >= 3);
+        TEST_CHECK(window_manager_animation_start_clock(context), false);
+        TEST_CHECK(animation_clock_test_create_calls, 1);
+        TEST_CHECK(animation_clock_test_callback_calls, stage >= 2 ? 1 : 0);
+        TEST_CHECK(animation_clock_test_start_calls, stage >= 3 ? 1 : 0);
         window_manager_animation_teardown_attempt(context);
-        TEST_CHECK(animation_test_stop_count, stage >= 3 ? 1 : 0);
-        TEST_CHECK(animation_test_link_release_count, stage >= 2 ? 1 : 0);
+        TEST_CHECK(animation_clock_test_stop_calls, stage >= 3 ? 1 : 0);
+        TEST_CHECK(animation_clock_test_release_calls, stage >= 2 ? 1 : 0);
+        TEST_CHECK(animation_clock_test_deallocations, 1);
+        animation_clock_test_end();
     }
-    struct window_animation_context context = { 0 };
-    animation_test_display_stage = 0;
-    TEST_CHECK(window_manager_animation_start_display_link(&context), true);
-    TEST_CHECK(context.display_link_may_be_running, true);
 
-    window_manager_animation_display_link_create = saved_create;
-    window_manager_animation_display_link_set_callback = saved_callback;
-    window_manager_animation_display_link_start = saved_start;
-    window_manager_animation_display_link_stop = saved_stop;
-    window_manager_animation_display_link_release = saved_release;
+    animation_clock_test_begin();
+    struct window_animation_context context = {0};
+    TEST_CHECK(window_manager_animation_start_clock(&context), true);
+    TEST_CHECK(context.clock != NULL, true);
+    TEST_CHECK(animation_clock_stop(context.clock), ANIMATION_CLOCK_STOP_QUIESCED);
+    animation_clock_destroy(context.clock);
+    context.clock = NULL;
+    animation_clock_test_end();
+
     window_manager_animation_disable_update = saved_disable;
     window_manager_animation_reenable_update = saved_reenable;
 });
 
 static int animation_test_connection_release_count;
-static void animation_test_link_release(CVDisplayLinkRef link) { (void) link; ++animation_test_link_release_count; }
+static void animation_test_clock_destroy(struct animation_clock *clock) { (void) clock; ++animation_test_link_release_count; }
 static CGError animation_test_connection_release(int cid) { (void) cid; ++animation_test_connection_release_count; return kCGErrorSuccess; }
 static int animation_test_allocation_call;
 static int animation_test_allocation_fail_call;
@@ -399,11 +359,17 @@ static void animation_test_retry_schedule(struct window_animation_context *conte
     animation_test_scheduled_context = context;
     animation_test_scheduled_delay = delay;
 }
-static CVReturn animation_test_stop_sequence(CVDisplayLinkRef link)
+static enum animation_clock_stop_result animation_test_clock_stop(struct animation_clock *clock)
 {
-    (void) link;
+    (void) clock;
+    if (animation_test_clock_quiesced) return ANIMATION_CLOCK_STOP_QUIESCED;
     ++animation_test_stop_count;
-    return animation_test_stop_result;
+    if (animation_test_stop_result == kCVReturnSuccess ||
+        animation_test_stop_result == kCVReturnDisplayLinkNotRunning) {
+        animation_test_clock_quiesced = true;
+        return ANIMATION_CLOCK_STOP_QUIESCED;
+    }
+    return ANIMATION_CLOCK_STOP_RETRY;
 }
 
 TEST_FUNC(animation_teardown_has_single_non_callback_owner,
@@ -415,14 +381,14 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(window_manager_retry_delay_ms(6), 6400ULL);
     TEST_CHECK(window_manager_retry_delay_ms(UINT8_MAX), 6400ULL);
 
-    __auto_type saved_stop = window_manager_animation_display_link_stop;
-    __auto_type saved_link_release = window_manager_animation_display_link_release;
+    __auto_type saved_stop = window_manager_animation_clock_stop;
+    __auto_type saved_link_release = window_manager_animation_clock_destroy;
     __auto_type saved_connection_release = window_manager_animation_release_connection;
     __auto_type saved_disable = window_manager_animation_disable_update;
     __auto_type saved_reenable = window_manager_animation_reenable_update;
     __auto_type saved_scheduler = window_manager_animation_retry_scheduler;
-    window_manager_animation_display_link_stop = animation_test_stop_sequence;
-    window_manager_animation_display_link_release = animation_test_link_release;
+    window_manager_animation_clock_stop = animation_test_clock_stop;
+    window_manager_animation_clock_destroy = animation_test_clock_destroy;
     window_manager_animation_release_connection = animation_test_connection_release;
     window_manager_animation_disable_update = animation_test_update;
     window_manager_animation_reenable_update = animation_test_update;
@@ -432,13 +398,13 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(saturated.teardown_attempts, UINT8_MAX);
     TEST_CHECK(animation_test_scheduled_delay, 6400ULL);
     animation_test_stop_count = 0;
+    animation_test_clock_quiesced = false;
     animation_test_link_release_count = 0;
     animation_test_connection_release_count = 0;
     animation_test_scheduled_context = NULL;
 
     struct window_animation_context *context = calloc(1, sizeof(*context));
-    context->display_link = (CVDisplayLinkRef) (intptr_t) 1;
-    context->display_link_may_be_running = true;
+    context->clock = (struct animation_clock *) (intptr_t) 1;
     context->animation_connection = 7;
     animation_test_stop_result = kCVReturnError;
     window_manager_animation_teardown_attempt(context);
@@ -447,7 +413,6 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(animation_test_connection_release_count, 0);
     TEST_CHECK(animation_test_scheduled_context == context, true);
     TEST_CHECK(animation_test_scheduled_delay, 100ULL);
-    TEST_CHECK(context->display_link_may_be_running, true);
 
     animation_test_stop_result = kCVReturnSuccess;
     window_manager_animation_teardown_attempt(context);
@@ -455,12 +420,101 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(animation_test_link_release_count, 1);
     TEST_CHECK(animation_test_connection_release_count, 1);
 
-    window_manager_animation_display_link_stop = saved_stop;
-    window_manager_animation_display_link_release = saved_link_release;
+    window_manager_animation_clock_stop = saved_stop;
+    window_manager_animation_clock_destroy = saved_link_release;
     window_manager_animation_release_connection = saved_connection_release;
     window_manager_animation_disable_update = saved_disable;
     window_manager_animation_reenable_update = saved_reenable;
     window_manager_animation_retry_scheduler = saved_scheduler;
+});
+
+static int animation_test_teardown_order[8];
+static int animation_test_teardown_order_count;
+static bool animation_test_teardown_stop_retry;
+
+static enum animation_clock_stop_result animation_test_order_stop(struct animation_clock *clock)
+{
+    (void) clock;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 1;
+    return animation_test_teardown_stop_retry ? ANIMATION_CLOCK_STOP_RETRY
+                                              : ANIMATION_CLOCK_STOP_QUIESCED;
+}
+
+static CGError animation_test_order_disable(int cid)
+{
+    (void) cid;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 2;
+    return kCGErrorSuccess;
+}
+
+static CGError animation_test_order_reenable(int cid)
+{
+    (void) cid;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 3;
+    return kCGErrorSuccess;
+}
+
+static void animation_test_order_destroy(struct animation_clock *clock)
+{
+    (void) clock;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 4;
+}
+
+static CGError animation_test_order_connection_release(int cid)
+{
+    (void) cid;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 5;
+    return kCGErrorSuccess;
+}
+
+static void animation_test_order_retry(struct window_animation_context *context, uint64_t delay)
+{
+    (void) context;
+    (void) delay;
+    animation_test_teardown_order[animation_test_teardown_order_count++] = 6;
+}
+
+TEST_FUNC(animation_teardown_order_stops_before_updates_and_releases_clock_before_connection,
+{
+    __auto_type saved_stop = window_manager_animation_clock_stop;
+    __auto_type saved_destroy = window_manager_animation_clock_destroy;
+    __auto_type saved_disable = window_manager_animation_disable_update;
+    __auto_type saved_reenable = window_manager_animation_reenable_update;
+    __auto_type saved_release = window_manager_animation_release_connection;
+    __auto_type saved_retry = window_manager_animation_retry_scheduler;
+    window_manager_animation_clock_stop = animation_test_order_stop;
+    window_manager_animation_clock_destroy = animation_test_order_destroy;
+    window_manager_animation_disable_update = animation_test_order_disable;
+    window_manager_animation_reenable_update = animation_test_order_reenable;
+    window_manager_animation_release_connection = animation_test_order_connection_release;
+    window_manager_animation_retry_scheduler = animation_test_order_retry;
+
+    animation_test_teardown_order_count = 0;
+    animation_test_teardown_stop_retry = false;
+    struct window_animation_context *context = calloc(1, sizeof(*context));
+    context->clock = (struct animation_clock *)(intptr_t) 1;
+    context->animation_connection = 7;
+    window_manager_animation_teardown_attempt(context);
+    TEST_CHECK(animation_test_teardown_order_count, 5);
+    for (int i = 0; i < 5; ++i) TEST_CHECK(animation_test_teardown_order[i], i + 1);
+
+    animation_test_teardown_order_count = 0;
+    animation_test_teardown_stop_retry = true;
+    context = calloc(1, sizeof(*context));
+    context->clock = (struct animation_clock *)(intptr_t) 1;
+    context->animation_connection = 7;
+    window_manager_animation_teardown_attempt(context);
+    TEST_CHECK(animation_test_teardown_order_count, 2);
+    TEST_CHECK(animation_test_teardown_order[0], 1);
+    TEST_CHECK(animation_test_teardown_order[1], 6);
+    free(context);
+
+    window_manager_animation_clock_stop = saved_stop;
+    window_manager_animation_clock_destroy = saved_destroy;
+    window_manager_animation_disable_update = saved_disable;
+    window_manager_animation_reenable_update = saved_reenable;
+    window_manager_animation_release_connection = saved_release;
+    window_manager_animation_retry_scheduler = saved_retry;
 });
 
 TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
@@ -473,8 +527,7 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     context->animation_list = calloc(1, sizeof(*context->animation_list));
     context->animation_count = 1;
     context->animation_connection = 7;
-    context->display_link = (CVDisplayLinkRef) (intptr_t) 1;
-    context->display_link_may_be_running = true;
+    context->clock = (struct animation_clock *) (intptr_t) 1;
     context->proxies_may_be_installed = true;
     context->animation_list[0].wid = 77;
     context->animation_list[0].proxy.id = 88;
@@ -486,19 +539,20 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     __auto_type saved_connection_release = window_manager_animation_release_connection;
     __auto_type saved_disable = window_manager_animation_disable_update;
     __auto_type saved_reenable = window_manager_animation_reenable_update;
-    __auto_type saved_stop = window_manager_animation_display_link_stop;
-    __auto_type saved_link_release = window_manager_animation_display_link_release;
+    __auto_type saved_stop = window_manager_animation_clock_stop;
+    __auto_type saved_link_release = window_manager_animation_clock_destroy;
     scripting_addition_swap_send_payload = animation_test_swap_sender;
     window_manager_animation_retry_scheduler = animation_test_retry_schedule;
     window_manager_proxy_release_window = animation_test_release_window;
     window_manager_animation_release_connection = animation_test_connection_release;
     window_manager_animation_disable_update = animation_test_update;
     window_manager_animation_reenable_update = animation_test_update;
-    window_manager_animation_display_link_stop = animation_test_stop_sequence;
-    window_manager_animation_display_link_release = animation_test_link_release;
+    window_manager_animation_clock_stop = animation_test_clock_stop;
+    window_manager_animation_clock_destroy = animation_test_clock_destroy;
 
     animation_test_stop_result = kCVReturnSuccess;
     animation_test_stop_count = 0;
+    animation_test_clock_quiesced = false;
     animation_test_send_result = false;
     animation_test_release_window_count = 0;
     animation_test_connection_release_count = 0;
@@ -510,7 +564,6 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     TEST_CHECK(animation_test_release_window_count, 0);
     TEST_CHECK(animation_test_connection_release_count, 0);
     TEST_CHECK(animation_test_stop_count, 1);
-    TEST_CHECK(context->display_link_may_be_running, false);
 
     animation_test_send_result = true;
     window_manager_animation_teardown_attempt(context);
@@ -524,8 +577,8 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     window_manager_animation_release_connection = saved_connection_release;
     window_manager_animation_disable_update = saved_disable;
     window_manager_animation_reenable_update = saved_reenable;
-    window_manager_animation_display_link_stop = saved_stop;
-    window_manager_animation_display_link_release = saved_link_release;
+    window_manager_animation_clock_stop = saved_stop;
+    window_manager_animation_clock_destroy = saved_link_release;
     table_free(&g_window_manager.window_animations_table);
     g_window_manager.window_animations_table = saved_table;
 });
