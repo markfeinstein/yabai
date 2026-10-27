@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 
+#include "window_management_bridge.h"
+
 #define DOCTOR_CSR_ALLOW_UNRESTRICTED_FS 0x02
 #define DOCTOR_CSR_ALLOW_TASK_FOR_PID    0x04
 #define DOCTOR_REQUIRED_SIP (DOCTOR_CSR_ALLOW_UNRESTRICTED_FS | DOCTOR_CSR_ALLOW_TASK_FOR_PID)
@@ -57,6 +59,7 @@ struct doctor_facts {
     enum doctor_probe config_readable;
     enum doctor_probe screen_capture_required;
     enum doctor_probe screen_capture_access;
+    struct wm_bridge_diagnostic window_management;
     enum doctor_sa_install sa_install;
     enum doctor_probe sa_socket;
     enum doctor_sa_runtime sa_runtime;

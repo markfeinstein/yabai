@@ -98,6 +98,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "display.c"
 #include "window.c"
 #include "accessibility_preferences.c"
+#include "window_management_bridge.c"
 #include "window_server_snapshot.c"
 #include "space_window_inventory.c"
 #include "view.c"
@@ -2808,11 +2809,15 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
 
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
+    TEST_ENTRY(window_management_bridge_exact_abi_runs_only_allowlisted_read) \
+    TEST_ENTRY(window_management_bridge_missing_and_mismatched_abi_fails_closed) \
+    TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
     TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
     TEST_ENTRY(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered) \
+    TEST_ENTRY(doctor_window_management_rows_are_advisory_and_redacted) \
     TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
     TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
     TEST_ENTRY(doctor_screen_capture_requirement_uses_static_config_precedence_without_prompting) \

@@ -17,6 +17,21 @@ static struct doctor_facts doctor_test_healthy_facts(void)
         .config_readable = DOCTOR_PROBE_YES,
         .screen_capture_required = DOCTOR_PROBE_NO,
         .screen_capture_access = DOCTOR_PROBE_UNKNOWN,
+        .window_management = {
+            .read_status = WM_BRIDGE_READ_OK,
+            .capabilities = {
+                .skylight_loaded = true,
+                .window_management_loaded = true,
+                .client_abi = true,
+                .copy_topology_abi = true,
+                .create_space_metadata = true,
+                .destroy_space_metadata = true,
+                .move_space_metadata = true,
+                .set_current_space_metadata = true,
+                .create_space_result_metadata = true
+            },
+            .managed_display_record_count = 2
+        },
         .sa_install = DOCTOR_SA_CURRENT,
         .sa_socket = DOCTOR_PROBE_YES,
         .sa_runtime = DOCTOR_SA_RUNTIME_CURRENT,
@@ -42,6 +57,8 @@ TEST_FUNC(doctor_healthy_fixture_returns_success,
         TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
         TEST_CHECK(doctor_test_output_contains(stream, "UNKNOWN service runtime"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "PASS screen recording   mechanism: selected static configuration does not enable capture-dependent features; next: no action required"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "PASS WindowManagement   mechanism: private bridge ABI matched and the read-only topology query returned 2 managed-display records; next: no action required"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "UNKNOWN WM Space mutation  mechanism: create, destroy, reorder, and focus operation metadata is present; mutation was not attempted; next: validate Dock and Mission Control coherence only in a disposable VM"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "PASS scripting status"), true);
         TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures; doctor made no changes"), true);
         fclose(stream);
@@ -125,6 +142,44 @@ TEST_FUNC(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered,
     TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
     TEST_CHECK(doctor_test_output_contains(stream,
         "UNKNOWN screen recording   mechanism: configured window animations require capture but nonprompting preflight is unavailable; next: verify Screen Recording permission manually"), true);
+    fclose(stream);
+});
+
+TEST_FUNC(doctor_window_management_rows_are_advisory_and_redacted,
+{
+    struct doctor_facts facts = doctor_test_healthy_facts();
+    const struct {
+        enum wm_bridge_read_status status;
+        const char *line;
+    } cases[] = {
+        { WM_BRIDGE_READ_OK,
+          "PASS WindowManagement   mechanism: private bridge ABI matched and the read-only topology query returned 2 managed-display records; next: no action required" },
+        { WM_BRIDGE_READ_UNAVAILABLE,
+          "UNKNOWN WindowManagement   mechanism: the optional private bridge framework, class, or selector is unavailable; next: continue using existing fallbacks" },
+        { WM_BRIDGE_READ_ABI_MISMATCH,
+          "WARN WindowManagement   mechanism: the optional private bridge class hierarchy or method encoding does not match the validated ABI; next: do not use bridged operations on this macOS build" },
+        { WM_BRIDGE_READ_FAILED,
+          "WARN WindowManagement   mechanism: the validated read-only topology operation returned no usable property-list array; next: do not use bridged operations on this macOS build" }
+    };
+
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        facts.window_management.read_status = cases[i].status;
+        FILE *stream = tmpfile();
+        TEST_CHECK(stream != NULL, true);
+        TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+        TEST_CHECK(doctor_test_output_contains(stream, cases[i].line), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures; doctor made no changes"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "DO_NOT_PRINT_UUID_TITLE_VALUE"), false);
+        fclose(stream);
+    }
+
+    facts.window_management.read_status = WM_BRIDGE_READ_OK;
+    facts.window_management.capabilities.destroy_space_metadata = false;
+    FILE *stream = tmpfile();
+    TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+    TEST_CHECK(doctor_test_output_contains(stream,
+        "UNKNOWN WM Space mutation  mechanism: one or more create, destroy, reorder, or focus operation ABIs are unavailable; next: retain the existing scripting-addition and gesture paths"), true);
+    TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures; doctor made no changes"), true);
     fclose(stream);
 });
 

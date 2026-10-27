@@ -91,6 +91,7 @@
 #include "declarative_space.h"
 #include "declarative_topology.h"
 #include "declarative_install.h"
+#include "window_management_bridge.h"
 #include "doctor.h"
 #include "message.h"
 #include "display.h"
@@ -144,4 +145,5 @@
 #include "declarative_space.c"
 #include "declarative_install.c"
 #include "yabai.c"
+#include "window_management_bridge.m"
 #include "doctor.m"
