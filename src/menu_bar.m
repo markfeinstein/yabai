@@ -1,9 +1,7 @@
 #include "menu_bar.h"
 #include "accessibility_preferences.h"
-#include "menu_bar_thumbnails.h"
 
 #import <AppKit/AppKit.h>
-#import <ScreenCaptureKit/ScreenCaptureKit.h>
 #include <dispatch/dispatch.h>
 #include <math.h>
 #include <pthread.h>
@@ -11,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <time.h>
 
 #if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
 #define YB_MENU_BAR_HAS_EXPANDED_INTERFACE_SDK 1
@@ -184,12 +181,6 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     id _expanded_session;
     YBMenuBarExpandedPanel *_expanded_panel;
     id _expanded_event_monitor;
-    YBMenuBarThumbnailCache *_thumbnail_cache;
-    NSMutableDictionary *_thumbnail_views;
-    NSMutableArray *_thumbnail_jobs;
-    NSUInteger _thumbnail_next_job;
-    NSUInteger _thumbnail_inflight;
-    uint64_t _thumbnail_epoch;
     bool _panel_disabled;
     bool _is_tracking_menu;
     bool _is_tearing_down_status_item;
@@ -212,7 +203,6 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)performPanelStyleAction:(id)sender;
 - (void)beginExpandedPanelWithSession:(id)session;
 - (void)endExpandedPanel;
-- (void)startThumbnailCapture;
 #if defined(YB_MENU_BAR_TEST)
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
 - (void)testSetMenu:(NSMenu *)menu;
@@ -241,8 +231,6 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (NSUInteger)testExpandedSpaceCardCount;
 - (bool)testStatusItemHasMenu;
 - (NSStatusBarButton *)testStatusItemButton;
-- (YBMenuBarThumbnailCache *)testThumbnailCache;
-- (NSUInteger)testExpandedThumbnailImageCount;
 #endif
 @end
 
@@ -843,18 +831,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     if (!self) return nil;
 
     if (callbacks) _callbacks = *callbacks;
-    _thumbnail_cache = [[YBMenuBarThumbnailCache alloc] init];
-    _thumbnail_views = [[NSMutableDictionary alloc] init];
-    _thumbnail_jobs = [[NSMutableArray alloc] init];
     return self;
 }
 
 - (void)dealloc
 {
     [self shutdown];
-    [_thumbnail_cache release];
-    [_thumbnail_views release];
-    [_thumbnail_jobs release];
     [super dealloc];
 }
 
@@ -904,8 +886,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (void)clearStatusItem
 {
     _is_tearing_down_status_item = true;
-    ++_thumbnail_epoch;
-    [_thumbnail_cache purge];
 
     if (_expanded_session) [_expanded_session cancel];
     [self closeExpandedPanel];
@@ -997,36 +977,13 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return label;
 }
 
-- (NSTimeInterval)thumbnailNow
-{
-    return (NSTimeInterval) clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000000.0;
-}
-
-- (bool)thumbnailsRequested
-{
-    return _snapshot && _snapshot->settings.thumbnails == MENU_BAR_THUMBNAILS_ON &&
-           [self wantsExpandedPanel];
-}
-
-- (NSString *)thumbnailKeyForDisplay:(const struct menu_bar_display *)display
-                               space:(const struct menu_bar_space *)space
-{
-    NSString *uuid = yb_nsstring(display ? display->uuid : NULL);
-    if (![uuid length] || !space) return nil;
-    return [NSString stringWithFormat:@"%@:%llu", uuid, space->space_id];
-}
-
 - (YBMenuBarExpandedPanel *)buildExpandedPanel
 {
     if (!_snapshot) return nil;
     const CGFloat width = 420.0;
     const CGFloat footer_height = 76.0;
     const CGFloat header_height = 52.0;
-    bool thumbnails = [self thumbnailsRequested];
-    bool capture_allowed = !thumbnails || CGPreflightScreenCaptureAccess();
-    if (thumbnails && !capture_allowed) [_thumbnail_cache purge];
-    [_thumbnail_views removeAllObjects];
-    const CGFloat card_height = thumbnails ? 88.0 : 52.0;
+    const CGFloat card_height = 52.0;
     const CGFloat display_height = 30.0;
     CGFloat document_height = 12.0;
     for (size_t display_index = 0; display_index < _snapshot->display_count; ++display_index) {
@@ -1101,56 +1058,14 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
             if (!yb_space_matches_filter(space, _snapshot->settings.space_filter)) continue;
             YBMenuBarSpaceCard *card = [[[YBMenuBarSpaceCard alloc]
                 initWithFrame:NSMakeRect(10, y - card_height + 8.0, width - 64, card_height)] autorelease];
-            [card setTitle:thumbnails ? @"" : yb_space_menu_title(space)];
+            [card setTitle:yb_space_menu_title(space)];
             [card setButtonType:NSButtonTypeMomentaryPushIn];
             [card setBezelStyle:NSBezelStyleRounded];
             [card setAlignment:NSTextAlignmentLeft];
             [card setTarget:nil];
             [card setAction:nil];
             [card setAccessibilityRole:NSAccessibilityGroupRole];
-            NSString *accessibility = yb_space_accessibility_title(display, display_index, space);
-            if (thumbnails) {
-                NSString *key = [self thumbnailKeyForDisplay:display space:space];
-                NSImageView *imageView = [[[NSImageView alloc] initWithFrame:NSMakeRect(8, 12, 112, 63)] autorelease];
-                [imageView setImageScaling:NSImageScaleProportionallyUpOrDown];
-                [imageView setAccessibilityElement:NO];
-                NSTextField *placeholder = [self panelLabel:capture_allowed
-                    ? (space->is_visible ? @"Preview pending" : @"No cached preview")
-                    : @"Preview unavailable"
-                    font:[NSFont systemFontOfSize:10.0]
-                    frame:NSMakeRect(8, 32, 112, 20)];
-                [placeholder setAlignment:NSTextAlignmentCenter];
-                [placeholder setTextColor:[NSColor secondaryLabelColor]];
-                [card addSubview:imageView];
-                [card addSubview:placeholder];
-                NSTextField *title = [self panelLabel:yb_space_menu_title(space)
-                                                     font:[NSFont systemFontOfSize:12.0]
-                                                    frame:NSMakeRect(128, 15, width - 200, 58)];
-                [card addSubview:title];
-                NSTimeInterval age = 0;
-                CGImageRef cached = capture_allowed && key
-                                  ? [_thumbnail_cache copyImageForKey:key now:[self thumbnailNow] age:&age]
-                                  : NULL;
-                NSString *previewState = capture_allowed ? @"no cached preview" : @"preview unavailable; Screen Recording access is not available";
-                if (cached) {
-                    NSImage *image = [[[NSImage alloc] initWithCGImage:cached size:NSMakeSize(112, 63)] autorelease];
-                    [imageView setImage:image];
-                    [placeholder setHidden:YES];
-                    previewState = age < 60.0 ? @"preview captured just now"
-                                              : [NSString stringWithFormat:@"cached preview captured %ld minutes ago", (long)(age / 60.0)];
-                    CGImageRelease(cached);
-                } else if (space->is_visible && capture_allowed) {
-                    previewState = @"preview pending";
-                }
-                [card setAccessibilityLabel:[NSString stringWithFormat:@"%@, %@", accessibility, previewState]];
-                if (key) {
-                    [_thumbnail_views setObject:@{ @"image": imageView, @"placeholder": placeholder,
-                                                   @"card": card, @"accessibility": accessibility }
-                                         forKey:key];
-                }
-            } else {
-                [card setAccessibilityLabel:accessibility];
-            }
+            [card setAccessibilityLabel:yb_space_accessibility_title(display, display_index, space)];
             [card setAccessibilitySelected:space->is_visible];
             [document addSubview:card];
             if (!first_key_view) first_key_view = card;
@@ -1226,127 +1141,8 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return true;
 }
 
-- (void)updateThumbnailKey:(NSString *)key image:(CGImageRef)image unavailable:(bool)unavailable
-{
-    NSDictionary *mapping = [_thumbnail_views objectForKey:key];
-    if (!mapping) return;
-    NSImageView *imageView = [mapping objectForKey:@"image"];
-    NSTextField *placeholder = [mapping objectForKey:@"placeholder"];
-    YBMenuBarSpaceCard *card = [mapping objectForKey:@"card"];
-    NSString *base = [mapping objectForKey:@"accessibility"];
-    if (image) {
-        NSImage *wrapped = [[[NSImage alloc] initWithCGImage:image size:NSMakeSize(112, 63)] autorelease];
-        [imageView setImage:wrapped];
-        [placeholder setHidden:YES];
-        [card setAccessibilityLabel:[NSString stringWithFormat:@"%@, preview captured just now", base]];
-    } else {
-        [imageView setImage:nil];
-        [placeholder setHidden:NO];
-        [placeholder setStringValue:unavailable ? @"Preview unavailable" : @"No capturable windows"];
-        [card setAccessibilityLabel:[NSString stringWithFormat:@"%@, %@", base,
-            unavailable ? @"preview unavailable" : @"no capturable windows"]];
-    }
-}
-
-- (void)startNextThumbnailJobs
-{
-    while (_thumbnail_inflight < 2 && _thumbnail_next_job < [_thumbnail_jobs count]) {
-        NSDictionary *job = [_thumbnail_jobs objectAtIndex:_thumbnail_next_job++];
-        SCContentFilter *filter = [job objectForKey:@"filter"];
-        SCStreamConfiguration *configuration = [job objectForKey:@"configuration"];
-        NSString *key = [job objectForKey:@"key"];
-        uint64_t epoch = [[job objectForKey:@"epoch"] unsignedLongLongValue];
-        ++_thumbnail_inflight;
-        [SCScreenshotManager captureImageWithFilter:filter configuration:configuration
-            completionHandler:^(CGImageRef image, NSError *error) {
-                CGImageRef retained = image ? CGImageRetain(image) : NULL;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (_thumbnail_inflight) --_thumbnail_inflight;
-                    bool current = epoch == _thumbnail_epoch && _expanded_panel &&
-                                   _snapshot && _snapshot->settings.thumbnails == MENU_BAR_THUMBNAILS_ON;
-                    if (current && retained) {
-                        if ([_thumbnail_cache insertImage:retained forKey:key now:[self thumbnailNow]]) {
-                            [self updateThumbnailKey:key image:retained unavailable:false];
-                        }
-                    } else if (current && error) {
-                        bool denied = !CGPreflightScreenCaptureAccess();
-                        if (denied) [_thumbnail_cache purge];
-                        [self updateThumbnailKey:key image:NULL unavailable:true];
-                    }
-                    if (retained) CGImageRelease(retained);
-                    [self startNextThumbnailJobs];
-                });
-            }];
-    }
-}
-
-- (void)startThumbnailCapture
-{
-    if (![self thumbnailsRequested] || !_expanded_panel) return;
-    if (!CGPreflightScreenCaptureAccess()) {
-        [_thumbnail_cache purge];
-        for (NSString *key in _thumbnail_views) [self updateThumbnailKey:key image:NULL unavailable:true];
-        return;
-    }
-    uint64_t epoch = ++_thumbnail_epoch;
-    [_thumbnail_jobs removeAllObjects];
-    _thumbnail_next_job = 0;
-    _thumbnail_inflight = 0;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES
-        completionHandler:^(SCShareableContent *content, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (epoch != _thumbnail_epoch || !_expanded_panel || error || !content) return;
-                NSUInteger jobs = 0;
-                for (size_t displayIndex = 0; displayIndex < _snapshot->display_count && jobs < 16; ++displayIndex) {
-                    const struct menu_bar_display *display = &_snapshot->displays[displayIndex];
-                    const struct menu_bar_space *visible = NULL;
-                    for (size_t spaceIndex = 0; spaceIndex < display->space_count; ++spaceIndex) {
-                        if (display->spaces[spaceIndex].is_visible) { visible = &display->spaces[spaceIndex]; break; }
-                    }
-                    NSString *key = [self thumbnailKeyForDisplay:display space:visible];
-                    if (!key || !visible || [_thumbnail_cache isFreshKey:key now:[self thumbnailNow]]) continue;
-                    SCDisplay *captureDisplay = nil;
-                    for (SCDisplay *candidate in [content displays]) {
-                        if ([candidate displayID] == display->display_id) { captureDisplay = candidate; break; }
-                    }
-                    if (!captureDisplay) { [self updateThumbnailKey:key image:NULL unavailable:true]; continue; }
-                    NSMutableArray *windows = [NSMutableArray array];
-                    for (SCWindow *window in [content windows]) {
-                        if (![window isOnScreen] || [window windowLayer] != 0 ||
-                            [[window owningApplication] processID] == getpid() ||
-                            !CGRectIntersectsRect([window frame], [captureDisplay frame])) continue;
-                        [windows addObject:window];
-                    }
-                    if (![windows count]) { [self updateThumbnailKey:key image:NULL unavailable:false]; continue; }
-                    SCContentFilter *filter = [[[SCContentFilter alloc] initWithDisplay:captureDisplay
-                                                                          includingWindows:windows] autorelease];
-                    SCStreamConfiguration *configuration = [[[SCStreamConfiguration alloc] init] autorelease];
-                    [configuration setWidth:256];
-                    [configuration setHeight:144];
-                    [configuration setPreservesAspectRatio:YES];
-                    [configuration setScalesToFit:YES];
-                    [configuration setShowsCursor:NO];
-                    [configuration setCapturesAudio:NO];
-                    [configuration setQueueDepth:1];
-                    [configuration setPixelFormat:kCVPixelFormatType_32BGRA];
-                    [configuration setShouldBeOpaque:YES];
-                    if (@available(macOS 14.2, *)) [configuration setIncludeChildWindows:YES];
-                    [_thumbnail_jobs addObject:@{ @"filter": filter, @"configuration": configuration,
-                                                  @"key": key, @"epoch": @(epoch) }];
-                    ++jobs;
-                }
-                [self startNextThumbnailJobs];
-            });
-        }];
-}
-
 - (void)closeExpandedPanel
 {
-    ++_thumbnail_epoch;
-    [_thumbnail_jobs removeAllObjects];
-    _thumbnail_next_job = 0;
-    _thumbnail_inflight = 0;
-    [_thumbnail_views removeAllObjects];
     if (_expanded_event_monitor) {
         [NSEvent removeMonitor:_expanded_event_monitor];
         [_expanded_event_monitor release];
@@ -1377,24 +1173,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         if (snapshot) menu_bar_model_snapshot_destroy(snapshot);
         [self clearStatusItem];
         return;
-    }
-
-    if (snapshot->settings.thumbnails == MENU_BAR_THUMBNAILS_OFF ||
-        snapshot->settings.interface == MENU_BAR_INTERFACE_MENU) {
-        ++_thumbnail_epoch;
-        [_thumbnail_cache purge];
-    } else {
-        NSMutableSet *keys = [NSMutableSet set];
-        for (size_t displayIndex = 0; displayIndex < snapshot->display_count; ++displayIndex) {
-            const struct menu_bar_display *display = &snapshot->displays[displayIndex];
-            NSString *uuid = yb_nsstring(display->uuid);
-            if (![uuid length]) continue;
-            for (size_t spaceIndex = 0; spaceIndex < display->space_count; ++spaceIndex) {
-                [keys addObject:[NSString stringWithFormat:@"%@:%llu", uuid,
-                                 display->spaces[spaceIndex].space_id]];
-            }
-        }
-        [_thumbnail_cache pruneToKeys:keys now:[self thumbnailNow]];
     }
 
     if (_is_tracking_menu) {
@@ -1893,7 +1671,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         }] retain];
     [_expanded_panel orderFront:nil];
     [_expanded_panel makeKeyWindow];
-    [self startThumbnailCapture];
 }
 
 - (void)endExpandedPanel
@@ -2073,25 +1850,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (NSStatusBarButton *)testStatusItemButton
 {
     return [_status_item button];
-}
-
-- (YBMenuBarThumbnailCache *)testThumbnailCache
-{
-    return _thumbnail_cache;
-}
-
-- (NSUInteger)testExpandedThumbnailImageCount
-{
-    if (!_expanded_panel) return 0;
-    NSUInteger count = 0;
-    NSMutableArray *stack = [NSMutableArray arrayWithObject:[_expanded_panel contentView]];
-    while ([stack count]) {
-        NSView *view = [stack lastObject];
-        [stack removeLastObject];
-        if ([view isKindOfClass:[NSImageView class]] && [(NSImageView *)view image]) ++count;
-        [stack addObjectsFromArray:[view subviews]];
-    }
-    return count;
 }
 
 - (NSUInteger)testExpandedSpaceCardCount
