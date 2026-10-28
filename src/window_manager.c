@@ -9,6 +9,7 @@ static struct window *window_manager_test_rule_window;
 #endif
 
 static AXError window_manager_set_attribute_value(AXUIElementRef element, CFStringRef attribute, CFTypeRef value);
+static void window_manager_refresh_active_window_highlight_for_captures(struct window_capture *window_list, int window_count);
 
 static TABLE_HASH_FUNC(hash_wm)
 {
@@ -1259,7 +1260,7 @@ set_final_frames:
         window_manager_animation_set_frame(window_list[i].window, window_list[i].x, window_list[i].y,
                                            window_list[i].w, window_list[i].h);
     }
-    event_loop_request_active_window_highlight_refresh();
+    window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
 }
 #ifdef TESTS
 static void (*window_manager_test_animate_observer)(struct window_capture *, int);
@@ -1281,14 +1282,28 @@ static bool window_manager_should_animate(float configured_duration)
     return configured_duration > 0.0f && !preferences.reduce_motion;
 }
 
-static bool window_manager_window_capture_list_contains(struct window_capture *window_list, int window_count,
-                                                        uint32_t window_id)
+static struct window_capture *window_manager_find_window_capture(struct window_capture *window_list,
+                                                                  int window_count,
+                                                                  uint32_t window_id)
 {
-    if (!window_id) return false;
+    if (!window_id) return NULL;
     for (int i = 0; i < window_count; ++i) {
-        if (window_list[i].window && window_list[i].window->id == window_id) return true;
+        if (window_list[i].window && window_list[i].window->id == window_id) return &window_list[i];
     }
-    return false;
+    return NULL;
+}
+
+static void window_manager_refresh_active_window_highlight_for_captures(struct window_capture *window_list,
+                                                                        int window_count)
+{
+    struct window_capture *capture = window_manager_find_window_capture(window_list, window_count,
+                                                                         g_window_manager.focused_window_id);
+    if (capture) {
+        CGRect frame = CGRectMake(capture->x, capture->y, capture->w, capture->h);
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, capture->window->id, frame);
+    } else {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 }
 
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count)
@@ -1302,8 +1317,8 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
 #endif
 
     if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
-        if (window_manager_window_capture_list_contains(window_list, window_count,
-                                                        g_window_manager.focused_window_id)) {
+        if (window_manager_find_window_capture(window_list, window_count,
+                                               g_window_manager.focused_window_id)) {
             window_manager_hide_active_window_highlight(&g_window_manager);
         }
         window_manager_animation_async_route(window_list, window_count);
@@ -1313,7 +1328,7 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
                                                    window_list[i].y, window_list[i].w,
                                                    window_list[i].h);
         }
-        window_manager_refresh_active_window_highlight(&g_window_manager);
+        window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
     }
 }
 
@@ -1335,7 +1350,7 @@ void window_manager_animate_window(struct window_capture capture)
     } else {
         window_manager_animation_direct_route(capture.window, capture.x, capture.y,
                                               capture.w, capture.h);
-        window_manager_refresh_active_window_highlight(&g_window_manager);
+        window_manager_refresh_active_window_highlight_for_captures(&capture, 1);
     }
 }
 
@@ -1446,9 +1461,31 @@ void window_manager_set_normal_window_opacity(struct window_manager *wm, float o
 }
 
 #ifdef TESTS
-static void (*window_manager_test_active_window_highlight_refresh_observer)(struct window_manager *);
+static void (*window_manager_test_active_window_highlight_refresh_observer)(struct window_manager *, uint32_t, const CGRect *);
 static void (*window_manager_test_active_window_highlight_hide_observer)(struct window_manager *);
 #endif
+
+static void window_manager_active_window_highlight_clear_pending_frame(struct active_window_highlight *highlight)
+{
+    highlight->pending_target_wid = 0;
+    highlight->pending_target_frame_valid = false;
+}
+
+static CGRect window_manager_active_window_highlight_resolve_frame(struct active_window_highlight *highlight,
+                                                                    uint32_t target_wid,
+                                                                    CGRect observed_frame)
+{
+    if (!highlight->pending_target_frame_valid) return observed_frame;
+    if (highlight->pending_target_wid != target_wid) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+        return observed_frame;
+    }
+    if (CGRectEqualToRect(highlight->pending_target_frame, observed_frame)) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+        return observed_frame;
+    }
+    return highlight->pending_target_frame;
+}
 
 static bool window_manager_active_window_highlight_window_is_animating(struct window_manager *wm,
                                                                         uint32_t window_id)
@@ -1461,6 +1498,7 @@ static bool window_manager_active_window_highlight_window_is_animating(struct wi
 
 void window_manager_hide_active_window_highlight(struct window_manager *wm)
 {
+    window_manager_active_window_highlight_clear_pending_frame(&wm->active_window_highlight);
 #ifdef TESTS
     if (window_manager_test_active_window_highlight_hide_observer) {
         window_manager_test_active_window_highlight_hide_observer(wm);
@@ -1476,14 +1514,27 @@ void window_manager_reorder_active_window_highlight(struct window_manager *wm)
     window_manager_refresh_active_window_highlight(wm);
 }
 
-void window_manager_refresh_active_window_highlight(struct window_manager *wm)
+static void window_manager_refresh_active_window_highlight_internal(struct window_manager *wm,
+                                                                     uint32_t target_wid,
+                                                                     const CGRect *target_frame)
 {
 #ifdef TESTS
     if (window_manager_test_active_window_highlight_refresh_observer) {
-        window_manager_test_active_window_highlight_refresh_observer(wm);
+        window_manager_test_active_window_highlight_refresh_observer(wm, target_wid, target_frame);
         return;
     }
 #endif
+    struct active_window_highlight *highlight = &wm->active_window_highlight;
+    // AX frame writes can complete before WindowServer publishes matching bounds.
+    if (target_frame && target_wid == wm->focused_window_id) {
+        highlight->pending_target_frame = *target_frame;
+        highlight->pending_target_wid = target_wid;
+        highlight->pending_target_frame_valid = true;
+    } else if (highlight->pending_target_frame_valid &&
+               highlight->pending_target_wid != wm->focused_window_id) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+    }
+
     if (!wm->enable_active_window_highlight || !wm->focused_window_id || mission_control_is_active()) {
         window_manager_hide_active_window_highlight(wm);
         return;
@@ -1501,25 +1552,38 @@ void window_manager_refresh_active_window_highlight(struct window_manager *wm)
     }
 
     uint8_t ordered_in = 0;
-    CGRect frame;
+    CGRect observed_frame;
     uint64_t tags = 0;
     if (SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in) != kCGErrorSuccess || !ordered_in ||
-        SLSGetWindowBounds(g_connection, window->id, &frame) != kCGErrorSuccess ||
+        SLSGetWindowBounds(g_connection, window->id, &observed_frame) != kCGErrorSuccess ||
         !window_tags_with_status(window->id, &tags)) {
         window_manager_hide_active_window_highlight(wm);
         return;
     }
 
+    CGRect frame = window_manager_active_window_highlight_resolve_frame(highlight, window->id, observed_frame);
     bool sticky = (tags & WINDOW_SERVER_TAG_ON_ALL_WORKSPACES) != 0;
     uint64_t sid = window_space(window->id);
     if ((!sticky && (!sid || !space_is_visible(sid))) ||
-        !active_window_highlight_show(&wm->active_window_highlight, window->id, frame,
+        !active_window_highlight_show(highlight, window->id, frame,
                                       window_level(window->id), window_sub_level(window->id),
                                       sid, sticky, wm->active_window_highlight_color.p,
                                       wm->active_window_highlight_width,
                                       wm->active_window_highlight_radius)) {
         window_manager_hide_active_window_highlight(wm);
     }
+}
+
+void window_manager_refresh_active_window_highlight(struct window_manager *wm)
+{
+    window_manager_refresh_active_window_highlight_internal(wm, 0, NULL);
+}
+
+void window_manager_refresh_active_window_highlight_for_frame(struct window_manager *wm,
+                                                               uint32_t window_id,
+                                                               CGRect frame)
+{
+    window_manager_refresh_active_window_highlight_internal(wm, window_id, &frame);
 }
 
 void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled)
