@@ -154,7 +154,6 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_SHADOW: return bundle->window_manager.purify_mode == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR: return bundle->menu_settings.enabled == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: return bundle->menu_settings.interface == value->enumeration;
-    case DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS: return bundle->menu_settings.thumbnails == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: return bundle->menu_settings.style == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return bundle->menu_settings.space_filter == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return bundle->window_manager.menubar_opacity == value->real;
@@ -233,7 +232,7 @@ static struct declarative_config_model *declarative_install_test_model(void)
 {
     static const char json[] =
         "{\"version\":2,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"single_window_max_width\":1800,\"single_window_min_width\":1200,\"single_window_width_ratio\":0.9,\"focus_follows_mouse\":\"autofocus\","
-        "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_interface\":\"panel\",\"menubar_thumbnails\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
+        "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_interface\":\"panel\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
         "\"modes\":[{\"name\":\"startup\",\"spaces\":[]}],\"active_mode\":\"startup\","
         "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"accordion_vertical\","
         "\"top_padding\":1,\"bottom_padding\":2,\"left_padding\":3,\"right_padding\":4,"
@@ -388,7 +387,6 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_RECENT);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
     TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_PANEL);
-    TEST_CHECK(g_menu_bar_manager.settings.thumbnails, MENU_BAR_THUMBNAILS_ON);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
@@ -507,7 +505,6 @@ TEST_FUNC(declarative_startup_install_failure_preserves_live_managers,
     TEST_CHECK(g_mouse_state.modifier, MOUSE_MOD_ALT);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_DISABLED);
     TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_MENU);
-    TEST_CHECK(g_menu_bar_manager.settings.thumbnails, MENU_BAR_THUMBNAILS_OFF);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_COMPACT);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
     declarative_startup_destroy(&closed_startup);

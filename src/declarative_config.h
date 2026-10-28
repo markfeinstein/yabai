@@ -37,7 +37,6 @@
     X(SHADOW,                COMMAND_CONFIG_SHADOW,                "window_shadow",                 ENUM,       GLOBAL, SHADOW,           SHADOW) \
     X(MENUBAR,               COMMAND_CONFIG_MENUBAR,               "menubar",                       ENUM,       GLOBAL, MENUBAR,          MENUBAR) \
     X(MENUBAR_INTERFACE,     COMMAND_CONFIG_MENUBAR_INTERFACE,     "menubar_interface",             ENUM,       GLOBAL, MENUBAR_INTERFACE, MENUBAR_INTERFACE) \
-    X(MENUBAR_THUMBNAILS,    COMMAND_CONFIG_MENUBAR_THUMBNAILS,    "menubar_thumbnails",            ENUM,       GLOBAL, MENUBAR_THUMBNAILS, MENUBAR_THUMBNAILS) \
     X(MENUBAR_STYLE,         COMMAND_CONFIG_MENUBAR_STYLE,         "menubar_style",                 ENUM,       GLOBAL, MENUBAR_STYLE,    MENUBAR_STYLE) \
     X(MENUBAR_SPACE_FILTER,  COMMAND_CONFIG_MENUBAR_SPACE_FILTER,  "menubar_space_filter",          ENUM,       GLOBAL, SPACE_FILTER,     SPACE_FILTER) \
     X(MENUBAR_OPACITY,       COMMAND_CONFIG_MENUBAR_OPACITY,       "menubar_opacity",               FLOAT,      GLOBAL, UNIT_FLOAT,       MENUBAR_OPACITY) \
