@@ -29,6 +29,17 @@ struct native_tab_tool
     CFMutableSetRef observed_ax_windows;
     id workspace_tokens[4];
     CFRunLoopTimerRef timer;
+    struct {
+        uint32_t window_id;
+        uint32_t generation;
+    } subscriptions[NATIVE_TAB_INVENTORY_CAPACITY];
+    size_t subscription_count;
+    uint32_t subscription_generation;
+    volatile uint32_t delivered_815;
+    volatile uint32_t delivered_816;
+    uint32_t last_delivery_code;
+    uint32_t last_delivery_window;
+    uint64_t last_delivery_ns;
     bool ax_available;
     bool success;
     bool stopping;
@@ -98,15 +109,29 @@ static void native_tab_ax_observe_window(struct native_tab_tool *tool, AXUIEleme
     };
     for (size_t i = 0; i < sizeof(notifications) / sizeof(*notifications); ++i) {
         AXError result = AXObserverAddNotification(tool->observer, window, notifications[i], tool);
-        if (result != kAXErrorSuccess && result != kAXErrorNotificationAlreadyRegistered &&
-            result != kAXErrorNotificationUnsupported) tool->success = false;
+        /* Per-window AX notifications are optional evidence. Inventory remains
+         * authoritative when a target does not support one of them. */
+        (void) result;
     }
+}
+
+static uint32_t native_tab_ax_application_window(AXUIElementRef application, CFStringRef attribute)
+{
+    CFTypeRef value = NULL;
+    uint32_t window_id = 0;
+    if (application && AXUIElementCopyAttributeValue(application, attribute, &value) == kAXErrorSuccess) {
+        window_id = native_tab_ax_window_id((AXUIElementRef) value);
+    }
+    if (value) CFRelease(value);
+    return window_id;
 }
 
 static void native_tab_enrich_ax_inventory(struct native_tab_tool *tool,
                                            struct native_tab_inventory *inventory)
 {
     if (!tool->ax_available || !tool->application) return;
+    uint32_t focused_window_id = native_tab_ax_application_window(
+        tool->application, kAXFocusedWindowAttribute);
     CFTypeRef value = NULL;
     AXError result = AXUIElementCopyAttributeValue(tool->application, kAXWindowsAttribute, &value);
     if (result != kAXErrorSuccess || !value || CFGetTypeID(value) != CFArrayGetTypeID()) {
@@ -122,13 +147,39 @@ static void native_tab_enrich_ax_inventory(struct native_tab_tool *tool,
         uint32_t window_id = native_tab_ax_window_id(window);
         struct native_tab_window_fact *fact = native_tab_inventory_find(inventory, window_id);
         if (!fact) continue;
-        CFTypeRef title = NULL;
+        fact->ax_member = true;
+        fact->focused = window_id && window_id == focused_window_id;
+        fact->validity |= NATIVE_TAB_FACT_AX | NATIVE_TAB_FACT_STATE;
+        CFTypeRef title = NULL, role = NULL, subrole = NULL;
         if (AXUIElementCopyAttributeValue(window, kAXTitleAttribute, &title) == kAXErrorSuccess &&
             title && CFGetTypeID(title) == CFStringGetTypeID()) {
             fact->title_token = (uint64_t) CFHash(title) + 1;
             fact->validity |= NATIVE_TAB_FACT_TITLE;
         }
+        if (AXUIElementCopyAttributeValue(window, kAXRoleAttribute, &role) == kAXErrorSuccess &&
+            role && CFGetTypeID(role) == CFStringGetTypeID()) {
+            fact->role_token = (uint32_t)CFHash(role) + 1;
+            fact->validity |= NATIVE_TAB_FACT_ROLE;
+        }
+        if (AXUIElementCopyAttributeValue(window, kAXSubroleAttribute, &subrole) == kAXErrorSuccess &&
+            subrole && CFGetTypeID(subrole) == CFStringGetTypeID()) {
+            fact->subrole_token = (uint32_t)CFHash(subrole) + 1;
+            fact->validity |= NATIVE_TAB_FACT_SUBROLE;
+        }
+        CFTypeRef state = NULL;
+        if (AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute, &state) == kAXErrorSuccess &&
+            state && CFGetTypeID(state) == CFBooleanGetTypeID()) {
+            fact->minimized = CFBooleanGetValue((CFBooleanRef)state);
+        }
+        if (state) CFRelease(state); state = NULL;
+        if (AXUIElementCopyAttributeValue(window, CFSTR("AXFullScreen"), &state) == kAXErrorSuccess &&
+            state && CFGetTypeID(state) == CFBooleanGetTypeID()) {
+            fact->fullscreen = CFBooleanGetValue((CFBooleanRef)state);
+        }
+        if (state) CFRelease(state);
         if (title) CFRelease(title);
+        if (role) CFRelease(role);
+        if (subrole) CFRelease(subrole);
     }
     CFRelease(windows);
 }
@@ -141,7 +192,32 @@ static void native_tab_subscribe_window_notifications(struct native_tab_tool *to
     for (size_t i = 0; i < inventory->count && count < NATIVE_TAB_INVENTORY_CAPACITY; ++i) {
         window_ids[count++] = inventory->windows[i].window_id;
     }
-    if (count) (void) SLSRequestNotificationsForWindows(tool->connection, window_ids, count);
+    if (!count) return;
+    uint32_t generation = ++tool->subscription_generation;
+    if (SLSRequestNotificationsForWindows(tool->connection, window_ids, count) != kCGErrorSuccess) return;
+    for (int i = 0; i < count; ++i) {
+        size_t index = 0;
+        while (index < tool->subscription_count &&
+               tool->subscriptions[index].window_id != window_ids[i]) ++index;
+        if (index == tool->subscription_count) {
+            if (tool->subscription_count >= NATIVE_TAB_INVENTORY_CAPACITY) continue;
+            ++tool->subscription_count;
+        }
+        tool->subscriptions[index].window_id = window_ids[i];
+        tool->subscriptions[index].generation = generation;
+    }
+}
+
+static bool native_tab_subscription_generation(const struct native_tab_tool *tool,
+                                                uint32_t window_id, uint32_t *generation)
+{
+    for (size_t i = 0; i < tool->subscription_count; ++i) {
+        if (tool->subscriptions[i].window_id != window_id) continue;
+        if (generation) *generation = tool->subscriptions[i].generation;
+        return true;
+    }
+    if (generation) *generation = 0;
+    return false;
 }
 
 static bool native_tab_capture_inventory(struct native_tab_tool *tool,
@@ -253,6 +329,7 @@ static bool native_tab_capture_inventory(struct native_tab_tool *tool,
 static bool native_tab_emit_event(struct native_tab_tool *tool,
                                   enum native_tab_event_type type, uint32_t window_id,
                                   bool ordered_in_known, bool ordered_in,
+                                  const struct native_tab_event *details,
                                   bool capture_inventory)
 {
     uint64_t now_ns = native_tab_now_ns();
@@ -262,14 +339,18 @@ static bool native_tab_emit_event(struct native_tab_tool *tool,
         (void) native_tab_capture_inventory(tool, &inventory);
         fact = native_tab_inventory_find(&inventory, window_id);
     }
-    struct native_tab_event event = {
-        .type = type,
-        .time_ns = now_ns,
-        .window_id = window_id,
-        .ordered_in_known = ordered_in_known,
-        .ordered_in = ordered_in
-    };
-    if (fact) { event.has_fact = true; event.fact = *fact; }
+    struct native_tab_event event = details ? *details : (struct native_tab_event) {0};
+    event.type = type;
+    event.time_ns = details && details->time_ns ? details->time_ns : now_ns;
+    event.window_id = window_id;
+    event.ordered_in_known = ordered_in_known;
+    event.ordered_in = ordered_in;
+    if (fact) {
+        event.has_fact = true;
+        event.fact = *fact;
+        event.target_pid_known = true;
+        event.target_pid = true;
+    }
     if (!native_tab_recorder_event(&tool->recorder, &event)) return false;
     if (capture_inventory && !native_tab_recorder_inventory(&tool->recorder, now_ns, &inventory)) return false;
     return true;
@@ -292,25 +373,55 @@ static void native_tab_stop(struct native_tab_tool *tool)
 static CONNECTION_CALLBACK(native_tab_connection_handler)
 {
     if (!context) return;
-    if (type != 1204 && (!data || data_length < sizeof(uint32_t))) return;
     struct native_tab_tool *tool = context;
+    uint64_t callback_ns = native_tab_now_ns();
+    bool payload_valid = type == 1204 || (data && data_length >= sizeof(uint32_t));
     uint32_t window_id = 0;
-    if (data && data_length >= sizeof(window_id)) memcpy(&window_id, data, sizeof(window_id));
+    if (payload_valid && data && data_length >= sizeof(window_id)) {
+        memcpy(&window_id, data, sizeof(window_id));
+    }
+    uint32_t delivered_index = 0;
+    if (type == 815) delivered_index = __atomic_add_fetch(&tool->delivered_815, 1, __ATOMIC_RELAXED);
+    if (type == 816) delivered_index = __atomic_add_fetch(&tool->delivered_816, 1, __ATOMIC_RELAXED);
+    uint32_t subscription_generation = 0;
+    bool subscribed = window_id && native_tab_subscription_generation(
+        tool, window_id, &subscription_generation);
+    bool duplicate = payload_valid && window_id && tool->last_delivery_code == type &&
+                     tool->last_delivery_window == window_id &&
+                     callback_ns >= tool->last_delivery_ns &&
+                     callback_ns - tool->last_delivery_ns <= NATIVE_TAB_SETTLE_DELAY_NS;
+    if (type == 815 || type == 816) {
+        tool->last_delivery_code = type;
+        tool->last_delivery_window = window_id;
+        tool->last_delivery_ns = callback_ns;
+    }
+    struct native_tab_event details = {
+        .time_ns = callback_ns,
+        .sls_code = type,
+        .payload_length = data_length > UINT32_MAX ? UINT32_MAX : (uint32_t)data_length,
+        .delivered_index = delivered_index,
+        .subscription_generation = subscription_generation,
+        .payload_valid = payload_valid,
+        .duplicate = duplicate,
+        .subscribed_before_known = window_id != 0,
+        .subscribed_before = subscribed
+    };
     dispatch_async(dispatch_get_main_queue(), ^{
         if (tool->stopping) return;
         bool success = true;
         if (type == 815 || type == 816) {
             uint8_t ordered_in = 0;
-            bool ordered_known = SLSWindowIsOrderedIn(tool->connection, window_id, &ordered_in) == kCGErrorSuccess;
+            bool ordered_known = payload_valid && window_id &&
+                SLSWindowIsOrderedIn(tool->connection, window_id, &ordered_in) == kCGErrorSuccess;
             success = native_tab_emit_event(tool,
                 type == 815 ? NATIVE_TAB_EVENT_SLS_VISIBLE : NATIVE_TAB_EVENT_SLS_INVISIBLE,
-                window_id, ordered_known, ordered_in != 0, true);
+                window_id, ordered_known, ordered_in != 0, &details, true);
         } else if (type == 804) {
             success = native_tab_emit_event(tool, NATIVE_TAB_EVENT_SLS_DESTROYED,
-                                            window_id, false, false, true);
+                                            window_id, false, false, &details, true);
         } else if (type == 1204) {
             success = native_tab_emit_event(tool, NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER,
-                                            0, false, false, false);
+                                            0, false, false, &details, false);
         }
         if (!success) { tool->success = false; native_tab_stop(tool); }
     });
@@ -344,9 +455,38 @@ static void native_tab_ax_handler(AXObserverRef observer, AXUIElementRef element
     } else {
         return;
     }
-    if (!native_tab_emit_event(tool, type, window_id, false, false, true)) {
+    struct native_tab_event details = {0};
+    if (type == NATIVE_TAB_EVENT_AX_FOCUSED) {
+        details.focus_subject_known = window_id != 0;
+        details.focus_subject_window_id = window_id;
+        details.app_focus_window_id = native_tab_ax_application_window(
+            tool->application, kAXFocusedWindowAttribute);
+        details.app_focus_known = details.app_focus_window_id != 0;
+        details.main_window_id = native_tab_ax_application_window(
+            tool->application, kAXMainWindowAttribute);
+        details.main_window_known = details.main_window_id != 0;
+    }
+    if (!native_tab_emit_event(tool, type, window_id, false, false, &details, true)) {
         tool->success = false;
         native_tab_stop(tool);
+        return;
+    }
+    if (type == NATIVE_TAB_EVENT_AX_FOCUSED) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NATIVE_TAB_SETTLE_DELAY_NS),
+                       dispatch_get_main_queue(), ^{
+            if (tool->stopping) return;
+            uint32_t stable = native_tab_ax_application_window(
+                tool->application, kAXFocusedWindowAttribute);
+            struct native_tab_event stable_details = {
+                .app_focus_known = stable != 0,
+                .app_focus_window_id = stable
+            };
+            if (!native_tab_emit_event(tool, NATIVE_TAB_EVENT_AX_FOCUS_STABLE,
+                                       stable, false, false, &stable_details, true)) {
+                tool->success = false;
+                native_tab_stop(tool);
+            }
+        });
     }
 }
 #pragma clang diagnostic pop
@@ -387,7 +527,7 @@ static void native_tab_setup_workspace(struct native_tab_tool *tool)
         object:nil queue:queue usingBlock:^(NSNotification *notification) {
             NSRunningApplication *application = notification.userInfo[NSWorkspaceApplicationKey];
             if (application.processIdentifier == tool->target_pid &&
-                !native_tab_emit_event(tool, NATIVE_TAB_EVENT_APP_HIDDEN, 0, false, false, false)) {
+                !native_tab_emit_event(tool, NATIVE_TAB_EVENT_APP_HIDDEN, 0, false, false, NULL, false)) {
                 tool->success = false; native_tab_stop(tool);
             }
         }];
@@ -395,7 +535,7 @@ static void native_tab_setup_workspace(struct native_tab_tool *tool)
         object:nil queue:queue usingBlock:^(NSNotification *notification) {
             NSRunningApplication *application = notification.userInfo[NSWorkspaceApplicationKey];
             if (application.processIdentifier == tool->target_pid &&
-                !native_tab_emit_event(tool, NATIVE_TAB_EVENT_APP_VISIBLE, 0, false, false, true)) {
+                !native_tab_emit_event(tool, NATIVE_TAB_EVENT_APP_VISIBLE, 0, false, false, NULL, true)) {
                 tool->success = false; native_tab_stop(tool);
             }
         }];
@@ -404,14 +544,14 @@ static void native_tab_setup_workspace(struct native_tab_tool *tool)
             NSRunningApplication *application = notification.userInfo[NSWorkspaceApplicationKey];
             if (application.processIdentifier == tool->target_pid) {
                 tool->success &= native_tab_emit_event(tool, NATIVE_TAB_EVENT_APP_TERMINATED,
-                                                       0, false, false, false);
+                                                       0, false, false, NULL, false);
                 native_tab_stop(tool);
             }
         }];
     tool->workspace_tokens[3] = [center addObserverForName:NSWorkspaceActiveSpaceDidChangeNotification
         object:nil queue:queue usingBlock:^(NSNotification *notification) {
             (void) notification;
-            if (!native_tab_emit_event(tool, NATIVE_TAB_EVENT_SPACE_CHANGED, 0, false, false, true)) {
+            if (!native_tab_emit_event(tool, NATIVE_TAB_EVENT_SPACE_CHANGED, 0, false, false, NULL, true)) {
                 tool->success = false; native_tab_stop(tool);
             }
         }];
@@ -474,19 +614,33 @@ static bool native_tab_parse_positive(const char *text, long minimum, long maxim
 
 static void native_tab_usage(const char *program)
 {
-    fprintf(stderr, "usage: %s --pid PID --scenario NAME --duration SECONDS --output PATH\n", program);
+    fprintf(stderr,
+            "usage: %s --pid PID --scenario NAME --fixture-token TOKEN --batch ID "
+            "--repeat 1..5 --direction TOKEN --expectation candidate|negative-control "
+            "--duration SECONDS --output PATH\n", program);
 }
 
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        long pid_value = 0, duration = 0;
-        const char *scenario = NULL, *output = NULL;
+        long pid_value = 0, duration = 0, planned_repeat = 0;
+        const char *scenario = NULL, *output = NULL, *fixture_token = NULL;
+        const char *batch_id = NULL, *direction = NULL, *expectation = NULL;
         for (int i = 1; i < argc; ++i) {
             if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
                 if (!native_tab_parse_positive(argv[++i], 2, INT_MAX, &pid_value)) return EXIT_FAILURE;
             } else if (strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) {
                 scenario = argv[++i];
+            } else if (strcmp(argv[i], "--fixture-token") == 0 && i + 1 < argc) {
+                fixture_token = argv[++i];
+            } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
+                batch_id = argv[++i];
+            } else if (strcmp(argv[i], "--repeat") == 0 && i + 1 < argc) {
+                if (!native_tab_parse_positive(argv[++i], 1, 5, &planned_repeat)) return EXIT_FAILURE;
+            } else if (strcmp(argv[i], "--direction") == 0 && i + 1 < argc) {
+                direction = argv[++i];
+            } else if (strcmp(argv[i], "--expectation") == 0 && i + 1 < argc) {
+                expectation = argv[++i];
             } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
                 if (!native_tab_parse_positive(argv[++i], 1, 600, &duration)) return EXIT_FAILURE;
             } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
@@ -496,7 +650,13 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
         }
-        if (!pid_value || !duration || !native_tab_scenario_is_valid(scenario) || !output) {
+        if (!pid_value || !duration || !planned_repeat ||
+            !native_tab_scenario_is_valid(scenario) ||
+            !native_tab_scenario_is_valid(fixture_token) ||
+            !native_tab_scenario_is_valid(batch_id) ||
+            !native_tab_scenario_is_valid(direction) ||
+            (!expectation || (strcmp(expectation, "candidate") != 0 &&
+                              strcmp(expectation, "negative-control") != 0)) || !output) {
             native_tab_usage(argv[0]);
             return EXIT_FAILURE;
         }
@@ -506,16 +666,21 @@ int main(int argc, char **argv)
         FILE *stream = NULL;
         if (!native_tab_trace_open(output, &stream)) return EXIT_FAILURE;
 
-        __block struct native_tab_tool tool = {
+        struct native_tab_tool *tool = calloc(1, sizeof(*tool));
+        if (!tool) {
+            native_tab_trace_close(stream, output, false);
+            return EXIT_FAILURE;
+        }
+        *tool = (struct native_tab_tool) {
             .target_pid = (pid_t) pid_value,
             .connection = SLSMainConnectionID(),
             .output_path = output,
             .start_ns = native_tab_now_ns(),
             .success = true
         };
-        tool.stop_ns = tool.start_ns + (uint64_t) duration * UINT64_C(1000000000);
-        tool.next_poll_ns = tool.start_ns + NATIVE_TAB_SETTLE_DELAY_NS;
-        if (!native_tab_setup_ax(&tool)) tool.success = false;
+        tool->stop_ns = tool->start_ns + (uint64_t) duration * UINT64_C(1000000000);
+        tool->next_poll_ns = tool->start_ns + NATIVE_TAB_SETTLE_DELAY_NS;
+        if (!native_tab_setup_ax(tool)) tool->success = false;
 
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         char os_version[64];
@@ -523,31 +688,34 @@ int main(int argc, char **argv)
                  version.majorVersion, version.minorVersion, version.patchVersion);
         char build[256] = {0}; size_t build_size = sizeof(build); struct utsname system = {0};
         if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0 ||
-            !memchr(build, '\0', sizeof(build)) || uname(&system) != 0) tool.success = false;
+            !memchr(build, '\0', sizeof(build)) || uname(&system) != 0) tool->success = false;
         struct native_tab_recorder_metadata metadata = {
             .os_version = os_version, .os_build = build,
-            .architecture = system.machine, .ax_available = tool.ax_available
+            .architecture = system.machine, .fixture_token = fixture_token,
+            .batch_id = batch_id, .direction = direction,
+            .expectation = expectation, .planned_repeat = (unsigned)planned_repeat,
+            .ax_available = tool->ax_available
         };
-        tool.success &= native_tab_recorder_init(&tool.recorder, stream, scenario,
-                                                 tool.start_ns, &metadata);
+        tool->success &= native_tab_recorder_init(&tool->recorder, stream, scenario,
+                                                  tool->start_ns, &metadata);
         struct native_tab_inventory baseline;
-        (void) native_tab_capture_inventory(&tool, &baseline);
-        tool.success &= native_tab_recorder_baseline(&tool.recorder, tool.start_ns, &baseline);
+        (void) native_tab_capture_inventory(tool, &baseline);
+        tool->success &= native_tab_recorder_baseline(&tool->recorder, tool->start_ns, &baseline);
 
         const uint32_t events[] = { 815, 816, 804, 1204 };
-        for (size_t i = 0; tool.success && i < sizeof(events) / sizeof(*events); ++i) {
-            tool.success &= SLSRegisterConnectionNotifyProc(tool.connection,
-                native_tab_connection_handler, events[i], &tool) == kCGErrorSuccess;
+        for (size_t i = 0; tool->success && i < sizeof(events) / sizeof(*events); ++i) {
+            tool->success &= SLSRegisterConnectionNotifyProc(tool->connection,
+                native_tab_connection_handler, events[i], tool) == kCGErrorSuccess;
         }
-        native_tab_setup_workspace(&tool);
+        native_tab_setup_workspace(tool);
 
-        CFRunLoopTimerContext timer_context = { .info = &tool };
-        tool.timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + 0.02, 0.02, 0, 0,
-                                          native_tab_timer, &timer_context);
-        if (tool.timer) {
-            CFRunLoopAddTimer(CFRunLoopGetMain(), tool.timer, kCFRunLoopCommonModes);
+        CFRunLoopTimerContext timer_context = { .info = tool };
+        tool->timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + 0.02, 0.02, 0, 0,
+                                           native_tab_timer, &timer_context);
+        if (tool->timer) {
+            CFRunLoopAddTimer(CFRunLoopGetMain(), tool->timer, kCFRunLoopCommonModes);
         } else {
-            tool.success = false;
+            tool->success = false;
         }
 
         signal(SIGINT, SIG_IGN);
@@ -556,15 +724,17 @@ int main(int argc, char **argv)
                                                               dispatch_get_main_queue());
         dispatch_source_t terminate = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
                                                               dispatch_get_main_queue());
-        dispatch_source_set_event_handler(interrupt, ^{ native_tab_stop(&tool); });
-        dispatch_source_set_event_handler(terminate, ^{ native_tab_stop(&tool); });
+        dispatch_source_set_event_handler(interrupt, ^{ native_tab_stop(tool); });
+        dispatch_source_set_event_handler(terminate, ^{ native_tab_stop(tool); });
         dispatch_resume(interrupt);
         dispatch_resume(terminate);
 
-        if (tool.success) CFRunLoopRun();
-        else native_tab_stop(&tool);
-        native_tab_cleanup(&tool);
-        bool success = native_tab_trace_close(stream, output, tool.success && tool.recorder.stopped);
+        if (tool->success) CFRunLoopRun();
+        else native_tab_stop(tool);
+        native_tab_cleanup(tool);
+        bool success = native_tab_trace_close(stream, output,
+                                               tool->success && tool->recorder.stopped);
+        free(tool);
         return success ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 }

@@ -65,7 +65,7 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe native-tab-event-recorder native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
+.PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
         test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
@@ -84,6 +84,8 @@ window-server-geometry-probe: $(GEOMETRY_PROBE_BIN)
 window-corner-geometry-probe: $(CORNER_GEOMETRY_PROBE_BIN)
 window-constraints-probe: $(WINDOW_CONSTRAINTS_PROBE_BIN)
 native-tab-event-recorder: $(NATIVE_TAB_RECORDER_BIN)
+native-tab-evidence-gate:
+	$(PYTHON) scripts/native_tab_evidence_gate.py --self-test
 native-tile-diagnostic: $(NATIVE_TILE_DIAGNOSTIC_BIN)
 active-window-highlight-probe: $(ACTIVE_HIGHLIGHT_PROBE_BIN)
 # Historical "install" builds the optimized artifact; it does not copy files.
