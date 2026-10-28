@@ -14,10 +14,22 @@
 #include <time.h>
 
 #if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
-#define YB_MENU_BAR_HAS_EXPANDED_INTERFACE 1
+#define YB_MENU_BAR_HAS_EXPANDED_INTERFACE_SDK 1
 #else
-#define YB_MENU_BAR_HAS_EXPANDED_INTERFACE 0
+#define YB_MENU_BAR_HAS_EXPANDED_INTERFACE_SDK 0
+@class NSStatusItemExpandedInterfaceSession;
+@interface NSStatusItem (YBExpandedInterfaceCompatibility)
+- (void)setExpandedInterfaceDelegate:(id)delegate;
+@end
+@interface NSStatusItemExpandedInterfaceSession : NSObject
+- (void)cancel;
+@end
 #endif
+
+/* The expanded-interface contract is Objective-C message based. Compile the
+ * runtime-guarded implementation with older SDKs as well so macOS 27 hosts do
+ * not silently fall back to the native menu in Nix/CI builds. */
+#define YB_MENU_BAR_HAS_EXPANDED_INTERFACE 1
 
 #define YB_MENU_BAR_MAX_EXPANDED_WIDTH 520.0
 #define YB_MENU_BAR_STATUS_HEIGHT       22.0
@@ -158,7 +170,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     [separator stroke];
 }
 
-#if YB_MENU_BAR_HAS_EXPANDED_INTERFACE
+#if YB_MENU_BAR_HAS_EXPANDED_INTERFACE_SDK
 @interface YBMenuBarController : NSObject <NSMenuDelegate, NSStatusItemExpandedInterfaceDelegate> {
 #else
 @interface YBMenuBarController : NSObject <NSMenuDelegate> {
