@@ -1,9 +1,13 @@
 static int active_window_highlight_refresh_calls;
 static int active_window_highlight_hide_calls;
 
-static void active_window_highlight_test_refresh_observer(struct window_manager *wm)
+static void active_window_highlight_test_refresh_observer(struct window_manager *wm,
+                                                           uint32_t target_wid,
+                                                           const CGRect *target_frame)
 {
     (void) wm;
+    (void) target_wid;
+    (void) target_frame;
     ++active_window_highlight_refresh_calls;
 }
 
@@ -55,6 +59,32 @@ TEST_FUNC(active_window_highlight_geometry_is_bounded_and_outset,
     active_window_highlight_invalidate_order(&state);
     TEST_CHECK(state.ordered, true);
     TEST_CHECK(state.needs_reorder, true);
+});
+
+TEST_FUNC(active_window_highlight_pending_geometry_rejects_stale_server_frame,
+{
+    CGRect old_frame = CGRectMake(10.0, 20.0, 100.0, 50.0);
+    CGRect new_frame = CGRectMake(40.0, 60.0, 300.0, 200.0);
+    struct active_window_highlight highlight = {
+        .pending_target_frame = new_frame,
+        .pending_target_wid = 42,
+        .pending_target_frame_valid = true
+    };
+
+    CGRect selected = window_manager_active_window_highlight_resolve_frame(&highlight, 42, old_frame);
+    TEST_CHECK(CGRectEqualToRect(selected, new_frame), true);
+    TEST_CHECK(highlight.pending_target_frame_valid, true);
+
+    selected = window_manager_active_window_highlight_resolve_frame(&highlight, 42, new_frame);
+    TEST_CHECK(CGRectEqualToRect(selected, new_frame), true);
+    TEST_CHECK(highlight.pending_target_frame_valid, false);
+
+    highlight.pending_target_frame = new_frame;
+    highlight.pending_target_wid = 42;
+    highlight.pending_target_frame_valid = true;
+    selected = window_manager_active_window_highlight_resolve_frame(&highlight, 99, old_frame);
+    TEST_CHECK(CGRectEqualToRect(selected, old_frame), true);
+    TEST_CHECK(highlight.pending_target_frame_valid, false);
 });
 
 TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,

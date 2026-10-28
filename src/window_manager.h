@@ -255,6 +255,7 @@ void window_manager_set_active_window_opacity(struct window_manager *wm, float o
 void window_manager_set_normal_window_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled);
 void window_manager_refresh_active_window_highlight(struct window_manager *wm);
+void window_manager_refresh_active_window_highlight_for_frame(struct window_manager *wm, uint32_t window_id, CGRect frame);
 void window_manager_reorder_active_window_highlight(struct window_manager *wm);
 void window_manager_hide_active_window_highlight(struct window_manager *wm);
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled);

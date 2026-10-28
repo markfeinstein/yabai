@@ -2253,7 +2253,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
     if (window->id == g_window_manager.focused_window_id) {
-        window_manager_refresh_active_window_highlight(&g_window_manager);
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window->id, window->frame);
     }
 
     if (was_fullscreen != is_fullscreen) {
