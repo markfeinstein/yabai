@@ -28,10 +28,12 @@ static void window_server_tag_corpus_test_fixture(
     struct window_server_snapshot *snapshot)
 {
     *metadata = (struct window_server_tag_corpus_metadata) {
-        .scenario = "baseline",
-        .os_version = "27.0.1",
-        .os_build = "26A434",
-        .architecture = "arm64"
+        .scenario = "baseline", .capture_set_id = "baseline-set",
+        .repeat_index = 1, .os_version = "27.0.1",
+        .os_build = "26A434", .architecture = "arm64",
+        .source_revision = "test-revision",
+        .ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_AUTO,
+        .display_count = 1, .separate_spaces = "yes", .stage_manager = "off"
     };
     windows[0] = (struct window_server_tag_corpus_public_window) {
         .window_id = 10, .owner_pid = 100, .cg_layer = 0, .on_screen = true,
@@ -79,10 +81,10 @@ TEST_FUNC(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable
         &metadata, windows, 3, &snapshot, &length);
     TEST_CHECK(output != NULL, true);
     static const char expected[] =
-        "{\"schema\":\"yabai.window-server-tag-corpus/v1\",\"type\":\"capture\",\"scenario\":\"baseline\",\"os_version\":\"27.0.1\",\"os_build\":\"26A434\",\"architecture\":\"arm64\",\"tag_map\":\"modern-advisory-v1\",\"tag_map_evidence\":\"mapped-26.3.1-sampled-27.0.1-unverified-27.2\",\"redaction\":\"strict-v1\",\"counts\":{\"public_windows\":3,\"snapshot_records\":3,\"root_relevant\":1,\"legacy_normal_untracked\":1,\"legacy_include_minimized_untracked\":1,\"document_or_floating\":2,\"document_or_floating_rejected_by_legacy\":1}}\n"
-        "{\"schema\":\"yabai.window-server-tag-corpus/v1\",\"type\":\"window\",\"ordinal\":0,\"owner_ordinal\":0,\"parent_kind\":\"root\",\"parent_ordinal\":null,\"sls_level\":0,\"cg_layer\":0,\"on_screen\":true,\"tags_hex\":\"0x0000000000000081\",\"attributes_hex\":\"0x0000000000000002\",\"named_tags\":[\"document\"],\"unknown_tags_hex\":\"0x0000000000000080\",\"root_relevant\":true,\"legacy_normal_untracked\":true,\"legacy_include_minimized_untracked\":true,\"document_or_floating\":true}\n"
-        "{\"schema\":\"yabai.window-server-tag-corpus/v1\",\"type\":\"window\",\"ordinal\":1,\"owner_ordinal\":0,\"parent_kind\":\"captured\",\"parent_ordinal\":0,\"sls_level\":3,\"cg_layer\":3,\"on_screen\":false,\"tags_hex\":\"0x1000000080000002\",\"attributes_hex\":\"0x0000000000000000\",\"named_tags\":[\"floating\",\"modal\",\"miniaturized\"],\"unknown_tags_hex\":\"0x0000000000000000\",\"root_relevant\":false,\"legacy_normal_untracked\":false,\"legacy_include_minimized_untracked\":false,\"document_or_floating\":true}\n"
-        "{\"schema\":\"yabai.window-server-tag-corpus/v1\",\"type\":\"window\",\"ordinal\":2,\"owner_ordinal\":1,\"parent_kind\":\"external\",\"parent_ordinal\":null,\"sls_level\":8,\"cg_layer\":8,\"on_screen\":true,\"tags_hex\":\"0x0000400000000000\",\"attributes_hex\":\"0x0000000000000002\",\"named_tags\":[\"menu_bar\"],\"unknown_tags_hex\":\"0x0000000000000000\",\"root_relevant\":false,\"legacy_normal_untracked\":false,\"legacy_include_minimized_untracked\":false,\"document_or_floating\":false}\n";
+        "{\"schema\":\"yabai.window-server-tag-corpus/v2\",\"type\":\"capture\",\"scenario\":\"baseline\",\"capture_set_id\":\"baseline-set\",\"repeat_index\":1,\"os_version\":\"27.0.1\",\"os_build\":\"26A434\",\"architecture\":\"arm64\",\"source_revision\":\"test-revision\",\"ax_mode\":\"auto\",\"display_count\":1,\"separate_spaces\":\"yes\",\"stage_manager\":\"off\",\"tag_map\":\"modern-advisory-v1\",\"tag_map_evidence\":\"mapped-26.3.1-sampled-27.0.1-unverified-27.2\",\"redaction\":\"strict-v1\",\"counts\":{\"public_windows\":3,\"snapshot_records\":3,\"root_relevant\":1,\"legacy_normal_untracked\":1,\"legacy_include_minimized_untracked\":1,\"document_or_floating\":2,\"document_or_floating_rejected_by_legacy\":1}}\n"
+        "{\"schema\":\"yabai.window-server-tag-corpus/v2\",\"type\":\"window\",\"ordinal\":0,\"owner_ordinal\":0,\"parent_kind\":\"root\",\"parent_ordinal\":null,\"sls_level\":0,\"cg_layer\":0,\"on_screen\":true,\"tags_hex\":\"0x0000000000000081\",\"attributes_hex\":\"0x0000000000000002\",\"named_tags\":[\"document\"],\"unknown_tags_hex\":\"0x0000000000000080\",\"root_relevant\":true,\"legacy_normal_untracked\":true,\"legacy_include_minimized_untracked\":true,\"document_or_floating\":true}\n"
+        "{\"schema\":\"yabai.window-server-tag-corpus/v2\",\"type\":\"window\",\"ordinal\":1,\"owner_ordinal\":0,\"parent_kind\":\"captured\",\"parent_ordinal\":0,\"sls_level\":3,\"cg_layer\":3,\"on_screen\":false,\"tags_hex\":\"0x1000000080000002\",\"attributes_hex\":\"0x0000000000000000\",\"named_tags\":[\"floating\",\"modal\",\"miniaturized\"],\"unknown_tags_hex\":\"0x0000000000000000\",\"root_relevant\":false,\"legacy_normal_untracked\":false,\"legacy_include_minimized_untracked\":false,\"document_or_floating\":true}\n"
+        "{\"schema\":\"yabai.window-server-tag-corpus/v2\",\"type\":\"window\",\"ordinal\":2,\"owner_ordinal\":1,\"parent_kind\":\"external\",\"parent_ordinal\":null,\"sls_level\":8,\"cg_layer\":8,\"on_screen\":true,\"tags_hex\":\"0x0000400000000000\",\"attributes_hex\":\"0x0000000000000002\",\"named_tags\":[\"menu_bar\"],\"unknown_tags_hex\":\"0x0000000000000000\",\"root_relevant\":false,\"legacy_normal_untracked\":false,\"legacy_include_minimized_untracked\":false,\"document_or_floating\":false}\n";
     if (output) {
         TEST_CHECK(length, sizeof(expected) - 1);
         TEST_CHECK(strcmp(output, expected), 0);
@@ -115,21 +117,42 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
     struct window_server_tag_corpus_comparison_window comparison_windows[3] = {
         {
             .owner = WS_OWNER_REGULAR, .ax = WS_AX_STANDARD_WINDOW,
+            .ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED,
             .title = WINDOW_SERVER_TITLE_NONEMPTY,
-            .label = { true, "primary-document", WS_WINDOW_CLASS_MANAGEABLE,
-                       WS_WINDOW_CLASS_MANAGEABLE }
+            .label = {
+                .present = true, .fixture_id = "document-1", .fixture_role = "primary-document",
+                .expected_normal = WS_WINDOW_CLASS_MANAGEABLE,
+                .expected_include_minimized = WS_WINDOW_CLASS_MANAGEABLE,
+                .adjudication = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED,
+                .adjudication_reason = "controlled-document", .evidence_ref = "evidence-1",
+                .bit58_state = WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE
+            }
         },
         {
             .owner = WS_OWNER_REGULAR, .ax = WS_AX_DIALOG_WINDOW,
+            .ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED,
             .title = WINDOW_SERVER_TITLE_NONEMPTY,
-            .label = { true, "child-sheet", WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE,
-                       WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE }
+            .label = {
+                .present = true, .fixture_id = "sheet-1", .fixture_role = "child-sheet",
+                .expected_normal = WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE,
+                .expected_include_minimized = WS_WINDOW_CLASS_USER_FACING_NONMANAGEABLE,
+                .adjudication = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED,
+                .adjudication_reason = "controlled-sheet", .evidence_ref = "evidence-2",
+                .bit58_state = WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE
+            }
         },
         {
             .owner = WS_OWNER_PROHIBITED, .ax = WS_AX_UNAVAILABLE,
+            .ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE,
             .title = WINDOW_SERVER_TITLE_UNAVAILABLE,
-            .label = { true, "menu-negative", WS_WINDOW_CLASS_SYSTEM_OVERLAY,
-                       WS_WINDOW_CLASS_SYSTEM_OVERLAY }
+            .label = {
+                .present = true, .fixture_id = "menu-1", .fixture_role = "menu-negative",
+                .expected_normal = WS_WINDOW_CLASS_SYSTEM_OVERLAY,
+                .expected_include_minimized = WS_WINDOW_CLASS_SYSTEM_OVERLAY,
+                .adjudication = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED,
+                .adjudication_reason = "controlled-menu", .evidence_ref = "evidence-3",
+                .bit58_state = WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE
+            }
         }
     };
     struct window_server_tag_corpus_comparison comparison = {
@@ -151,7 +174,7 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
             id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
             TEST_CHECK([object isKindOfClass:[NSDictionary class]], true);
             if (line_count == 0) {
-                TEST_CHECK([object[@"schema"] isEqualToString:@"yabai.window-server-classifier-comparison/v1"], true);
+                TEST_CHECK([object[@"schema"] isEqualToString:@"yabai.window-server-classifier-comparison/v2"], true);
                 TEST_CHECK([object[@"counts"][@"labeled"] integerValue], 3L);
                 TEST_CHECK([object[@"counts"][@"false_positive"] integerValue], 0L);
                 TEST_CHECK([object[@"counts"][@"false_negative"] integerValue], 0L);
@@ -165,13 +188,16 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
         for (size_t i = 0; i < array_count(redacted); ++i) {
             TEST_CHECK(strstr(output, redacted[i]) == NULL, true);
         }
+        TEST_CHECK(strstr(output, "\"fixture_id\":\"document-1\"") != NULL, true);
         TEST_CHECK(strstr(output, "\"fixture_role\":\"primary-document\"") != NULL, true);
+        TEST_CHECK(strstr(output, "\"adjudication_status\":\"confirmed\"") != NULL, true);
         TEST_CHECK(strstr(output, "\"candidate_normal\":\"manageable\"") != NULL, true);
         TEST_CHECK(strstr(output, "\"parent_kind\":\"captured\"") != NULL, true);
     }
     free(output);
 
     comparison_windows[0].ax = WS_AX_NO_MATCH;
+    comparison_windows[0].ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH;
     windows[0].on_screen = false;
     output = NULL; length = 0;
     stream = open_memstream(&output, &length);
@@ -191,15 +217,37 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
         TEST_CHECK([profiles[@"legacy_only_unknown_tag_bits"] integerValue], 1L);
         TEST_CHECK([profiles[@"legacy_only_include_minimized_only"] integerValue], 0L);
         TEST_CHECK([profiles[@"unique_candidate_only"] integerValue], 0L);
+        TEST_CHECK([object[@"counts"][@"adjudicated_disagreement"] integerValue], 1L);
+        TEST_CHECK([object[@"counts"][@"pending_disagreement"] integerValue], 0L);
     }
     free(output);
 
+    const char *saved_role = comparison_windows[0].label.fixture_role;
     comparison_windows[0].label.fixture_role = "invalid role";
     char path[] = "/private/tmp/yabai-comparison-invalid.XXXXXX";
     int fd = mkstemp(path); TEST_CHECK(fd >= 0, true); if (fd >= 0) close(fd); unlink(path);
     TEST_CHECK(window_server_tag_corpus_write_comparison_file(
         path, &metadata, windows, 3, &snapshot, &comparison), false);
     TEST_CHECK(access(path, F_OK), -1);
+    comparison_windows[0].label.fixture_role = saved_role;
+
+    const char *saved_reason = comparison_windows[0].label.adjudication_reason;
+    comparison_windows[0].label.adjudication_reason = NULL;
+    TEST_CHECK(window_server_tag_corpus_write_comparison_file(
+        path, &metadata, windows, 3, &snapshot, &comparison), false);
+    TEST_CHECK(access(path, F_OK), -1);
+    comparison_windows[0].label.adjudication_reason = saved_reason;
+
+    comparison_windows[0].label.fixture_role = "bit58-ordinary";
+    comparison_windows[0].label.control_pair_id = "bit58-pair";
+    comparison_windows[0].label.bit58_state = WINDOW_SERVER_TAG_CORPUS_BIT58_SET;
+    TEST_CHECK(window_server_tag_corpus_write_comparison_file(
+        path, &metadata, windows, 3, &snapshot, &comparison), false);
+    TEST_CHECK(access(path, F_OK), -1);
+    records[1].tags |= WINDOW_SERVER_TAG_IGNORE_FOR_SCREEN_SHARING;
+    TEST_CHECK(window_server_tag_corpus_write_comparison_file(
+        path, &metadata, windows, 3, &snapshot, &comparison), true);
+    unlink(path);
 });
 
 TEST_FUNC(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files,
@@ -263,8 +311,10 @@ static bool window_server_tag_corpus_benchmark_case(size_t record_count)
     struct window_server_tag_corpus_public_window windows[1000] = {0};
     struct window_server_window_record records[1000] = {0};
     struct window_server_tag_corpus_metadata metadata = {
-        .scenario = "benchmark", .os_version = "27.0.1",
-        .os_build = "26A434", .architecture = "arm64"
+        .scenario = "benchmark", .capture_set_id = "benchmark-set", .repeat_index = 1,
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .source_revision = "benchmark-revision", .ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_AUTO,
+        .display_count = 1, .separate_spaces = "yes", .stage_manager = "off"
     };
     for (size_t i = 0; i < record_count; ++i) {
         windows[i] = (struct window_server_tag_corpus_public_window) {
@@ -331,8 +381,10 @@ static bool window_server_classifier_comparison_benchmark_case(size_t record_cou
     struct window_server_window_record records[1000] = {0};
     struct window_server_tag_corpus_comparison_window comparison_windows[1000] = {0};
     struct window_server_tag_corpus_metadata metadata = {
-        .scenario = "benchmark", .os_version = "27.0.1",
-        .os_build = "26A434", .architecture = "arm64"
+        .scenario = "benchmark", .capture_set_id = "benchmark-set", .repeat_index = 1,
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .source_revision = "benchmark-revision", .ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_AUTO,
+        .display_count = 1, .separate_spaces = "yes", .stage_manager = "off"
     };
     for (size_t i = 0; i < record_count; ++i) {
         windows[i] = (struct window_server_tag_corpus_public_window) {
@@ -349,6 +401,7 @@ static bool window_server_classifier_comparison_benchmark_case(size_t record_cou
         comparison_windows[i] = (struct window_server_tag_corpus_comparison_window) {
             .owner = (enum ws_owner_kind)(i % 4),
             .ax = (enum ws_ax_corroboration)(i % 6),
+            .ax_observation = (enum window_server_tag_corpus_ax_observation)(i % 5),
             .title = (enum window_server_tag_corpus_title_state)(i % 3)
         };
     }

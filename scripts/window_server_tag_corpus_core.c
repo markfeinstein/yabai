@@ -42,6 +42,55 @@ bool window_server_tag_corpus_scenario_is_valid(const char *scenario)
     return true;
 }
 
+static const char *corpus_ax_mode_name(enum window_server_tag_corpus_ax_mode mode)
+{
+    switch (mode) {
+#define WINDOW_SERVER_TAG_CORPUS_AX_CASE(value, name) case value: return name;
+    WINDOW_SERVER_TAG_CORPUS_AX_MODE_LIST(WINDOW_SERVER_TAG_CORPUS_AX_CASE)
+#undef WINDOW_SERVER_TAG_CORPUS_AX_CASE
+    }
+    return NULL;
+}
+
+static const char *corpus_ax_observation_name(enum window_server_tag_corpus_ax_observation value)
+{
+    switch (value) {
+    case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE: return "unavailable";
+    case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH: return "no-match";
+    case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR: return "inventory-error";
+    case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR: return "role-error";
+    case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED: return "matched";
+    }
+    return NULL;
+}
+
+static const char *corpus_adjudication_name(enum window_server_tag_corpus_adjudication value)
+{
+    switch (value) {
+    case WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING: return "pending";
+    case WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED: return "confirmed";
+    case WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_REJECTED: return "rejected";
+    }
+    return NULL;
+}
+
+static const char *corpus_bit58_state_name(enum window_server_tag_corpus_bit58_state value)
+{
+    switch (value) {
+    case WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE: return "not-applicable";
+    case WINDOW_SERVER_TAG_CORPUS_BIT58_CLEAR: return "clear";
+    case WINDOW_SERVER_TAG_CORPUS_BIT58_SET: return "set";
+    }
+    return NULL;
+}
+
+static bool corpus_environment_value_is_valid(const char *value, const char *a,
+                                              const char *b, const char *c)
+{
+    return value && (strcmp(value, a) == 0 || strcmp(value, b) == 0 ||
+                     strcmp(value, c) == 0);
+}
+
 static bool corpus_root_relevant(const struct window_server_window_record *record)
 {
     return record->parent_id == 0 &&
@@ -113,7 +162,13 @@ static bool corpus_validate(const struct window_server_tag_corpus_metadata *meta
                             const struct window_server_snapshot *snapshot)
 {
     if (!metadata || !window_server_tag_corpus_scenario_is_valid(metadata->scenario) ||
-        !metadata->os_version || !metadata->os_build || !metadata->architecture ||
+        !window_server_tag_corpus_scenario_is_valid(metadata->capture_set_id) ||
+        !metadata->repeat_index || !metadata->os_version || !metadata->os_build ||
+        !metadata->architecture ||
+        !window_server_tag_corpus_scenario_is_valid(metadata->source_revision) ||
+        !corpus_ax_mode_name(metadata->ax_mode) || !metadata->display_count ||
+        !corpus_environment_value_is_valid(metadata->separate_spaces, "yes", "no", "unknown") ||
+        !corpus_environment_value_is_valid(metadata->stage_manager, "on", "off", "unknown") ||
         (!windows && window_count) || !snapshot || snapshot->count != window_count ||
         (window_count && !snapshot->records)) return false;
     for (size_t i = 0; i < window_count; ++i) {
@@ -156,9 +211,16 @@ bool window_server_tag_corpus_serialize(
     if (fputs("{\"schema\":\"" WINDOW_SERVER_TAG_CORPUS_SCHEMA
               "\",\"type\":\"capture\",\"scenario\":", stream) == EOF ||
         !corpus_json_string(stream, metadata->scenario) ||
+        fputs(",\"capture_set_id\":", stream) == EOF || !corpus_json_string(stream, metadata->capture_set_id) ||
+        fprintf(stream, ",\"repeat_index\":%u", metadata->repeat_index) < 0 ||
         fputs(",\"os_version\":", stream) == EOF || !corpus_json_string(stream, metadata->os_version) ||
         fputs(",\"os_build\":", stream) == EOF || !corpus_json_string(stream, metadata->os_build) ||
         fputs(",\"architecture\":", stream) == EOF || !corpus_json_string(stream, metadata->architecture) ||
+        fputs(",\"source_revision\":", stream) == EOF || !corpus_json_string(stream, metadata->source_revision) ||
+        fputs(",\"ax_mode\":", stream) == EOF || !corpus_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
+        fprintf(stream, ",\"display_count\":%u", metadata->display_count) < 0 ||
+        fputs(",\"separate_spaces\":", stream) == EOF || !corpus_json_string(stream, metadata->separate_spaces) ||
+        fputs(",\"stage_manager\":", stream) == EOF || !corpus_json_string(stream, metadata->stage_manager) ||
         fprintf(stream,
                 ",\"tag_map\":\"modern-advisory-v1\","
                 "\"tag_map_evidence\":\"mapped-26.3.1-sampled-27.0.1-unverified-27.2\","
@@ -284,13 +346,32 @@ static bool corpus_comparison_validate(
     if (!comparison || comparison->window_count != window_count ||
         (!comparison->windows && window_count)) return false;
     for (size_t i = 0; i < window_count; ++i) {
+        if (!corpus_ax_observation_name(comparison->windows[i].ax_observation)) return false;
         const struct window_server_tag_corpus_label *label = &comparison->windows[i].label;
         if (!label->present) continue;
-        if (!window_server_tag_corpus_scenario_is_valid(label->fixture_role) ||
+        const char *adjudication = corpus_adjudication_name(label->adjudication);
+        const char *bit58 = corpus_bit58_state_name(label->bit58_state);
+        if (!window_server_tag_corpus_scenario_is_valid(label->fixture_id) ||
+            !window_server_tag_corpus_scenario_is_valid(label->fixture_role) ||
             label->expected_normal < WS_WINDOW_CLASS_MANAGEABLE ||
             label->expected_normal > WS_WINDOW_CLASS_UNCERTAIN ||
             label->expected_include_minimized < WS_WINDOW_CLASS_MANAGEABLE ||
-            label->expected_include_minimized > WS_WINDOW_CLASS_UNCERTAIN) return false;
+            label->expected_include_minimized > WS_WINDOW_CLASS_UNCERTAIN ||
+            !adjudication || !bit58) return false;
+        if (label->adjudication == WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING) {
+            if (label->adjudication_reason || label->evidence_ref) return false;
+        } else if (!window_server_tag_corpus_scenario_is_valid(label->adjudication_reason) ||
+                   !window_server_tag_corpus_scenario_is_valid(label->evidence_ref)) {
+            return false;
+        }
+        if (label->control_pair_id &&
+            !window_server_tag_corpus_scenario_is_valid(label->control_pair_id)) return false;
+        bool bit58_control = strcmp(label->fixture_role, "bit58-ordinary") == 0;
+        if (bit58_control != (label->control_pair_id != NULL) ||
+            (bit58_control && label->bit58_state == WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE) ||
+            (!bit58_control && label->bit58_state != WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE)) {
+            return false;
+        }
     }
     return true;
 }
@@ -309,8 +390,10 @@ bool window_server_tag_corpus_serialize_comparison(
     size_t class_counts[2][4] = {{0}};
     size_t comparison_counts[2][CORPUS_COMPARISON_CATEGORY_COUNT] = {{0}};
     size_t labeled_count = 0, unlabeled_disagreement = 0;
+    size_t pending_disagreement = 0, adjudicated_disagreement = 0;
     size_t false_positive = 0, false_negative = 0;
-    size_t ax_matched = 0, ax_unavailable = 0, ax_error = 0;
+    size_t ax_matched = 0, ax_unavailable = 0, ax_no_match = 0;
+    size_t ax_inventory_error = 0, ax_role_error = 0;
     size_t unique_candidate_only = 0, unique_legacy_only = 0;
     size_t legacy_only_offscreen_ax_no_match = 0;
     size_t legacy_only_attribute_bit_2 = 0, legacy_only_unknown_tag_bits = 0;
@@ -322,10 +405,13 @@ bool window_server_tag_corpus_serialize_comparison(
         const struct window_server_window_record *record =
             corpus_find_record(snapshot, windows[i].window_id);
         enum ws_ax_corroboration ax = comparison->windows[i].ax;
-        if (ax == WS_AX_STANDARD_WINDOW || ax == WS_AX_FLOATING_WINDOW ||
-            ax == WS_AX_DIALOG_WINDOW) ++ax_matched;
-        else if (ax == WS_AX_UNAVAILABLE) ++ax_unavailable;
-        else ++ax_error;
+        switch (comparison->windows[i].ax_observation) {
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED: ++ax_matched; break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE: ++ax_unavailable; break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH: ++ax_no_match; break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR: ++ax_inventory_error; break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR: ++ax_role_error; break;
+        }
         bool disagreement = false;
         bool candidate_only[2] = { false, false };
         bool legacy_only[2] = { false, false };
@@ -382,19 +468,44 @@ bool window_server_tag_corpus_serialize_comparison(
             if (record->tags & ~WINDOW_SERVER_TAG_KNOWN_MASK) ++legacy_only_unknown_tag_bits;
             if (!legacy_only[0] && legacy_only[1]) ++legacy_only_include_minimized_only;
         }
-        if (comparison->windows[i].label.present) ++labeled_count;
-        else if (disagreement) ++unlabeled_disagreement;
+        const struct window_server_tag_corpus_label *label = &comparison->windows[i].label;
+        if (label->present) {
+            ++labeled_count;
+            bool bit58_set = (record->tags & WINDOW_SERVER_TAG_IGNORE_FOR_SCREEN_SHARING) != 0;
+            if ((label->bit58_state == WINDOW_SERVER_TAG_CORPUS_BIT58_SET && !bit58_set) ||
+                (label->bit58_state == WINDOW_SERVER_TAG_CORPUS_BIT58_CLEAR && bit58_set)) return false;
+            if (disagreement) {
+                if (label->adjudication == WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING) {
+                    ++pending_disagreement;
+                } else {
+                    ++adjudicated_disagreement;
+                }
+            }
+        } else if (disagreement) {
+            ++unlabeled_disagreement;
+        }
     }
 
-    if (fputs("{\"schema\":\"yabai.window-server-classifier-comparison/v1\","
+    if (fputs("{\"schema\":\"" WINDOW_SERVER_CLASSIFIER_COMPARISON_SCHEMA "\","
               "\"type\":\"capture\",\"scenario\":", stream) == EOF ||
         !corpus_json_string(stream, metadata->scenario) ||
+        fputs(",\"capture_set_id\":", stream) == EOF || !corpus_json_string(stream, metadata->capture_set_id) ||
+        fprintf(stream, ",\"repeat_index\":%u", metadata->repeat_index) < 0 ||
         fputs(",\"os_version\":", stream) == EOF || !corpus_json_string(stream, metadata->os_version) ||
         fputs(",\"os_build\":", stream) == EOF || !corpus_json_string(stream, metadata->os_build) ||
         fputs(",\"architecture\":", stream) == EOF || !corpus_json_string(stream, metadata->architecture) ||
+        fputs(",\"source_revision\":", stream) == EOF || !corpus_json_string(stream, metadata->source_revision) ||
+        fputs(",\"ax_mode\":", stream) == EOF || !corpus_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
+        fprintf(stream, ",\"display_count\":%u", metadata->display_count) < 0 ||
+        fputs(",\"separate_spaces\":", stream) == EOF || !corpus_json_string(stream, metadata->separate_spaces) ||
+        fputs(",\"stage_manager\":", stream) == EOF || !corpus_json_string(stream, metadata->stage_manager) ||
         fprintf(stream,
                 ",\"legacy_algorithm\":\"legacy-space-eligibility-v1\","
                 "\"candidate_algorithm\":\"conservative-candidate-v1\","
+                "\"activation_state\":\"diagnostic-only\","
+                "\"fallback_algorithm\":\"legacy-space-eligibility-v1\","
+                "\"rollback_policy\":\"disable-candidate-and-use-legacy\","
+                "\"tag_layout_revision\":\"modern-advisory-v1\","
                 "\"tag_layout_status\":\"%s\",\"redaction\":\"strict-v1\","
                 "\"counts\":{\"public_windows\":%zu,\"snapshot_records\":%zu,"
                 "\"normal_classes\":{\"manageable\":%zu,\"user-facing-nonmanageable\":%zu,"
@@ -406,8 +517,11 @@ bool window_server_tag_corpus_serialize_comparison(
                 "\"include_minimized_comparison\":{\"same_include\":%zu,\"same_exclude\":%zu,"
                 "\"candidate_only\":%zu,\"legacy_only\":%zu},"
                 "\"labeled\":%zu,\"unlabeled_disagreement\":%zu,"
+                "\"pending_disagreement\":%zu,\"adjudicated_disagreement\":%zu,"
                 "\"false_positive\":%zu,\"false_negative\":%zu,"
-                "\"ax_matched\":%zu,\"ax_unavailable\":%zu,\"ax_error\":%zu,"
+                "\"ax_matched\":%zu,\"ax_unavailable\":%zu,"
+                "\"ax_no_match\":%zu,\"ax_inventory_error\":%zu,"
+                "\"ax_role_error\":%zu,"
                 "\"disagreement_profiles\":{\"unique_candidate_only\":%zu,"
                 "\"unique_legacy_only\":%zu,\"legacy_only_offscreen_ax_no_match\":%zu,"
                 "\"legacy_only_attribute_bit_2\":%zu,\"legacy_only_unknown_tag_bits\":%zu,"
@@ -419,8 +533,9 @@ bool window_server_tag_corpus_serialize_comparison(
                 class_counts[1][0], class_counts[1][1], class_counts[1][2], class_counts[1][3],
                 comparison_counts[0][0], comparison_counts[0][1], comparison_counts[0][2], comparison_counts[0][3],
                 comparison_counts[1][0], comparison_counts[1][1], comparison_counts[1][2], comparison_counts[1][3],
-                labeled_count, unlabeled_disagreement, false_positive, false_negative,
-                ax_matched, ax_unavailable, ax_error,
+                labeled_count, unlabeled_disagreement, pending_disagreement,
+                adjudicated_disagreement, false_positive, false_negative,
+                ax_matched, ax_unavailable, ax_no_match, ax_inventory_error, ax_role_error,
                 unique_candidate_only, unique_legacy_only, legacy_only_offscreen_ax_no_match,
                 legacy_only_attribute_bit_2, legacy_only_unknown_tag_bits,
                 legacy_only_include_minimized_only, candidate_only_on_screen_ax_corroborated,
@@ -455,7 +570,7 @@ bool window_server_tag_corpus_serialize_comparison(
             category[mode] = corpus_comparison(legacy[mode], classification[mode].window_class);
         }
         if (fprintf(stream,
-                    "{\"schema\":\"yabai.window-server-classifier-comparison/v1\","
+                    "{\"schema\":\"" WINDOW_SERVER_CLASSIFIER_COMPARISON_SCHEMA "\","
                     "\"type\":\"window\",\"ordinal\":%zu,\"owner_ordinal\":%zu,"
                     "\"parent_kind\":\"%s\",\"parent_ordinal\":",
                     i, corpus_owner_ordinal(windows, i), parent_kind) < 0) return false;
@@ -466,7 +581,8 @@ bool window_server_tag_corpus_serialize_comparison(
                     "\"tags_hex\":\"0x%016llx\",\"attributes_hex\":\"0x%016llx\","
                     "\"unknown_tags_hex\":\"0x%016llx\",\"owner_kind\":\"%s\","
                     "\"frame_state\":\"%s\",\"ax_status\":\"%s\","
-                    "\"title_state\":\"%s\",\"legacy_normal\":%s,"
+                    "\"ax_observation\":\"%s\",\"title_state\":\"%s\","
+                    "\"legacy_normal\":%s,"
                     "\"legacy_include_minimized\":%s,\"candidate_normal\":\"%s\","
                     "\"candidate_include_minimized\":\"%s\","
                     "\"comparison_normal\":\"%s\",\"comparison_include_minimized\":\"%s\","
@@ -476,6 +592,7 @@ bool window_server_tag_corpus_serialize_comparison(
                     (unsigned long long) (record->tags & ~WINDOW_SERVER_TAG_KNOWN_MASK),
                     ws_owner_kind_name(comparison->windows[i].owner), corpus_frame_state(windows + i),
                     ws_ax_corroboration_name(comparison->windows[i].ax),
+                    corpus_ax_observation_name(comparison->windows[i].ax_observation),
                     corpus_title_state_name(comparison->windows[i].title),
                     legacy[0] ? "true" : "false", legacy[1] ? "true" : "false",
                     ws_window_class_name(classification[0].window_class),
@@ -486,12 +603,28 @@ bool window_server_tag_corpus_serialize_comparison(
             !corpus_write_reasons(stream, classification[1].reasons)) return false;
         const struct window_server_tag_corpus_label *label = &comparison->windows[i].label;
         if (label->present) {
-            if (fputs(",\"fixture_role\":", stream) == EOF ||
+            if (fputs(",\"fixture_id\":", stream) == EOF ||
+                !corpus_json_string(stream, label->fixture_id) ||
+                fputs(",\"fixture_role\":", stream) == EOF ||
                 !corpus_json_string(stream, label->fixture_role) ||
                 fprintf(stream, ",\"expected_normal\":\"%s\","
-                                "\"expected_include_minimized\":\"%s\"",
+                                "\"expected_include_minimized\":\"%s\","
+                                "\"adjudication_status\":\"%s\","
+                                "\"bit58_state\":\"%s\"",
                         ws_window_class_name(label->expected_normal),
-                        ws_window_class_name(label->expected_include_minimized)) < 0) return false;
+                        ws_window_class_name(label->expected_include_minimized),
+                        corpus_adjudication_name(label->adjudication),
+                        corpus_bit58_state_name(label->bit58_state)) < 0) return false;
+            if (label->adjudication != WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING) {
+                if (fputs(",\"adjudication_reason\":", stream) == EOF ||
+                    !corpus_json_string(stream, label->adjudication_reason) ||
+                    fputs(",\"evidence_ref\":", stream) == EOF ||
+                    !corpus_json_string(stream, label->evidence_ref)) return false;
+            }
+            if (label->control_pair_id) {
+                if (fputs(",\"control_pair_id\":", stream) == EOF ||
+                    !corpus_json_string(stream, label->control_pair_id)) return false;
+            }
         }
         if (fputs("}\n", stream) == EOF) return false;
     }
