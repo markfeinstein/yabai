@@ -151,6 +151,11 @@ struct window_manager
     float window_opacity_duration;
     float window_animation_duration;
     int window_animation_easing;
+    bool enable_active_window_highlight;
+    struct rgba_color active_window_highlight_color;
+    float active_window_highlight_radius;
+    float active_window_highlight_width;
+    struct active_window_highlight active_window_highlight;
     struct rgba_color insert_feedback_color;
     float insert_feedback_radius;
     float insert_feedback_width;
@@ -248,6 +253,10 @@ void window_manager_set_purify_mode(struct window_manager *wm, enum purify_mode 
 void window_manager_set_menubar_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_active_window_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_normal_window_opacity(struct window_manager *wm, float opacity);
+void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled);
+void window_manager_refresh_active_window_highlight(struct window_manager *wm);
+void window_manager_reorder_active_window_highlight(struct window_manager *wm);
+void window_manager_hide_active_window_highlight(struct window_manager *wm);
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled);
 bool window_manager_set_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_window_opacity(struct window_manager *wm, struct window *window, float opacity);

@@ -599,6 +599,39 @@ Numeric fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
+\f(CRactive_window_highlight_color\fP: unsigned mathematical integer \f(CR1...UINT32_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_highlight_radius\fP: finite display points greater than or equal to zero, default 9;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_highlight_width\fP: finite display points greater than zero, default 4; rendering clamps it to half the focused window\(cqs shorter dimension;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
 \f(CRinsert_feedback_color\fP: unsigned mathematical integer \f(CR1...UINT32_MAX\fP;
 .RE
 .sp
@@ -1199,6 +1232,30 @@ System Integrity Protection must be partially disabled.
 Opacity of an unfocused window.
 .br
 System Integrity Protection must be partially disabled.
+.RE
+.sp
+\fBactive_window_highlight\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Draw a click\-through outline around the focused eligible window using a private WindowServer overlay; the scripting addition is not required.
+.br
+The highlight is hidden while the window is minimized, ordered out, in native fullscreen, represented by a yabai animation proxy, or while Mission Control is active. (default: off)
+.RE
+.sp
+\fBactive_window_highlight_color\fP [\fI0xAARRGGBB\fP]
+.RS 4
+Color of the focused\-window highlight. (default: 0xffd75f5f)
+.RE
+.sp
+\fBactive_window_highlight_radius\fP [\fIfloat\fP]
+.RS 4
+Target corner radius in display points for the focused\-window highlight. Must be finite and greater than or equal to zero. (default: 9)
+.RE
+.sp
+\fBactive_window_highlight_width\fP [\fIfloat\fP]
+.RS 4
+Stroke width in display points for the focused\-window highlight. Must be finite and greater than zero.
+.br
+Rendering clamps the width to half the focused window\(cqs shorter dimension. (default: 4)
 .RE
 .sp
 \fBwindow_animation_duration\fP [\fI<DURATION_SEL>\fP]

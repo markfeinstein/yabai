@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Add an opt-in, click-through `active_window_highlight` outline for the focused
+  eligible window, with configurable color, radius, and width; fail closed during
+  Mission Control, native fullscreen, visibility transitions, and yabai animations.
 - Add opt-in proportional `single_window_width_ratio` geometry, with an
   absolute `single_window_min_width` floor and an optional
   `single_window_max_width` ceiling, that centers one managed window while

@@ -62,6 +62,11 @@ static int declarative_install_test_mutex_destroy_counting(pthread_mutex_t *mute
     X(float, window_opacity_duration) \
     X(float, window_animation_duration) \
     X(int, window_animation_easing) \
+    X(bool, enable_active_window_highlight) \
+    X(struct rgba_color, active_window_highlight_color) \
+    X(float, active_window_highlight_radius) \
+    X(float, active_window_highlight_width) \
+    X(struct active_window_highlight, active_window_highlight) \
     X(struct rgba_color, insert_feedback_color) \
     X(float, insert_feedback_radius) \
     X(float, insert_feedback_width) \
@@ -160,6 +165,10 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return bundle->window_manager.menubar_opacity == value->real;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: return bundle->window_manager.active_window_opacity == value->real;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return bundle->window_manager.normal_window_opacity == value->real;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT: return bundle->window_manager.enable_active_window_highlight == value->boolean;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR: return bundle->window_manager.active_window_highlight_color.p == value->u32;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS: return bundle->window_manager.active_window_highlight_radius == value->real;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH: return bundle->window_manager.active_window_highlight_width == value->real;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return bundle->window_manager.insert_feedback_color.p == value->u32;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return bundle->window_manager.insert_feedback_radius == value->real;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return bundle->window_manager.insert_feedback_width == value->real;

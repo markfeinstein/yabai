@@ -802,6 +802,18 @@ static bool update_window_notifications(void)
         })
     }
 
+    if (success && !workspace_is_macos_sequoia_or_newer() &&
+        g_window_manager.enable_active_window_highlight && g_window_manager.focused_window_id) {
+        bool present = false;
+        for (size_t i = 0; i < window_count; ++i) {
+            if (window_list[i] == g_window_manager.focused_window_id) { present = true; break; }
+        }
+        if (!present) {
+            success = update_window_notifications_append(&window_list, &window_count, &window_capacity,
+                                                         g_window_manager.focused_window_id);
+        }
+    }
+
     if (success && window_count <= INT_MAX) {
         CGError request_result = SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count);
         success = request_result == kCGErrorSuccess;
@@ -816,6 +828,16 @@ static bool update_window_notifications(void)
 
     free(window_list);
     return success;
+}
+
+void event_loop_request_active_window_highlight_refresh(void)
+{
+    (void) event_loop_post(&g_event_loop, ACTIVE_WINDOW_HIGHLIGHT_REFRESH, NULL, 0);
+}
+
+void event_loop_active_window_highlight_target_did_change(void)
+{
+    if (!workspace_is_macos_sequoia_or_newer()) (void) update_window_notifications();
 }
 
 static bool window_focus_should_center_mouse(struct window *focused_window, struct window *window, uint32_t ffm_window_id)
@@ -849,6 +871,8 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     wm->focused_window_id = window->id;
     wm->focused_window_psn = window->application->psn;
     ms->ffm_window_id = 0;
+    window_manager_refresh_active_window_highlight(wm);
+    if (focus_changed) event_loop_active_window_highlight_target_did_change();
 
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
     if (focus_changed && previous_view && previous_view != view && view_layout_is_accordion(previous_view->layout)) {
@@ -1320,6 +1344,8 @@ static void event_loop_clear_window_identity(struct window_manager *wm, uint32_t
     if (wm->focused_window_id == window_id) {
         wm->focused_window_id = 0;
         wm->focused_window_psn = (ProcessSerialNumber) {0};
+        window_manager_hide_active_window_highlight(wm);
+        event_loop_active_window_highlight_target_did_change();
     }
     if (wm->last_window_id == window_id) wm->last_window_id = 0;
 }
@@ -1486,6 +1512,8 @@ static void event_loop_application_front_update_focus(struct application *applic
         g_window_manager.focused_window_id = 0;
         g_window_manager.focused_window_psn = application->psn;
         g_mouse_state.ffm_window_id = 0;
+        window_manager_hide_active_window_highlight(&g_window_manager);
+        event_loop_active_window_highlight_target_did_change();
         return;
     }
 
@@ -1497,6 +1525,7 @@ static void event_loop_application_front_update_focus(struct application *applic
         }
 
         window_manager_add_lost_focused_event(&g_window_manager, focused_window_id);
+        window_manager_hide_active_window_highlight(&g_window_manager);
         (void) event_loop_try_adopt_focused_window(application, focused_window_id);
         return;
     }
@@ -1651,6 +1680,7 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
     event_loop_flush_batched_views(view_list, view_count);
     managed_window_correction_schedule_application(application);
 
+    window_manager_refresh_active_window_highlight(&g_window_manager);
     event_signal_push(SIGNAL_APPLICATION_VISIBLE, application);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
@@ -1670,6 +1700,7 @@ static EVENT_HANDLER(APPLICATION_HIDDEN)
         native_resize_clear(&g_mouse_state);
     }
     application->is_hidden = true;
+    window_manager_refresh_active_window_highlight(&g_window_manager);
 
     int window_count;
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
@@ -2132,6 +2163,9 @@ static EVENT_HANDLER(WINDOW_MOVED)
     event_signal_push(SIGNAL_WINDOW_MOVED, window);
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame.origin = new_origin;
+    if (window->id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 
     if (!windowed_fullscreen) {
         window_clear_flag(window, WINDOW_WINDOWED);
@@ -2218,6 +2252,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
+    if (window->id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 
     if (was_fullscreen != is_fullscreen) {
         managed_window_correction_clear(window);
@@ -2401,6 +2438,9 @@ static EVENT_HANDLER(WINDOW_MINIMIZED)
     managed_window_correction_clear(window);
     window_set_flag(window, WINDOW_MINIMIZE);
     window_constraints_invalidate(&window->constraints);
+    if (window->id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 
     if (window_ax_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
@@ -2453,6 +2493,9 @@ static EVENT_HANDLER(WINDOW_DEMINIMIZED)
 
     window_clear_flag(window, WINDOW_MINIMIZE);
     window_constraints_invalidate(&window->constraints);
+    if (window->id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 
     if (window_ax_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
@@ -2515,12 +2558,22 @@ static EVENT_HANDLER(WINDOW_TITLE_CHANGED)
     event_signal_push(SIGNAL_WINDOW_TITLE_CHANGED, window);
 }
 
+static EVENT_HANDLER(ACTIVE_WINDOW_HIGHLIGHT_REFRESH)
+{
+    (void) context;
+    (void) param1;
+    window_manager_refresh_active_window_highlight(&g_window_manager);
+}
+
 static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 {
     uint32_t wid = (uint64_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
     struct window_node *node = table_find(&g_window_manager.insert_feedback, &wid);
     if (node) SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
+    if (wid == g_window_manager.focused_window_id) {
+        window_manager_reorder_active_window_highlight(&g_window_manager);
+    }
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
@@ -2635,6 +2688,9 @@ static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
     if (ordered_in) return;
 
     window_manager_window_did_order_out(&g_window_manager, window);
+    if (wid == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
@@ -2661,6 +2717,9 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
     (void) window_manager_refresh_window_ref(&g_window_manager, window);
     uint64_t sid = space_manager_active_space();
     window_manager_window_did_order_in(&g_window_manager, window, space_manager_is_window_on_space(sid, window) ? sid : 0);
+    if (wid == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 }
 
@@ -2766,6 +2825,7 @@ static EVENT_HANDLER(SPACE_CHANGED)
         }
     }
 
+    window_manager_refresh_active_window_highlight(&g_window_manager);
     event_signal_push(SIGNAL_SPACE_CHANGED, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_FOCUS);
 }
@@ -2833,6 +2893,7 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
         }
     }
 
+    window_manager_refresh_active_window_highlight(&g_window_manager);
     event_signal_push(SIGNAL_DISPLAY_CHANGED, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_DISPLAY | MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
 }
@@ -3430,6 +3491,7 @@ static void mission_control_begin_session(enum mission_control_mode mode, uint64
     __atomic_store_n(&g_mission_control_poll_generation, g_mission_control_session.generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);
     if (poll) mission_control_schedule_poll(0.1);
+    window_manager_hide_active_window_highlight(&g_window_manager);
     mission_control_emit_signal(SIGNAL_MISSION_CONTROL_ENTER, (void *) (uintptr_t) mode);
 }
 
@@ -3518,6 +3580,7 @@ static void mission_control_finish_exit(uint64_t generation)
         mission_control_set_menu_alpha(alpha);
     }
     if (mode == MISSION_CONTROL_MODE_SHOW || mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS) mission_control_correct();
+    window_manager_refresh_active_window_highlight(&g_window_manager);
     mission_control_emit_signal(SIGNAL_MISSION_CONTROL_EXIT, (void *) (uintptr_t) mode);
     mission_control_mark_menu_dirty();
     mission_control_request_reconcile();
@@ -3617,6 +3680,7 @@ static EVENT_HANDLER(SYSTEM_WOKE)
     if (workspace_is_macos_monterey_or_newer()) {
         mission_control_ensure_observed();
     }
+    window_manager_refresh_active_window_highlight(&g_window_manager);
     mission_control_schedule_poll(0.1);
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);

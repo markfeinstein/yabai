@@ -200,6 +200,9 @@ Numeric fields are:
 * `window_animation_duration`: finite seconds greater than or equal to zero. A nonzero value requires nonprompting SIP and Screen Recording preflight during runtime preparation;
 * `menubar_opacity`: `0...1`;
 * `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
+* `active_window_highlight_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `active_window_highlight_radius`: finite display points greater than or equal to zero, default 9;
+* `active_window_highlight_width`: finite display points greater than zero, default 4; rendering clamps it to half the focused window's shorter dimension;
 * `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
 * `insert_feedback_radius`: finite display points greater than or equal to zero, default 9;
 * `insert_feedback_width`: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
@@ -557,6 +560,20 @@ Global Settings
 *normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of an unfocused window. +
     System Integrity Protection must be partially disabled.
+
+*active_window_highlight* ['<BOOL_SEL>']::
+    Draw a click-through outline around the focused eligible window using a private WindowServer overlay; the scripting addition is not required. +
+    The highlight is hidden while the window is minimized, ordered out, in native fullscreen, represented by a yabai animation proxy, or while Mission Control is active. (default: off)
+
+*active_window_highlight_color* ['0xAARRGGBB']::
+    Color of the focused-window highlight. (default: 0xffd75f5f)
+
+*active_window_highlight_radius* ['float']::
+    Target corner radius in display points for the focused-window highlight. Must be finite and greater than or equal to zero. (default: 9)
+
+*active_window_highlight_width* ['float']::
+    Stroke width in display points for the focused-window highlight. Must be finite and greater than zero. +
+    Rendering clamps the width to half the focused window's shorter dimension. (default: 4)
 
 *window_animation_duration* ['<DURATION_SEL>']::
     Duration of window frame animation. +

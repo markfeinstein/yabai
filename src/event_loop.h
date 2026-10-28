@@ -38,6 +38,7 @@ static inline bool event_loop_pending_consume(volatile uint32_t *pending)
     EVENT_TYPE_ENTRY(WINDOW_MINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_DEMINIMIZED) \
     EVENT_TYPE_ENTRY(WINDOW_TITLE_CHANGED) \
+    EVENT_TYPE_ENTRY(ACTIVE_WINDOW_HIGHLIGHT_REFRESH) \
     EVENT_TYPE_ENTRY(MANAGED_WINDOW_CORRECTION_HINT) \
     EVENT_TYPE_ENTRY(SLS_WINDOW_ORDERED) \
     EVENT_TYPE_ENTRY(SLS_WINDOW_IS_VISIBLE) \
@@ -161,6 +162,8 @@ void event_loop_cancel_managed_window_correction(struct window *window);
 void event_loop_schedule_application_launch_retry(struct process *process);
 void event_loop_window_inventory_did_change(void);
 void event_loop_request_window_focus_fallback(void);
+void event_loop_request_active_window_highlight_refresh(void);
+void event_loop_active_window_highlight_target_did_change(void);
 void event_loop_process_application_windows(struct window **window_list, int window_count);
 
 #endif
