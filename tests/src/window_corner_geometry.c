@@ -94,6 +94,14 @@ TEST_FUNC(window_corner_geometry_preserves_zero_equal_and_asymmetric_source_orde
         if (array) CFRelease(array);
     }
 
+    CFArrayRef raw_array = window_corner_geometry_test_array(cases[2], 4);
+    struct window_corner_geometry raw_geometry = {0};
+    TEST_CHECK(window_corner_geometry_normalize(raw_array,
+        WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RAW, &raw_geometry), true);
+    TEST_CHECK(raw_geometry.source, WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RAW);
+    TEST_CHECK(window_corner_geometry_is_complete(&raw_geometry), true);
+    if (raw_array) CFRelease(raw_array);
+
     struct window_corner_geometry invalid = {
         .radius = { 1, 2, 3, 4 },
         .valid_mask = WINDOW_CORNER_GEOMETRY_VALID_ALL,
