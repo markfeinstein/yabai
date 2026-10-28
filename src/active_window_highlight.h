@@ -31,9 +31,12 @@ struct active_window_highlight
     int sub_level;
     float width;
     float radius;
+    CGRect pending_target_frame;
+    uint32_t pending_target_wid;
     bool sticky;
     bool ordered;
     bool needs_reorder;
+    bool pending_target_frame_valid;
 };
 
 struct active_window_highlight_geometry active_window_highlight_geometry_make(CGRect target_frame,

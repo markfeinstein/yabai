@@ -1041,6 +1041,10 @@ static bool window_manager_animation_test_reduce_motion;
 static int window_manager_animation_test_async_calls;
 static int window_manager_animation_test_async_windows;
 static int window_manager_animation_test_direct_calls;
+static int window_manager_animation_test_highlight_refresh_calls;
+static uint32_t window_manager_animation_test_highlight_target_wid;
+static CGRect window_manager_animation_test_highlight_frame;
+static bool window_manager_animation_test_highlight_has_frame;
 
 static struct accessibility_display_preferences window_manager_animation_test_preferences(void)
 {
@@ -1066,6 +1070,17 @@ static void window_manager_animation_test_direct(struct window *window, float x,
     (void) width;
     (void) height;
     ++window_manager_animation_test_direct_calls;
+}
+
+static void window_manager_animation_test_highlight_refresh(struct window_manager *wm,
+                                                            uint32_t target_wid,
+                                                            const CGRect *target_frame)
+{
+    (void) wm;
+    ++window_manager_animation_test_highlight_refresh_calls;
+    window_manager_animation_test_highlight_target_wid = target_wid;
+    window_manager_animation_test_highlight_has_frame = target_frame != NULL;
+    if (target_frame) window_manager_animation_test_highlight_frame = *target_frame;
 }
 
 TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configuration,
@@ -1123,6 +1138,58 @@ TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configur
     window_manager_animation_preferences = saved_preferences;
     window_manager_animation_async_route = saved_async;
     window_manager_animation_direct_route = saved_direct;
+});
+
+TEST_FUNC(window_animation_direct_refresh_uses_capture_geometry,
+{
+    __auto_type saved_preferences = window_manager_animation_preferences;
+    __auto_type saved_direct = window_manager_animation_direct_route;
+    __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
+    float saved_duration = g_window_manager.window_animation_duration;
+    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    window_manager_animation_preferences = window_manager_animation_test_preferences;
+    window_manager_animation_direct_route = window_manager_animation_test_direct;
+    window_manager_test_active_window_highlight_refresh_observer = window_manager_animation_test_highlight_refresh;
+
+    struct window first = { .id = 1 };
+    struct window second = { .id = 2 };
+    struct window_capture captures[] = {
+        { .window = &first, .x = 1, .y = 2, .w = 3, .h = 4 },
+        { .window = &second, .x = 5, .y = 6, .w = 7, .h = 8 }
+    };
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animation_test_direct_calls = 0;
+    window_manager_animation_test_highlight_refresh_calls = 0;
+    g_window_manager.window_animation_duration = 0.0f;
+    g_window_manager.focused_window_id = second.id;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 1);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, second.id);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, true);
+    TEST_CHECK(CGRectEqualToRect(window_manager_animation_test_highlight_frame,
+                                 CGRectMake(5, 6, 7, 8)), true);
+
+    g_window_manager.focused_window_id = 99;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, 0U);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, false);
+
+    g_window_manager.focused_window_id = first.id;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 3);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, first.id);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, true);
+    TEST_CHECK(CGRectEqualToRect(window_manager_animation_test_highlight_frame,
+                                 CGRectMake(1, 2, 3, 4)), true);
+
+    g_window_manager.focused_window_id = saved_focused_window_id;
+    g_window_manager.window_animation_duration = saved_duration;
+    window_manager_animation_preferences = saved_preferences;
+    window_manager_animation_direct_route = saved_direct;
+    window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
 });
 
 TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
