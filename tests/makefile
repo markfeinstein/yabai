@@ -7,7 +7,7 @@ ARCH ?=
 CC ?= clang
 ARCH_FLAG = $(if $(ARCH),-arch $(ARCH),)
 BASE_FLAGS = $(ARCH_FLAG) -DTESTS -DPROFILE=1 -std=c11 -Wall -Wextra
-FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework ScreenCaptureKit -framework SkyLight
+FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
@@ -37,7 +37,7 @@ opaque-context:
 
 build: core-build opaque-context
 	$(CC) ./src/runtime_paths.c -o $(OUT)/runtime_paths $(ARCH_FLAG) -DTESTS -std=c11 -Wall -Wextra -Werror
-	$(CC) ./src/menu_bar_ui.m ../src/menu_bar_model.c ../src/menu_bar_thumbnails.m ../src/accessibility_preferences.m -o $(OUT)/menu_bar_ui $(ARCH_FLAG) -DYB_MENU_BAR_TEST=1 -framework Cocoa -framework ScreenCaptureKit
+	$(CC) ./src/menu_bar_ui.m ../src/menu_bar_model.c ../src/accessibility_preferences.m -o $(OUT)/menu_bar_ui $(ARCH_FLAG) -framework Cocoa
 	$(CC) ./src/loader_protocol.c -x assembler-with-cpp ../src/osax/loader_shellcode.s $(ARCH_FLAG) -Wall -Wextra -Werror -o $(OUT)/loader_protocol
 	$(CC) ./src/osax_payload.m -o $(OUT)/osax_payload $(ARCH_FLAG) -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
 	$(CC) ./src/macho_parser.c ../scripts/macho_parser.c ../scripts/scan_sa_core.c -o $(OUT)/macho_parser $(ARCH_FLAG) -DMACHO_PARSER_TESTING -std=c11 -Wall -Wextra -Werror

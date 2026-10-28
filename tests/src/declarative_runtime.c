@@ -20,7 +20,6 @@ enum declarative_test_effect {
     DECLARATIVE_TEST_EFFECT_SHADOW,
     DECLARATIVE_TEST_EFFECT_MENU_ENABLED,
     DECLARATIVE_TEST_EFFECT_MENU_INTERFACE,
-    DECLARATIVE_TEST_EFFECT_MENU_THUMBNAILS,
     DECLARATIVE_TEST_EFFECT_MENU_STYLE,
     DECLARATIVE_TEST_EFFECT_MENU_FILTER,
     DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY,
@@ -129,7 +128,6 @@ static void declarative_test_refresh_insert_feedback(void) { ++declarative_test_
 static void declarative_test_shadow(void *manager, int value) { ((struct window_manager *) manager)->purify_mode = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SHADOW]; }
 static void declarative_test_menu_enabled(int value) { g_menu_bar_manager.settings.enabled = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_ENABLED]; }
 static void declarative_test_menu_interface(int value) { g_menu_bar_manager.settings.interface = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_INTERFACE]; }
-static void declarative_test_menu_thumbnails(int value) { g_menu_bar_manager.settings.thumbnails = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_THUMBNAILS]; }
 static void declarative_test_menu_style(int value) { g_menu_bar_manager.settings.style = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_STYLE]; }
 static void declarative_test_menu_filter(int value) { g_menu_bar_manager.settings.space_filter = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_FILTER]; }
 static void declarative_test_mouse_modifier(void *state, int value) { ((struct mouse_state *) state)->modifier = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER]; }
@@ -159,7 +157,6 @@ static const struct declarative_runtime_operation_ops declarative_test_operation
     .set_shadow = declarative_test_shadow,
     .set_menu_enabled = declarative_test_menu_enabled,
     .set_menu_interface = declarative_test_menu_interface,
-    .set_menu_thumbnails = declarative_test_menu_thumbnails,
     .set_menu_style = declarative_test_menu_style,
     .set_menu_space_filter = declarative_test_menu_filter,
     .set_mouse_modifier = declarative_test_mouse_modifier,
@@ -209,7 +206,6 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_SHADOW, "float", "float\n", DECLARATIVE_TEST_EFFECT_SHADOW },
     { DECLARATIVE_CONFIG_MENUBAR, "on", "on\n", DECLARATIVE_TEST_EFFECT_MENU_ENABLED },
     { DECLARATIVE_CONFIG_MENUBAR_INTERFACE, "panel", "panel\n", DECLARATIVE_TEST_EFFECT_MENU_INTERFACE },
-    { DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS, "on", "on\n", DECLARATIVE_TEST_EFFECT_MENU_THUMBNAILS },
     { DECLARATIVE_CONFIG_MENUBAR_STYLE, "expanded", "expanded\n", DECLARATIVE_TEST_EFFECT_MENU_STYLE },
     { DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER, "all", "all\n", DECLARATIVE_TEST_EFFECT_MENU_FILTER },
     { DECLARATIVE_CONFIG_MENUBAR_OPACITY, "0.5", "0.5000\n", DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY },
@@ -324,7 +320,6 @@ static struct declarative_value declarative_test_value(enum declarative_config_i
     case DECLARATIVE_CONFIG_SHADOW: value.enumeration = PURIFY_DISABLED; break;
     case DECLARATIVE_CONFIG_MENUBAR: value.enumeration = MENU_BAR_DISABLED; break;
     case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: value.enumeration = MENU_BAR_INTERFACE_MENU; break;
-    case DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS: value.enumeration = MENU_BAR_THUMBNAILS_OFF; break;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: value.enumeration = MENU_BAR_STYLE_COMPACT; break;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: value.enumeration = MENU_BAR_SPACE_FILTER_OCCUPIED; break;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: value.real = 0.5f; break;
@@ -856,7 +851,7 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
 )
 
 TEST_FUNC(declarative_runtime_live_matrix_covers_all_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 49);
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 48);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
@@ -1373,18 +1368,15 @@ TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
     menu_bar_manager_startup_staging_is_open = false;
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), false);
     TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), false);
-    TEST_CHECK(menu_bar_manager_startup_stage_thumbnails(MENU_BAR_THUMBNAILS_ON), false);
     TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_EXPANDED), false);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), false);
     menu_bar_manager_startup_staging_open();
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), true);
     TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), true);
-    TEST_CHECK(menu_bar_manager_startup_stage_thumbnails(MENU_BAR_THUMBNAILS_ON), true);
     TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_EXPANDED), true);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), true);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
     TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_PANEL);
-    TEST_CHECK(g_menu_bar_manager.settings.thumbnails, MENU_BAR_THUMBNAILS_ON);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
@@ -1393,7 +1385,6 @@ TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
     TEST_CHECK(g_menu_bar_manager.generation, 0ULL);
     TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, 0U);
     TEST_CHECK(menu_bar_manager_startup_stage_interface((enum menu_bar_interface) 99), false);
-    TEST_CHECK(menu_bar_manager_startup_stage_thumbnails((enum menu_bar_thumbnails) 99), false);
     TEST_CHECK(menu_bar_manager_startup_stage_style((enum menu_bar_style) 99), false);
     menu_bar_manager_startup_staging_seal();
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_DISABLED), false);

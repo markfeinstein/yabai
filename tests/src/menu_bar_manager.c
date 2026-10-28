@@ -7,7 +7,6 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     struct menu_bar_settings defaults = menu_bar_manager_settings();
     TEST_CHECK(defaults.enabled, MENU_BAR_DISABLED);
     TEST_CHECK(defaults.interface, MENU_BAR_INTERFACE_MENU);
-    TEST_CHECK(defaults.thumbnails, MENU_BAR_THUMBNAILS_OFF);
     TEST_CHECK(defaults.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(defaults.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
 
@@ -15,15 +14,12 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_PANEL), "panel"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_AUTO), "auto"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_interface_string((enum menu_bar_interface) -1), "menu"), 0);
-    TEST_CHECK(strcmp(menu_bar_manager_thumbnails_string(MENU_BAR_THUMBNAILS_OFF), "off"), 0);
-    TEST_CHECK(strcmp(menu_bar_manager_thumbnails_string(MENU_BAR_THUMBNAILS_ON), "on"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_COMPACT), "compact"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_EXPANDED), "expanded"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "expanded"), 0);
 
     enum menu_bar_enabled enabled = MENU_BAR_ENABLED;
     enum menu_bar_interface interface = MENU_BAR_INTERFACE_MENU;
-    enum menu_bar_thumbnails thumbnails = MENU_BAR_THUMBNAILS_OFF;
     enum menu_bar_style style = MENU_BAR_STYLE_EXPANDED;
     enum menu_bar_space_filter filter = MENU_BAR_SPACE_FILTER_ALL;
 
@@ -42,13 +38,6 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(interface, MENU_BAR_INTERFACE_AUTO);
     TEST_CHECK(menu_bar_manager_parse_interface("popover", 7, &interface), false);
     TEST_CHECK(interface, MENU_BAR_INTERFACE_AUTO);
-
-    TEST_CHECK(menu_bar_manager_parse_thumbnails("off", 3, &thumbnails), true);
-    TEST_CHECK(thumbnails, MENU_BAR_THUMBNAILS_OFF);
-    TEST_CHECK(menu_bar_manager_parse_thumbnails("on", 2, &thumbnails), true);
-    TEST_CHECK(thumbnails, MENU_BAR_THUMBNAILS_ON);
-    TEST_CHECK(menu_bar_manager_parse_thumbnails("yes", 3, &thumbnails), false);
-    TEST_CHECK(thumbnails, MENU_BAR_THUMBNAILS_ON);
 
     TEST_CHECK(menu_bar_manager_parse_style("compact", 7, &style), true);
     TEST_CHECK(style, MENU_BAR_STYLE_COMPACT);

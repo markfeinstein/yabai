@@ -1535,87 +1535,6 @@ test_expanded_panel_modes_and_unavailable_fallback(void)
     return true;
 }
 
-static CGImageRef
-menu_bar_ui_test_image(size_t width, size_t height)
-{
-    CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = color ? CGBitmapContextCreate(NULL, width, height, 8, width * 4, color,
-                                                          kCGImageAlphaPremultipliedLast) : NULL;
-    CGImageRef image = context ? CGBitmapContextCreateImage(context) : NULL;
-    if (context) CGContextRelease(context);
-    if (color) CGColorSpaceRelease(color);
-    return image;
-}
-
-static NSUInteger
-menu_bar_ui_view_tree_count_class(NSView *root, Class class_value)
-{
-    NSUInteger count = [root isKindOfClass:class_value] ? 1 : 0;
-    for (NSView *view in [root subviews]) count += menu_bar_ui_view_tree_count_class(view, class_value);
-    return count;
-}
-
-static bool
-test_thumbnail_cache_ttl_freshness_limits_and_purge(void)
-{
-    YBMenuBarThumbnailCache *cache = [[YBMenuBarThumbnailCache alloc] init];
-    CGImageRef image = menu_bar_ui_test_image(16, 16);
-    TEST_CHECK(image != NULL);
-    TEST_CHECK([cache insertImage:image forKey:@"display:1" now:0.0]);
-    TEST_CHECK([cache isFreshKey:@"display:1" now:9.999]);
-    TEST_CHECK(![cache isFreshKey:@"display:1" now:10.0]);
-    NSTimeInterval age = 0;
-    CGImageRef copy = [cache copyImageForKey:@"display:1" now:299.0 age:&age];
-    TEST_CHECK(copy != NULL);
-    TEST_CHECK(age == 299.0);
-    if (copy) CGImageRelease(copy);
-    copy = [cache copyImageForKey:@"display:1" now:300.0 age:&age];
-    TEST_CHECK(copy == NULL);
-    for (int i = 0; i < 17; ++i) {
-        NSString *key = [NSString stringWithFormat:@"display:%d", i + 10];
-        TEST_CHECK([cache insertImage:image forKey:key now:400.0 + i]);
-    }
-    TEST_CHECK([cache testEntryCount] == 16);
-    TEST_CHECK([cache testTotalCost] <= YB_MENU_BAR_THUMBNAIL_MAX_COST);
-    [cache pruneToKeys:[NSSet setWithObjects:@"display:10", @"display:11", nil] now:420.0];
-    TEST_CHECK([cache testEntryCount] <= 2);
-    [cache purge];
-    TEST_CHECK([cache testEntryCount] == 0);
-    TEST_CHECK([cache testTotalCost] == 0);
-    if (image) CGImageRelease(image);
-    [cache release];
-    return true;
-}
-
-static bool
-test_thumbnail_panel_uses_fixed_decorative_regions_without_changing_actions(void)
-{
-    g_yb_menu_bar_panel_capability_override = 2;
-    struct menu_bar_ui_action_log log = {0};
-    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
-    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
-    struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(500);
-    snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
-    snapshot->settings.thumbnails = MENU_BAR_THUMBNAILS_ON;
-    [controller testSetSnapshot:snapshot];
-    CGImageRef image = menu_bar_ui_test_image(32, 18);
-    TEST_CHECK([[controller testThumbnailCache] insertImage:image forKey:@"display-1:42" now:0.0]);
-    YBMenuBarExpandedPanel *panel = [controller buildExpandedPanel];
-    TEST_CHECK(panel != nil);
-    TEST_CHECK(menu_bar_ui_view_tree_count_class([panel contentView], [YBMenuBarSpaceCard class]) == 2);
-    TEST_CHECK(menu_bar_ui_view_tree_count_class([panel contentView], [NSImageView class]) == 2);
-    TEST_CHECK(log.count == 0);
-    struct menu_bar_snapshot *disabled = menu_bar_ui_detailed_snapshot(501);
-    disabled->settings.interface = MENU_BAR_INTERFACE_PANEL;
-    disabled->settings.thumbnails = MENU_BAR_THUMBNAILS_OFF;
-    [controller receiveSnapshot:disabled clear:false];
-    TEST_CHECK([[controller testThumbnailCache] testEntryCount] == 0);
-    if (image) CGImageRelease(image);
-    [controller release];
-    g_yb_menu_bar_panel_capability_override = -1;
-    return true;
-}
-
 struct menu_bar_ui_test_case
 {
     const char *name;
@@ -1646,8 +1565,6 @@ int main(void)
             { "generation_ordering_without_status_item_delivery", test_generation_ordering_without_status_item_delivery },
             { "expanded_panel_lifecycle_actions_and_deferred_snapshot", test_expanded_panel_lifecycle_actions_and_deferred_snapshot },
             { "expanded_panel_modes_and_unavailable_fallback", test_expanded_panel_modes_and_unavailable_fallback },
-            { "thumbnail_cache_ttl_freshness_limits_and_purge", test_thumbnail_cache_ttl_freshness_limits_and_purge },
-            { "thumbnail_panel_uses_fixed_decorative_regions_without_changing_actions", test_thumbnail_panel_uses_fixed_decorative_regions_without_changing_actions },
         };
 
         size_t passed = 0;

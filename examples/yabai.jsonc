@@ -55,8 +55,6 @@
     "window_animation_easing": "ease_out_circ",
 
     "menubar": "off",
-    "menubar_interface": "menu",
-    "menubar_thumbnails": "off",
     "menubar_style": "expanded",
     "menubar_space_filter": "occupied",
     "menubar_opacity": 1.0,

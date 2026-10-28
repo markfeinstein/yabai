@@ -183,7 +183,6 @@ Enum fields are:
 * `window_shadow`: `off`, `float`, `on`;
 * `menubar`: `off`, `on`;
 * `menubar_interface`: `menu`, `panel`, `auto`;
-* `menubar_thumbnails`: `off`, `on`;
 * `menubar_style`: `compact`, `expanded`;
 * `menubar_space_filter`: `occupied`, `all`;
 * `layout`: `bsp`, `stack`, `float`, `accordion_horizontal`, `accordion_vertical`;
@@ -481,12 +480,7 @@ Global Settings
     'menu': Use the existing native informational menu. +
     'panel': On macOS 27 or newer, use a transient keyboard-accessible read-only panel; fall back to the native menu when unavailable. +
     'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
-    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. Without *menubar_thumbnails*, it does not require Screen Recording permission.
-
-*menubar_thumbnails* ['off|on']::
-    Enable opt-in, memory-only thumbnails in the macOS 27 expanded panel. Default is 'off'. +
-    Thumbnails use public ScreenCaptureKit and require existing Screen Recording permission. yabai never prompts, switches Spaces, focuses windows, or captures while the panel is closed. Only ordinary on-screen layer-0 windows are composited; the cursor, audio, wallpaper, Dock, menu bar, notifications, and yabai panel are excluded. +
-    Images are limited to 256x144 pixels, retained for at most five minutes, and bounded to 16 entries or 8 MiB. Disabling the setting, losing permission, disabling the menu bar, or falling back to the native menu purges the cache. Thumbnails can still contain sensitive application content and are never written to disk, logged, copied, queried, or sent over IPC.
+    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It never shows window titles, geometry, screenshots, previews, or thumbnails and does not require Screen Recording permission.
 
 *menubar_style* ['compact|expanded']::
     Set the menu bar status item layout. Default is 'expanded'. +

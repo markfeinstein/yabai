@@ -1722,20 +1722,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                                 value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
-        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_THUMBNAILS)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", menu_bar_manager_thumbnails_string(menu_bar_manager_thumbnails()));
-            } else {
-                enum menu_bar_thumbnails thumbnails;
-                if (menu_bar_manager_parse_thumbnails(value.text, value.length, &thumbnails)) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_THUMBNAILS,
-                        &(struct declarative_value) { .present = true, .enumeration = thumbnails }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
-                                value.length, value.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_STYLE)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {

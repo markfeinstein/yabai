@@ -443,17 +443,6 @@ Enum fields are:
 .  sp -1
 .  IP \(bu 2.3
 .\}
-\f(CRmenubar_thumbnails\fP: \f(CRoff\fP, \f(CRon\fP;
-.RE
-.sp
-.RS 4
-.ie n \{\
-\h'-04'\(bu\h'+03'\c
-.\}
-.el \{\
-.  sp -1
-.  IP \(bu 2.3
-.\}
 \f(CRmenubar_style\fP: \f(CRcompact\fP, \f(CRexpanded\fP;
 .RE
 .sp
@@ -1093,16 +1082,7 @@ Select the read\-only menu bar item\(cqs expanded interface. Default is \fImenu\
 .br
 \fIauto\fP: Use the panel on macOS 27 or newer and the native menu on older systems.
 .br
-The panel uses the existing display/Space snapshot and exposes only the existing space\-filter and indicator\-layout settings. Without \fBmenubar_thumbnails\fP, it does not require Screen Recording permission.
-.RE
-.sp
-\fBmenubar_thumbnails\fP [\fIoff|on\fP]
-.RS 4
-Enable opt\-in, memory\-only thumbnails in the macOS 27 expanded panel. Default is \fIoff\fP.
-.br
-Thumbnails use public ScreenCaptureKit and require existing Screen Recording permission. yabai never prompts, switches Spaces, focuses windows, or captures while the panel is closed. Only ordinary on\-screen layer\-0 windows are composited; the cursor, audio, wallpaper, Dock, menu bar, notifications, and yabai panel are excluded.
-.br
-Images are limited to 256x144 pixels, retained for at most five minutes, and bounded to 16 entries or 8 MiB. Disabling the setting, losing permission, disabling the menu bar, or falling back to the native menu purges the cache. Thumbnails can still contain sensitive application content and are never written to disk, logged, copied, queried, or sent over IPC.
+The panel uses the existing display/Space snapshot and exposes only the existing space\-filter and indicator\-layout settings. It never shows window titles, geometry, screenshots, previews, or thumbnails and does not require Screen Recording permission.
 .RE
 .sp
 \fBmenubar_style\fP [\fIcompact|expanded\fP]
