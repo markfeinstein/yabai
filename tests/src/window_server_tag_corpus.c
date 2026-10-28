@@ -171,6 +171,29 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
     }
     free(output);
 
+    comparison_windows[0].ax = WS_AX_NO_MATCH;
+    windows[0].on_screen = false;
+    output = NULL; length = 0;
+    stream = open_memstream(&output, &length);
+    TEST_CHECK(stream != NULL, true);
+    TEST_CHECK(window_server_tag_corpus_serialize_comparison(
+        stream, &metadata, windows, 3, &snapshot, &comparison), true);
+    TEST_CHECK(fclose(stream), 0);
+    if (output) {
+        char *newline = strchr(output, '\n');
+        TEST_CHECK(newline != NULL, true);
+        NSData *data = [NSData dataWithBytes:output length:newline ? (NSUInteger)(newline - output) : 0];
+        id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        id profiles = object[@"counts"][@"disagreement_profiles"];
+        TEST_CHECK([profiles[@"unique_legacy_only"] integerValue], 1L);
+        TEST_CHECK([profiles[@"legacy_only_offscreen_ax_no_match"] integerValue], 1L);
+        TEST_CHECK([profiles[@"legacy_only_attribute_bit_2"] integerValue], 1L);
+        TEST_CHECK([profiles[@"legacy_only_unknown_tag_bits"] integerValue], 1L);
+        TEST_CHECK([profiles[@"legacy_only_include_minimized_only"] integerValue], 0L);
+        TEST_CHECK([profiles[@"unique_candidate_only"] integerValue], 0L);
+    }
+    free(output);
+
     comparison_windows[0].label.fixture_role = "invalid role";
     char path[] = "/private/tmp/yabai-comparison-invalid.XXXXXX";
     int fd = mkstemp(path); TEST_CHECK(fd >= 0, true); if (fd >= 0) close(fd); unlink(path);
