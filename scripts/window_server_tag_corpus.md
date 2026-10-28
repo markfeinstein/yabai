@@ -70,6 +70,21 @@ Allowed fixture roles are:
 
 Expected classes are `manageable`, `user-facing-nonmanageable`, `system-overlay`, or `uncertain`.
 
+## Disagreement profiles
+
+Comparison captures include aggregate, redacted `counts.disagreement_profiles` values. They count unique windows across normal and include-minimized modes and make repeated host captures comparable without exposing application identity:
+
+- unique candidate-only and legacy-only windows;
+- legacy-only windows that are offscreen with no AX inventory match;
+- legacy-only windows carrying attribute bit 2 or unknown tag bits;
+- disagreements present only when minimized windows are included;
+- candidate-only windows that are onscreen and AX-corroborated;
+- candidate-only windows carrying unknown tag bits.
+
+These profiles are triage evidence, not labels. In particular, offscreen AX-no-match windows may be inactive native tabs, windows on another Space, minimized windows, stale surfaces, or legitimate documents omitted from the current AX inventory. Do not treat a profile as sufficient to relax or activate the classifier.
+
+A macOS 27.0.1 current-host capture on build 26A434 found zero candidate-only windows and nine unique legacy-only windows: all nine were offscreen, regular-owner, root-level, AX-no-match windows with unknown tag bits; seven carried attribute bit 2 and two occurred only in include-minimized mode. This phenotype remains unadjudicated without controlled fixture labels.
+
 ## Evidence matrix
 
 Before any activation PR, repeat and review labeled captures for:

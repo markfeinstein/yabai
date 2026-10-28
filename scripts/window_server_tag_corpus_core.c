@@ -311,6 +311,11 @@ bool window_server_tag_corpus_serialize_comparison(
     size_t labeled_count = 0, unlabeled_disagreement = 0;
     size_t false_positive = 0, false_negative = 0;
     size_t ax_matched = 0, ax_unavailable = 0, ax_error = 0;
+    size_t unique_candidate_only = 0, unique_legacy_only = 0;
+    size_t legacy_only_offscreen_ax_no_match = 0;
+    size_t legacy_only_attribute_bit_2 = 0, legacy_only_unknown_tag_bits = 0;
+    size_t legacy_only_include_minimized_only = 0;
+    size_t candidate_only_on_screen_ax_corroborated = 0, candidate_only_unknown_tag_bits = 0;
     struct ws_window_classification classifications[2];
 
     for (size_t i = 0; i < window_count; ++i) {
@@ -322,6 +327,8 @@ bool window_server_tag_corpus_serialize_comparison(
         else if (ax == WS_AX_UNAVAILABLE) ++ax_unavailable;
         else ++ax_error;
         bool disagreement = false;
+        bool candidate_only[2] = { false, false };
+        bool legacy_only[2] = { false, false };
         for (int mode = 0; mode < 2; ++mode) {
             struct ws_window_classification_input input = {
                 .valid_fields = record->valid_fields,
@@ -346,7 +353,9 @@ bool window_server_tag_corpus_serialize_comparison(
             enum corpus_comparison_category category =
                 corpus_comparison(legacy, classifications[mode].window_class);
             ++comparison_counts[mode][category];
-            disagreement |= category == CORPUS_CANDIDATE_ONLY || category == CORPUS_LEGACY_ONLY;
+            candidate_only[mode] = category == CORPUS_CANDIDATE_ONLY;
+            legacy_only[mode] = category == CORPUS_LEGACY_ONLY;
+            disagreement |= candidate_only[mode] || legacy_only[mode];
             const struct window_server_tag_corpus_label *label = &comparison->windows[i].label;
             if (label->present) {
                 enum ws_window_class expected = mode ? label->expected_include_minimized
@@ -356,6 +365,22 @@ bool window_server_tag_corpus_serialize_comparison(
                 if (classifications[mode].window_class != WS_WINDOW_CLASS_MANAGEABLE &&
                     expected == WS_WINDOW_CLASS_MANAGEABLE) ++false_negative;
             }
+        }
+        bool any_candidate_only = candidate_only[0] || candidate_only[1];
+        bool any_legacy_only = legacy_only[0] || legacy_only[1];
+        if (any_candidate_only) {
+            ++unique_candidate_only;
+            bool ax_corroborated = ax == WS_AX_STANDARD_WINDOW || ax == WS_AX_FLOATING_WINDOW ||
+                                   ax == WS_AX_DIALOG_WINDOW;
+            if (windows[i].on_screen && ax_corroborated) ++candidate_only_on_screen_ax_corroborated;
+            if (record->tags & ~WINDOW_SERVER_TAG_KNOWN_MASK) ++candidate_only_unknown_tag_bits;
+        }
+        if (any_legacy_only) {
+            ++unique_legacy_only;
+            if (!windows[i].on_screen && ax == WS_AX_NO_MATCH) ++legacy_only_offscreen_ax_no_match;
+            if (record->attributes & UINT64_C(0x2)) ++legacy_only_attribute_bit_2;
+            if (record->tags & ~WINDOW_SERVER_TAG_KNOWN_MASK) ++legacy_only_unknown_tag_bits;
+            if (!legacy_only[0] && legacy_only[1]) ++legacy_only_include_minimized_only;
         }
         if (comparison->windows[i].label.present) ++labeled_count;
         else if (disagreement) ++unlabeled_disagreement;
@@ -382,14 +407,24 @@ bool window_server_tag_corpus_serialize_comparison(
                 "\"candidate_only\":%zu,\"legacy_only\":%zu},"
                 "\"labeled\":%zu,\"unlabeled_disagreement\":%zu,"
                 "\"false_positive\":%zu,\"false_negative\":%zu,"
-                "\"ax_matched\":%zu,\"ax_unavailable\":%zu,\"ax_error\":%zu}}\n",
+                "\"ax_matched\":%zu,\"ax_unavailable\":%zu,\"ax_error\":%zu,"
+                "\"disagreement_profiles\":{\"unique_candidate_only\":%zu,"
+                "\"unique_legacy_only\":%zu,\"legacy_only_offscreen_ax_no_match\":%zu,"
+                "\"legacy_only_attribute_bit_2\":%zu,\"legacy_only_unknown_tag_bits\":%zu,"
+                "\"legacy_only_include_minimized_only\":%zu,"
+                "\"candidate_only_on_screen_ax_corroborated\":%zu,"
+                "\"candidate_only_unknown_tag_bits\":%zu}}}\n",
                 ws_tag_layout_status_name(comparison->tag_layout), window_count, snapshot->count,
                 class_counts[0][0], class_counts[0][1], class_counts[0][2], class_counts[0][3],
                 class_counts[1][0], class_counts[1][1], class_counts[1][2], class_counts[1][3],
                 comparison_counts[0][0], comparison_counts[0][1], comparison_counts[0][2], comparison_counts[0][3],
                 comparison_counts[1][0], comparison_counts[1][1], comparison_counts[1][2], comparison_counts[1][3],
                 labeled_count, unlabeled_disagreement, false_positive, false_negative,
-                ax_matched, ax_unavailable, ax_error) < 0) return false;
+                ax_matched, ax_unavailable, ax_error,
+                unique_candidate_only, unique_legacy_only, legacy_only_offscreen_ax_no_match,
+                legacy_only_attribute_bit_2, legacy_only_unknown_tag_bits,
+                legacy_only_include_minimized_only, candidate_only_on_screen_ax_corroborated,
+                candidate_only_unknown_tag_bits) < 0) return false;
 
     for (size_t i = 0; i < window_count; ++i) {
         const struct window_server_window_record *record =
