@@ -65,4 +65,10 @@ The input identifiers are not emitted. Select and restore the target outside the
 
 `overlay_above` and `overlay_adjacent` describe the front-to-back `CGWindowListCopyWindowInfo` order. They are evidence, not an activation selector. Different window classes or OS releases must not be normalized away without a complete z-order explanation.
 
-This probe is not physical accessibility acceptance. Menu navigation, VoiceOver, Reduce Transparency/Increase Contrast, and visible flicker still require direct observation. Cross-version conclusions still require the existing macOS 26.6 and 27.2 environments; do not create or download a VM for this tool.
+## Current dual-display and physical acceptance
+
+On macOS 27.0.1, the deployed highlight was checked on both currently connected 2× displays: an external fixed 60 Hz main display and the built-in 120 Hz display. Each focused target had exactly one daemon-owned geometry match above the target; legacy center hit testing remained on the target and the ignore-for-events tag remained present.
+
+Physical acceptance passed for native menu keyboard navigation/open/close and for highlight visibility under Reduce Transparency, Increase Contrast, and Differentiate Without Color, with preferences restored after each check. VoiceOver acceptance was not completed and remains a manual blocker.
+
+Cross-version conclusions still require existing macOS 26.6 and 27.2 environments; do not create or download a VM for this tool.
