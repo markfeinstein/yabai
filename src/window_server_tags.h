@@ -9,6 +9,10 @@
  * authoritative production contract. */
 #define WINDOW_SERVER_TAG_DOCUMENT                   (UINT64_C(1) << 0)
 #define WINDOW_SERVER_TAG_FLOATING                   (UINT64_C(1) << 1)
+/* Observed on yabai-owned click-through overlays on macOS 27.0.1. Keep this
+ * overlay-only tag out of WINDOW_SERVER_TAG_KNOWN_MASK until a classifier
+ * corpus establishes its semantics for application-owned windows. */
+#define WINDOW_SERVER_TAG_IGNORE_FOR_EVENTS          (UINT64_C(1) << 9)
 #define WINDOW_SERVER_TAG_ON_ALL_WORKSPACES          (UINT64_C(1) << 11)
 #define WINDOW_SERVER_TAG_KIT_VISIBLE                (UINT64_C(1) << 13)
 #define WINDOW_SERVER_TAG_MODAL                      (UINT64_C(1) << 31)
