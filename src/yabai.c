@@ -49,7 +49,6 @@ struct declarative_startup_state g_declarative_startup;
 static bool g_native_config_explicit;
 static int g_lock_fd = -1;
 
-mach_port_t g_bs_port;
 int g_connection;
 bool g_verbose;
 pid_t g_pid;
@@ -179,7 +178,6 @@ static inline bool configure_settings_and_acquire_lock(void)
     CGSetLocalEventsSuppressionInterval(0.0f);
     CGEnableEventStateCombining(false);
     mouse_state_init(&g_mouse_state);
-    task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &g_bs_port);
 
     g_lock_fd = yabai_runtime_acquire_lock(g_lock_file, getuid());
     if (g_lock_fd == -1) {

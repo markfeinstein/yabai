@@ -427,7 +427,6 @@ enum window_identity_test_rejection_case
     WINDOW_IDENTITY_TEST_CORRECTION,
     WINDOW_IDENTITY_TEST_FEEDBACK,
     WINDOW_IDENTITY_TEST_ANIMATION,
-    WINDOW_IDENTITY_TEST_JANKYBORDERS,
     WINDOW_IDENTITY_TEST_INCOMPATIBLE,
     WINDOW_IDENTITY_TEST_NEW_TREE_ID,
     WINDOW_IDENTITY_TEST_DUPLICATE_OLD_ID,
@@ -459,11 +458,6 @@ static bool window_identity_test_rejection(
         uint32_t key = 1;
         table_add(&fixture.wm.window_animations_table, &key, &fixture.window);
     } break;
-    case WINDOW_IDENTITY_TEST_JANKYBORDERS:
-        pthread_mutex_lock(&g_jankyborders_desired.lock);
-        g_jankyborders_desired.count = 1;
-        pthread_mutex_unlock(&g_jankyborders_desired.lock);
-        break;
     case WINDOW_IDENTITY_TEST_INCOMPATIBLE:
         window_identity_test_candidate_flags |= WINDOW_FULLSCREEN;
         break;
@@ -488,11 +482,6 @@ static bool window_identity_test_rejection(
     uint32_t before_id = fixture.window.id;
     struct window *before_lookup = window_manager_find_window(&fixture.wm, fixture.old_id);
     enum window_identity_replace_error actual = window_identity_test_attempt(&fixture);
-    if (rejection == WINDOW_IDENTITY_TEST_JANKYBORDERS) {
-        pthread_mutex_lock(&g_jankyborders_desired.lock);
-        g_jankyborders_desired.count = 0;
-        pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    }
     bool unchanged = actual == expected && fixture.window.id == before_id &&
                      window_manager_find_window(&fixture.wm, fixture.old_id) == before_lookup &&
                      window_manager_find_window(&fixture.wm, fixture.new_id) == NULL &&
@@ -524,7 +513,6 @@ TEST_FUNC(window_identity_transaction_rejects_collisions_busy_state_and_invarian
         { WINDOW_IDENTITY_TEST_CORRECTION, WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION },
         { WINDOW_IDENTITY_TEST_FEEDBACK, WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK },
         { WINDOW_IDENTITY_TEST_ANIMATION, WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION },
-        { WINDOW_IDENTITY_TEST_JANKYBORDERS, WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION },
         { WINDOW_IDENTITY_TEST_INCOMPATIBLE, WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW },
         { WINDOW_IDENTITY_TEST_NEW_TREE_ID, WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT },
         { WINDOW_IDENTITY_TEST_DUPLICATE_OLD_ID, WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION },

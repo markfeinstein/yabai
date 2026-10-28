@@ -2900,7 +2900,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
     TEST_ENTRY(window_server_hit_test_relation_classification_is_conservative) \
     TEST_ENTRY(window_server_hit_test_comparison_is_optional_and_legacy_authoritative) \
-    TEST_ENTRY(window_manager_hit_test_preserves_proxy_and_border_skip_sequence) \
+    TEST_ENTRY(window_manager_hit_test_skips_multiple_owned_cosmetic_windows) \
     TEST_ENTRY(window_server_hit_test_concurrent_comparison_is_race_free) \
     TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
     TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
@@ -3131,9 +3131,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_binary_wake_converges_after_merges)   \
     TEST_ENTRY(focus_pending_accounting_is_saturating_and_owned) \
     TEST_ENTRY(producer_pending_state_rolls_back_and_retries_after_rejection) \
-    TEST_ENTRY(mach_send_uses_bounded_timeout) \
     TEST_ENTRY(animation_payload_packers_bound_batches_and_preserve_order) \
-    TEST_ENTRY(jankyborders_generations_supersede_stale_retries) \
     TEST_ENTRY(animation_clock_cv_setup_stop_and_destroy_states_are_exact) \
     TEST_ENTRY(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread) \
     TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \

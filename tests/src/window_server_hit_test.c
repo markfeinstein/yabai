@@ -140,14 +140,10 @@ static OSStatus hit_test_sequence_fake(int cid, int filter, int flags, int reser
     return noErr;
 }
 
-static bool hit_test_janky_fake(int cid) { return cid == 77; }
-
-TEST_FUNC(window_manager_hit_test_preserves_proxy_and_border_skip_sequence,
+TEST_FUNC(window_manager_hit_test_skips_multiple_owned_cosmetic_windows,
 {
     __auto_type saved_legacy = window_server_hit_test_legacy_impl;
-    __auto_type saved_janky = window_manager_test_connection_is_jankyborders;
     window_server_hit_test_legacy_impl = hit_test_sequence_fake;
-    window_manager_test_connection_is_jankyborders = hit_test_janky_fake;
     struct window_manager wm = {0}; table_init(&wm.window, 4, hash_wm, compare_wm);
     struct window target = { .id = 30 }; table_add(&wm.window, &target.id, &target);
     int saved_connection = g_connection; g_connection = 55;
@@ -161,7 +157,7 @@ TEST_FUNC(window_manager_hit_test_preserves_proxy_and_border_skip_sequence,
     TEST_CHECK(hit_test_sequence_filters[1], 10U); TEST_CHECK(hit_test_sequence_flags[1], -1);
 
     hit_test_sequence_index = 0;
-    hit_test_sequence_ids[0] = 11; hit_test_sequence_cids[0] = 77;
+    hit_test_sequence_ids[0] = 11; hit_test_sequence_cids[0] = 55;
     hit_test_sequence_ids[1] = 12; hit_test_sequence_cids[1] = 55;
     hit_test_sequence_ids[2] = 30; hit_test_sequence_cids[2] = 99;
     TEST_CHECK(window_manager_find_window_at_point_filtering_window(&wm, CGPointMake(1, 2), 5), &target);
@@ -172,7 +168,6 @@ TEST_FUNC(window_manager_hit_test_preserves_proxy_and_border_skip_sequence,
 
     g_connection = saved_connection; table_free(&wm.window);
     window_server_hit_test_legacy_impl = saved_legacy;
-    window_manager_test_connection_is_jankyborders = saved_janky;
 });
 
 static OSStatus hit_test_thread_legacy(int cid, int filter, int flags, int reserved,
