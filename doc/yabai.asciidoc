@@ -480,7 +480,7 @@ Global Settings
     'menu': Use the existing native informational menu. +
     'panel': On macOS 27 or newer, use a transient keyboard-accessible read-only panel; fall back to the native menu when unavailable. +
     'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
-    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It never shows window titles, geometry, screenshots, previews, or thumbnails and does not require Screen Recording permission.
+    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It does not expose window content and does not require Screen Recording permission.
 
 *menubar_style* ['compact|expanded']::
     Set the menu bar status item layout. Default is 'expanded'. +

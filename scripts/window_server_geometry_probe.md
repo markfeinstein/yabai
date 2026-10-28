@@ -56,9 +56,9 @@ On macOS 27.0.1 build 26A434, read-only arm64 disassembly established the shared
 
 ## Current macOS 27.0.1 controlled result
 
-On the current single internal 2× display, ten controlled points produced independently valid results. In the latest run both APIs selected the same WindowServer surface for all ten points and all repeated calls. Filtered calls also agreed. This does not erase earlier stable disagreements on manually arranged ordinary, overlapping, panel, transparent, and sheet states; it demonstrates that disagreement depends on exact stacking and surface composition.
+With only the internal 2× display active, ten controlled points selected the same WindowServer surface in both APIs. After connecting an external 2× fixed-60 Hz main display beside the built-in 120 Hz display, the same corpus produced six same-window points and four stable different-owner overlaps; those four disagreed in all 100 repetitions. This confirms that mode-0/mode-1 semantics depend on exact stacking and multi-display surface composition rather than timing noise.
 
-The deployed highlight remained click-through in the separate highlight acceptance probe. A real animation proxy or insertion-feedback fixture was not available. JankyBorders is absent and must not be reintroduced as a fixture.
+The deployed highlight remained click-through in the separate highlight acceptance probe. A real animation proxy or insertion-feedback fixture was not available. Removed external border software is not a supported fixture.
 
 ## Remaining gates
 
