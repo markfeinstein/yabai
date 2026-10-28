@@ -1,50 +1,75 @@
-# WindowServer corner-geometry probe
+# Window corner geometry probe
 
-This opt-in developer tool validates the read-only `SLSWindowIteratorGetResolvedCornerRadii` getter and the inert normalization contract. It never contacts the yabai daemon and performs no WindowServer mutation.
+This standalone probe is the only code path that calls private corner getters. Production collection and proxy rendering remain hard-disabled.
 
 ```sh
 make window-corner-geometry-probe
-bin/debug/window-corner-geometry-probe --limit 200 --samples 24
-bin/debug/window-corner-geometry-probe --fixtures
+revision=$(git rev-parse --short=12 HEAD)
+bin/debug/window-corner-geometry-probe \
+  --source-revision "$revision" \
+  --fixture-revision controlled-v3
 ```
 
-Options:
+The JSONL schema is `yabai.window-corner-geometry-probe/v3`. Output contains fixture labels, phases, cycles, dimensions, uninterpreted slots/flags, and compatibility metadata, but no raw window IDs, PIDs, titles, application identity, paths, Space IDs, or display IDs.
 
-- `--limit N` bounds ambient getter calls from 1 through 10,000. The default is 200.
-- `--samples N` bounds detailed redacted ambient sample records from 0 through 100. The default is 24.
-- `--fixtures` creates eight temporary probe-owned AppKit windows, observes them, and closes them. It does not activate the probe or alter operator windows.
+## ABI guard
 
-Fixture mode includes a standard titled window, an opaque borderless control, a transparent uniform-radius layer, four one-corner `CACornerMask` variants, and a small window whose public layer radius exceeds half its minimum dimension. Public layer transactions are flushed before querying exact probe-owned window numbers.
+On macOS 27.0.1 build 26A434, arm64 disassembly validated these one-argument iterator getters:
 
-Schema v2 reports:
+- `SLSWindowIteratorGetCornerRadii` → newly created `CFArrayRef`;
+- `SLSWindowIteratorGetResolvedCornerRadii` → newly created `CFArrayRef`;
+- `SLSWindowIteratorGetCornerMaskFlags` → `uint32_t`.
 
-- OS version, build, architecture, and ambient/fixture mode;
-- availability of the resolved/raw radii, mask-flags, and mask-copy symbols;
-- the deliberately disabled production collection and proxy-rendering states;
-- result CF type, array count, source-order numeric slots, uniform/asymmetric classification with 0.01 tolerance, frame dimensions, and getter latency;
-- fixture labels plus whether an immediate repeated getter call returns the same pointer and equivalent normalized values;
-- aggregate count/type/validity totals and p50/p95 getter latency.
+The v3 probe calls raw, resolved, and mask-flags only on that exact build. On any other build it reports symbol presence and `abi: unverified` without invoking them. Every observation records the iterator window before/after the call sequence, performs repeated calls, and releases returned arrays under the verified +1 ownership contract.
 
-Raw WindowServer IDs, owners, titles, bundle identifiers, absolute positions, and window contents are omitted. Repeated pointer identity is an observation, not an ownership contract.
+`SLSCopyWindowCornerMask` remains `abi_state: partial` and `called:false`. No private setter symbol is resolved or called.
 
-## macOS 27.0.1 ABI ledger
+## Fixtures and repetitions
 
-Read-only arm64 disassembly on build 26A434 establishes:
+The controlled set includes:
 
-- resolved and raw iterator getters take the iterator as their only argument, create a four-element CFArray, and return it at +1 ownership;
-- mask-flags takes the iterator and returns a 32-bit value;
-- `SLSCopyWindowCornerMask` takes connection, window ID, and a 32-byte geometry output pointer, but its returned object/mask representation remains insufficiently identified for use;
-- singular and system-radius transaction setters take transaction, window ID, and one double;
-- masked-corners takes transaction, window ID, and an integer mask;
-- the macOS-27 plural radii setter takes transaction, window ID, and four doubles in scalar floating-point argument registers—not a CFArray;
-- the corner-mask transaction setter has additional object, flag, and four-double inputs and remains disabled.
+- standard titled window;
+- opaque borderless square control;
+- five public content-layer mask/corner-radius negative controls;
+- clamped small content-layer control;
+- utility panel;
+- attached sheet.
 
-No setter is called by this probe.
+Content-layer fixtures are explicitly labeled `expected_windowserver_effect: none`; public `CACornerMask` does not establish WindowServer slot order.
 
-A valid observation requires exactly four finite, nonnegative numeric values. Source order remains intentionally opaque until an independently correlated mask/getter ABI proves physical corner names.
+The probe runs:
 
-Fixture mode on build 26A434 produced eight valid, uniform observations. The standard titled window reported four 16-point values; the opaque borderless and all transparent public-layer fixtures reported four zeros. One-corner `CACornerMask` variants and a 60-point layer radius on an 80-point window did not change WindowServer metadata. Immediate repeated calls returned equivalent values but distinct array pointers. Public content-layer masks are therefore not ground truth for WindowServer slot ordering.
+- five steady batches for every fixture;
+- five resize cycles over baseline, half-width, half-height, small size, and restored size for titled and borderless controls;
+- back-to-back raw/resolved/mask calls per observation.
 
-## Policy
+Fullscreen and native tile transitions are not automated on the live host because they require a disposable VM/dedicated-account workflow and previously disturbed the active Space. Their counters remain zero.
 
-Production collection and proxy rendering remain disabled. If physical ordering and mask semantics remain unresolved, the safe recommendation is uniform-only: accept four valid values, use them only when all four agree within tolerance, clamp the cosmetic proxy radius to half its minimum dimension, and otherwise preserve the rectangular fallback. Never mutate application windows. Setter calls require a separate explicitly authorized experiment; symbol availability or static ABI analysis is insufficient.
+## Current macOS 27.0.1 result
+
+The controlled v3 corpus produced 100 observations:
+
+- raw: 100/100 four-number finite nonnegative arrays;
+- resolved: 100/100 four-number finite nonnegative arrays;
+- raw/resolved repeated calls returned different pointers with stable values;
+- iterator identity remained stable for all 100 call sequences;
+- mask flags were stably `0x0000000f` for all 100 observations;
+- no resolved observation was asymmetric;
+- physical slot order therefore remains `unknown`.
+
+This strengthens the ABI and ownership evidence, but does not establish mask-bit semantics or physical slot ordering.
+
+## Compatibility and policy
+
+Run records include OS/build, process/host architecture, Rosetta state, pointer/CGFloat width, compiler, SDK max-allowed macro, deployment target, symbol presence, source/fixture revisions, and per-symbol ABI state.
+
+Actual runtime/ABI rows are still missing for macOS 26.6 and 27.2. The installed SDK set also lacks 27.2. Do not infer those rows from 26.5/27.0 exports.
+
+The following remain unchanged:
+
+- `window_corner_geometry_production_collection_enabled = false`;
+- `window_corner_geometry_production_rendering_enabled = false`;
+- no private corner setter;
+- no production proxy behavior change.
+
+Any later cosmetic rendering policy must still require independently proven physical slot order across asymmetric fixtures on 26.6 and 27.2, default to uniform-only, clamp to half the proxy dimension, affect only yabai-owned proxies, and fall back to rectangular rendering.
