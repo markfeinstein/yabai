@@ -2969,6 +2969,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
+    TEST_ENTRY(duplicate_display_change_does_not_reserve_topology_recovery) \
     TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_resize_debounce_preserves_fullscreen_state_transitions) \
