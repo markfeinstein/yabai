@@ -2743,6 +2743,7 @@ static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
 static void event_loop_reserve_topology_resync(struct event_loop *event_loop);
 #ifdef TESTS
 static int (*event_loop_test_space_type)(uint64_t);
+static uint32_t (*event_loop_test_active_display_id)(void);
 #endif
 
 static void event_loop_topology_lifecycle_failed(void)
@@ -2845,11 +2846,18 @@ static bool event_loop_commit_display_change(struct display_manager *dm, struct 
 
 static EVENT_HANDLER(DISPLAY_CHANGED)
 {
+#ifdef TESTS
+    uint32_t new_did = event_loop_test_active_display_id
+                     ? event_loop_test_active_display_id()
+                     : display_manager_active_display_id();
+#else
     uint32_t new_did = display_manager_active_display_id();
-    if (g_display_manager.current_display_id == new_did) {
-        debug("%s: newly activated display %d was already active (%d); reserving topology verification..\n",
+#endif
+    /* Active-display notifications can accompany Space changes without a
+     * display transition. Only a valid repeated ID is an inert duplicate. */
+    if (new_did && g_display_manager.current_display_id == new_did) {
+        debug("%s: newly activated display %d was already active (%d); ignoring duplicate event..\n",
               __FUNCTION__, g_display_manager.current_display_id, new_did);
-        event_loop_topology_lifecycle_failed();
         return;
     }
 

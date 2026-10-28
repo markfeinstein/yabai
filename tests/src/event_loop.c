@@ -2935,6 +2935,34 @@ TEST_FUNC(display_change_rejects_invalid_pairs_before_commit,
     TEST_CHECK(sm.current_space_id, 30ULL);
 });
 
+static uint32_t display_change_test_active_display_id(void)
+{
+    return 7;
+}
+
+TEST_FUNC(duplicate_display_change_does_not_reserve_topology_recovery,
+{
+    uint32_t (*saved_active_display_id)(void) = event_loop_test_active_display_id;
+    uint32_t saved_current_display_id = g_display_manager.current_display_id;
+    uint32_t saved_topology_resync_pending = g_event_loop.topology_resync_pending;
+    sem_t *saved_semaphore = g_event_loop.semaphore;
+
+    event_loop_test_active_display_id = display_change_test_active_display_id;
+    g_display_manager.current_display_id = 7;
+    g_event_loop.topology_resync_pending = 0;
+    g_event_loop.semaphore = NULL;
+
+    EVENT_HANDLER_DISPLAY_CHANGED(NULL, 0);
+
+    TEST_CHECK(g_display_manager.current_display_id, 7U);
+    TEST_CHECK(g_event_loop.topology_resync_pending, 0U);
+
+    event_loop_test_active_display_id = saved_active_display_id;
+    g_display_manager.current_display_id = saved_current_display_id;
+    g_event_loop.topology_resync_pending = saved_topology_resync_pending;
+    g_event_loop.semaphore = saved_semaphore;
+});
+
 static int ordinary_application_front_test_update_calls;
 static int ordinary_application_front_test_activated_signals;
 static int ordinary_application_front_test_front_switched_signals;
