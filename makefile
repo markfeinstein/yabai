@@ -26,6 +26,8 @@ TAG_CORPUS_BIN = $(BUILD_PATH)/debug/window-server-tag-corpus
 GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-server-geometry-probe
 NATIVE_TAB_RECORDER_BIN = $(BUILD_PATH)/debug/native-tab-event-recorder
 NATIVE_TILE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/native-tile-diagnostic
+ACTIVE_HIGHLIGHT_PROBE_APP = $(BUILD_PATH)/debug/active-window-highlight-probe.app
+ACTIVE_HIGHLIGHT_PROBE_BIN = $(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents/MacOS/active-window-highlight-probe
 CORNER_GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-corner-geometry-probe
 WINDOW_CONSTRAINTS_PROBE_BIN = $(BUILD_PATH)/debug/window-constraints-probe
 YABAI_COMMON   = ./src/manifest.m
@@ -39,6 +41,7 @@ TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_c
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/misc/extern.h makefile
 NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
 NATIVE_TILE_DIAGNOSTIC_DEPS = scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c scripts/native_tile_diagnostic_core.h src/window_management_bridge.m src/window_management_bridge.h makefile
+ACTIVE_HIGHLIGHT_PROBE_DEPS = scripts/active_window_highlight_probe.m scripts/active_window_highlight_probe.Info.plist src/window_server_tags.h src/misc/extern.h makefile
 CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_corner_geometry.c src/window_corner_geometry.h src/misc/extern.h makefile
 WINDOW_CONSTRAINTS_PROBE_DEPS = scripts/window_constraints_probe.m src/window_constraints.c src/window_constraints.h src/misc/extern.h makefile
 OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
@@ -62,7 +65,7 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan window-server-tag-corpus window-server-geometry-probe window-corner-geometry-probe window-constraints-probe native-tab-event-recorder native-tile-diagnostic install man man-check man-contract icon archive publish sign deploy \
+.PHONY: all debug release asan tsan window-server-tag-corpus window-server-geometry-probe window-corner-geometry-probe window-constraints-probe native-tab-event-recorder native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
         test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
@@ -80,6 +83,7 @@ window-corner-geometry-probe: $(CORNER_GEOMETRY_PROBE_BIN)
 window-constraints-probe: $(WINDOW_CONSTRAINTS_PROBE_BIN)
 native-tab-event-recorder: $(NATIVE_TAB_RECORDER_BIN)
 native-tile-diagnostic: $(NATIVE_TILE_DIAGNOSTIC_BIN)
+active-window-highlight-probe: $(ACTIVE_HIGHLIGHT_PROBE_BIN)
 # Historical "install" builds the optimized artifact; it does not copy files.
 install: release
 
@@ -165,6 +169,12 @@ $(NATIVE_TAB_RECORDER_BIN): $(NATIVE_TAB_RECORDER_DEPS)
 $(NATIVE_TILE_DIAGNOSTIC_BIN): $(NATIVE_TILE_DIAGNOSTIC_DEPS)
 	@mkdir -p '$(dir $@)'
 	$(XCRUN) clang scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c src/window_management_bridge.m -o '$@' $(COMMON_FLAGS) -O0 -framework Foundation
+
+$(ACTIVE_HIGHLIGHT_PROBE_BIN): $(ACTIVE_HIGHLIGHT_PROBE_DEPS)
+	@mkdir -p '$(dir $@)' '$(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents'
+	@cp scripts/active_window_highlight_probe.Info.plist '$(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents/Info.plist'
+	$(XCRUN) clang scripts/active_window_highlight_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+	$(CODESIGN) --force --deep --sign - '$(ACTIVE_HIGHLIGHT_PROBE_APP)'
 
 # Generate both native scripting-addition artifacts as private temporaries,
 # then publish only one combined compiler input. Explicit source and makefile
