@@ -1,42 +1,73 @@
 # WindowServer geometry hit-test probe
 
-This opt-in developer tool compares the existing `SLSFindWindowAndOwner` result with the dynamically resolved `SLSFindWindowByGeometry` result. It never contacts the yabai daemon and does not change window or desktop state.
+This opt-in developer tool compares the production-authoritative `SLSFindWindowAndOwner` result with the diagnostic `SLSFindWindowByGeometry` result. It never changes yabai production selection, mouse targeting, drag/drop, focus-follows-mouse, or `--window mouse` behavior.
+
+## Build and controlled corpus
 
 ```sh
 make window-server-geometry-probe
-bin/debug/window-server-geometry-probe --iterations 500
+revision=$(git rev-parse --short=12 HEAD)
+bin/debug/window-server-geometry-probe \
+  --controlled \
+  --source-revision "$revision" \
+  --fixture-revision controlled-v3 \
+  --iterations 200
 ```
 
-Options:
+The controlled harness creates and closes only probe-owned AppKit fixtures and samples:
 
-- `--point X,Y` compares a manually prepared screen coordinate instead of the current cursor.
-- `--iterations N` runs an alternating-order latency comparison after warmup.
-- `--verbose-ids` temporarily includes raw result IDs on stdout. Default output omits IDs.
+- ordinary client center and rounded-corner cutout;
+- the deployed active-highlight inner edge when discoverable;
+- same-process overlap;
+- utility panel;
+- transparent click-through panel;
+- attached sheet;
+- just inside, exactly on, and just outside the main display’s left edge.
 
-## Confirmed macOS 27.0.1 ABI
+A manual point remains available:
 
-Read-only arm64 disassembly on build 26A434 confirms that both exported functions use the same eight-argument C ABI:
-
-```c
-(connection, filter_window_id, flags, reserved,
- screen_point, window_point_out, window_id_out, window_connection_out)
+```sh
+bin/debug/window-server-geometry-probe \
+  --point X,Y \
+  --source-revision "$revision" \
+  --fixture-revision manual-v1
 ```
 
-Both truncate the input point to signed integer coordinates, call the same internal `_CGSFindWindow` routine, and decode the same output layout. The distinguishing behavior is an internal mode argument: legacy passes `0`, while `SLSFindWindowByGeometry` passes `1`. The geometry result is therefore a different semantic query, not a drop-in implementation of the legacy query.
+Output omits raw window IDs, connection IDs, PIDs, application identity, titles, paths, display IDs/UUIDs, and absolute coordinates. It records controlled fixture/point roles, redacted result kinds, fractional-to-signed-integer truncation delta, display count/scale, statuses, relationship evidence, bounds/local-point checks, filtered-call results, timing, and provenance.
 
-Schema v2 reports that internal mode distinction plus a conservative relationship classification:
+## Relationship taxonomy
+
+Schema `yabai.window-server-geometry-probe/v3` distinguishes:
 
 - `same-window`;
-- `parent-child`;
-- `associated`;
-- `same-owner`;
-- `unrelated`;
-- `unavailable`.
+- `legacy-parent-geometry-child`;
+- `legacy-child-geometry-parent`;
+- directional or bidirectional association;
+- `same-owner-unrelated` and `different-owner-overlap`;
+- `legacy-only-hit`, `geometry-only-hit`, and `both-no-hit`;
+- per-side error outcomes;
+- `relationship-metadata-unknown` when parent/association inspection is unavailable.
 
-It also checks each result independently against WindowServer bounds and the returned local point. Raw IDs remain omitted unless `--verbose-ids` is explicitly supplied.
+Both basic and filtered variants receive a full relationship label and status pair. False and unavailable metadata are not conflated.
 
-The basic `(filter=0, flags=1, reserved=0)` and filtered `(filter=legacy_window_id, flags=-1, reserved=0)` forms are retained as diagnostic inputs only. They are inherited from the legacy call pattern; their equivalence is not assumed.
+## Exact ABI evidence
 
-Controlled macOS 27.0.1 fixtures produced stable disagreements for ordinary, overlapping, panel, transparent, and sheet points. Disagreement is evidence of different semantics and does not imply either API is incorrect.
+On macOS 27.0.1 build 26A434, read-only arm64 disassembly established the shared eight-argument ABI. Legacy uses internal mode 0 and geometry uses mode 1. The probe marks that ABI as verified only on that exact build; other versions remain unverified until independently inspected.
 
-Before any activation PR, explain those relationships across display boundaries, multiple/mixed-scale displays, yabai proxies, yabai-owned highlight and feedback overlays, macOS 26.6, and macOS 27.2. Production mouse, drag/drop, focus-follows-mouse, and `--window mouse` behavior must continue using the legacy result.
+## Current macOS 27.0.1 controlled result
+
+On the current single internal 2× display, ten controlled points produced independently valid results. In the latest run both APIs selected the same WindowServer surface for all ten points and all repeated calls. Filtered calls also agreed. This does not erase earlier stable disagreements on manually arranged ordinary, overlapping, panel, transparent, and sheet states; it demonstrates that disagreement depends on exact stacking and surface composition.
+
+The deployed highlight remained click-through in the separate highlight acceptance probe. A real animation proxy or insertion-feedback fixture was not available. JankyBorders is absent and must not be reintroduced as a fixture.
+
+## Remaining gates
+
+Production remains legacy-authoritative until controlled evidence explains relationships across:
+
+- different-process overlap;
+- menus and popovers;
+- real animation proxies and insertion feedback;
+- multiple displays, negative origins, shared boundaries, and mixed scales;
+- macOS 26.6 and 27.2.
+
+Do not promote geometry to a fallback or selector from timing or same-window counts alone.
