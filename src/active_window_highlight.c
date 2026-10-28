@@ -59,7 +59,7 @@ void active_window_highlight_destroy(struct active_window_highlight *highlight)
 
 static bool active_window_highlight_create(struct active_window_highlight *highlight, CFTypeRef frame_region)
 {
-    uint64_t tags = (1ULL << 1) | (1ULL << 9);
+    uint64_t tags = WINDOW_SERVER_TAG_FLOATING | WINDOW_SERVER_TAG_IGNORE_FOR_EVENTS;
     CFTypeRef empty_region = CGRegionCreateEmptyRegion();
     if (!empty_region) return false;
 
