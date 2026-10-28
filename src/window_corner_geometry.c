@@ -5,8 +5,7 @@
 #include <pthread.h>
 #include <string.h>
 
-typedef CFArrayRef (*window_corner_geometry_resolved_getter)(CFTypeRef iterator,
-                                                              uint32_t window_id);
+typedef CFArrayRef (*window_corner_geometry_resolved_getter)(CFTypeRef iterator);
 
 static window_corner_geometry_resolved_getter window_corner_geometry_resolved_impl;
 static pthread_once_t window_corner_geometry_resolved_once = PTHREAD_ONCE_INIT;
@@ -87,9 +86,11 @@ bool window_corner_geometry_collect_resolved(CFTypeRef iterator, uint32_t window
     if (!iterator || !window_id || !geometry || !capability.resolved_getter_available ||
         !capability.collection_enabled) return false;
 
-    CFArrayRef value = window_corner_geometry_resolved_impl(iterator, window_id);
-    return window_corner_geometry_normalize(value, WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED,
-                                            geometry);
+    CFArrayRef value = window_corner_geometry_resolved_impl(iterator);
+    bool result = window_corner_geometry_normalize(
+        value, WINDOW_CORNER_GEOMETRY_SOURCE_SLS_RESOLVED, geometry);
+    if (value) CFRelease(value);
+    return result;
 }
 
 bool window_corner_geometry_apply_to_proxy(int connection, uint32_t proxy_window_id,

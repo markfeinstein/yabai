@@ -152,7 +152,7 @@ $(GEOMETRY_PROBE_BIN): $(GEOMETRY_PROBE_DEPS)
 
 $(CORNER_GEOMETRY_PROBE_BIN): $(CORNER_GEOMETRY_PROBE_DEPS)
 	@mkdir -p '$(dir $@)'
-	$(XCRUN) clang scripts/window_corner_geometry_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+	$(XCRUN) clang scripts/window_corner_geometry_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework QuartzCore -framework SkyLight
 
 $(WINDOW_CONSTRAINTS_PROBE_BIN): $(WINDOW_CONSTRAINTS_PROBE_DEPS)
 	@mkdir -p '$(dir $@)'

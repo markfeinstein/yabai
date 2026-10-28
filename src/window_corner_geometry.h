@@ -37,9 +37,9 @@ bool window_corner_geometry_normalize(CFTypeRef value,
 bool window_corner_geometry_is_complete(const struct window_corner_geometry *geometry);
 struct window_corner_geometry_capability window_corner_geometry_capability(void);
 
-/* The ABI is validated read-only, but ownership and corner ordering remain
- * unresolved. Production collection therefore resolves capability only and
- * makes no getter call until a later activation decision. */
+/* macOS 27.0.1 arm64 disassembly validates a one-argument iterator getter
+ * returning a newly created CFArray. Physical corner ordering remains opaque.
+ * Production collection therefore stays disabled until cross-version policy. */
 bool window_corner_geometry_collect_resolved(CFTypeRef iterator, uint32_t window_id,
                                              struct window_corner_geometry *geometry);
 
