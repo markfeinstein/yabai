@@ -1,58 +1,106 @@
 # Native-tab event recorder
 
-This opt-in developer tool records read-only AX, WindowServer, workspace, Space, and Mission Control evidence for one already-running application. It does not launch, activate, focus, tab, detach, move, resize, minimize, or close windows. It is not connected to the yabai daemon and does not alter production window lifecycle handling.
+This opt-in developer tool records observational AX, WindowServer, workspace, Space, and Mission Control evidence for one already-running application. It does not launch, activate, focus, tab, detach, move, resize, minimize, close, or replace windows. It is not connected to the yabai daemon and never calls production identity mutation, dormant aliases, replacement signals, or `window_manager_replace_window_identity`.
 
 ```sh
 make native-tab-event-recorder
+make native-tab-evidence-gate
+
 bin/debug/native-tab-event-recorder \
   --pid PID \
   --scenario active-to-inactive \
+  --fixture-token controlled-editor \
+  --batch active-to-inactive-27.0 \
+  --repeat 1 \
+  --direction a-to-b \
+  --expectation candidate \
   --duration 15 \
-  --output /private/tmp/native-tabs.jsonl
+  --output /private/tmp/native-tabs-r1.jsonl
 ```
 
-The output path must not exist. The recorder creates it with mode `0600`, rejects symlinks and existing paths, and removes partial output on failure.
+The output path must not exist. The recorder creates it with mode `0600`, rejects symlinks and existing paths, and removes partial output on failure. Keep traces outside repositories and delete them after analysis.
 
 ## Permission policy
 
-The recorder checks existing Accessibility trust with `AXIsProcessTrusted()`. It never uses the prompting API. If Accessibility is not already trusted, it records `ax_available:false` and continues with reduced WindowServer/workspace evidence. Do not grant permissions merely to run the tool.
+The recorder checks existing Accessibility trust with `AXIsProcessTrusted()`. It never uses the prompting API. If Accessibility is not already trusted, it records `ax_available:false` and continues with reduced evidence. Do not grant permissions merely to run the tool.
 
-WindowServer notifications observed by the tool include visible (`815`), invisible (`816`), destroyed (`804`), and Mission Control enter (`1204`). Every inventory and notification subscription is bounded to 256 target-process windows.
+## Authoritative inventories
 
-## Timing and interpretation
+Complete inventories define endpoint cardinality. SLS and AX callbacks are corroborating evidence and never create appeared/disappeared endpoints by themselves.
 
-Version 1 uses fixed diagnostic timing:
+- baseline: the last complete inventory before the causal episode;
+- terminal: a complete inventory followed by unchanged complete polls and the required post-action quiet interval;
+- disappeared: baseline minus terminal;
+- appeared: terminal minus baseline;
+- incomplete inventories are recorded but never replace the last authoritative complete inventory;
+- a remove/add of the same ID is `same-id-reappeared`, not an old/new identity pair.
 
-- inventory polling: 100 ms;
-- normal boundary: two consecutive complete, unchanged inventories (200 ms quiescence);
-- hard terminal readback: 1000 ms after the first event when quiescence is not established;
-- appeared/disappeared capacity: 8 IDs per episode.
+The recorder emits the full bounded Cartesian product `disappeared × appeared`. Each vector reports redacted owner, Space, root/parent, frame, level/sublevel, order/adjacency, role/subrole, title-token, event-order, delivered-count, conflict, and lifecycle evidence. It does not greedily choose an identity.
 
-A single unchanged poll does not close an episode, so a split remove/add transition remains together. Once two unchanged polls close it, a later inventory delta starts a new episode instead of contaminating the earlier cardinality. Incomplete inventories neither establish quiescence nor replace the authoritative complete inventory.
+`singleton-observational-candidate` requires one distinct disappeared/appeared pair with known compatible Space, root/parent, level and sublevel facts, complete inventories, and no exclusion, conflict, unresolved outside event, overflow, or separation violation. The label is evidence only.
 
-The recorder tracks redacted in-run presence history. `known_id_reappeared:true` means an ordinal observed in an earlier complete inventory was absent and later appeared again; it is evidence about WindowServer ID presence only, not a dormant-tab alias or proof of logical identity. A remove/add of the same ID inside one episode retains the `same-id-reappeared` outcome.
+## Exact action separation
 
-An event exactly at the hard deadline still participates. Events after it begin a new episode. Outcomes such as `unexplained-one-to-one`, `appearance-only`, and `same-id-reappeared` describe event cardinality only. They are not identity matches and never change daemon state.
+Schema v2 uses:
+
+```c
+NATIVE_TAB_ACTION_SEPARATION_NS = 600000000
+```
+
+A gate-eligible episode requires:
+
+- at least 600 ms of complete unchanged baseline before action start;
+- at least 600 ms from the prior action end to a later action start;
+- at least 600 ms without another causal action after the terminal delta.
+
+Exactly 600 ms passes. 599,999,999 ns fails with `action-separation-violated`. Prefer one operator action per trace.
+
+## SLS 815/816 accounting
+
+Callbacks are counted on callback entry before payload validation. Event rows include:
+
+- raw code, payload length and validity;
+- per-code delivered index;
+- subscription generation and whether the ID was known subscribed;
+- ordered-in readback and confirmed/conflict/unknown disposition;
+- duplicate status;
+- target-PID corroboration when inventory facts are available.
+
+Episode and summary rows retain delivered, invalid, confirmed, conflict, unknown, and duplicate counts. Event order is one of `816-before-815`, `815-before-816`, `816-only`, `815-only`, `neither`, or `mixed-or-duplicate-order`. Inventory cardinality remains authoritative.
+
+## AX focus readbacks
+
+A focused-window callback records separate redacted ordinals for:
+
+- notification subject;
+- immediate application focused-window readback;
+- main-window readback;
+- a stable focused-window readback emitted after 100 ms.
+
+Conflicts remain visible; they are not guessed into identity.
+
+## Lifecycle exclusions and ambiguity
+
+Destroy, minimize/deminiaturize, app hide/unhide, app termination, active-Space change, and Mission Control/topology events join the current episode and set lifecycle exclusion bits. They exclude replacement interpretation whether delivered before or after 815/816.
+
+The recorder is gate-ineligible for non-singleton cardinality, missing mandatory facts, incomplete inventory, readback conflict, unresolved outside event, lifecycle exclusion, capacity overflow, action-separation violation, or inconsistent evidence across repeats.
 
 ## Strict redaction
 
-JSONL uses schema `yabai.native-tab-event-trace/v1` and `strict-v1` redaction. It never serializes raw PID, WindowServer ID, Space ID, application name, bundle ID, executable path, title text, AX descriptions, absolute frame coordinates, or wall-clock timestamps.
+JSONL uses `yabai.native-tab-event-trace/v2` with `strict-v1` redaction. It never serializes raw PID, WindowServer ID, Space ID, application name, bundle ID, executable path, title text, AX descriptions, absolute frame coordinates, or wall-clock timestamps.
 
-Per-run ordinals replace identities. Titles become equality-only in-memory tokens and are serialized only as `same_title_token`. Frames appear only as old/new deltas quantized in 8-point units.
+Per-run ordinals replace identities. Titles, roles, and subroles are equality-only tokens in memory. Frames appear only as old/new deltas quantized in 8-point units.
 
-## Suggested manual scenarios
+## Planned five-repeat gate
 
-Run a separate trace for each controlled fixture:
+A batch is planned in advance with one file for each `--repeat 1` through `--repeat 5`. Validate it offline:
 
-- selected tab A to selected tab B;
-- B back to A;
-- inactive tab detached into its own window;
-- active tab detached;
-- minimized and restored;
-- ordinary close;
-- app hide/unhide;
-- native tabs with focus changes.
+```sh
+python3 scripts/native_tab_evidence_gate.py /private/tmp/native-tabs-*.jsonl
+```
 
-The operator or a dedicated fixture application performs the actions. The recorder itself remains read-only. Preserve traces outside the repository, inspect only redacted JSONL, and delete them after analysis.
+The exact tuple is OS build, architecture, fixture token, scenario, direction, expectation, batch ID, and schema version. A candidate batch passes only when all five traces contain one complete, separated, gate-eligible singleton episode with the same comparison and 815/816 delivered-count signature. Four successes are insufficient; one ambiguous or inconsistent attempt blocks the entire planned batch.
 
-A later PR may propose transactional identity replacement only after the recorded event order and lifecycle explanations are adjudicated. This tool does not add `window_manager_replace_window_identity`, dormant-tab aliases, or a `window_replaced` signal.
+Use `--expectation negative-control` for close, minimize/restore, hide/unhide, and Space-transition batches. Those pass only when all five repetitions remain excluded and never become gate-eligible.
+
+Even a gate pass authorizes only a later reviewed matcher proposal. Repeat the focused corpus on macOS 27.2 before proposing production identity mutation.
