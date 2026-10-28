@@ -9,14 +9,33 @@
 #include "../src/window_server_snapshot.h"
 #include "../src/window_server_classifier.h"
 
-#define WINDOW_SERVER_TAG_CORPUS_SCHEMA "yabai.window-server-tag-corpus/v1"
+#define WINDOW_SERVER_TAG_CORPUS_SCHEMA "yabai.window-server-tag-corpus/v2"
+#define WINDOW_SERVER_CLASSIFIER_COMPARISON_SCHEMA "yabai.window-server-classifier-comparison/v2"
+
+#define WINDOW_SERVER_TAG_CORPUS_AX_MODE_LIST(X) \
+    X(WINDOW_SERVER_TAG_CORPUS_AX_AUTO, "auto") \
+    X(WINDOW_SERVER_TAG_CORPUS_AX_UNAVAILABLE, "unavailable")
+
+enum window_server_tag_corpus_ax_mode
+{
+#define WINDOW_SERVER_TAG_CORPUS_AX_ENUM(value, name) value,
+    WINDOW_SERVER_TAG_CORPUS_AX_MODE_LIST(WINDOW_SERVER_TAG_CORPUS_AX_ENUM)
+#undef WINDOW_SERVER_TAG_CORPUS_AX_ENUM
+};
 
 struct window_server_tag_corpus_metadata
 {
     const char *scenario;
+    const char *capture_set_id;
+    unsigned repeat_index;
     const char *os_version;
     const char *os_build;
     const char *architecture;
+    const char *source_revision;
+    enum window_server_tag_corpus_ax_mode ax_mode;
+    unsigned display_count;
+    const char *separate_spaces;
+    const char *stage_manager;
 };
 
 enum window_server_tag_corpus_title_state
@@ -26,18 +45,48 @@ enum window_server_tag_corpus_title_state
     WINDOW_SERVER_TITLE_NONEMPTY
 };
 
+enum window_server_tag_corpus_ax_observation
+{
+    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE,
+    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH,
+    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR,
+    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR,
+    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED
+};
+
+enum window_server_tag_corpus_adjudication
+{
+    WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING,
+    WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED,
+    WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_REJECTED
+};
+
+enum window_server_tag_corpus_bit58_state
+{
+    WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE,
+    WINDOW_SERVER_TAG_CORPUS_BIT58_CLEAR,
+    WINDOW_SERVER_TAG_CORPUS_BIT58_SET
+};
+
 struct window_server_tag_corpus_label
 {
     bool present;
+    const char *fixture_id;
     const char *fixture_role;
     enum ws_window_class expected_normal;
     enum ws_window_class expected_include_minimized;
+    enum window_server_tag_corpus_adjudication adjudication;
+    const char *adjudication_reason;
+    const char *evidence_ref;
+    const char *control_pair_id;
+    enum window_server_tag_corpus_bit58_state bit58_state;
 };
 
 struct window_server_tag_corpus_comparison_window
 {
     enum ws_owner_kind owner;
     enum ws_ax_corroboration ax;
+    enum window_server_tag_corpus_ax_observation ax_observation;
     enum window_server_tag_corpus_title_state title;
     struct window_server_tag_corpus_label label;
 };

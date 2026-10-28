@@ -1,54 +1,85 @@
 # WindowServer tag corpus and classifier comparison
 
-This developer-only tool records strict-redacted WindowServer metadata. It never changes daemon behavior and the candidate classifier is not used by production inventory.
+This developer-only tooling records strict-redacted WindowServer metadata and evaluates the evidence gate offline. It never changes daemon behavior, and production inventory continues to use `legacy-space-eligibility-v1`.
 
 ## Build
 
 ```sh
 make window-server-tag-corpus
+make classifier-corpus-gate
 ```
+
+The gate target runs a synthetic pass/fail self-test. It does not validate live evidence.
 
 ## Capture
 
-Arrange a scenario manually, allow it to become quiescent, then run:
+Arrange one controlled state, allow it to become quiescent, and capture it at least twice with distinct repeat indexes:
 
 ```sh
+revision=$(git rev-parse --short=12 HEAD)
 bin/debug/window-server-tag-corpus \
   --scenario appkit-standard \
-  --output /private/tmp/appkit-standard.jsonl \
+  --capture-set appkit-standard-27.0 \
+  --repeat-index 1 \
+  --source-revision "$revision" \
+  --ax-mode auto \
+  --separate-spaces yes \
+  --stage-manager off \
+  --output /private/tmp/appkit-standard-r1.jsonl \
   --compare-classifier \
-  --labels /private/tmp/appkit-standard.labels.json
+  --labels /private/tmp/appkit-standard-r1.labels.json
 ```
 
-Capture each labeled state at least twice. Do not commit generated output or label files without an explicit privacy review.
+Use `--ax-mode unavailable` to force the same-state conservative control without changing TCC. `auto` uses Accessibility only when it is already trusted. Never trigger a permission prompt for a corpus.
 
-The tool:
+`--separate-spaces` accepts `yes`, `no`, or `unknown`; `--stage-manager` accepts `on`, `off`, or `unknown`. Display count is observed automatically. These fields are provenance, not selectors.
+
+The recorder:
 
 - uses one public CG window list and one immutable WindowServer snapshot;
 - does not contact the yabai daemon;
 - never requests Accessibility or Screen Recording permission;
-- uses Accessibility only when it is already authorized;
+- distinguishes forced/unavailable AX, inventory errors, role errors, no-match, and matched records;
 - does not move, focus, resize, order, minimize, fullscreen, create, or destroy windows;
 - creates output with `O_EXCL|O_NOFOLLOW` and mode `0600`;
-- emits no raw window IDs, PIDs, titles, application names, bundle IDs, paths, Space/display identities, or geometry.
+- emits no raw window IDs, PIDs, titles, application names, bundle IDs, paths, Space/display identities, or absolute geometry.
 
-## Labels
+Keep generated corpora and label files outside repositories and delete them after analysis. Do not commit them without an explicit privacy review.
 
-Label files are local, mode `0600`, non-symlink JSON files:
+## Labels and adjudication
+
+Label files are local, mode `0600`, non-symlink JSON files. Raw IDs exist only in this private input and never appear in strict-redacted output. To create a private starter file without titles or application identity, use `--label-template /private/tmp/state.labels.json` instead of `--labels`; the command fails rather than overwriting an existing path. Edit the placeholders, then capture again with `--labels`.
 
 ```json
 {
-  "schema": "yabai.window-server-tag-labels/v1",
+  "schema": "yabai.window-server-tag-labels/v2",
   "windows": [
     {
       "window_id": 123,
+      "fixture_id": "document-1",
       "fixture_role": "primary-document",
       "expected_normal": "manageable",
-      "expected_include_minimized": "manageable"
+      "expected_include_minimized": "manageable",
+      "adjudication_status": "confirmed",
+      "adjudication_reason": "controlled-standard-document",
+      "evidence_ref": "operator-row-1",
+      "bit58_state": "not-applicable"
     }
   ]
 }
 ```
+
+`fixture_id`, reasons, evidence references, and control-pair IDs are opaque safe tokens containing only letters, digits, `.`, `_`, or `-`. They must not encode application identity, titles, paths, raw IDs, or other sensitive values.
+
+Adjudication status is:
+
+- `pending`: reason and evidence reference must be absent;
+- `confirmed`: the controlled fixture explains the expected result or disagreement;
+- `rejected`: the row is proven not to represent the claimed fixture.
+
+A labeled disagreement remains a gate blocker while pending. Merely assigning a fixture role does not adjudicate it.
+
+Expected classes are `manageable`, `user-facing-nonmanageable`, `system-overlay`, or `uncertain`.
 
 Allowed fixture roles are:
 
@@ -58,50 +89,67 @@ Allowed fixture roles are:
 - `floating-panel`
 - `menu-negative`
 - `overlay-negative`
+- `menu-extra-negative`
+- `dock-negative`
+- `system-overlay-negative`
 - `electron-main`
 - `electron-helper`
 - `fullscreen`
 - `split-view`
 - `minimized`
+- `restored`
+- `stage-manager-off`
+- `stage-manager-on`
+- `stage-manager-shelf`
 - `native-tab-active`
 - `native-tab-inactive`
 - `native-tab-detached`
+- `native-tab-bar`
 - `bit58-ordinary`
 
-Expected classes are `manageable`, `user-facing-nonmanageable`, `system-overlay`, or `uncertain`.
+### Bit-58 controls
 
-## Disagreement profiles
+`bit58-ordinary` labels additionally require the same safe `control_pair_id` in paired captures and a `bit58_state` of `clear` or `set`. The recorder rejects a state that disagrees with the captured tag. The offline gate requires both states and identical candidate classes; bit 58 remains diagnostic and is never validity evidence.
 
-Comparison captures include aggregate, redacted `counts.disagreement_profiles` values. They count unique windows across normal and include-minimized modes and make repeated host captures comparable without exposing application identity:
+All other roles require `bit58_state: "not-applicable"` and no control-pair ID.
 
-- unique candidate-only and legacy-only windows;
-- legacy-only windows that are offscreen with no AX inventory match;
-- legacy-only windows carrying attribute bit 2 or unknown tag bits;
-- disagreements present only when minimized windows are included;
-- candidate-only windows that are onscreen and AX-corroborated;
-- candidate-only windows carrying unknown tag bits.
+## Disagreement and AX profiles
 
-These profiles are triage evidence, not labels. In particular, offscreen AX-no-match windows may be inactive native tabs, windows on another Space, minimized windows, stale surfaces, or legitimate documents omitted from the current AX inventory. Do not treat a profile as sufficient to relax or activate the classifier.
+Comparison headers retain aggregate class, comparison, false-positive/negative, AX, and disagreement-profile counts. Each window row contains:
 
-A macOS 27.0.1 current-host capture on build 26A434 found zero candidate-only windows and nine unique legacy-only windows: all nine were offscreen, regular-owner, root-level, AX-no-match windows with unknown tag bits; seven carried attribute bit 2 and two occurred only in include-minimized mode. This phenotype remains unadjudicated without controlled fixture labels.
+- source-safe fixture and adjudication metadata when labeled;
+- legacy and candidate results for both modes;
+- controlled reason lists;
+- AX classifier status and separate observation status;
+- redacted owner, parent, title, frame, level, tag, and attribute categories.
 
-## Evidence matrix
+AX inventory and role read failures are classified conservatively as unavailable for the candidate rather than being conflated with a successful no-match.
 
-Before any activation PR, repeat and review labeled captures for:
+## Offline evidence gate
 
-1. AppKit standard documents.
-2. Root dialogs, child sheets, and floating panels.
-3. Menu, menu-extra, Dock, and system-overlay negatives.
-4. Electron main and helper-owned surfaces.
-5. Native fullscreen and Split View.
-6. Minimized and restored states.
-7. Stage Manager off/on and shelf surfaces.
-8. Native tabs: active, inactive, detached, and tab-bar states.
-9. An ordinary window carrying bit 58.
-10. AX-authorized and AX-unavailable sessions.
+Run the validator only on reviewed strict-redacted v2 comparison files:
 
-Required OS coverage is macOS 26.6, 27.0, and 27.2. The 27.2 layout remains `unverified` until independently reviewed.
+```sh
+python3 scripts/window_server_classifier_gate.py /private/tmp/corpus/*.jsonl
+```
 
-## Activation gate
+It exits nonzero and emits a source-safe blocker list until all of the following are true:
 
-The candidate remains diagnostic-only until all labeled candidate-manageable false positives are zero, every disagreement is adjudicated, required positives are explained, bit 58 is proven classification-invariant, AX-unavailable behavior remains conservative, and multi-display/Separate Spaces coverage is complete. Activation requires a separate version-gated PR with explicit fallback and rollback behavior.
+- macOS 26.6, 27.0.x, and 27.2 are present;
+- every required role is covered on every required OS;
+- every capture set and fixture has at least two stable repeats;
+- both `auto` and forced `unavailable` AX modes exist per OS, with matched AX evidence in `auto`;
+- labeled candidate-manageable false positives are zero;
+- every disagreement is labeled, explained, and non-pending;
+- required positives are confirmed and found;
+- bit-58 clear/set pairs are classification-invariant;
+- Stage Manager off/on and multi-display Separate Spaces evidence exist;
+- tag-layout status is sampled for each required build;
+- all files use one reviewed source revision;
+- activation is still diagnostic-only with legacy fallback and explicit rollback metadata.
+
+A gate pass is evidence for a later review; it does not enable the classifier. Activation still requires a separate, version-gated production PR with explicit fallback and rollback behavior.
+
+## Current external blockers
+
+The current host is macOS 27.0.1 with one internal display. No suitable macOS 26.6 or 27.2 VM is installed, and no self-hosted live-integration runner is registered. Do not create or download a VM merely to satisfy this matrix.

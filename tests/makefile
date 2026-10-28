@@ -125,6 +125,7 @@ syntax:
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/window_server_tag_corpus_core.c -std=c11 -Wall -Wextra -Werror
+	python3 -c 'compile(open("../scripts/window_server_classifier_gate.py", encoding="utf-8").read(), "window_server_classifier_gate.py", "exec")'
 	$(CC) -fsyntax-only ../scripts/native_tab_event_recorder_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/native_tile_diagnostic_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_classifier.c -std=c11 -Wall -Wextra -Werror

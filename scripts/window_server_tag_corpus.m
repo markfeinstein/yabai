@@ -3,6 +3,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -24,7 +25,11 @@ static bool corpus_number(NSDictionary *dictionary, CFStringRef key, int64_t *va
 
 static void corpus_usage(const char *program)
 {
-    fprintf(stderr, "usage: %s --scenario NAME --output PATH [--compare-classifier [--labels PATH]]\n",
+    fprintf(stderr,
+            "usage: %s --scenario NAME --capture-set ID --repeat-index N "
+            "--source-revision REV --output PATH [--ax-mode auto|unavailable] "
+            "[--separate-spaces yes|no|unknown] [--stage-manager on|off|unknown] "
+            "[--compare-classifier [--labels PATH] [--label-template PATH]]\n",
             program);
 }
 
@@ -59,12 +64,28 @@ static enum ws_ax_corroboration corpus_ax_class(CFTypeRef role, CFTypeRef subrol
     return WS_AX_OTHER;
 }
 
+static void corpus_mark_owner_ax_error(
+    const struct window_server_tag_corpus_public_window *windows, size_t count,
+    struct window_server_tag_corpus_comparison_window *comparison,
+    int owner_pid, enum window_server_tag_corpus_ax_observation observation)
+{
+    for (size_t i = 0; i < count; ++i) {
+        if (windows[i].owner_pid != owner_pid) continue;
+        comparison[i].ax = WS_AX_UNAVAILABLE;
+        comparison[i].ax_observation = observation;
+    }
+}
+
 static void corpus_enrich_ax(const struct window_server_tag_corpus_public_window *windows,
                              size_t count,
-                             struct window_server_tag_corpus_comparison_window *comparison)
+                             struct window_server_tag_corpus_comparison_window *comparison,
+                             enum window_server_tag_corpus_ax_mode mode)
 {
-    if (!AXIsProcessTrusted()) return;
-    for (size_t i = 0; i < count; ++i) comparison[i].ax = WS_AX_NO_MATCH;
+    if (mode == WINDOW_SERVER_TAG_CORPUS_AX_UNAVAILABLE || !AXIsProcessTrusted()) return;
+    for (size_t i = 0; i < count; ++i) {
+        comparison[i].ax = WS_AX_NO_MATCH;
+        comparison[i].ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH;
+    }
     for (size_t owner = 0; owner < count; ++owner) {
         bool first = true;
         for (size_t previous = 0; previous < owner; ++previous) {
@@ -76,6 +97,8 @@ static void corpus_enrich_ax(const struct window_server_tag_corpus_public_window
         AXError error = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute, &value);
         CFRelease(application);
         if (error != kAXErrorSuccess || !value || CFGetTypeID(value) != CFArrayGetTypeID()) {
+            corpus_mark_owner_ax_error(windows, count, comparison, windows[owner].owner_pid,
+                                       WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR);
             if (value) CFRelease(value);
             continue;
         }
@@ -88,10 +111,20 @@ static void corpus_enrich_ax(const struct window_server_tag_corpus_public_window
             int public_index = corpus_public_index(windows, count, window_id);
             if (public_index < 0) continue;
             CFTypeRef role = NULL, subrole = NULL, title = NULL;
-            AXUIElementCopyAttributeValue(ax_window, kAXRoleAttribute, &role);
-            AXUIElementCopyAttributeValue(ax_window, kAXSubroleAttribute, &subrole);
+            AXError role_error = AXUIElementCopyAttributeValue(ax_window, kAXRoleAttribute, &role);
+            AXError subrole_error = AXUIElementCopyAttributeValue(ax_window, kAXSubroleAttribute, &subrole);
             AXError title_error = AXUIElementCopyAttributeValue(ax_window, kAXTitleAttribute, &title);
-            comparison[public_index].ax = corpus_ax_class(role, subrole);
+            if (role_error != kAXErrorSuccess || subrole_error != kAXErrorSuccess ||
+                !role || !subrole || CFGetTypeID(role) != CFStringGetTypeID() ||
+                CFGetTypeID(subrole) != CFStringGetTypeID()) {
+                comparison[public_index].ax = WS_AX_UNAVAILABLE;
+                comparison[public_index].ax_observation =
+                    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR;
+            } else {
+                comparison[public_index].ax = corpus_ax_class(role, subrole);
+                comparison[public_index].ax_observation =
+                    WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED;
+            }
             if (title_error == kAXErrorSuccess && title && CFGetTypeID(title) == CFStringGetTypeID()) {
                 comparison[public_index].title = CFStringGetLength((CFStringRef) title)
                                                ? WINDOW_SERVER_TITLE_NONEMPTY
@@ -113,8 +146,11 @@ static bool corpus_fixture_role_is_valid(NSString *role)
         roles = [[NSSet alloc] initWithArray:@[
             @"primary-document", @"root-dialog", @"child-sheet", @"floating-panel",
             @"menu-negative", @"overlay-negative", @"electron-main", @"electron-helper",
-            @"fullscreen", @"split-view", @"minimized", @"native-tab-active",
-            @"native-tab-inactive", @"native-tab-detached", @"bit58-ordinary"
+            @"fullscreen", @"split-view", @"minimized", @"restored",
+            @"stage-manager-off", @"stage-manager-on", @"stage-manager-shelf",
+            @"native-tab-active", @"native-tab-inactive", @"native-tab-detached",
+            @"native-tab-bar", @"menu-extra-negative", @"dock-negative",
+            @"system-overlay-negative", @"bit58-ordinary"
         ]];
     });
     return [role isKindOfClass:[NSString class]] && [roles containsObject:role];
@@ -132,6 +168,66 @@ static bool corpus_parse_class(NSString *value, enum ws_window_class *result)
         }
     }
     return false;
+}
+
+static bool corpus_parse_adjudication(NSString *value,
+                                        enum window_server_tag_corpus_adjudication *result)
+{
+    if ([value isEqualToString:@"pending"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING; return true;
+    }
+    if ([value isEqualToString:@"confirmed"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_CONFIRMED; return true;
+    }
+    if ([value isEqualToString:@"rejected"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_REJECTED; return true;
+    }
+    return false;
+}
+
+static bool corpus_parse_bit58_state(NSString *value,
+                                     enum window_server_tag_corpus_bit58_state *result)
+{
+    if ([value isEqualToString:@"not-applicable"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_BIT58_NOT_APPLICABLE; return true;
+    }
+    if ([value isEqualToString:@"clear"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_BIT58_CLEAR; return true;
+    }
+    if ([value isEqualToString:@"set"]) {
+        *result = WINDOW_SERVER_TAG_CORPUS_BIT58_SET; return true;
+    }
+    return false;
+}
+
+static bool corpus_write_label_template(
+    const char *path, const struct window_server_tag_corpus_public_window *windows, size_t count)
+{
+    if (!path || !path[0]) return false;
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) return false;
+    FILE *stream = fdopen(fd, "w");
+    bool success = stream &&
+        fputs("{\"schema\":\"yabai.window-server-tag-labels/v2\",\"windows\":[", stream) != EOF;
+    for (size_t i = 0; success && i < count; ++i) {
+        success = (!i || fputc(',', stream) != EOF) &&
+            fprintf(stream,
+                    "{\"window_id\":%u,\"ordinal\":%zu,"
+                    "\"fixture_id\":\"replace\",\"fixture_role\":\"replace\","
+                    "\"expected_normal\":\"uncertain\","
+                    "\"expected_include_minimized\":\"uncertain\","
+                    "\"adjudication_status\":\"pending\","
+                    "\"bit58_state\":\"not-applicable\"}",
+                    windows[i].window_id, i) >= 0;
+    }
+    if (success) success = fputs("]}\n", stream) != EOF && fflush(stream) == 0;
+    if (stream) {
+        if (fclose(stream) != 0) success = false;
+    } else {
+        close(fd);
+    }
+    if (!success) unlink(path);
+    return success;
 }
 
 static bool corpus_load_labels(const char *path,
@@ -161,24 +257,43 @@ static bool corpus_load_labels(const char *path,
     if (!stable) return false;
     id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     if (![object isKindOfClass:[NSDictionary class]] ||
-        ![object[@"schema"] isEqualToString:@"yabai.window-server-tag-labels/v1"] ||
+        ![object[@"schema"] isEqualToString:@"yabai.window-server-tag-labels/v2"] ||
         ![object[@"windows"] isKindOfClass:[NSArray class]]) return false;
     for (id label in object[@"windows"]) {
         if (![label isKindOfClass:[NSDictionary class]] ||
             ![label[@"window_id"] isKindOfClass:[NSNumber class]] ||
-            !corpus_fixture_role_is_valid(label[@"fixture_role"])) return false;
+            ![label[@"fixture_id"] isKindOfClass:[NSString class]] ||
+            !corpus_fixture_role_is_valid(label[@"fixture_role"]) ||
+            ![label[@"adjudication_status"] isKindOfClass:[NSString class]] ||
+            ![label[@"bit58_state"] isKindOfClass:[NSString class]]) return false;
         long long raw_id = [label[@"window_id"] longLongValue];
         if (raw_id <= 0 || raw_id > UINT32_MAX) return false;
         int index = corpus_public_index(windows, count, (uint32_t) raw_id);
         if (index < 0 || comparison[index].label.present) return false;
         enum ws_window_class normal, minimized;
+        enum window_server_tag_corpus_adjudication adjudication;
+        enum window_server_tag_corpus_bit58_state bit58_state;
         if (!corpus_parse_class(label[@"expected_normal"], &normal) ||
-            !corpus_parse_class(label[@"expected_include_minimized"], &minimized)) return false;
+            !corpus_parse_class(label[@"expected_include_minimized"], &minimized) ||
+            !corpus_parse_adjudication(label[@"adjudication_status"], &adjudication) ||
+            !corpus_parse_bit58_state(label[@"bit58_state"], &bit58_state)) return false;
+        NSString *reason = label[@"adjudication_reason"];
+        NSString *evidence = label[@"evidence_ref"];
+        NSString *pair = label[@"control_pair_id"];
+        if ((reason && ![reason isKindOfClass:[NSString class]]) ||
+            (evidence && ![evidence isKindOfClass:[NSString class]]) ||
+            (pair && ![pair isKindOfClass:[NSString class]])) return false;
         comparison[index].label = (struct window_server_tag_corpus_label) {
             .present = true,
+            .fixture_id = [label[@"fixture_id"] UTF8String],
             .fixture_role = [label[@"fixture_role"] UTF8String],
             .expected_normal = normal,
-            .expected_include_minimized = minimized
+            .expected_include_minimized = minimized,
+            .adjudication = adjudication,
+            .adjudication_reason = [reason UTF8String],
+            .evidence_ref = [evidence UTF8String],
+            .control_pair_id = [pair UTF8String],
+            .bit58_state = bit58_state
         };
     }
     return true;
@@ -188,18 +303,49 @@ int main(int argc, char **argv)
 {
     @autoreleasepool {
         const char *scenario = NULL;
+        const char *capture_set_id = NULL;
+        const char *source_revision = NULL;
         const char *output = NULL;
         const char *labels = NULL;
+        const char *label_template = NULL;
+        const char *separate_spaces = "unknown";
+        const char *stage_manager = "unknown";
+        unsigned repeat_index = 0;
+        enum window_server_tag_corpus_ax_mode ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_AUTO;
         bool compare_classifier = false;
         for (int i = 1; i < argc; ++i) {
             if (strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) scenario = argv[++i];
+            else if (strcmp(argv[i], "--capture-set") == 0 && i + 1 < argc) capture_set_id = argv[++i];
+            else if (strcmp(argv[i], "--repeat-index") == 0 && i + 1 < argc) {
+                char *end = NULL; unsigned long value = strtoul(argv[++i], &end, 10);
+                if (!end || *end || !value || value > UINT_MAX) { corpus_usage(argv[0]); return EXIT_FAILURE; }
+                repeat_index = (unsigned) value;
+            }
+            else if (strcmp(argv[i], "--source-revision") == 0 && i + 1 < argc) source_revision = argv[++i];
             else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) output = argv[++i];
+            else if (strcmp(argv[i], "--ax-mode") == 0 && i + 1 < argc) {
+                const char *value = argv[++i];
+                if (strcmp(value, "auto") == 0) ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_AUTO;
+                else if (strcmp(value, "unavailable") == 0) ax_mode = WINDOW_SERVER_TAG_CORPUS_AX_UNAVAILABLE;
+                else { corpus_usage(argv[0]); return EXIT_FAILURE; }
+            }
+            else if (strcmp(argv[i], "--separate-spaces") == 0 && i + 1 < argc) separate_spaces = argv[++i];
+            else if (strcmp(argv[i], "--stage-manager") == 0 && i + 1 < argc) stage_manager = argv[++i];
             else if (strcmp(argv[i], "--compare-classifier") == 0) compare_classifier = true;
             else if (strcmp(argv[i], "--labels") == 0 && i + 1 < argc) labels = argv[++i];
+            else if (strcmp(argv[i], "--label-template") == 0 && i + 1 < argc) label_template = argv[++i];
             else { corpus_usage(argv[0]); return EXIT_FAILURE; }
         }
-        if (!window_server_tag_corpus_scenario_is_valid(scenario) || !output ||
-            (labels && !compare_classifier)) {
+        if (!window_server_tag_corpus_scenario_is_valid(scenario) ||
+            !window_server_tag_corpus_scenario_is_valid(capture_set_id) ||
+            !window_server_tag_corpus_scenario_is_valid(source_revision) ||
+            !repeat_index || !output ||
+            (strcmp(separate_spaces, "yes") != 0 && strcmp(separate_spaces, "no") != 0 &&
+             strcmp(separate_spaces, "unknown") != 0) ||
+            (strcmp(stage_manager, "on") != 0 && strcmp(stage_manager, "off") != 0 &&
+             strcmp(stage_manager, "unknown") != 0) ||
+            ((labels || label_template) && !compare_classifier) ||
+            (labels && label_template)) {
             corpus_usage(argv[0]);
             return EXIT_FAILURE;
         }
@@ -243,6 +389,7 @@ int main(int argc, char **argv)
                 comparison_windows[i] = (struct window_server_tag_corpus_comparison_window) {
                     .owner = corpus_owner_kind((pid_t) owner_pid),
                     .ax = WS_AX_UNAVAILABLE,
+                    .ax_observation = WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE,
                     .title = WINDOW_SERVER_TITLE_UNAVAILABLE
                 };
             }
@@ -269,20 +416,30 @@ int main(int argc, char **argv)
             !memchr(os_build, '\0', sizeof(os_build)) || uname(&system_info) != 0) {
             window_server_snapshot_destroy(snapshot); free(comparison_windows); free(windows); return EXIT_FAILURE;
         }
+        NSUInteger screen_count = [NSScreen screens].count;
+        if (!screen_count || screen_count > UINT_MAX) {
+            window_server_snapshot_destroy(snapshot); free(comparison_windows); free(windows); return EXIT_FAILURE;
+        }
         struct window_server_tag_corpus_metadata metadata = {
-            .scenario = scenario, .os_version = os_version,
-            .os_build = os_build, .architecture = system_info.machine
+            .scenario = scenario, .capture_set_id = capture_set_id,
+            .repeat_index = repeat_index, .os_version = os_version,
+            .os_build = os_build, .architecture = system_info.machine,
+            .source_revision = source_revision, .ax_mode = ax_mode,
+            .display_count = (unsigned) screen_count,
+            .separate_spaces = separate_spaces, .stage_manager = stage_manager
         };
         bool success;
         if (compare_classifier) {
-            corpus_enrich_ax(windows, count, comparison_windows);
+            corpus_enrich_ax(windows, count, comparison_windows, ax_mode);
             if (labels && !corpus_load_labels(labels, windows, count, comparison_windows)) {
                 window_server_snapshot_destroy(snapshot); free(comparison_windows); free(windows); return EXIT_FAILURE;
             }
             enum ws_tag_layout_status layout = WS_TAG_LAYOUT_UNSUPPORTED;
-            if (version.majorVersion == 26 ||
-                (version.majorVersion == 27 && version.minorVersion < 2)) layout = WS_TAG_LAYOUT_SAMPLED;
-            else if (version.majorVersion == 27) layout = WS_TAG_LAYOUT_UNVERIFIED;
+            if (version.majorVersion == 27 && version.minorVersion < 2) {
+                layout = WS_TAG_LAYOUT_SAMPLED;
+            } else if (version.majorVersion == 26 || version.majorVersion == 27) {
+                layout = WS_TAG_LAYOUT_UNVERIFIED;
+            }
             struct window_server_tag_corpus_comparison comparison = {
                 .tag_layout = layout,
                 .normal_level = CGWindowLevelForKey(kCGNormalWindowLevelKey),
@@ -294,6 +451,11 @@ int main(int argc, char **argv)
                 output, &metadata, windows, count, snapshot, &comparison);
         } else {
             success = window_server_tag_corpus_write_file(output, &metadata, windows, count, snapshot);
+        }
+        if (success && label_template &&
+            !corpus_write_label_template(label_template, windows, count)) {
+            unlink(output);
+            success = false;
         }
         window_server_snapshot_destroy(snapshot);
         free(comparison_windows);
