@@ -21,6 +21,10 @@ check_contract() {
     require_source "*window_opacity_duration* ['<OPACITY_DURATION_SEL>']::"
     require_source "*active_window_opacity* ['<POSITIVE_UNIT_SEL>']::"
     require_source "*normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::"
+    require_source "*active_window_highlight* ['<BOOL_SEL>']::"
+    require_source "*active_window_highlight_color* ['0xAARRGGBB']::"
+    require_source "*active_window_highlight_radius* ['float']::"
+    require_source "*active_window_highlight_width* ['float']::"
     require_source "*window_animation_duration* ['<DURATION_SEL>']::"
     require_source '    If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection. +'
     require_source '    A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.'
@@ -42,6 +46,10 @@ check_contract() {
     require_man '\fBwindow_opacity_duration\fP [\fI<OPACITY_DURATION_SEL>\fP]'
     require_man '\fBactive_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]'
     require_man '\fBnormal_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]'
+    require_man '\fBactive_window_highlight\fP [\fI<BOOL_SEL>\fP]'
+    require_man '\fBactive_window_highlight_color\fP [\fI0xAARRGGBB\fP]'
+    require_man '\fBactive_window_highlight_radius\fP [\fIfloat\fP]'
+    require_man '\fBactive_window_highlight_width\fP [\fIfloat\fP]'
     require_man '\fBwindow_animation_duration\fP [\fI<DURATION_SEL>\fP]'
     require_man 'If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection.'
     require_man 'A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.'

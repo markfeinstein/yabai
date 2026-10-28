@@ -126,6 +126,7 @@ static void declarative_install_destroy_window_manager(struct window_manager *wm
     if (wm->application_lost_front_switched_event.buckets) table_free(&wm->application_lost_front_switched_event);
     if (wm->window_animations_table.buckets) table_free(&wm->window_animations_table);
     if (wm->insert_feedback.buckets) table_free(&wm->insert_feedback);
+    active_window_highlight_destroy(&wm->active_window_highlight);
     memset(wm, 0, sizeof(*wm));
 }
 
@@ -153,6 +154,10 @@ static bool declarative_install_window_manager_init(struct window_manager *wm)
     wm->active_window_opacity = 1.0f;
     wm->normal_window_opacity = 1.0f;
     wm->window_animation_easing = ease_out_circ_type;
+    wm->enable_active_window_highlight = false;
+    wm->active_window_highlight_color = rgba_color_from_hex(ACTIVE_WINDOW_HIGHLIGHT_COLOR_DEFAULT);
+    wm->active_window_highlight_radius = ACTIVE_WINDOW_HIGHLIGHT_RADIUS_DEFAULT;
+    wm->active_window_highlight_width = ACTIVE_WINDOW_HIGHLIGHT_WIDTH_DEFAULT;
     wm->insert_feedback_color = rgba_color_from_hex(0xffd75f5f);
     wm->insert_feedback_radius = INSERT_FEEDBACK_RADIUS_DEFAULT;
     wm->insert_feedback_width = INSERT_FEEDBACK_WIDTH_DEFAULT;
@@ -285,6 +290,10 @@ static void declarative_install_apply_candidate_value(struct declarative_startup
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: wm->menubar_opacity = value->real; break;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: wm->active_window_opacity = value->real; break;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: wm->normal_window_opacity = value->real; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT: wm->enable_active_window_highlight = value->boolean; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR: wm->active_window_highlight_color = rgba_color_from_hex(value->u32); break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS: wm->active_window_highlight_radius = value->real; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH: wm->active_window_highlight_width = value->real; break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: wm->insert_feedback_color = rgba_color_from_hex(value->u32); break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: wm->insert_feedback_radius = value->real; break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: wm->insert_feedback_width = value->real; break;
@@ -482,6 +491,11 @@ static void declarative_install_move_window_manager(struct window_manager *desti
     destination->window_opacity_duration = source->window_opacity_duration;
     destination->window_animation_duration = source->window_animation_duration;
     destination->window_animation_easing = source->window_animation_easing;
+    destination->enable_active_window_highlight = source->enable_active_window_highlight;
+    destination->active_window_highlight_color = source->active_window_highlight_color;
+    destination->active_window_highlight_radius = source->active_window_highlight_radius;
+    destination->active_window_highlight_width = source->active_window_highlight_width;
+    destination->active_window_highlight = source->active_window_highlight;
     destination->insert_feedback_color = source->insert_feedback_color;
     destination->insert_feedback_radius = source->insert_feedback_radius;
     destination->insert_feedback_width = source->insert_feedback_width;
@@ -576,6 +590,7 @@ struct declarative_reload_ops
     struct window *(*find_window)(uint32_t wid, void *context);
     bool (*is_eligible)(struct window *window, void *context);
     const struct declarative_space_postcommit_ops *postcommit_ops;
+    void (*refresh_active_window_highlight)(void *context);
     void (*refresh_insert_feedback)(void *context);
     void (*postcommit_probe)(bool committed, void *context);
     void *context;
@@ -676,6 +691,13 @@ static bool declarative_reload_window_is_eligible(struct window *window, void *c
     return window && window_manager_should_manage_window(window);
 }
 
+static void declarative_reload_refresh_active_window_highlight(void *context)
+{
+    (void) context;
+    window_manager_refresh_active_window_highlight(&g_window_manager);
+    event_loop_active_window_highlight_target_did_change();
+}
+
 static void declarative_reload_refresh_insert_feedback(void *context)
 {
     (void) context;
@@ -699,6 +721,10 @@ static void declarative_reload_apply_scalars(const struct declarative_startup_bu
     g_window_manager.window_opacity_duration = wm->window_opacity_duration;
     g_window_manager.window_animation_duration = wm->window_animation_duration;
     g_window_manager.window_animation_easing = wm->window_animation_easing;
+    g_window_manager.enable_active_window_highlight = wm->enable_active_window_highlight;
+    g_window_manager.active_window_highlight_color = wm->active_window_highlight_color;
+    g_window_manager.active_window_highlight_radius = wm->active_window_highlight_radius;
+    g_window_manager.active_window_highlight_width = wm->active_window_highlight_width;
     g_window_manager.insert_feedback_color = wm->insert_feedback_color;
     g_window_manager.insert_feedback_radius = wm->insert_feedback_radius;
     g_window_manager.insert_feedback_width = wm->insert_feedback_width;
@@ -1535,6 +1561,7 @@ static bool declarative_config_reload_with_ops(FILE *response,
         if (transaction.previous_normal_opacity != g_window_manager.normal_window_opacity) {
             window_manager_set_normal_window_opacity(&g_window_manager, g_window_manager.normal_window_opacity);
         }
+        if (ops->refresh_active_window_highlight) ops->refresh_active_window_highlight(ops->context);
         if (ops->refresh_insert_feedback) ops->refresh_insert_feedback(ops->context);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_TOPOLOGY);
     }
@@ -1556,6 +1583,7 @@ bool declarative_config_reload(FILE *response)
         .query_sid = declarative_reload_query_sid,
         .find_window = declarative_reload_find_window,
         .is_eligible = declarative_reload_window_is_eligible,
+        .refresh_active_window_highlight = declarative_reload_refresh_active_window_highlight,
         .refresh_insert_feedback = declarative_reload_refresh_insert_feedback
     };
     return declarative_config_reload_with_ops(response, &ops);
@@ -1866,6 +1894,7 @@ static struct declarative_reload_ops declarative_reload_ops_from_test(
         .find_window = test_ops->find_window,
         .is_eligible = test_ops->is_eligible,
         .postcommit_ops = test_ops->postcommit_ops,
+        .refresh_active_window_highlight = test_ops->refresh_active_window_highlight,
         .refresh_insert_feedback = test_ops->refresh_insert_feedback,
         .postcommit_probe = test_ops->postcommit_probe,
         .context = test_ops->context

@@ -274,7 +274,7 @@ enum declarative_space_phase3c_stale_kind
     PHASE3C_STALE_CASE_COUNT
 };
 
-_Static_assert(PHASE3C_STALE_CASE_COUNT == 132, "Phase 3C stale matrix must contain exactly 132 cases");
+_Static_assert(PHASE3C_STALE_CASE_COUNT == 136, "Phase 3C stale matrix must contain exactly 136 cases");
 
 TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
 {
@@ -414,7 +414,7 @@ TEST_FUNC(declarative_space_phase3c_generated_stale_before_image_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         ++cases_run;
     }
-    TEST_CHECK(cases_run, 132UL);
+    TEST_CHECK(cases_run, 136UL);
 })
 
 struct declarative_space_phase3c_outcome_context

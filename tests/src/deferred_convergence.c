@@ -1,67 +1,9 @@
-static mach_msg_option_t deferred_test_mach_options;
-static mach_msg_timeout_t deferred_test_mach_timeout;
-static mach_msg_return_t deferred_test_mach_send(mach_msg_header_t *header, mach_msg_option_t options,
-                                                  mach_msg_size_t send_size, mach_msg_size_t receive_limit,
-                                                  mach_port_name_t receive_name, mach_msg_timeout_t timeout,
-                                                  mach_port_name_t notify)
-{
-    (void) header; (void) send_size; (void) receive_limit; (void) receive_name; (void) notify;
-    deferred_test_mach_options = options;
-    deferred_test_mach_timeout = timeout;
-    return MACH_SEND_TIMED_OUT;
-}
-
-TEST_FUNC(mach_send_uses_bounded_timeout,
-{
-    __auto_type saved = mach_send_message;
-    mach_send_message = deferred_test_mach_send;
-    uint32_t payload = 1;
-    TEST_CHECK(mach_send(1, &payload, sizeof(payload)), MACH_SEND_TIMED_OUT);
-    TEST_CHECK((deferred_test_mach_options & MACH_SEND_MSG) != 0, true);
-    TEST_CHECK((deferred_test_mach_options & MACH_SEND_TIMEOUT) != 0, true);
-    TEST_CHECK(deferred_test_mach_timeout, (mach_msg_timeout_t) MACH_SEND_SHORT_TIMEOUT_MS);
-    mach_send_message = saved;
-});
-
 static int deferred_test_sa_send_count;
 static bool deferred_test_sa_send_success(struct sa_payload_builder *builder)
 {
     (void) builder;
     ++deferred_test_sa_send_count;
     return true;
-}
-
-static int deferred_test_janky_send_count;
-static int deferred_test_janky_fail_call;
-static bool deferred_test_janky_fail_all;
-static uint32_t deferred_test_janky_real_wids[2048];
-static int deferred_test_janky_real_count;
-static bool deferred_test_janky_check_lock;
-static bool deferred_test_janky_lock_was_held;
-static struct jankyborders_reconciliation *deferred_test_janky_scheduled_state;
-static uint64_t deferred_test_janky_scheduled_delay;
-static void deferred_test_janky_schedule(struct jankyborders_reconciliation *state, uint64_t delay)
-{
-    deferred_test_janky_scheduled_state = state;
-    deferred_test_janky_scheduled_delay = delay;
-}
-static kern_return_t deferred_test_janky_send(mach_port_t port, void *data, uint32_t size)
-{
-    (void) port;
-    (void) size;
-    struct jankyborders_animation_message *message = data;
-    if (deferred_test_janky_check_lock) {
-        int lock_result = pthread_mutex_trylock(&g_jankyborders_desired.lock);
-        deferred_test_janky_lock_was_held = lock_result != 0;
-        if (lock_result == 0) pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    }
-    for (uint32_t i = 0; i < message->count; ++i) {
-        if (deferred_test_janky_real_count < array_count(deferred_test_janky_real_wids)) {
-            deferred_test_janky_real_wids[deferred_test_janky_real_count++] = message->real_wid[i];
-        }
-    }
-    ++deferred_test_janky_send_count;
-    return deferred_test_janky_fail_all || deferred_test_janky_send_count == deferred_test_janky_fail_call ? KERN_FAILURE : KERN_SUCCESS;
 }
 
 TEST_FUNC(animation_payload_packers_bound_batches_and_preserve_order,
@@ -146,111 +88,7 @@ TEST_FUNC(animation_payload_packers_bound_batches_and_preserve_order,
     TEST_CHECK(deferred_test_sa_send_count, 0);
     scripting_addition_swap_send_payload = saved_swap_sender;
 
-    struct jankyborders_animation_message message;
-    cursor = window_manager_pack_jankyborders_batch(animations, 1023, 0, 7, false, &message);
-    TEST_CHECK(cursor, 512);
-    TEST_CHECK(message.count, 512U);
-    TEST_CHECK(message.real_wid[0], 1U);
-    TEST_CHECK(message.real_wid[511], 512U);
-    cursor = window_manager_pack_jankyborders_batch(animations, 1023, cursor, 7, false, &message);
-    TEST_CHECK(cursor, 1023);
-    TEST_CHECK(message.count, 511U);
-    TEST_CHECK(message.real_wid[0], 513U);
-    TEST_CHECK(message.real_wid[510], 1023U);
-
-    kern_return_t (*saved_janky_sender)(mach_port_t, void *, uint32_t) = window_manager_jankyborders_send;
-    window_manager_jankyborders_send = deferred_test_janky_send;
-    deferred_test_janky_fail_all = false;
-    deferred_test_janky_send_count = 0;
-    deferred_test_janky_fail_call = 1;
-    TEST_CHECK(window_manager_reconcile_jankyborders_state(1, window_manager_copy_jankyborders_state(animations, 1023, 7, false)), true);
-    TEST_CHECK(deferred_test_janky_send_count, 3);
-    deferred_test_janky_send_count = 0;
-    deferred_test_janky_fail_call = 2;
-    TEST_CHECK(window_manager_reconcile_jankyborders_state(1, window_manager_copy_jankyborders_state(animations, 1023, 7, false)), true);
-    TEST_CHECK(deferred_test_janky_send_count, 4);
-    deferred_test_janky_send_count = 0;
-    deferred_test_janky_fail_call = 0;
-    TEST_CHECK(window_manager_send_jankyborders_batches(1, animations, 1023, 7, false), true);
-    TEST_CHECK(deferred_test_janky_send_count, 2);
-
-    __auto_type saved_janky_scheduler = window_manager_jankyborders_retry_scheduler;
-    window_manager_jankyborders_retry_scheduler = deferred_test_janky_schedule;
-    deferred_test_janky_scheduled_state = NULL;
-    deferred_test_janky_fail_all = true;
-    TEST_CHECK(window_manager_reconcile_jankyborders_state(1, window_manager_copy_jankyborders_state(animations, 513, 9, false)), false);
-    TEST_CHECK(deferred_test_janky_scheduled_state != NULL, true);
-    TEST_CHECK(deferred_test_janky_scheduled_delay, 100ULL);
-    if (deferred_test_janky_scheduled_state) {
-        uint32_t copied_first = deferred_test_janky_scheduled_state->records[0].real_wid;
-        animations[0].wid = 999999;
-        TEST_CHECK(deferred_test_janky_scheduled_state->records[0].real_wid, copied_first);
-        deferred_test_janky_fail_all = false;
-        TEST_CHECK(window_manager_send_jankyborders_state(1, deferred_test_janky_scheduled_state), true);
-        window_manager_free_jankyborders_state(deferred_test_janky_scheduled_state);
-    }
-    window_manager_jankyborders_retry_scheduler = saved_janky_scheduler;
-    window_manager_jankyborders_send = saved_janky_sender;
     free(animations);
-});
-
-TEST_FUNC(jankyborders_generations_supersede_stale_retries,
-{
-    struct window_animation animations[3] = {
-        { .wid = 7001, .proxy = { .id = 8001 } },
-        { .wid = 7002, .proxy = { .id = 8002 } },
-        { .wid = 7003, .proxy = { .id = 8003 } }
-    };
-    __auto_type saved_sender = window_manager_jankyborders_send;
-    __auto_type saved_scheduler = window_manager_jankyborders_retry_scheduler;
-    window_manager_jankyborders_send = deferred_test_janky_send;
-    window_manager_jankyborders_retry_scheduler = deferred_test_janky_schedule;
-
-    deferred_test_janky_fail_all = true;
-    deferred_test_janky_scheduled_state = NULL;
-    struct jankyborders_reconciliation *start =
-        window_manager_copy_jankyborders_state(animations, 3, 1325, false);
-    TEST_CHECK(window_manager_reconcile_jankyborders_state(1, start), false);
-    TEST_CHECK(deferred_test_janky_scheduled_state == start, true);
-
-    deferred_test_janky_fail_all = false;
-    deferred_test_janky_real_count = 0;
-    struct jankyborders_reconciliation *stop =
-        window_manager_copy_jankyborders_state(animations, 3, 1326, false);
-    TEST_CHECK(window_manager_reconcile_jankyborders_state(1, stop), true);
-    int sends_before_stale = deferred_test_janky_send_count;
-    TEST_CHECK(window_manager_send_jankyborders_state(1, start), true);
-    TEST_CHECK(deferred_test_janky_send_count, sends_before_stale);
-    window_manager_free_jankyborders_state(start);
-
-    struct jankyborders_reconciliation *old =
-        window_manager_copy_jankyborders_state(animations, 3, 1325, false);
-    struct jankyborders_reconciliation *new_middle =
-        window_manager_copy_jankyborders_state(&animations[1], 1, 1325, false);
-    deferred_test_janky_real_count = 0;
-    deferred_test_janky_check_lock = true;
-    deferred_test_janky_lock_was_held = false;
-    TEST_CHECK(window_manager_send_jankyborders_state(1, old), true);
-    TEST_CHECK(deferred_test_janky_lock_was_held, true);
-    deferred_test_janky_check_lock = false;
-    TEST_CHECK(deferred_test_janky_real_count, 2);
-    TEST_CHECK(deferred_test_janky_real_wids[0], 7001U);
-    TEST_CHECK(deferred_test_janky_real_wids[1], 7003U);
-    window_manager_free_jankyborders_state(old);
-    window_manager_free_jankyborders_state(new_middle);
-
-    struct jankyborders_reconciliation *cleanup =
-        window_manager_copy_jankyborders_state(animations, 3, 1326, false);
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    TEST_CHECK(window_manager_jankyborders_generation_index_locked(7001) >= 0, true);
-    window_manager_jankyborders_complete_stop_locked(cleanup);
-    TEST_CHECK(window_manager_jankyborders_generation_index_locked(7001), -1);
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    window_manager_free_jankyborders_state(cleanup);
-    TEST_CHECK(window_manager_jankyborders_generation_matches(7001, 1), false);
-
-    window_manager_jankyborders_send = saved_sender;
-    window_manager_jankyborders_retry_scheduler = saved_scheduler;
 });
 
 TEST_FUNC(event_queue_binary_wake_converges_after_merges,

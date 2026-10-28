@@ -17,6 +17,7 @@ struct declarative_reload_fixture
     size_t postcommit_calls;
     size_t postcommit_failures;
     size_t probe_calls;
+    size_t highlight_refresh_calls;
     size_t refresh_calls;
     struct declarative_space_postcommit_ops postcommit_ops;
     uint32_t wids[4];
@@ -170,6 +171,11 @@ static bool declarative_reload_test_postcommit_feedback(struct window_node *node
     return !fixture->postcommit_fail;
 }
 
+static void declarative_reload_test_refresh_active_window_highlight(void *context)
+{
+    ++((struct declarative_reload_fixture *) context)->highlight_refresh_calls;
+}
+
 static void declarative_reload_test_refresh_insert_feedback(void *context)
 {
     ++((struct declarative_reload_fixture *) context)->refresh_calls;
@@ -201,6 +207,7 @@ static struct declarative_reload_test_ops declarative_reload_test_ops(struct dec
         .find_window = declarative_reload_test_find_window,
         .is_eligible = declarative_reload_test_is_eligible,
         .postcommit_ops = &fixture->postcommit_ops,
+        .refresh_active_window_highlight = declarative_reload_test_refresh_active_window_highlight,
         .refresh_insert_feedback = declarative_reload_test_refresh_insert_feedback,
         .postcommit_probe = declarative_reload_test_postcommit_probe,
         .context = fixture
@@ -753,6 +760,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
            stages, allocator_failures);
     TEST_CHECK(stages, (size_t) DECLARATIVE_RELOAD_TEST_STAGE_COUNT - 1);
     TEST_CHECK(allocator_failures, 4U);
+    TEST_CHECK(fixture.highlight_refresh_calls, 0U);
     TEST_CHECK(fixture.refresh_calls, 0U);
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
@@ -761,7 +769,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
 {
     static const char candidate_json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17,\"insert_feedback_radius\":15,\"insert_feedback_width\":4},"
+        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17,\"active_window_highlight\":true,\"active_window_highlight_color\":4278255360,\"active_window_highlight_radius\":12,\"active_window_highlight_width\":5,\"insert_feedback_radius\":15,\"insert_feedback_width\":4},"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,"
         "\"match\":{\"app\":{\"pattern\":\"^App$\"}},\"effects\":{\"manage\":true}}]}";
     struct declarative_reload_fixture fixture = {
@@ -817,7 +825,12 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(strcmp(output, "configuration reloaded\n"), 0);
     TEST_CHECK(fixture.probe_calls, 1U);
     TEST_CHECK(fixture.probe_committed, true);
+    TEST_CHECK(fixture.highlight_refresh_calls, 1U);
     TEST_CHECK(fixture.refresh_calls, 1U);
+    TEST_CHECK(g_window_manager.enable_active_window_highlight, true);
+    TEST_CHECK(g_window_manager.active_window_highlight_color.p, 0xff00ff00U);
+    TEST_CHECK(g_window_manager.active_window_highlight_radius, 12.0f);
+    TEST_CHECK(g_window_manager.active_window_highlight_width, 5.0f);
     TEST_CHECK(g_window_manager.insert_feedback_radius, 15.0f);
     TEST_CHECK(g_window_manager.insert_feedback_width, 4.0f);
     TEST_CHECK(declarative_installed.generation, old_generation + 1);

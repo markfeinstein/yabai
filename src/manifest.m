@@ -7,7 +7,6 @@
 #include <mach-o/dyld.h>
 #include <mach-o/fat.h>
 #include <mach-o/swap.h>
-#include <bootstrap.h>
 
 #ifdef __x86_64__
 #include <emmintrin.h>
@@ -104,6 +103,8 @@
 #include "window_server_snapshot.h"
 #include "window_server_classifier.h"
 #include "window_server_hit_test.h"
+#include "window_server_tags.h"
+#include "active_window_highlight.h"
 #include "process_manager.h"
 #include "application.h"
 #include "display_manager.h"
@@ -140,6 +141,7 @@
 #include "window_server_snapshot.c"
 #include "window_server_classifier.c"
 #include "window_server_hit_test.c"
+#include "active_window_highlight.c"
 #include "space.c"
 #include "space_gesture.c"
 #include "view.c"

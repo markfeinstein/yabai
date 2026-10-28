@@ -53,6 +53,8 @@ struct declarative_runtime_operation_ops
     void (*set_menubar_opacity)(void *, float);
     void (*set_active_window_opacity)(void *, float);
     void (*set_normal_window_opacity)(void *, float);
+    void (*set_active_window_highlight_enabled)(void *, bool);
+    void (*refresh_active_window_highlight)(void *);
     void (*refresh_insert_feedback)(void);
     void (*set_shadow)(void *, int);
     void (*set_menu_enabled)(int);

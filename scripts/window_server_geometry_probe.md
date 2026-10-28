@@ -39,4 +39,4 @@ The basic `(filter=0, flags=1, reserved=0)` and filtered `(filter=legacy_window_
 
 Controlled macOS 27.0.1 fixtures produced stable disagreements for ordinary, overlapping, panel, transparent, and sheet points. Disagreement is evidence of different semantics and does not imply either API is incorrect.
 
-Before any activation PR, explain those relationships across display boundaries, multiple/mixed-scale displays, yabai proxies, JankyBorders, macOS 26.6, and macOS 27.2. Production mouse, drag/drop, focus-follows-mouse, and `--window mouse` behavior must continue using the legacy result.
+Before any activation PR, explain those relationships across display boundaries, multiple/mixed-scale displays, yabai proxies, yabai-owned highlight and feedback overlays, macOS 26.6, and macOS 27.2. Production mouse, drag/drop, focus-follows-mouse, and `--window mouse` behavior must continue using the legacy result.

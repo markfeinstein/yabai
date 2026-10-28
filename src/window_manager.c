@@ -1,4 +1,3 @@
-extern mach_port_t g_bs_port;
 extern uint8_t *g_event_bytes;
 extern struct event_loop g_event_loop;
 extern void *g_workspace_context;
@@ -769,287 +768,10 @@ void window_manager_resize_window(struct window *window, float width, float heig
     }
 }
 
-struct jankyborders_animation_message
-{
-    uint32_t event;
-    uint32_t count;
-    uint32_t proxy_wid[512];
-    uint32_t real_wid[512];
-};
-
-#ifdef TESTS
-static int window_manager_pack_jankyborders_batch(struct window_animation *animation_list, int animation_count,
-                                                   int start, uint32_t event, bool skip,
-                                                   struct jankyborders_animation_message *message)
-{
-    *message = (struct jankyborders_animation_message) { .event = event };
-    int i = start;
-    while (i < animation_count && message->count < array_count(message->proxy_wid)) {
-        if (!skip || !__atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED)) {
-            message->proxy_wid[message->count] = animation_list[i].proxy.id;
-            message->real_wid[message->count] = animation_list[i].wid;
-            ++message->count;
-        }
-        ++i;
-    }
-    return i;
-}
-#endif
-
-#ifdef TESTS
-static kern_return_t (*window_manager_jankyborders_send)(mach_port_t, void *, uint32_t) = mach_send;
-#else
-#define window_manager_jankyborders_send mach_send
-#endif
-
-#ifdef TESTS
-static bool window_manager_send_jankyborders_batches(mach_port_t port, struct window_animation *animation_list,
-                                                       int animation_count, uint32_t event, bool skip)
-{
-    int cursor = 0;
-    while (cursor < animation_count) {
-        struct jankyborders_animation_message message;
-        int next = window_manager_pack_jankyborders_batch(animation_list, animation_count, cursor, event, skip, &message);
-        if (message.count && window_manager_jankyborders_send(port, &message, sizeof(message)) != KERN_SUCCESS) return false;
-        cursor = next;
-    }
-    return true;
-}
-#endif
-
 static uint64_t window_manager_retry_delay_ms(uint8_t attempt)
 {
     uint8_t shift = attempt < 6 ? attempt : 6;
     return 100ULL << shift;
-}
-
-struct jankyborders_desired_entry { uint32_t wid; uint64_t generation; };
-static struct {
-    pthread_mutex_t lock;
-    struct jankyborders_desired_entry *entries;
-    int count;
-    int capacity;
-    uint64_t next_generation;
-} g_jankyborders_desired = { .lock = PTHREAD_MUTEX_INITIALIZER };
-
-struct jankyborders_record
-{
-    uint32_t proxy_wid;
-    uint32_t real_wid;
-};
-
-struct jankyborders_reconciliation
-{
-    struct jankyborders_record *records;
-    int count;
-    uint32_t event;
-    uint64_t generation;
-    uint8_t attempt;
-};
-
-static int window_manager_jankyborders_generation_index_locked(uint32_t wid)
-{
-    for (int i = 0; i < g_jankyborders_desired.count; ++i) {
-        if (g_jankyborders_desired.entries[i].wid == wid) return i;
-    }
-    return -1;
-}
-
-#ifdef TESTS
-static bool window_manager_jankyborders_generation_matches(uint32_t wid, uint64_t generation)
-{
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    int index = window_manager_jankyborders_generation_index_locked(wid);
-    bool matches = index >= 0 && g_jankyborders_desired.entries[index].generation == generation;
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    return matches;
-}
-#endif
-
-static void window_manager_jankyborders_complete_stop_locked(struct jankyborders_reconciliation *state)
-{
-    if (state->event != 1326) return;
-    for (int i = 0; i < state->count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index >= 0 && g_jankyborders_desired.entries[index].generation == state->generation) {
-            g_jankyborders_desired.entries[index] = g_jankyborders_desired.entries[--g_jankyborders_desired.count];
-        }
-    }
-}
-
-static void window_manager_jankyborders_complete_stop(struct jankyborders_reconciliation *state)
-{
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    window_manager_jankyborders_complete_stop_locked(state);
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-}
-
-static struct jankyborders_reconciliation *window_manager_copy_jankyborders_state(struct window_animation *animation_list,
-                                                                                  int animation_count,
-                                                                                  uint32_t event, bool skip)
-{
-    int count = 0;
-    for (int i = 0; i < animation_count; ++i) {
-        if (!skip || !__atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) ++count;
-    }
-
-    struct jankyborders_reconciliation *state = calloc(1, sizeof(*state));
-    if (!state) goto fail;
-    state->records = count ? calloc((size_t) count, sizeof(*state->records)) : NULL;
-    if (count && !state->records) goto fail;
-    state->count = count;
-    state->event = event;
-    for (int i = 0, out = 0; i < animation_count; ++i) {
-        if (skip && __atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) continue;
-        state->records[out++] = (struct jankyborders_record) {
-            .proxy_wid = animation_list[i].proxy.id,
-            .real_wid = animation_list[i].wid
-        };
-    }
-
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    int required = g_jankyborders_desired.count + count;
-    if (required > g_jankyborders_desired.capacity) {
-        int capacity = g_jankyborders_desired.capacity ? g_jankyborders_desired.capacity : 16;
-        while (capacity < required) capacity *= 2;
-        void *entries = realloc(g_jankyborders_desired.entries, (size_t) capacity * sizeof(*g_jankyborders_desired.entries));
-        if (!entries) {
-            pthread_mutex_unlock(&g_jankyborders_desired.lock);
-            goto fail;
-        }
-        g_jankyborders_desired.entries = entries;
-        g_jankyborders_desired.capacity = capacity;
-    }
-    if (++g_jankyborders_desired.next_generation == 0) ++g_jankyborders_desired.next_generation;
-    state->generation = g_jankyborders_desired.next_generation;
-    for (int i = 0; i < count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index < 0) index = g_jankyborders_desired.count++;
-        g_jankyborders_desired.entries[index] = (struct jankyborders_desired_entry) {
-            .wid = state->records[i].real_wid,
-            .generation = state->generation
-        };
-    }
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    return state;
-
-fail:
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    if (++g_jankyborders_desired.next_generation == 0) ++g_jankyborders_desired.next_generation;
-    for (int i = 0; i < animation_count; ++i) {
-        if (skip && __atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) continue;
-        int index = window_manager_jankyborders_generation_index_locked(animation_list[i].wid);
-        if (index < 0) continue;
-        if (event == 1326) {
-            g_jankyborders_desired.entries[index] = g_jankyborders_desired.entries[--g_jankyborders_desired.count];
-        } else {
-            g_jankyborders_desired.entries[index].generation = g_jankyborders_desired.next_generation;
-        }
-    }
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    warn("%s: unable to retain cosmetic border reconciliation state\n", __FUNCTION__);
-    if (state) { free(state->records); free(state); }
-    return NULL;
-}
-
-static bool window_manager_send_jankyborders_state(mach_port_t port, struct jankyborders_reconciliation *state)
-{
-    int capacity = (state->count + 511) / 512;
-    struct jankyborders_animation_message *messages = capacity ? calloc((size_t) capacity, sizeof(*messages)) : NULL;
-    if (capacity && !messages) return false;
-    int message_count = 0;
-
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    for (int i = 0; i < state->count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index < 0 || g_jankyborders_desired.entries[index].generation != state->generation) continue;
-        if (!message_count || messages[message_count - 1].count == 512) {
-            messages[message_count++].event = state->event;
-        }
-        struct jankyborders_animation_message *message = &messages[message_count - 1];
-        message->proxy_wid[message->count] = state->records[i].proxy_wid;
-        message->real_wid[message->count] = state->records[i].real_wid;
-        ++message->count;
-    }
-
-    bool success = true;
-    for (int i = 0; i < message_count; ++i) {
-        if (window_manager_jankyborders_send(port, &messages[i], sizeof(messages[i])) != KERN_SUCCESS) {
-            success = false;
-            break;
-        }
-    }
-    if (success) window_manager_jankyborders_complete_stop_locked(state);
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    free(messages);
-    return success;
-}
-
-static void window_manager_free_jankyborders_state(struct jankyborders_reconciliation *state)
-{
-    if (!state) return;
-    free(state->records);
-    free(state);
-}
-
-static void window_manager_jankyborders_retry(struct jankyborders_reconciliation *state);
-static void window_manager_jankyborders_dispatch_retry(struct jankyborders_reconciliation *state, uint64_t delay_ms)
-{
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ms * NSEC_PER_MSEC),
-                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        window_manager_jankyborders_retry(state);
-    });
-}
-#ifdef TESTS
-static void (*window_manager_jankyborders_retry_scheduler)(struct jankyborders_reconciliation *, uint64_t) = window_manager_jankyborders_dispatch_retry;
-#else
-#define window_manager_jankyborders_retry_scheduler window_manager_jankyborders_dispatch_retry
-#endif
-
-static void window_manager_jankyborders_schedule_retry(struct jankyborders_reconciliation *state)
-{
-    uint64_t delay = window_manager_retry_delay_ms(state->attempt);
-    if (state->attempt != UINT8_MAX) ++state->attempt;
-    window_manager_jankyborders_retry_scheduler(state, delay);
-}
-
-static void window_manager_jankyborders_retry(struct jankyborders_reconciliation *state)
-{
-    mach_port_t port;
-    if (!g_bs_port || bootstrap_look_up(g_bs_port, "git.felix.jbevent", &port) != KERN_SUCCESS) {
-        window_manager_jankyborders_schedule_retry(state);
-        return;
-    }
-    bool success = window_manager_send_jankyborders_state(port, state);
-    mach_port_deallocate(mach_task_self(), port);
-    if (success) window_manager_free_jankyborders_state(state);
-    else window_manager_jankyborders_schedule_retry(state);
-}
-
-static bool window_manager_reconcile_jankyborders_state(mach_port_t port, struct jankyborders_reconciliation *state)
-{
-    if (!state) return false;
-    if (window_manager_send_jankyborders_state(port, state) || window_manager_send_jankyborders_state(port, state)) {
-        window_manager_free_jankyborders_state(state);
-        return true;
-    }
-    window_manager_jankyborders_schedule_retry(state);
-    return false;
-}
-
-static bool window_manager_send_prepared_jankyborders(struct jankyborders_reconciliation *state, bool wait)
-{
-    if (!state) return false;
-    mach_port_t port;
-    if (!g_bs_port || bootstrap_look_up(g_bs_port, "git.felix.jbevent", &port) != KERN_SUCCESS) {
-        window_manager_jankyborders_complete_stop(state);
-        window_manager_free_jankyborders_state(state);
-        return true;
-    }
-    bool success = window_manager_reconcile_jankyborders_state(port, state);
-    mach_port_deallocate(mach_task_self(), port);
-    if (success && wait) usleep(20000);
-    return success;
 }
 
 static void window_manager_destroy_window_proxy(int animation_connection, struct window_proxy *proxy);
@@ -1317,6 +1039,7 @@ static void window_manager_animation_release_context(struct window_animation_con
     if (context->animation_connection) (void) window_manager_animation_release_connection(context->animation_connection);
     free(context->animation_list);
     free(context);
+    event_loop_request_active_window_highlight_refresh();
 }
 
 static void window_manager_animation_destroy_context(struct window_animation_context *context, bool update_disabled)
@@ -1381,8 +1104,6 @@ static void window_manager_animation_teardown_attempt(void *data)
         return;
     }
     context->proxies_may_be_installed = false;
-    struct jankyborders_reconciliation *border_state =
-        window_manager_copy_jankyborders_state(context->animation_list, context->animation_count, 1326, true);
 
     for (int i = 0; i < context->animation_count; ++i) {
         struct window_animation *animation = &context->animation_list[i];
@@ -1392,7 +1113,6 @@ static void window_manager_animation_teardown_attempt(void *data)
         }
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-    (void) window_manager_send_prepared_jankyborders(border_state, true);
     window_manager_animation_release_context(context, true);
 }
 
@@ -1452,9 +1172,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
 
     pthread_t *threads = window_manager_animation_allocate((size_t) window_count * sizeof(pthread_t));
     if (!threads) goto cleanup;
-    struct jankyborders_reconciliation **replacement_border_states = calloc((size_t) window_count * 2,
-                                                                            sizeof(*replacement_border_states));
-    if (!replacement_border_states) warn("%s: unable to retain replacement border state\n", __FUNCTION__);
 
     int thread_count = 0;
     bool update_disabled = true;
@@ -1483,10 +1200,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
                 add_to_table = false;
             } else {
                 __atomic_store_n(&existing_animation->skip, true, __ATOMIC_RELEASE);
-                if (replacement_border_states) {
-                    replacement_border_states[i * 2] = window_manager_copy_jankyborders_state(existing_animation, 1, 1326, false);
-                    replacement_border_states[i * 2 + 1] = window_manager_copy_jankyborders_state(&context->animation_list[i], 1, 1325, true);
-                }
 
                 CFTypeRef transaction = SLSTransactionCreate(context->animation_connection);
                 if (transaction) {
@@ -1510,13 +1223,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
 
-    if (replacement_border_states) {
-        for (int i = 0; i < window_count * 2; ++i) {
-            if (replacement_border_states[i]) (void) window_manager_send_prepared_jankyborders(replacement_border_states[i], false);
-        }
-        free(replacement_border_states);
-    }
-
     for (int i = 0; i < thread_count; ++i) pthread_join(threads[i], NULL);
     free(threads);
 
@@ -1535,10 +1241,7 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
             __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
         }
     }
-    struct jankyborders_reconciliation *start_border_state =
-        window_manager_copy_jankyborders_state(context->animation_list, context->animation_count, 1325, true);
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-    (void) window_manager_send_prepared_jankyborders(start_border_state, false);
 
     (void) window_manager_animation_reenable_update(context->animation_connection);
     update_disabled = false;
@@ -1556,6 +1259,7 @@ set_final_frames:
         window_manager_animation_set_frame(window_list[i].window, window_list[i].x, window_list[i].y,
                                            window_list[i].w, window_list[i].h);
     }
+    event_loop_request_active_window_highlight_refresh();
 }
 #ifdef TESTS
 static void (*window_manager_test_animate_observer)(struct window_capture *, int);
@@ -1577,6 +1281,16 @@ static bool window_manager_should_animate(float configured_duration)
     return configured_duration > 0.0f && !preferences.reduce_motion;
 }
 
+static bool window_manager_window_capture_list_contains(struct window_capture *window_list, int window_count,
+                                                        uint32_t window_id)
+{
+    if (!window_id) return false;
+    for (int i = 0; i < window_count; ++i) {
+        if (window_list[i].window && window_list[i].window->id == window_id) return true;
+    }
+    return false;
+}
+
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count)
 {
     TIME_FUNCTION;
@@ -1588,6 +1302,10 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
 #endif
 
     if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        if (window_manager_window_capture_list_contains(window_list, window_count,
+                                                        g_window_manager.focused_window_id)) {
+            window_manager_hide_active_window_highlight(&g_window_manager);
+        }
         window_manager_animation_async_route(window_list, window_count);
     } else {
         for (int i = 0; i < window_count; ++i) {
@@ -1595,6 +1313,7 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
                                                    window_list[i].y, window_list[i].w,
                                                    window_list[i].h);
         }
+        window_manager_refresh_active_window_highlight(&g_window_manager);
     }
 }
 
@@ -1609,10 +1328,14 @@ void window_manager_animate_window(struct window_capture capture)
 #endif
 
     if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        if (capture.window && capture.window->id == g_window_manager.focused_window_id) {
+            window_manager_hide_active_window_highlight(&g_window_manager);
+        }
         window_manager_animation_async_route(&capture, 1);
     } else {
         window_manager_animation_direct_route(capture.window, capture.x, capture.y,
                                               capture.w, capture.h);
+        window_manager_refresh_active_window_highlight(&g_window_manager);
     }
 }
 
@@ -1720,6 +1443,90 @@ void window_manager_set_normal_window_opacity(struct window_manager *wm, float o
             window_manager_set_window_opacity(wm, window, wm->normal_window_opacity);
         }
     })
+}
+
+#ifdef TESTS
+static void (*window_manager_test_active_window_highlight_refresh_observer)(struct window_manager *);
+static void (*window_manager_test_active_window_highlight_hide_observer)(struct window_manager *);
+#endif
+
+static bool window_manager_active_window_highlight_window_is_animating(struct window_manager *wm,
+                                                                        uint32_t window_id)
+{
+    pthread_mutex_lock(&wm->window_animations_lock);
+    bool animating = table_find(&wm->window_animations_table, &window_id) != NULL;
+    pthread_mutex_unlock(&wm->window_animations_lock);
+    return animating;
+}
+
+void window_manager_hide_active_window_highlight(struct window_manager *wm)
+{
+#ifdef TESTS
+    if (window_manager_test_active_window_highlight_hide_observer) {
+        window_manager_test_active_window_highlight_hide_observer(wm);
+        return;
+    }
+#endif
+    active_window_highlight_hide(&wm->active_window_highlight);
+}
+
+void window_manager_reorder_active_window_highlight(struct window_manager *wm)
+{
+    active_window_highlight_invalidate_order(&wm->active_window_highlight);
+    window_manager_refresh_active_window_highlight(wm);
+}
+
+void window_manager_refresh_active_window_highlight(struct window_manager *wm)
+{
+#ifdef TESTS
+    if (window_manager_test_active_window_highlight_refresh_observer) {
+        window_manager_test_active_window_highlight_refresh_observer(wm);
+        return;
+    }
+#endif
+    if (!wm->enable_active_window_highlight || !wm->focused_window_id || mission_control_is_active()) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    struct window *window = window_manager_find_window(wm, wm->focused_window_id);
+    if (!window || !window->application || window->application->is_hidden ||
+        !window_manager_is_window_eligible(window) ||
+        window_check_flag(window, WINDOW_MINIMIZE) ||
+        window_check_flag(window, WINDOW_FULLSCREEN) ||
+        window_check_flag(window, WINDOW_ORDERED_OUT) ||
+        window_manager_active_window_highlight_window_is_animating(wm, window->id)) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    uint8_t ordered_in = 0;
+    CGRect frame;
+    uint64_t tags = 0;
+    if (SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in) != kCGErrorSuccess || !ordered_in ||
+        SLSGetWindowBounds(g_connection, window->id, &frame) != kCGErrorSuccess ||
+        !window_tags_with_status(window->id, &tags)) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    bool sticky = (tags & WINDOW_SERVER_TAG_ON_ALL_WORKSPACES) != 0;
+    uint64_t sid = window_space(window->id);
+    if ((!sticky && (!sid || !space_is_visible(sid))) ||
+        !active_window_highlight_show(&wm->active_window_highlight, window->id, frame,
+                                      window_level(window->id), window_sub_level(window->id),
+                                      sid, sticky, wm->active_window_highlight_color.p,
+                                      wm->active_window_highlight_width,
+                                      wm->active_window_highlight_radius)) {
+        window_manager_hide_active_window_highlight(wm);
+    }
+}
+
+void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled)
+{
+    wm->enable_active_window_highlight = enabled;
+    window_manager_refresh_active_window_highlight(wm);
+    event_loop_active_window_highlight_target_did_change();
 }
 
 #ifdef TESTS
@@ -1857,27 +1664,6 @@ struct window *window_manager_find_window_on_space_by_rank_filtering_window(stru
     return result;
 }
 
-#ifdef TESTS
-static bool (*window_manager_test_connection_is_jankyborders)(int);
-#endif
-
-static inline bool window_manager_window_connection_is_jankyborders(int window_cid)
-{
-#ifdef TESTS
-    if (window_manager_test_connection_is_jankyborders) {
-        return window_manager_test_connection_is_jankyborders(window_cid);
-    }
-#endif
-    static char process_name[PROC_PIDPATHINFO_MAXSIZE];
-
-    pid_t window_pid = 0;
-    process_name[0] = '\0';
-    if (SLSConnectionGetPID(window_cid, &window_pid) != kCGErrorSuccess || window_pid <= 0) return false;
-    proc_name(window_pid, process_name, sizeof(process_name));
-
-    return strcmp(process_name, "borders") == 0;
-}
-
 static bool window_manager_legacy_hit_test(CGPoint point, uint32_t filter_wid, int flags,
                                            uint32_t *window_id, int *window_cid)
 {
@@ -1895,21 +1681,29 @@ static bool window_manager_legacy_hit_test(CGPoint point, uint32_t filter_wid, i
     return true;
 }
 
+static bool window_manager_resolve_hit_test_window(CGPoint point, uint32_t filter_wid, int flags,
+                                                   uint32_t *window_id, int *window_cid)
+{
+    if (!window_manager_legacy_hit_test(point, filter_wid, flags, window_id, window_cid)) return false;
+
+    for (int attempts = 0; attempts < 16; ++attempts) {
+        if (g_connection != *window_cid) return true;
+        uint32_t skipped_window_id = *window_id;
+        if (!skipped_window_id ||
+            !window_manager_legacy_hit_test(point, skipped_window_id, -1, window_id, window_cid) ||
+            *window_id == skipped_window_id) {
+            return false;
+        }
+    }
+
+    return false;
+}
+
 struct window *window_manager_find_window_at_point_filtering_window(struct window_manager *wm, CGPoint point, uint32_t filter_wid)
 {
     uint32_t window_id = 0;
     int window_cid = 0;
-
-    if (!window_manager_legacy_hit_test(point, filter_wid, -1, &window_id, &window_cid)) return NULL;
-    if (g_connection == window_cid &&
-        !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-
-    if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (!window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-        if (g_connection == window_cid &&
-            !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-    }
-
+    if (!window_manager_resolve_hit_test_window(point, filter_wid, -1, &window_id, &window_cid)) return NULL;
     return window_manager_find_window(wm, window_id);
 }
 
@@ -1917,17 +1711,7 @@ struct window *window_manager_find_window_at_point(struct window_manager *wm, CG
 {
     uint32_t window_id = 0;
     int window_cid = 0;
-
-    if (!window_manager_legacy_hit_test(point, 0, 1, &window_id, &window_cid)) return NULL;
-    if (g_connection == window_cid &&
-        !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-
-    if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (!window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-        if (g_connection == window_cid &&
-            !window_manager_legacy_hit_test(point, window_id, -1, &window_id, &window_cid)) return NULL;
-    }
-
+    if (!window_manager_resolve_hit_test_window(point, 0, 1, &window_id, &window_cid)) return NULL;
     return window_manager_find_window(wm, window_id);
 }
 
@@ -2516,14 +2300,6 @@ static bool window_manager_identity_correction_is_clear(const struct window *win
            !window->frame_correction_started_at && !window->frame_correction_retry_at;
 }
 
-static bool window_manager_identity_jankyborders_quiescent(void)
-{
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    bool quiescent = g_jankyborders_desired.count == 0;
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    return quiescent;
-}
-
 static void window_manager_identity_release_candidate(struct window *candidate)
 {
     if (candidate) window_destroy(candidate);
@@ -2559,9 +2335,7 @@ window_manager_identity_preflight(struct space_manager *sm, struct window_manage
     if (ms->current_action != MOUSE_MODE_NONE || ms->native_resize.window_id ||
         ms->window || ms->feedback_node) return WINDOW_IDENTITY_REPLACE_BUSY_MOUSE;
     if (wm->insert_feedback.count) return WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK;
-    if (wm->window_animations_table.count || !window_manager_identity_jankyborders_quiescent()) {
-        return WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION;
-    }
+    if (wm->window_animations_table.count) return WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION;
     if (!window_manager_identity_correction_is_clear(window)) return WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION;
 
     *managed_view = table_find(&wm->managed_window, &old_id);
@@ -4673,6 +4447,10 @@ void window_manager_init(struct window_manager *wm)
     wm->window_opacity_duration = 0.0f;
     wm->window_animation_duration = 0.0f;
     wm->window_animation_easing = ease_out_circ_type;
+    wm->enable_active_window_highlight = false;
+    wm->active_window_highlight_color = rgba_color_from_hex(ACTIVE_WINDOW_HIGHLIGHT_COLOR_DEFAULT);
+    wm->active_window_highlight_radius = ACTIVE_WINDOW_HIGHLIGHT_RADIUS_DEFAULT;
+    wm->active_window_highlight_width = ACTIVE_WINDOW_HIGHLIGHT_WIDTH_DEFAULT;
     wm->insert_feedback_color = rgba_color_from_hex(0xffd75f5f);
     wm->insert_feedback_radius = INSERT_FEEDBACK_RADIUS_DEFAULT;
     wm->insert_feedback_width = INSERT_FEEDBACK_WIDTH_DEFAULT;
@@ -4746,4 +4524,6 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
         wm->focused_window_psn = window->application->psn;
         window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
     }
+    window_manager_refresh_active_window_highlight(wm);
+    event_loop_active_window_highlight_target_did_change();
 }

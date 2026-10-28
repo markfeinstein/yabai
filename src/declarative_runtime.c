@@ -91,6 +91,8 @@ static void declarative_operation_set_opacity_enabled(void *manager, bool value)
 static void declarative_operation_set_menubar_opacity(void *manager, float value) { window_manager_set_menubar_opacity(manager, value); }
 static void declarative_operation_set_active_opacity(void *manager, float value) { window_manager_set_active_window_opacity(manager, value); }
 static void declarative_operation_set_normal_opacity(void *manager, float value) { window_manager_set_normal_window_opacity(manager, value); }
+static void declarative_operation_set_active_window_highlight_enabled(void *manager, bool value) { window_manager_set_active_window_highlight_enabled(manager, value); }
+static void declarative_operation_refresh_active_window_highlight(void *manager) { window_manager_refresh_active_window_highlight(manager); }
 static void declarative_operation_set_shadow(void *manager, int value) { window_manager_set_purify_mode(manager, value); }
 static void declarative_operation_set_menu_enabled(int value) { menu_bar_manager_set_enabled(value); }
 static void declarative_operation_set_menu_interface(int value) { menu_bar_manager_set_interface(value); }
@@ -117,6 +119,8 @@ static void declarative_operation_invalidate_spaces(void *manager) { space_manag
     .set_menubar_opacity = declarative_operation_set_menubar_opacity, \
     .set_active_window_opacity = declarative_operation_set_active_opacity, \
     .set_normal_window_opacity = declarative_operation_set_normal_opacity, \
+    .set_active_window_highlight_enabled = declarative_operation_set_active_window_highlight_enabled, \
+    .refresh_active_window_highlight = declarative_operation_refresh_active_window_highlight, \
     .refresh_insert_feedback = insert_feedback_refresh_all, \
     .set_shadow = declarative_operation_set_shadow, \
     .set_menu_enabled = declarative_operation_set_menu_enabled, \
@@ -230,8 +234,11 @@ static bool declarative_value_valid(enum declarative_config_id id, const struct 
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return value->real >= 0.0f && value->real <= 1.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return value->real > 0.0f && value->real <= 1.0f && isfinite(value->real);
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return value->u32 != 0;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return value->real >= 0.0f && isfinite(value->real);
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return value->real > 0.0f && isfinite(value->real);
     case DECLARATIVE_CONFIG_LAYOUT: return value->enumeration >= VIEW_BSP && value->enumeration <= VIEW_ACCORDION_VERTICAL;
     case DECLARATIVE_CONFIG_ACCORDION_PADDING: return value->integer >= 0;
@@ -323,6 +330,21 @@ static enum declarative_apply_result declarative_apply_runtime_setting_to_view(e
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: declarative_runtime_operation_ops.set_menubar_opacity(&g_window_manager, value->real); break;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: declarative_runtime_operation_ops.set_active_window_opacity(&g_window_manager, value->real); break;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: declarative_runtime_operation_ops.set_normal_window_opacity(&g_window_manager, value->real); break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT:
+        declarative_runtime_operation_ops.set_active_window_highlight_enabled(&g_window_manager, value->boolean);
+        break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR:
+        g_window_manager.active_window_highlight_color = rgba_color_from_hex(value->u32);
+        declarative_runtime_operation_ops.refresh_active_window_highlight(&g_window_manager);
+        break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS:
+        g_window_manager.active_window_highlight_radius = value->real;
+        declarative_runtime_operation_ops.refresh_active_window_highlight(&g_window_manager);
+        break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH:
+        g_window_manager.active_window_highlight_width = value->real;
+        declarative_runtime_operation_ops.refresh_active_window_highlight(&g_window_manager);
+        break;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR:
         g_window_manager.insert_feedback_color = rgba_color_from_hex(value->u32);
         declarative_runtime_operation_ops.refresh_insert_feedback();
