@@ -2969,6 +2969,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
+    TEST_ENTRY(duplicate_display_change_does_not_reserve_topology_recovery) \
     TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_resize_debounce_preserves_fullscreen_state_transitions) \
@@ -2986,6 +2987,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
     TEST_ENTRY(active_window_highlight_geometry_is_bounded_and_outset) \
+    TEST_ENTRY(active_window_highlight_pending_geometry_rejects_stale_server_frame) \
     TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
     TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
@@ -3010,6 +3012,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
     TEST_ENTRY(window_animation_policy_honors_reduce_motion_without_mutating_configuration) \
+    TEST_ENTRY(window_animation_direct_refresh_uses_capture_geometry) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
     TEST_ENTRY(window_reconciliation_preserves_transient_fullscreen_exit_membership) \
