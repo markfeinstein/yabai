@@ -1,33 +1,71 @@
 # Window constraints probe
 
-This opt-in developer tool creates six temporary AppKit windows owned by the probe, observes their constraints through both known private read-only getters, and closes them. It never resizes, focuses, or otherwise changes an operator window and is not connected to the yabai daemon.
+This opt-in developer tool creates only probe-owned AppKit fixtures, observes both known private read-only constraint getters, attempts original unmodified resize requests through a separate AX controller process, restores every fixture, and closes all windows. It does not touch operator windows or change production policy.
 
 ```sh
 make window-constraints-probe
-bin/debug/window-constraints-probe > /private/tmp/window-constraints.jsonl
+caffeinate -d -u -t 180 &
+bin/debug/window-constraints-probe > /private/tmp/window-constraints-v2.jsonl
 ```
 
-The fixture matrix includes frame limits, content limits, titlebar/toolbar content limits, a borderless window, an exact fixed-size window, and an unbounded/default window. It also changes one fixture's limits and samples again after 250 ms and 1000 ms.
+Keeping the display awake avoids a macOS state where `CGGetActiveDisplayList` temporarily reports zero active displays while the built-in display remains online. The assertion is temporary and is not part of the evidence.
 
-Each `yabai.window-constraints-probe/v1` observation records:
+## Schema v2
 
-- AppKit frame/content and declared frame/content limits;
-- existing-trust-only AX size readback;
-- `SLSWindowIteratorGetConstraints` and `SLSPackagesGetWindowConstraints` results and latency;
-- normalization through the production `window_constraints_update()` model;
-- whether minimum, maximum, and current values match AppKit frame or content semantics;
-- iterator/direct agreement.
+`yabai.window-constraints-probe/v2` emits:
 
-The output contains fixture labels but no raw PID, WindowServer ID, title, application name, bundle ID, path, absolute position, Space ID, or display ID. The probe never calls an Accessibility prompting API or a private setter.
+- `run`: platform, symbol, trust, schedule, and diagnostic-only metadata;
+- `fixture`: declared limits, increments, fixture kind, and delegate policy;
+- `observation`: AppKit state, AX readback, iterator/packages raw values, validity, getter order/skew, basis, deltas, and agreement class;
+- `resize_trial`: the original AX request, settled readback, separate iterator/packages predictions and confusion cells, delegate input/output, restore result, and authority block;
+- `transition_summary`: 46 samples from 0 through 5000 ms with first-change latency;
+- `summary`: agreement, AX write/restore outcomes, and per-source confusion counts.
 
-## macOS 27.0.1 observation
+Every resize trial contains:
 
-On build 26A434, eight controlled observations produced iterator and direct-package values in all eight cases, with exact agreement. Decorated frame-limit fixtures reported frame-relative minimum, maximum, and current sizes. Content limits were converted to decorated frame sizes. Borderless and full-size-content controls had identical frame/content dimensions. The unbounded/default fixture returned zero triplets, which production normalization correctly kept unknown. A dynamic frame-limit change was visible by the 250 ms sample and remained stable at 1000 ms.
+```json
+"authority": {
+  "decision_source": "ax-readback",
+  "private_constraints_modified_request": false,
+  "production_policy_enabled": false
+}
+```
 
-This supports further evaluation of nullable advisory query fields, but not production layout behavior. The direct-package API added no information or recovery in this fixture, and a single AppKit process on one OS cannot establish behavior for delegate clamps, resize increments, Electron, native tabs, fullscreen, panels, or cross-version freshness.
+Private constraints never clamp, suppress, or rewrite the requested AX size.
+
+## Controlled fixtures
+
+The AppKit host covers:
+
+- frame and content limit controls;
+- fixed and unbounded controls;
+- delegate-only effective clamping, tighten, and loosen transitions;
+- frame and content resize increments with off-grid requests;
+- toolbar hidden/visible transitions;
+- utility panel;
+- attached, detached, and reattached sheet;
+- native tabs with different per-tab limits and A→B→A selection;
+- minimized limit mutation and restored lifecycle state.
+
+Resizable fixtures receive the full below/within/above 3×3 request matrix, exact minimum and maximum, and two off-grid requests for increment fixtures. AX settling requires three equal reads spanning at least 100 ms and times out after 2 seconds. Every trial restores and verifies the baseline.
+
+The output uses fixture IDs but no raw PID, WindowServer ID, title, application name, bundle ID, path, absolute position, Space ID, or display ID.
+
+## Current macOS 27.0.1 evidence
+
+On build 26A434:
+
+- 13 controlled fixtures produced 383 observations;
+- iterator and packages/direct results were available and exactly equal in all 383 observations;
+- the minimized dynamic-limit change became visible to both getters by 250 ms;
+- delegate-only tightening/loosening, toolbar visibility, and active-tab selection did not change the private triplet within 5 seconds;
+- 114 AX resize trials were attempted, but all were unscored: the separate controller reported existing AX trust yet could not resolve the probe-host AX windows by WindowServer ID, so no write was issued;
+- no prompt was triggered, no request was modified, and all pre-existing window IDs and frames were restored.
+
+This is an exact fixture-host/controller identity blocker, not evidence that AX writes are unsupported. Do not grant new Accessibility permission merely to complete the matrix. A future run needs a dedicated signed fixture application whose AX windows are resolvable from an already-trusted controller, or an existing suitable VM/account. Electron framed/frameless hosts are likewise unavailable as controlled pinned fixtures; existing user Electron applications must not be mutated.
 
 ## Decision policy
 
-Keep constraints diagnostic-only unless controlled observations prove a consistent, documentable frame/content basis, finite and ordered limits, bounded refresh after dynamic changes, and predictive value for accepted resizes. A direct getter that merely duplicates iterator values does not justify production fallback. Current creation-time caching must not drive layout behavior without separately proven invalidation semantics.
+Constraints remain diagnostic-only. The v2 output may support nullable advisory fields only after cross-version evidence establishes stable basis, finite ordered limits, bounded freshness, and useful prediction for settled AX results. Delegate clamps and resize increments are expected sources of false negatives when absent from the private triplet.
 
-Do not add public query fields while basis varies by style or values are invalid, unbounded, stale, or ambiguous. If a later cross-OS corpus supports exposure, fields should be nullable advisory data with an explicit `constraints-known` indicator; AX write/readback remains authoritative.
+Do not implement layout clamping, auto-floating, BSP correction, rejection, or creation-time-cache authority from this probe. AX write/readback plus bounded correction remains authoritative.
