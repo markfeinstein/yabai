@@ -82,12 +82,33 @@ static bool positive_u64(id value, uint64_t *result)
     return true;
 }
 
-static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic)
+typedef uint64_t (*direct_divider_fn)(uint64_t space_id);
+typedef CGRect (*direct_tile_rect_fn)(int connection, uint32_t window_id);
+typedef bool (*direct_can_create_fn)(int connection, uint64_t space_id, CGSize minimum_size);
+
+static bool rect_equal(CGRect a, CGRect b)
+{
+    return fabs(a.origin.x - b.origin.x) <= 0.01 &&
+           fabs(a.origin.y - b.origin.y) <= 0.01 &&
+           fabs(a.size.width - b.size.width) <= 0.01 &&
+           fabs(a.size.height - b.size.height) <= 0.01;
+}
+
+static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic,
+                              bool exact_abi_build)
 {
     *diagnostic = (struct native_tile_extended_diagnostic) {0};
     void *skylight = dlopen(WM_SKYLIGHT_PATH, RTLD_LAZY | RTLD_LOCAL);
     void *framework = dlopen(WM_FRAMEWORK_PATH, RTLD_LAZY | RTLD_LOCAL);
     if (!skylight || !framework) goto out;
+    direct_divider_fn direct_divider = (direct_divider_fn)dlsym(
+        skylight, "SLSGetTileSpaceDividerDirections");
+    direct_tile_rect_fn direct_rect = (direct_tile_rect_fn)dlsym(
+        skylight, "SLSWindowGetTileRect");
+    direct_can_create_fn direct_can = (direct_can_create_fn)dlsym(
+        skylight, "SLSSpaceCanCreateTile");
+    diagnostic->direct_abi_verified = exact_abi_build && direct_divider &&
+                                      direct_rect && direct_can;
 
     Class client = objc_lookUpClass("WMClientWindowManager");
     Class synchronous = objc_lookUpClass("SLSSynchronousBridgedWindowManagementOperation");
@@ -150,16 +171,32 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
                 if (successes[0] && successes[1] && values[0] == values[1]) {
                     ++diagnostic->divider_repeat_stable;
                 }
+                if (diagnostic->direct_abi_verified) {
+                    ++diagnostic->direct_divider_calls;
+                    if (successes[0] && direct_divider(sid) == values[0]) {
+                        ++diagnostic->direct_divider_matches;
+                    }
+                }
 
                 ++diagnostic->can_create_calls;
                 id operation = init_u64_size(can_op, "initWithSpaceID:minSize:", sid,
                                               CGSizeMake(320.0, 240.0));
                 id result = perform(manager, operation);
+                bool can_known = false, can_value = false;
                 if (kind(result, bool_result)) {
-                    bool value = ((bool (*)(id, SEL))objc_msgSend)(
+                    can_value = ((bool (*)(id, SEL))objc_msgSend)(
                         result, sel_registerName("boolValue"));
+                    can_known = true;
                     ++diagnostic->can_create_successes;
-                    if (value) ++diagnostic->can_create_true;
+                    if (can_value) ++diagnostic->can_create_true;
+                }
+                if (diagnostic->direct_abi_verified) {
+                    ++diagnostic->direct_can_create_calls;
+                    bool direct_value = direct_can(SLSMainConnectionID(), sid,
+                                                   CGSizeMake(320.0, 240.0));
+                    if (can_known && direct_value == can_value) {
+                        ++diagnostic->direct_can_create_matches;
+                    }
                 }
                 release_object(result); release_object(operation);
             }
@@ -179,21 +216,30 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
             if (![number isKindOfClass:[NSNumber class]] ||
                 [number unsignedLongLongValue] > UINT32_MAX || ![number unsignedIntValue]) continue;
             ++diagnostic->tile_rect_calls;
-            id operation = init_u32(rect_op, "initWithWindowID:", [number unsignedIntValue]);
+            uint32_t wid = [number unsignedIntValue];
+            id operation = init_u32(rect_op, "initWithWindowID:", wid);
             id result = perform(manager, operation);
+            CGRect rect = CGRectZero; bool rect_known = false;
             if (kind(result, rect_result)) {
-                CGRect rect = CGRectZero;
 #ifdef __x86_64__
                 ((void (*)(CGRect *, id, SEL))objc_msgSend_stret)(
                     &rect, result, sel_registerName("rect"));
 #else
                 rect = ((CGRect (*)(id, SEL))objc_msgSend)(result, sel_registerName("rect"));
 #endif
+                rect_known = true;
                 ++diagnostic->tile_rect_successes;
                 if (isfinite(rect.origin.x) && isfinite(rect.origin.y) &&
                     isfinite(rect.size.width) && isfinite(rect.size.height) &&
                     rect.size.width > 0.0 && rect.size.height > 0.0) {
                     ++diagnostic->tile_rect_nonempty;
+                }
+            }
+            if (diagnostic->direct_abi_verified) {
+                ++diagnostic->direct_tile_rect_calls;
+                CGRect direct_value = direct_rect(SLSMainConnectionID(), wid);
+                if (rect_known && rect_equal(direct_value, rect)) {
+                    ++diagnostic->direct_tile_rect_matches;
                 }
             }
             release_object(result); release_object(operation);
@@ -226,12 +272,15 @@ int main(int argc, char **argv)
 
         struct wm_tile_membership_diagnostic diagnostic;
         if (!window_management_bridge_diagnose_tile_membership_readonly(&diagnostic)) return 3;
-        struct native_tile_extended_diagnostic extended;
-        diagnose_extended(&extended);
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         char build[256] = {0}; size_t build_size = sizeof(build); struct utsname system = {0};
         if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0 ||
             !memchr(build, '\0', sizeof(build)) || uname(&system) != 0) return 3;
+        bool exact_abi_build = version.majorVersion == 27 && version.minorVersion == 0 &&
+                               version.patchVersion == 1 && strcmp(build, "26A434") == 0 &&
+                               strcmp(system.machine, "arm64") == 0;
+        struct native_tile_extended_diagnostic extended;
+        diagnose_extended(&extended, exact_abi_build);
         struct native_tile_platform platform = {
             .os_major = (int)version.majorVersion,
             .os_minor = (int)version.minorVersion,

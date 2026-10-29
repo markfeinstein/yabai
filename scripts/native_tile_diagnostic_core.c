@@ -46,14 +46,17 @@ bool native_tile_diagnostic_write_json(FILE *stream,
         "\"capabilities\":{\"managed-space-topology\":\"%s\","
         "\"tile-space-membership\":\"%s\",\"metadata-verified\":%s,"
         "\"divider-directions\":%s,\"window-tile-rect\":%s,"
-        "\"can-create-tile\":%s},\"counts\":{"
+        "\"can-create-tile\":%s,\"direct-abi-verified\":%s},\"counts\":{"
         "\"managed-displays\":%u,\"managed-spaces\":%u,\"spaces-queried\":%u,"
         "\"tiled-parent-spaces\":%u,\"tile-spaces\":%u,\"failed-queries\":%u,"
         "\"divider-calls\":%u,\"divider-successes\":%u,"
         "\"divider-nonzero\":%u,\"divider-repeat-stable\":%u,"
         "\"tile-rect-calls\":%u,\"tile-rect-successes\":%u,"
         "\"tile-rect-nonempty\":%u,\"can-create-calls\":%u,"
-        "\"can-create-successes\":%u,\"can-create-true\":%u},"
+        "\"can-create-successes\":%u,\"can-create-true\":%u,"
+        "\"direct-divider-calls\":%u,\"direct-divider-matches\":%u,"
+        "\"direct-tile-rect-calls\":%u,\"direct-tile-rect-matches\":%u,"
+        "\"direct-can-create-calls\":%u,\"direct-can-create-matches\":%u},"
         "\"production-tile-commands\":false,\"redaction\":\"aggregate-only\"}\n",
         native_tile_status_string(diagnostic->status), platform->os_major, platform->os_minor,
         platform->os_patch, platform->build, platform->architecture,
@@ -63,6 +66,7 @@ bool native_tile_diagnostic_write_json(FILE *stream,
         extended->divider_available ? "true" : "false",
         extended->tile_rect_available ? "true" : "false",
         extended->can_create_available ? "true" : "false",
+        extended->direct_abi_verified ? "true" : "false",
         diagnostic->managed_display_count, diagnostic->managed_space_count,
         diagnostic->spaces_queried, diagnostic->tiled_parent_space_count,
         diagnostic->tile_space_count, diagnostic->failed_query_count,
@@ -70,6 +74,9 @@ bool native_tile_diagnostic_write_json(FILE *stream,
         extended->divider_nonzero, extended->divider_repeat_stable,
         extended->tile_rect_calls, extended->tile_rect_successes,
         extended->tile_rect_nonempty, extended->can_create_calls,
-        extended->can_create_successes, extended->can_create_true);
+        extended->can_create_successes, extended->can_create_true,
+        extended->direct_divider_calls, extended->direct_divider_matches,
+        extended->direct_tile_rect_calls, extended->direct_tile_rect_matches,
+        extended->direct_can_create_calls, extended->direct_can_create_matches);
     return written > 0 && fflush(stream) == 0 && !ferror(stream);
 }
