@@ -394,6 +394,9 @@ bool window_server_tag_corpus_serialize_comparison(
     size_t false_positive = 0, false_negative = 0;
     size_t ax_matched = 0, ax_unavailable = 0, ax_no_match = 0;
     size_t ax_inventory_error = 0, ax_role_error = 0;
+    size_t ax_no_match_on_screen = 0, ax_no_match_offscreen = 0;
+    size_t ax_inventory_error_on_screen = 0, ax_inventory_error_offscreen = 0;
+    size_t ax_role_error_on_screen = 0, ax_role_error_offscreen = 0;
     size_t unique_candidate_only = 0, unique_legacy_only = 0;
     size_t legacy_only_offscreen_ax_no_match = 0;
     size_t legacy_only_attribute_bit_2 = 0, legacy_only_unknown_tag_bits = 0;
@@ -408,9 +411,19 @@ bool window_server_tag_corpus_serialize_comparison(
         switch (comparison->windows[i].ax_observation) {
         case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_MATCHED: ++ax_matched; break;
         case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_UNAVAILABLE: ++ax_unavailable; break;
-        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH: ++ax_no_match; break;
-        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR: ++ax_inventory_error; break;
-        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR: ++ax_role_error; break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_NO_MATCH:
+            ++ax_no_match;
+            if (windows[i].on_screen) ++ax_no_match_on_screen; else ++ax_no_match_offscreen;
+            break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_INVENTORY_ERROR:
+            ++ax_inventory_error;
+            if (windows[i].on_screen) ++ax_inventory_error_on_screen;
+            else ++ax_inventory_error_offscreen;
+            break;
+        case WINDOW_SERVER_TAG_CORPUS_AX_OBSERVATION_ROLE_ERROR:
+            ++ax_role_error;
+            if (windows[i].on_screen) ++ax_role_error_on_screen; else ++ax_role_error_offscreen;
+            break;
         }
         bool disagreement = false;
         bool candidate_only[2] = { false, false };
@@ -521,7 +534,11 @@ bool window_server_tag_corpus_serialize_comparison(
                 "\"false_positive\":%zu,\"false_negative\":%zu,"
                 "\"ax_matched\":%zu,\"ax_unavailable\":%zu,"
                 "\"ax_no_match\":%zu,\"ax_inventory_error\":%zu,"
-                "\"ax_role_error\":%zu,"
+                "\"ax_role_error\":%zu,\"ax_profiles\":{"
+                "\"no_match_on_screen\":%zu,\"no_match_offscreen\":%zu,"
+                "\"inventory_error_on_screen\":%zu,"
+                "\"inventory_error_offscreen\":%zu,"
+                "\"role_error_on_screen\":%zu,\"role_error_offscreen\":%zu},"
                 "\"disagreement_profiles\":{\"unique_candidate_only\":%zu,"
                 "\"unique_legacy_only\":%zu,\"legacy_only_offscreen_ax_no_match\":%zu,"
                 "\"legacy_only_attribute_bit_2\":%zu,\"legacy_only_unknown_tag_bits\":%zu,"
@@ -536,6 +553,9 @@ bool window_server_tag_corpus_serialize_comparison(
                 labeled_count, unlabeled_disagreement, pending_disagreement,
                 adjudicated_disagreement, false_positive, false_negative,
                 ax_matched, ax_unavailable, ax_no_match, ax_inventory_error, ax_role_error,
+                ax_no_match_on_screen, ax_no_match_offscreen,
+                ax_inventory_error_on_screen, ax_inventory_error_offscreen,
+                ax_role_error_on_screen, ax_role_error_offscreen,
                 unique_candidate_only, unique_legacy_only, legacy_only_offscreen_ax_no_match,
                 legacy_only_attribute_bit_2, legacy_only_unknown_tag_bits,
                 legacy_only_include_minimized_only, candidate_only_on_screen_ax_corroborated,

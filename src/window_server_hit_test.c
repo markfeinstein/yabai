@@ -110,7 +110,9 @@ void window_server_hit_test_compare(const struct window_server_hit_test_request 
     }
     if (comparison->legacy.status == kCGErrorSuccess) {
         comparison->same_window = comparison->legacy.window_id == comparison->geometry.window_id;
-        comparison->same_owner = comparison->legacy.window_connection == comparison->geometry.window_connection;
+        comparison->same_owner = comparison->legacy.window_connection &&
+            comparison->geometry.window_connection &&
+            comparison->legacy.window_connection == comparison->geometry.window_connection;
         comparison->same_window_point = CGPointEqualToPoint(
             comparison->legacy.window_point, comparison->geometry.window_point);
     }

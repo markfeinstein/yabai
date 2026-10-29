@@ -219,6 +219,8 @@ TEST_FUNC(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled,
         TEST_CHECK([profiles[@"unique_candidate_only"] integerValue], 0L);
         TEST_CHECK([object[@"counts"][@"adjudicated_disagreement"] integerValue], 1L);
         TEST_CHECK([object[@"counts"][@"pending_disagreement"] integerValue], 0L);
+        TEST_CHECK([object[@"counts"][@"ax_profiles"][@"no_match_on_screen"] integerValue], 0L);
+        TEST_CHECK([object[@"counts"][@"ax_profiles"][@"no_match_offscreen"] integerValue], 1L);
     }
     free(output);
 

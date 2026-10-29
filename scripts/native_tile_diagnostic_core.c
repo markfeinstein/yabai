@@ -52,10 +52,18 @@ bool native_tile_diagnostic_write_json(FILE *stream,
         "\"divider-calls\":%u,\"divider-successes\":%u,"
         "\"divider-nonzero\":%u,\"divider-repeat-stable\":%u,"
         "\"tile-rect-calls\":%u,\"tile-rect-successes\":%u,"
-        "\"tile-rect-nonempty\":%u,\"can-create-calls\":%u,"
+        "\"tile-rect-nonempty\":%u,\"tile-rect-empty\":%u,"
+        "\"tile-rect-nonempty-layer-zero\":%u,"
+        "\"tile-rect-nonempty-layer-nonzero\":%u,"
+        "\"tile-rect-empty-layer-zero\":%u,"
+        "\"tile-rect-empty-layer-nonzero\":%u,"
+        "\"tile-rect-nonempty-matches-public-bounds\":%u,"
+        "\"tile-rect-empty-with-public-bounds\":%u,"
+        "\"can-create-calls\":%u,"
         "\"can-create-successes\":%u,\"can-create-true\":%u,"
         "\"direct-divider-calls\":%u,\"direct-divider-matches\":%u,"
         "\"direct-tile-rect-calls\":%u,\"direct-tile-rect-matches\":%u,"
+        "\"direct-tile-rect-empty-matches\":%u,"
         "\"direct-can-create-calls\":%u,\"direct-can-create-matches\":%u},"
         "\"production-tile-commands\":false,\"redaction\":\"aggregate-only\"}\n",
         native_tile_status_string(diagnostic->status), platform->os_major, platform->os_minor,
@@ -73,10 +81,18 @@ bool native_tile_diagnostic_write_json(FILE *stream,
         extended->divider_calls, extended->divider_successes,
         extended->divider_nonzero, extended->divider_repeat_stable,
         extended->tile_rect_calls, extended->tile_rect_successes,
-        extended->tile_rect_nonempty, extended->can_create_calls,
+        extended->tile_rect_nonempty, extended->tile_rect_empty,
+        extended->tile_rect_nonempty_layer_zero,
+        extended->tile_rect_nonempty_layer_nonzero,
+        extended->tile_rect_empty_layer_zero,
+        extended->tile_rect_empty_layer_nonzero,
+        extended->tile_rect_nonempty_matches_public_bounds,
+        extended->tile_rect_empty_with_public_bounds,
+        extended->can_create_calls,
         extended->can_create_successes, extended->can_create_true,
         extended->direct_divider_calls, extended->direct_divider_matches,
         extended->direct_tile_rect_calls, extended->direct_tile_rect_matches,
+        extended->direct_tile_rect_empty_matches,
         extended->direct_can_create_calls, extended->direct_can_create_matches);
     return written > 0 && fflush(stream) == 0 && !ferror(stream);
 }

@@ -1726,13 +1726,13 @@ TEST_FUNC(declarative_mode_messages_classify_typed_failures_without_spurious_rec
             TEST_CHECK(message.reservation != 0, cases[i].reconcile);
             TEST_CHECK(declarative_installed_selected_mode(), NULL);
             free(message.output);
+            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+            TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
             declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_OK;
             declarative_space_test_fail_allocation_at(0);
             declarative_space_test_set_admission(0, true);
             ops.query_sid_result = NULL;
             declarative_mode_space_window_list = saved_window_list;
-            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
-            TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
         }
     }
     declarative_mode_space_window_list = saved_window_list;
