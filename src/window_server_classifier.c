@@ -22,7 +22,8 @@ ws_window_classification_reason_descriptors[] = {
     { WS_REASON_OWNER_NOT_REGULAR, "owner_not_regular" },
     { WS_REASON_ATTRIBUTE_BIT_2, "attribute_bit_2" },
     { WS_REASON_IGNORE_SCREEN_SHARING, "ignore_for_screen_sharing" },
-    { WS_REASON_UNKNOWN_TAG_BITS, "unknown_tag_bits" }
+    { WS_REASON_UNKNOWN_TAG_BITS, "unknown_tag_bits" },
+    { WS_REASON_AX_UNAVAILABLE_CONSERVATIVE, "ax_unavailable_conservative" }
 };
 
 const size_t ws_window_classification_reason_descriptor_count =
@@ -149,14 +150,14 @@ struct ws_window_classification ws_classify_window_candidate(
                                  reasons | WS_REASON_AX_CORROBORATED);
     }
 
+    if (input->ax == WS_AX_UNAVAILABLE) reasons |= WS_REASON_AX_UNAVAILABLE_CONSERVATIVE;
     if (floating && !document) reasons |= WS_REASON_FLOATING_WITHOUT_AX;
     if (!ws_frame_is_positive(input->frame)) reasons |= WS_REASON_INVALID_FRAME;
     if (input->owner != WS_OWNER_REGULAR) reasons |= WS_REASON_OWNER_NOT_REGULAR;
     if (input->ax == WS_AX_UNAVAILABLE && document && !floating &&
         input->owner == WS_OWNER_REGULAR && input->level == input->normal_level &&
         ws_frame_is_positive(input->frame)) {
-        return ws_classification(WS_WINDOW_CLASS_MANAGEABLE,
-                                 reasons | WS_REASON_NO_AX_DOCUMENT);
+        reasons |= WS_REASON_NO_AX_DOCUMENT;
     }
     return ws_classification(WS_WINDOW_CLASS_UNCERTAIN, reasons);
 }
