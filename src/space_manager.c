@@ -424,7 +424,8 @@ static bool space_manager_apply_layout_transaction(struct space_manager *sm, str
 #else
         bool is_user_space = space_is_user(view->sid);
 #endif
-        if (view->uuid) {
+        /* WindowServer represents UUID-less Spaces as either NULL or an empty CFString. */
+        if (view->uuid && CFStringGetLength(view->uuid) > 0) {
             if (!CFStringGetCString(view->uuid, uuids[at], sizeof(uuids[at]), kCFStringEncodingUTF8) ||
                 !uuids[at][0]) {
                 valid = false;

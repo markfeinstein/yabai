@@ -555,6 +555,32 @@ TEST_FUNC(imperative_layout_transaction_exhausts_preparation_faults_without_publ
     space_manager_layout_fail_ordinal = 0;
 })
 
+TEST_FUNC(imperative_layout_transaction_synthesizes_identity_for_empty_uuid,
+{
+    struct test_ordered t;
+    bool initialized = test_ordered_init(&t);
+    TEST_CHECK(initialized, true);
+    if (!initialized) return result;
+
+    t.view->uuid = CFStringCreateCopy(NULL, CFSTR(""));
+    TEST_CHECK(t.view->uuid != NULL, true);
+    if (!t.view->uuid) {
+        test_ordered_free(&t);
+        return result;
+    }
+    TEST_CHECK(CFStringGetLength(t.view->uuid), 0L);
+
+    TEST_CHECK(space_manager_set_layout_for_view(&g_space_manager, t.view, VIEW_STACK), true);
+    TEST_CHECK(t.view->layout, VIEW_STACK);
+    TEST_CHECK(t.view->root->window_count, 2);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.a), t.view);
+    TEST_CHECK(window_manager_find_managed_window(&g_window_manager, &t.b), t.view);
+
+    test_ordered_free(&t);
+    TEST_CHECK(declarative_space_test_outstanding_allocations(), 0U);
+    TEST_CHECK(space_manager_layout_outstanding, 0U);
+})
+
 TEST_FUNC(imperative_float_layout_uses_no_external_inventory_and_removes_mappings,
 {
     struct test_ordered t;
