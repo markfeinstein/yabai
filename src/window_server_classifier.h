@@ -63,7 +63,8 @@ enum ws_window_classification_reason
     WS_REASON_OWNER_NOT_REGULAR       = UINT64_C(1) << 15,
     WS_REASON_ATTRIBUTE_BIT_2         = UINT64_C(1) << 16,
     WS_REASON_IGNORE_SCREEN_SHARING   = UINT64_C(1) << 17,
-    WS_REASON_UNKNOWN_TAG_BITS        = UINT64_C(1) << 18
+    WS_REASON_UNKNOWN_TAG_BITS        = UINT64_C(1) << 18,
+    WS_REASON_AX_UNAVAILABLE_CONSERVATIVE = UINT64_C(1) << 19
 };
 
 struct ws_legacy_eligibility_input
