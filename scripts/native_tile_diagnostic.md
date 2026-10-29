@@ -7,7 +7,7 @@ make native-tile-diagnostic
 bin/debug/native-tile-diagnostic
 ```
 
-Schema v2 reports managed displays/Spaces, membership, divider-direction stability, window tile-rect availability, can-create feasibility, failed queries, and ABI/capability status without IDs, application identity, titles, paths, or raw geometry. All calls are synchronous read operations with exact runtime method-encoding checks; production tile commands remain disabled.
+Schema v2 reports managed displays/Spaces, membership, divider-direction stability, window tile-rect availability, can-create feasibility, failed queries, and ABI/capability status without IDs, application identity, titles, paths, or raw geometry. Tile-rect aggregates distinguish empty/nonempty results, zero/nonzero public window layers, public-bounds availability, exact direct/bridge matches, and semantic empty-result matches. All calls are synchronous read operations with exact runtime method-encoding checks; production tile commands remain disabled.
 
 On macOS 27.0.1 build 26A434, arm64 disassembly also validates the direct read-only export shapes used for shadow correlation:
 
@@ -34,8 +34,10 @@ On the current restored dual-display topology, v2 additionally observed:
 - divider ABI verified; 20/20 successful calls, stable across 10 repeated Space pairs, all directions zero;
 - tile-rect ABI verified; 14/14 successful calls, 9 nonempty rects;
 - can-create ABI verified; 10/10 successful calls, all feasibility results false;
-- direct divider and can-create exports matched every bridged call; tile-rect matched all 8 nonempty bridged rects, while 2 empty-result rows remain unresolved.
+- direct divider and can-create exports matched every bridged call; tile-rect matched all nonempty bridged rects exactly.
 - membership remained 0 tiled parents / 0 tile Spaces with 0 failed queries.
+
+A follow-up single-display capture resolved the two apparent empty-row mismatches: all 8 nonempty tile rects matched direct and bridged calls exactly, while both remaining rows were semantically empty in both paths despite differing empty-rectangle representations. Both empty rows were nonzero-layer surfaces with nonempty public bounds. The 8 nonempty rows split evenly between zero/nonzero public layers, and none equaled its public CG window bounds. This explains the correlation mismatch but not what the private tile rect represents for ordinary non-tiled surfaces.
 
 The results are read-only evidence, not tile ownership semantics. Do not add mutation commands or production tile ownership from them.
 
