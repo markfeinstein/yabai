@@ -23,7 +23,11 @@ TEST_FUNC(native_tile_diagnostic_json_is_stable_aggregate_and_redacted,
         .divider_calls = 8, .divider_successes = 8,
         .divider_nonzero = 2, .divider_repeat_stable = 4,
         .tile_rect_calls = 12, .tile_rect_successes = 12, .tile_rect_nonempty = 2,
-        .can_create_calls = 4, .can_create_successes = 4, .can_create_true = 3
+        .can_create_calls = 4, .can_create_successes = 4, .can_create_true = 3,
+        .direct_abi_verified = true,
+        .direct_divider_calls = 4, .direct_divider_matches = 4,
+        .direct_tile_rect_calls = 12, .direct_tile_rect_matches = 12,
+        .direct_can_create_calls = 4, .direct_can_create_matches = 4
     };
     char *output = NULL; size_t length = 0;
     FILE *stream = open_memstream(&output, &length);
@@ -37,14 +41,17 @@ TEST_FUNC(native_tile_diagnostic_json_is_stable_aggregate_and_redacted,
         "\"capabilities\":{\"managed-space-topology\":\"available\","
         "\"tile-space-membership\":\"available\",\"metadata-verified\":true,"
         "\"divider-directions\":true,\"window-tile-rect\":true,"
-        "\"can-create-tile\":true},\"counts\":{"
+        "\"can-create-tile\":true,\"direct-abi-verified\":true},\"counts\":{"
         "\"managed-displays\":1,\"managed-spaces\":4,\"spaces-queried\":4,"
         "\"tiled-parent-spaces\":1,\"tile-spaces\":2,\"failed-queries\":0,"
         "\"divider-calls\":8,\"divider-successes\":8,\"divider-nonzero\":2,"
         "\"divider-repeat-stable\":4,\"tile-rect-calls\":12,"
         "\"tile-rect-successes\":12,\"tile-rect-nonempty\":2,"
         "\"can-create-calls\":4,\"can-create-successes\":4,"
-        "\"can-create-true\":3},\"production-tile-commands\":false,"
+        "\"can-create-true\":3,\"direct-divider-calls\":4,"
+        "\"direct-divider-matches\":4,\"direct-tile-rect-calls\":12,"
+        "\"direct-tile-rect-matches\":12,\"direct-can-create-calls\":4,"
+        "\"direct-can-create-matches\":4},\"production-tile-commands\":false,"
         "\"redaction\":\"aggregate-only\"}\n";
     TEST_CHECK(length, sizeof(expected) - 1);
     TEST_CHECK(strcmp(output, expected), 0);

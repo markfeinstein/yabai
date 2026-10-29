@@ -19,6 +19,12 @@ static const char *native_tab_event_name(enum native_tab_event_type type)
     case NATIVE_TAB_EVENT_AX_DEMINIMIZED: return "ax-deminiaturized";
     case NATIVE_TAB_EVENT_AX_FOCUSED: return "ax-focused";
     case NATIVE_TAB_EVENT_AX_FOCUS_STABLE: return "ax-focus-stable";
+    case NATIVE_TAB_EVENT_CONTROL_CLOSE: return "control-close";
+    case NATIVE_TAB_EVENT_CONTROL_MINIMIZE: return "control-minimize";
+    case NATIVE_TAB_EVENT_CONTROL_RESTORE: return "control-restore";
+    case NATIVE_TAB_EVENT_CONTROL_HIDE: return "control-hide";
+    case NATIVE_TAB_EVENT_CONTROL_UNHIDE: return "control-unhide";
+    case NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE: return "control-space-change";
     case NATIVE_TAB_EVENT_APP_HIDDEN: return "app-hidden";
     case NATIVE_TAB_EVENT_APP_VISIBLE: return "app-visible";
     case NATIVE_TAB_EVENT_APP_TERMINATED: return "app-terminated";
@@ -527,11 +533,13 @@ bool native_tab_recorder_init(struct native_tab_recorder *recorder, FILE *stream
         "\"poll_ms\":100,\"hard_ms\":1000,\"action_separation_ms\":600,"
         "\"episode_capacity\":8,\"pair_capacity\":64,"
         "\"inventory_capacity\":256,\"ax_available\":%s,"
-        "\"production_identity_mutation\":false}\n",
+        "\"control_events_available\":%s,\"production_identity_mutation\":false}\n",
         recorder->scenario, recorder->fixture_token, recorder->batch_id, recorder->direction,
         recorder->expectation, recorder->planned_repeat,
         metadata->os_version, metadata->os_build, metadata->architecture,
-        metadata->ax_available ? "true" : "false") < 0 || fflush(stream) != 0) return false;
+        metadata->ax_available ? "true" : "false",
+        metadata->control_events_available ? "true" : "false") < 0 ||
+        fflush(stream) != 0) return false;
     return true;
 }
 
@@ -667,6 +675,33 @@ static bool native_tab_event_payload_valid(const struct native_tab_event *event)
     return event->payload_valid || event->sls_code == 0;
 }
 
+static const char *native_tab_event_source(enum native_tab_event_type type)
+{
+    switch (type) {
+    case NATIVE_TAB_EVENT_SLS_VISIBLE:
+    case NATIVE_TAB_EVENT_SLS_INVISIBLE:
+    case NATIVE_TAB_EVENT_SLS_DESTROYED: return "sls";
+    case NATIVE_TAB_EVENT_AX_CREATED:
+    case NATIVE_TAB_EVENT_AX_DESTROYED:
+    case NATIVE_TAB_EVENT_AX_MINIMIZED:
+    case NATIVE_TAB_EVENT_AX_DEMINIMIZED:
+    case NATIVE_TAB_EVENT_AX_FOCUSED:
+    case NATIVE_TAB_EVENT_AX_FOCUS_STABLE: return "ax";
+    case NATIVE_TAB_EVENT_CONTROL_CLOSE:
+    case NATIVE_TAB_EVENT_CONTROL_MINIMIZE:
+    case NATIVE_TAB_EVENT_CONTROL_RESTORE:
+    case NATIVE_TAB_EVENT_CONTROL_HIDE:
+    case NATIVE_TAB_EVENT_CONTROL_UNHIDE:
+    case NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE: return "control";
+    case NATIVE_TAB_EVENT_APP_HIDDEN:
+    case NATIVE_TAB_EVENT_APP_VISIBLE:
+    case NATIVE_TAB_EVENT_APP_TERMINATED: return "workspace";
+    case NATIVE_TAB_EVENT_SPACE_CHANGED: return "space";
+    case NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER: return "mission-control";
+    }
+    return "unknown";
+}
+
 static const char *native_tab_event_readback_disposition(const struct native_tab_event *event)
 {
     if (event->type != NATIVE_TAB_EVENT_SLS_VISIBLE &&
@@ -685,13 +720,13 @@ static bool native_tab_write_event(struct native_tab_recorder *recorder,
         "{\"schema\":\"yabai.native-tab-event-trace/v2\",\"redaction\":\"strict-v1\","
         "\"type\":\"event\",\"seq\":%llu,\"elapsed_ms\":%llu,"
         "\"scenario\":\"%s\",\"episode_id\":%u,"
-        "\"event\":\"%s\",\"window_ordinal\":",
+        "\"source\":\"%s\",\"event\":\"%s\",\"window_ordinal\":",
         (unsigned long long) recorder->sequence,
         (unsigned long long) native_tab_elapsed_ms(recorder, event->time_ns),
         recorder->scenario,
         recorder->episode.state == NATIVE_TAB_EPISODE_COLLECTING
             ? recorder->episode.episode_id : 0,
-        native_tab_event_name(event->type)) < 0 ||
+        native_tab_event_source(event->type), native_tab_event_name(event->type)) < 0 ||
         !native_tab_write_window_ordinal(recorder, event->window_id)) return false;
     if (fputs(",\"ordered_in\":", recorder->stream) == EOF ||
         !native_tab_write_nullable_bool(recorder->stream, event->ordered_in_known,
@@ -699,11 +734,12 @@ static bool native_tab_write_event(struct native_tab_recorder *recorder,
         fprintf(recorder->stream,
                 ",\"sls_code\":%u,\"payload_length\":%u,\"payload_valid\":%s,"
                 "\"delivered_index\":%u,\"duplicate\":%s,"
-                "\"readback_disposition\":\"%s\","
+                "\"control_correlated\":%s,\"readback_disposition\":\"%s\","
                 "\"subscription_generation\":%u,",
                 event->sls_code, event->payload_length,
                 native_tab_event_payload_valid(event) ? "true" : "false", event->delivered_index,
                 event->duplicate ? "true" : "false",
+                event->control_correlated ? "true" : "false",
                 native_tab_event_readback_disposition(event),
                 event->subscription_generation) < 0 ||
         fputs("\"subscribed_before_delivery\":", recorder->stream) == EOF ||
@@ -728,9 +764,45 @@ static bool native_tab_write_event(struct native_tab_recorder *recorder,
     return native_tab_finish_record(recorder);
 }
 
-bool native_tab_recorder_event(struct native_tab_recorder *recorder,
-                               const struct native_tab_event *event)
+static bool native_tab_control_correlates(const struct native_tab_recorder *recorder,
+                                          const struct native_tab_event *event)
 {
+    if (!recorder->last_control_event_ns || event->time_ns < recorder->last_control_event_ns ||
+        event->time_ns - recorder->last_control_event_ns > NATIVE_TAB_ACTION_SEPARATION_NS) {
+        return false;
+    }
+    switch (recorder->last_control_event) {
+    case NATIVE_TAB_EVENT_CONTROL_CLOSE:
+        return event->type == NATIVE_TAB_EVENT_AX_DESTROYED ||
+               event->type == NATIVE_TAB_EVENT_SLS_DESTROYED;
+    case NATIVE_TAB_EVENT_CONTROL_MINIMIZE:
+        return event->type == NATIVE_TAB_EVENT_AX_MINIMIZED;
+    case NATIVE_TAB_EVENT_CONTROL_RESTORE:
+        return event->type == NATIVE_TAB_EVENT_AX_DEMINIMIZED;
+    case NATIVE_TAB_EVENT_CONTROL_HIDE:
+        return event->type == NATIVE_TAB_EVENT_APP_HIDDEN;
+    case NATIVE_TAB_EVENT_CONTROL_UNHIDE:
+        return event->type == NATIVE_TAB_EVENT_APP_VISIBLE;
+    case NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE:
+        return event->type == NATIVE_TAB_EVENT_SPACE_CHANGED;
+    default:
+        return false;
+    }
+}
+
+static bool native_tab_is_control_event(enum native_tab_event_type type)
+{
+    return type >= NATIVE_TAB_EVENT_CONTROL_CLOSE &&
+           type <= NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE;
+}
+
+bool native_tab_recorder_event(struct native_tab_recorder *recorder,
+                               const struct native_tab_event *input_event)
+{
+    if (!input_event) return false;
+    struct native_tab_event adjusted = *input_event;
+    adjusted.control_correlated = native_tab_control_correlates(recorder, &adjusted);
+    const struct native_tab_event *event = &adjusted;
     if (!recorder || !recorder->initialized || recorder->stopped || !event ||
         !native_tab_flush_expired_before_event(recorder, event->time_ns)) return false;
     if (event->has_fact) native_tab_record_fact(recorder, &event->fact);
@@ -741,19 +813,30 @@ bool native_tab_recorder_event(struct native_tab_recorder *recorder,
     for (size_t i = 0; i < sizeof(related) / sizeof(*related); ++i) {
         if (related[i]) (void) native_tab_ordinal_entry(recorder, related[i], true);
     }
+    if (native_tab_is_control_event(event->type)) {
+        recorder->last_control_event = event->type;
+        recorder->last_control_event_ns = event->time_ns;
+    }
 
-    bool causal = event->type == NATIVE_TAB_EVENT_SLS_VISIBLE ||
+    bool causal = !event->control_correlated &&
+                  (event->type == NATIVE_TAB_EVENT_SLS_VISIBLE ||
                   event->type == NATIVE_TAB_EVENT_SLS_INVISIBLE ||
                   event->type == NATIVE_TAB_EVENT_SLS_DESTROYED ||
                   event->type == NATIVE_TAB_EVENT_AX_CREATED ||
                   event->type == NATIVE_TAB_EVENT_AX_DESTROYED ||
                   event->type == NATIVE_TAB_EVENT_AX_MINIMIZED ||
                   event->type == NATIVE_TAB_EVENT_AX_DEMINIMIZED ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_CLOSE ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_MINIMIZE ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_RESTORE ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_HIDE ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_UNHIDE ||
+                  event->type == NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE ||
                   event->type == NATIVE_TAB_EVENT_APP_HIDDEN ||
                   event->type == NATIVE_TAB_EVENT_APP_VISIBLE ||
                   event->type == NATIVE_TAB_EVENT_APP_TERMINATED ||
                   event->type == NATIVE_TAB_EVENT_SPACE_CHANGED ||
-                  event->type == NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER;
+                  event->type == NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER);
     if (causal) {
         native_tab_episode_begin(recorder, event->time_ns);
         recorder->episode.last_event_ns = event->time_ns;
@@ -811,6 +894,7 @@ bool native_tab_recorder_event(struct native_tab_recorder *recorder,
     }
 
     if (!native_tab_write_event(recorder, event)) return false;
+    if (event->control_correlated) return native_tab_capacity_check(recorder, event->time_ns);
 
     switch (event->type) {
     case NATIVE_TAB_EVENT_SLS_DESTROYED:
@@ -830,6 +914,42 @@ bool native_tab_recorder_event(struct native_tab_recorder *recorder,
         break;
     case NATIVE_TAB_EVENT_AX_DEMINIMIZED:
         recorder->episode.lifecycle_exclusions |= NATIVE_TAB_EXCLUSION_DEMINIMIZE;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_CLOSE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_AX_DESTROYED;
+        ++recorder->control_marker_count;
+        ++recorder->control_close_count;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_MINIMIZE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_MINIMIZE;
+        ++recorder->control_marker_count;
+        ++recorder->control_minimize_count;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_RESTORE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_DEMINIMIZE;
+        ++recorder->control_marker_count;
+        ++recorder->control_restore_count;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_HIDE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_APP_HIDE;
+        ++recorder->control_marker_count;
+        ++recorder->control_hide_count;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_UNHIDE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_APP_UNHIDE;
+        ++recorder->control_marker_count;
+        ++recorder->control_unhide_count;
+        break;
+    case NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE:
+        recorder->episode.lifecycle_exclusions |=
+            NATIVE_TAB_EXCLUSION_CONTROL_MARKER | NATIVE_TAB_EXCLUSION_SPACE_CHANGE;
+        ++recorder->control_marker_count;
+        ++recorder->control_space_change_count;
         break;
     case NATIVE_TAB_EVENT_APP_HIDDEN:
         recorder->episode.lifecycle_exclusions |= NATIVE_TAB_EXCLUSION_APP_HIDE;
@@ -892,12 +1012,20 @@ bool native_tab_recorder_stop(struct native_tab_recorder *recorder, uint64_t now
         "\"type\":\"summary\",\"seq\":%llu,\"elapsed_ms\":%llu,"
         "\"scenario\":\"%s\",\"resolutions\":%u,\"gate_eligible\":%u,"
         "\"inventory_incomplete\":%u,\"dropped_records\":%u,"
-        "\"sls_815_delivered\":%u,\"sls_816_delivered\":%u,"
+        "\"control_markers\":%u,\"control_close\":%u,"
+        "\"control_minimize\":%u,\"control_restore\":%u,"
+        "\"control_hide\":%u,\"control_unhide\":%u,"
+        "\"control_space_change\":%u,\"sls_815_delivered\":%u,"
+        "\"sls_816_delivered\":%u,"
         "\"production_identity_mutation\":false}\n",
         (unsigned long long) recorder->sequence,
         (unsigned long long) native_tab_elapsed_ms(recorder, now_ns), recorder->scenario,
         recorder->resolution_count, recorder->gate_eligible_count,
         recorder->incomplete_count, recorder->dropped_count,
+        recorder->control_marker_count,
+        recorder->control_close_count, recorder->control_minimize_count,
+        recorder->control_restore_count, recorder->control_hide_count,
+        recorder->control_unhide_count, recorder->control_space_change_count,
         recorder->session_815.delivered, recorder->session_816.delivered);
     int summary_flush = fflush(recorder->stream);
     if (summary_written < 0 || summary_flush != 0) return false;

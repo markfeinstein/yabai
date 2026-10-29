@@ -123,7 +123,7 @@ Comparison headers retain aggregate class, comparison, false-positive/negative, 
 - AX classifier status and separate observation status;
 - redacted owner, parent, title, frame, level, tag, and attribute categories.
 
-AX inventory and role read failures are classified conservatively as unavailable for the candidate rather than being conflated with a successful no-match.
+AX inventory and role read failures are classified conservatively as unavailable for the candidate rather than being conflated with a successful no-match. Forced-unavailable evidence on 27.0.1 showed that root dialogs and inactive native tabs can be indistinguishable from ordinary documents using the current WindowServer facts. The candidate therefore keeps all untracked AX-unavailable documents `uncertain`; only already-tracked windows retain manageable status. `no_ax_document` remains a diagnostic phenotype and is accompanied by `ax_unavailable_conservative`.
 
 ## Offline evidence gate
 
@@ -152,4 +152,4 @@ A gate pass is evidence for a later review; it does not enable the classifier. A
 
 ## Current external blockers
 
-The current host is macOS 27.0.1 with one internal display. No suitable macOS 26.6 or 27.2 VM is installed, and no self-hosted live-integration runner is registered. Do not create or download a VM merely to satisfy this matrix.
+The current host is macOS 27.0.1; the external display used for the earlier dual-display rows is not currently connected. No suitable macOS 26.6 or 27.2 VM is installed, and no self-hosted live-integration runner is registered. Do not create or download a VM merely to satisfy this matrix.

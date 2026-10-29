@@ -25,6 +25,7 @@ TEST_FUNC(window_server_classifier_ordered_decision_table_is_conservative,
     TEST_CHECK(classification.reasons & WS_REASON_AX_CORROBORATED, WS_REASON_AX_CORROBORATED);
 
     input = ws_classifier_test_base(); input.tracked = true; input.valid_fields = 0;
+    input.ax = WS_AX_UNAVAILABLE;
     classification = ws_classify_window_candidate(&input);
     TEST_CHECK(classification.window_class, WS_WINDOW_CLASS_MANAGEABLE);
     TEST_CHECK(classification.reasons & WS_REASON_TRACKED_PRESERVED, WS_REASON_TRACKED_PRESERVED);
@@ -80,8 +81,10 @@ TEST_FUNC(window_server_classifier_ordered_decision_table_is_conservative,
 
     input = ws_classifier_test_base(); input.ax = WS_AX_UNAVAILABLE;
     classification = ws_classify_window_candidate(&input);
-    TEST_CHECK(classification.window_class, WS_WINDOW_CLASS_MANAGEABLE);
+    TEST_CHECK(classification.window_class, WS_WINDOW_CLASS_UNCERTAIN);
     TEST_CHECK(classification.reasons & WS_REASON_NO_AX_DOCUMENT, WS_REASON_NO_AX_DOCUMENT);
+    TEST_CHECK(classification.reasons & WS_REASON_AX_UNAVAILABLE_CONSERVATIVE,
+               WS_REASON_AX_UNAVAILABLE_CONSERVATIVE);
 
     input = ws_classifier_test_base(); input.ax = WS_AX_UNAVAILABLE;
     input.tags = WINDOW_SERVER_TAG_FLOATING; input.level = input.floating_level;
