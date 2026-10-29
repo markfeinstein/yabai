@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -29,6 +31,7 @@ struct native_tab_tool
     CFMutableSetRef observed_ax_windows;
     id workspace_tokens[4];
     CFRunLoopTimerRef timer;
+    FILE *control_events;
     struct {
         uint32_t window_id;
         uint32_t generation;
@@ -557,11 +560,46 @@ static void native_tab_setup_workspace(struct native_tab_tool *tool)
         }];
 }
 
+static bool native_tab_control_event_type(const char *line,
+                                          enum native_tab_event_type *type)
+{
+    if (!strcmp(line, "close")) *type = NATIVE_TAB_EVENT_CONTROL_CLOSE;
+    else if (!strcmp(line, "minimize")) *type = NATIVE_TAB_EVENT_CONTROL_MINIMIZE;
+    else if (!strcmp(line, "restore")) *type = NATIVE_TAB_EVENT_CONTROL_RESTORE;
+    else if (!strcmp(line, "hide")) *type = NATIVE_TAB_EVENT_CONTROL_HIDE;
+    else if (!strcmp(line, "unhide")) *type = NATIVE_TAB_EVENT_CONTROL_UNHIDE;
+    else if (!strcmp(line, "space-change")) *type = NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE;
+    else return false;
+    return true;
+}
+
+static bool native_tab_poll_control_events(struct native_tab_tool *tool)
+{
+    if (!tool->control_events) return true;
+    clearerr(tool->control_events);
+    char line[64];
+    while (fgets(line, sizeof(line), tool->control_events)) {
+        size_t length = strlen(line);
+        if (!length || line[length - 1] != '\n') return false;
+        line[--length] = '\0';
+        if (length && line[length - 1] == '\r') line[--length] = '\0';
+        enum native_tab_event_type type;
+        if (!native_tab_control_event_type(line, &type) ||
+            !native_tab_emit_event(tool, type, 0, false, false, NULL, true)) return false;
+    }
+    return !ferror(tool->control_events);
+}
+
 static void native_tab_timer(CFRunLoopTimerRef timer, void *context)
 {
     (void) timer;
     struct native_tab_tool *tool = context;
     if (!tool || tool->stopping) return;
+    if (!native_tab_poll_control_events(tool)) {
+        tool->success = false;
+        native_tab_stop(tool);
+        return;
+    }
     uint64_t now_ns = native_tab_now_ns();
     if (native_tab_recorder_hard_due(&tool->recorder, now_ns)) {
         struct native_tab_inventory inventory;
@@ -601,6 +639,27 @@ static void native_tab_cleanup(struct native_tab_tool *tool)
     }
     if (tool->observed_ax_windows) CFRelease(tool->observed_ax_windows);
     if (tool->application) CFRelease(tool->application);
+    if (tool->control_events) fclose(tool->control_events);
+}
+
+static bool native_tab_open_control_events(const char *path, FILE **stream)
+{
+    if (!path || !stream) return false;
+    *stream = NULL;
+    struct stat before;
+    if (lstat(path, &before) != 0 || !S_ISREG(before.st_mode) ||
+        before.st_uid != getuid() || (before.st_mode & 0777) != 0600) return false;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return false;
+    struct stat after;
+    if (fstat(fd, &after) != 0 || before.st_dev != after.st_dev ||
+        before.st_ino != after.st_ino || before.st_nlink != 1) {
+        close(fd); return false;
+    }
+    FILE *result = fdopen(fd, "r");
+    if (!result) { close(fd); return false; }
+    *stream = result;
+    return true;
 }
 
 static bool native_tab_parse_positive(const char *text, long minimum, long maximum, long *value)
@@ -617,7 +676,7 @@ static void native_tab_usage(const char *program)
     fprintf(stderr,
             "usage: %s --pid PID --scenario NAME --fixture-token TOKEN --batch ID "
             "--repeat 1..5 --direction TOKEN --expectation candidate|negative-control "
-            "--duration SECONDS --output PATH\n", program);
+            "--duration SECONDS --output PATH [--control-events PATH]\n", program);
 }
 
 int main(int argc, char **argv)
@@ -626,6 +685,7 @@ int main(int argc, char **argv)
         long pid_value = 0, duration = 0, planned_repeat = 0;
         const char *scenario = NULL, *output = NULL, *fixture_token = NULL;
         const char *batch_id = NULL, *direction = NULL, *expectation = NULL;
+        const char *control_events_path = NULL;
         for (int i = 1; i < argc; ++i) {
             if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
                 if (!native_tab_parse_positive(argv[++i], 2, INT_MAX, &pid_value)) return EXIT_FAILURE;
@@ -645,6 +705,8 @@ int main(int argc, char **argv)
                 if (!native_tab_parse_positive(argv[++i], 1, 600, &duration)) return EXIT_FAILURE;
             } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
                 output = argv[++i];
+            } else if (strcmp(argv[i], "--control-events") == 0 && i + 1 < argc) {
+                control_events_path = argv[++i];
             } else {
                 native_tab_usage(argv[0]);
                 return EXIT_FAILURE;
@@ -680,6 +742,12 @@ int main(int argc, char **argv)
         };
         tool->stop_ns = tool->start_ns + (uint64_t) duration * UINT64_C(1000000000);
         tool->next_poll_ns = tool->start_ns + NATIVE_TAB_SETTLE_DELAY_NS;
+        if (control_events_path &&
+            !native_tab_open_control_events(control_events_path, &tool->control_events)) {
+            native_tab_trace_close(stream, output, false);
+            free(tool);
+            return EXIT_FAILURE;
+        }
         if (!native_tab_setup_ax(tool)) tool->success = false;
 
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
@@ -694,7 +762,8 @@ int main(int argc, char **argv)
             .architecture = system.machine, .fixture_token = fixture_token,
             .batch_id = batch_id, .direction = direction,
             .expectation = expectation, .planned_repeat = (unsigned)planned_repeat,
-            .ax_available = tool->ax_available
+            .ax_available = tool->ax_available,
+            .control_events_available = tool->control_events != NULL
         };
         tool->success &= native_tab_recorder_init(&tool->recorder, stream, scenario,
                                                   tool->start_ns, &metadata);

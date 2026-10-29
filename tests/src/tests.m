@@ -2908,6 +2908,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(native_tab_event_recorder_pairs_both_switch_event_orders_without_identity_decision) \
     TEST_ENTRY(native_tab_event_recorder_separates_quiescent_inventory_episodes_and_tracks_reappearance) \
     TEST_ENTRY(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle_explanations) \
+    TEST_ENTRY(native_tab_event_recorder_correlates_observed_lifecycle_with_control_marker) \
     TEST_ENTRY(native_tab_event_recorder_enforces_deadlines_stale_events_capacity_and_stop) \
     TEST_ENTRY(native_tab_event_recorder_marks_incomplete_inventory_and_secures_output) \
     TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \

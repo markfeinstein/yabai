@@ -20,6 +20,27 @@ bin/debug/native-tab-event-recorder \
 
 The output path must not exist. The recorder creates it with mode `0600`, rejects symlinks and existing paths, and removes partial output on failure. Keep traces outside repositories and delete them after analysis.
 
+## Controlled action markers
+
+Negative-control fixtures can append acknowledged actions to a pre-created private file:
+
+```sh
+control=$(mktemp "${TMPDIR:-/tmp}/native-tab-actions.XXXXXX")
+chmod 0600 "$control"
+bin/debug/native-tab-event-recorder ... --control-events "$control"
+```
+
+After the fixture has actually completed an action, append exactly one of:
+
+- `close`
+- `minimize`
+- `restore`
+- `hide`
+- `unhide`
+- `space-change`
+
+Markers are polled read-only, serialized with `source:"control"`, and set lifecycle exclusions. A planned action is not enough: the fixture must append only after the operation returns. The five-repeat negative-control gate now requires at least one acknowledged marker per trace, preventing missing AX/SLS callbacks from being mistaken for an unmarked success.
+
 ## Permission policy
 
 The recorder checks existing Accessibility trust with `AXIsProcessTrusted()`. It never uses the prompting API. If Accessibility is not already trusted, it records `ax_available:false` and continues with reduced evidence. Do not grant permissions merely to run the tool.
@@ -104,3 +125,13 @@ The exact tuple is OS build, architecture, fixture token, scenario, direction, e
 Use `--expectation negative-control` for close, minimize/restore, hide/unhide, and Space-transition batches. Those pass only when all five repetitions remain excluded and never become gate-eligible.
 
 Even a gate pass authorizes only a later reviewed matcher proposal. Repeat the focused corpus on macOS 27.2 before proposing production identity mutation.
+
+## Current controlled negative evidence
+
+On macOS 27.0.1, planned independent five-repeat batches passed for:
+
+- close: 5/5, one acknowledged close marker and one lifecycle-excluded episode per trace;
+- minimize/restore: 5/5, acknowledged minimize and restore markers with two separated excluded episodes per trace;
+- hide/unhide: 5/5, acknowledged hide and unhide markers with two separated excluded episodes per trace.
+
+The marker requirement closes the earlier ambiguity where missing AX/SLS callbacks made ordinary close look like an unexplained disappearance. Inventory remains authoritative, observed callbacks remain visible, and markers only exclude a fixture action after the fixture reports that the operation returned.

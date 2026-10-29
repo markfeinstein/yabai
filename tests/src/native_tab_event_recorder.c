@@ -240,7 +240,10 @@ TEST_FUNC(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle
         NATIVE_TAB_EVENT_AX_MINIMIZED, NATIVE_TAB_EVENT_AX_DEMINIMIZED,
         NATIVE_TAB_EVENT_APP_HIDDEN, NATIVE_TAB_EVENT_APP_VISIBLE,
         NATIVE_TAB_EVENT_APP_TERMINATED, NATIVE_TAB_EVENT_SPACE_CHANGED,
-        NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER
+        NATIVE_TAB_EVENT_MISSION_CONTROL_ENTER, NATIVE_TAB_EVENT_CONTROL_CLOSE,
+        NATIVE_TAB_EVENT_CONTROL_MINIMIZE, NATIVE_TAB_EVENT_CONTROL_RESTORE,
+        NATIVE_TAB_EVENT_CONTROL_HIDE, NATIVE_TAB_EVENT_CONTROL_UNHIDE,
+        NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE
     };
     struct native_tab_inventory one_old = native_tab_test_inventory(old_facts, 1, true);
     struct native_tab_inventory one_new = native_tab_test_inventory(new_facts, 1, true);
@@ -255,8 +258,41 @@ TEST_FUNC(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle
         TEST_CHECK(native_tab_test_end(&trace, UINT64_C(1300000000)), true);
         TEST_CHECK(strstr(trace.output, "\"outcome\":\"lifecycle-excluded\"") != NULL, true);
         TEST_CHECK(strstr(trace.output, "\"gate_eligible\":false") != NULL, true);
+        if (exclusions[i] >= NATIVE_TAB_EVENT_CONTROL_CLOSE &&
+            exclusions[i] <= NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE) {
+            TEST_CHECK(strstr(trace.output, "\"source\":\"control\"") != NULL, true);
+            TEST_CHECK(trace.recorder.control_marker_count, 1U);
+        }
         free(trace.output);
     }
+})
+
+TEST_FUNC(native_tab_event_recorder_correlates_observed_lifecycle_with_control_marker,
+{
+    struct native_tab_window_fact fact = native_tab_test_fact(
+        799001, 0, 9, 1, 0, 0, 100, 100, 0);
+    struct native_tab_inventory baseline = native_tab_test_inventory(&fact, 1, true);
+    struct native_tab_test_trace trace;
+    TEST_CHECK(native_tab_test_begin(&trace, "control-correlation"), true);
+    TEST_CHECK(native_tab_recorder_baseline(&trace.recorder, trace.start, &baseline), true);
+    uint64_t action = trace.start + NATIVE_TAB_ACTION_SEPARATION_NS;
+    struct native_tab_event marker = {
+        .type = NATIVE_TAB_EVENT_CONTROL_HIDE, .time_ns = action
+    };
+    struct native_tab_event observed = {
+        .type = NATIVE_TAB_EVENT_APP_HIDDEN,
+        .time_ns = action + UINT64_C(100000000)
+    };
+    TEST_CHECK(native_tab_recorder_event(&trace.recorder, &marker), true);
+    TEST_CHECK(native_tab_recorder_event(&trace.recorder, &observed), true);
+    TEST_CHECK(native_tab_recorder_inventory(&trace.recorder,
+        action + NATIVE_TAB_ACTION_SEPARATION_NS, &baseline), true);
+    TEST_CHECK(native_tab_test_end(&trace, UINT64_C(1300000000)), true);
+    TEST_CHECK(native_tab_test_count(trace.output, "\"source\":\"control\""), 1U);
+    TEST_CHECK(native_tab_test_count(trace.output, "\"control_correlated\":true"), 1U);
+    TEST_CHECK(native_tab_test_count(trace.output, "\"outcome\":\"lifecycle-excluded\""), 1U);
+    TEST_CHECK(trace.recorder.control_hide_count, 1U);
+    free(trace.output);
 })
 
 TEST_FUNC(native_tab_event_recorder_enforces_deadlines_stale_events_capacity_and_stop,
