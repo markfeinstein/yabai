@@ -33,6 +33,20 @@ bin/debug/window-server-geometry-probe \
   --fixture-revision manual-v1
 ```
 
+For controlled external-process fixtures, pass a private mode-0600 manifest. It may correlate a raw window ID, owner PID, or both to a safe kind token:
+
+```json
+{
+  "schema": "yabai.window-server-geometry-fixtures/v1",
+  "entries": [
+    {"owner_pid": 123, "kind": "popover-surface"},
+    {"window_id": 456, "kind": "overlap-front"}
+  ]
+}
+```
+
+Use `--fixture-manifest PATH`; the path must be a stable regular file owned by the current user, must not be a symlink, and must have mode 0600. Raw correlation values are never serialized. This permits menu, popover, click-through, and separate-process child surfaces to retain a controlled label even when WindowServer returns an associated surface rather than the AppKit top-level ID.
+
 Output omits raw window IDs, connection IDs, PIDs, application identity, titles, paths, display IDs/UUIDs, and absolute coordinates. It records controlled fixture/point roles, redacted result kinds, fractional-to-signed-integer truncation delta, display count/scale, statuses, relationship evidence, bounds/local-point checks, filtered-call results, timing, and provenance.
 
 ## Relationship taxonomy
@@ -58,7 +72,7 @@ On macOS 27.0.1 build 26A434, read-only arm64 disassembly established the shared
 
 With only the internal 2× display active, ten controlled points selected the same WindowServer surface in both APIs. After connecting an external 2× fixed-60 Hz main display beside the built-in 120 Hz display, the same corpus produced six same-window points and four stable different-owner overlaps; those four disagreed in all 100 repetitions. This confirms that mode-0/mode-1 semantics depend on exact stacking and multi-display surface composition rather than timing noise.
 
-The deployed highlight remained click-through in the separate highlight acceptance probe. A real animation proxy or insertion-feedback fixture was not available. Removed external border software is not a supported fixture.
+The deployed highlight remained click-through in the separate highlight acceptance probe. Additional separate-process opaque-overlap and click-through-overlay attempts selected the same surface in both APIs for 200/200 repetitions under the tested stacking. Automated menu/popover lifetime control was not stable enough to claim a semantic row; the private manifest support now permits a future controlled host to label those associated surfaces without exposing raw correlation values. A real animation proxy or insertion-feedback fixture was not available. Removed external border software is not a supported fixture.
 
 ## Remaining gates
 

@@ -1,8 +1,11 @@
 #import <AppKit/AppKit.h>
 
+#include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -15,12 +18,13 @@
 struct fixture_entry
 {
     uint32_t window_id;
+    pid_t owner_pid;
     const char *kind;
 };
 
 struct fixture_manifest
 {
-    struct fixture_entry entries[16];
+    struct fixture_entry entries[32];
     size_t count;
     uint32_t highlight_id;
 };
@@ -202,9 +206,17 @@ static const char *fixture_kind(const struct fixture_manifest *manifest, uint32_
             if (![value isKindOfClass:[NSDictionary class]]) continue;
             NSNumber *number = value[(NSString *)kCGWindowNumber];
             NSNumber *owner = value[(NSString *)kCGWindowOwnerPID];
-            if ([number isKindOfClass:[NSNumber class]] &&
-                [owner isKindOfClass:[NSNumber class]] &&
-                number.unsignedIntValue == wid && owner.intValue == getpid()) {
+            if (![number isKindOfClass:[NSNumber class]] ||
+                ![owner isKindOfClass:[NSNumber class]] || number.unsignedIntValue != wid) continue;
+            pid_t owner_pid = (pid_t)owner.intValue;
+            for (size_t i = 0; i < manifest->count; ++i) {
+                if (manifest->entries[i].owner_pid == owner_pid) {
+                    const char *kind = manifest->entries[i].kind;
+                    CFRelease(windows);
+                    return kind;
+                }
+            }
+            if (owner_pid == getpid()) {
                 CFRelease(windows);
                 return "controlled-app-surface";
             }
@@ -216,11 +228,58 @@ static const char *fixture_kind(const struct fixture_manifest *manifest, uint32_
 
 static void add_fixture(struct fixture_manifest *manifest, NSWindow *window, const char *kind)
 {
-    if (!manifest || !window || manifest->count >= 16) return;
+    if (!manifest || !window || manifest->count >= 32) return;
     manifest->entries[manifest->count++] = (struct fixture_entry) {
         .window_id = (uint32_t)window.windowNumber,
+        .owner_pid = getpid(),
         .kind = kind
     };
+}
+
+static bool load_fixture_manifest(const char *path, struct fixture_manifest *manifest)
+{
+    if (!path || !manifest) return false;
+    struct stat before;
+    if (lstat(path, &before) != 0 || !S_ISREG(before.st_mode) ||
+        before.st_uid != getuid() || (before.st_mode & 0777) != 0600 ||
+        before.st_size <= 0 || before.st_size > 1024 * 1024) return false;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return false;
+    NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)before.st_size];
+    ssize_t used = 0;
+    while (used < before.st_size) {
+        ssize_t count = read(fd, (uint8_t *)data.mutableBytes + used,
+                             (size_t)(before.st_size - used));
+        if (count <= 0) { close(fd); return false; }
+        used += count;
+    }
+    struct stat after;
+    bool stable = fstat(fd, &after) == 0 && before.st_dev == after.st_dev &&
+                  before.st_ino == after.st_ino && before.st_size == after.st_size &&
+                  before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+                  before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec;
+    close(fd);
+    if (!stable) return false;
+    id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+    if (![object isKindOfClass:[NSDictionary class]] ||
+        ![object[@"schema"] isEqualToString:@"yabai.window-server-geometry-fixtures/v1"] ||
+        ![object[@"entries"] isKindOfClass:[NSArray class]]) return false;
+    for (id row in object[@"entries"]) {
+        if (![row isKindOfClass:[NSDictionary class]] ||
+            ![row[@"kind"] isKindOfClass:[NSString class]] ||
+            !safe_token([row[@"kind"] UTF8String]) || manifest->count >= 32) return false;
+        NSNumber *window = row[@"window_id"];
+        NSNumber *owner = row[@"owner_pid"];
+        uint64_t window_id = [window isKindOfClass:[NSNumber class]] ? window.unsignedLongLongValue : 0;
+        long long owner_pid = [owner isKindOfClass:[NSNumber class]] ? owner.longLongValue : 0;
+        if ((!window_id && owner_pid <= 0) || window_id > UINT32_MAX || owner_pid > INT_MAX) return false;
+        manifest->entries[manifest->count++] = (struct fixture_entry) {
+            .window_id = (uint32_t)window_id,
+            .owner_pid = (pid_t)owner_pid,
+            .kind = [row[@"kind"] UTF8String]
+        };
+    }
+    return manifest->count != 0;
 }
 
 static uint64_t window_tags(int cid, uint32_t wid)
@@ -305,9 +364,10 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
                "\"type\":\"point\",\"fixture_id\":\"%s\",\"point_role\":\"%s\","
                "\"os_version\":\"%s\",\"os_build\":\"%s\","
                "\"architecture\":\"%s\",\"source_revision\":\"%s\","
-               "\"fixture_revision\":\"%s\",\"geometry_available\":false}\n",
+               "\"fixture_revision\":\"%s\",\"fixture_manifest_entries\":%zu,"
+               "\"geometry_available\":false}\n",
                fixture_id, point_role, os_version, build, architecture,
-               source_revision, fixture_revision);
+               source_revision, fixture_revision, manifest ? manifest->count : 0);
         return true;
     }
     if (!result_valid(&basic.legacy) || !result_valid(&basic.geometry)) return false;
@@ -359,7 +419,8 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
            "\"type\":\"point\",\"fixture_id\":\"%s\",\"point_role\":\"%s\","
            "\"os_version\":\"%s\",\"os_build\":\"%s\",\"architecture\":\"%s\","
            "\"source_revision\":\"%s\",\"fixture_revision\":\"%s\","
-           "\"geometry_available\":true,\"abi\":{\"arguments\":8,"
+           "\"fixture_manifest_entries\":%zu,\"geometry_available\":true,"
+           "\"abi\":{\"arguments\":8,"
            "\"legacy_internal_mode\":0,\"geometry_internal_mode\":1,"
            "\"verified_on_exact_build\":%s},"
            "\"display\":{\"count\":%lu,\"main_scale\":%.3f,"
@@ -382,7 +443,7 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
            "\"geometry_errors\":%d,\"disagreements\":%d},"
            "\"production_selector\":\"legacy\"}\n",
            fixture_id, point_role, os_version, build, architecture,
-           source_revision, fixture_revision,
+           source_revision, fixture_revision, manifest ? manifest->count : 0,
            !strcmp(os_version, "27.0.1") && !strcmp(build, "26A434") ? "true" : "false",
            (unsigned long)NSScreen.screens.count, screen ? screen.backingScaleFactor : 0.0,
            NSScreen.screens.count > 1 ? "true" : "false",
@@ -504,7 +565,7 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "usage: %s (--controlled | --point X,Y) --source-revision REV "
-            "--fixture-revision REV [--iterations N]\n", program);
+            "--fixture-revision REV [--iterations N] [--fixture-manifest PATH]\n", program);
 }
 
 int main(int argc, char **argv)
@@ -514,6 +575,7 @@ int main(int argc, char **argv)
         bool controlled = false, explicit_point = false;
         int iterations = 100;
         const char *source_revision = NULL, *fixture_revision = NULL;
+        const char *fixture_manifest_path = NULL;
         for (int i = 1; i < argc; ++i) {
             if (strcmp(argv[i], "--controlled") == 0) controlled = true;
             else if (strcmp(argv[i], "--point") == 0 && i + 1 < argc) {
@@ -526,6 +588,8 @@ int main(int argc, char **argv)
                 source_revision = argv[++i];
             } else if (strcmp(argv[i], "--fixture-revision") == 0 && i + 1 < argc) {
                 fixture_revision = argv[++i];
+            } else if (strcmp(argv[i], "--fixture-manifest") == 0 && i + 1 < argc) {
+                fixture_manifest_path = argv[++i];
             } else if (strcmp(argv[i], "--help") == 0) {
                 usage(argv[0]); return EXIT_SUCCESS;
             } else { usage(argv[0]); return EXIT_FAILURE; }
@@ -534,9 +598,15 @@ int main(int argc, char **argv)
             !safe_token(fixture_revision)) {
             usage(argv[0]); return EXIT_FAILURE;
         }
+        if (controlled && fixture_manifest_path) return EXIT_FAILURE;
         if (controlled) return run_controlled(iterations, source_revision, fixture_revision)
                             ? EXIT_SUCCESS : EXIT_FAILURE;
+        struct fixture_manifest manifest = {0};
+        if (fixture_manifest_path && !load_fixture_manifest(fixture_manifest_path, &manifest)) {
+            return EXIT_FAILURE;
+        }
         return emit_point("manual", "manual-point", point, iterations, source_revision,
-                          fixture_revision, NULL) ? EXIT_SUCCESS : EXIT_FAILURE;
+                          fixture_revision, fixture_manifest_path ? &manifest : NULL)
+             ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 }
