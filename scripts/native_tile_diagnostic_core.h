@@ -20,6 +20,13 @@ struct native_tile_extended_diagnostic
     uint32_t tile_rect_calls;
     uint32_t tile_rect_successes;
     uint32_t tile_rect_nonempty;
+    uint32_t tile_rect_empty;
+    uint32_t tile_rect_nonempty_layer_zero;
+    uint32_t tile_rect_nonempty_layer_nonzero;
+    uint32_t tile_rect_empty_layer_zero;
+    uint32_t tile_rect_empty_layer_nonzero;
+    uint32_t tile_rect_nonempty_matches_public_bounds;
+    uint32_t tile_rect_empty_with_public_bounds;
     uint32_t can_create_calls;
     uint32_t can_create_successes;
     uint32_t can_create_true;
@@ -27,6 +34,7 @@ struct native_tile_extended_diagnostic
     uint32_t direct_divider_matches;
     uint32_t direct_tile_rect_calls;
     uint32_t direct_tile_rect_matches;
+    uint32_t direct_tile_rect_empty_matches;
     uint32_t direct_can_create_calls;
     uint32_t direct_can_create_matches;
 };

@@ -86,9 +86,20 @@ typedef uint64_t (*direct_divider_fn)(uint64_t space_id);
 typedef CGRect (*direct_tile_rect_fn)(int connection, uint32_t window_id);
 typedef bool (*direct_can_create_fn)(int connection, uint64_t space_id, CGSize minimum_size);
 
+static bool rect_nonempty(CGRect rect)
+{
+    return isfinite(rect.origin.x) && isfinite(rect.origin.y) &&
+           isfinite(rect.size.width) && isfinite(rect.size.height) &&
+           rect.size.width > 0.0 && rect.size.height > 0.0;
+}
+
 static bool rect_equal(CGRect a, CGRect b)
 {
-    return fabs(a.origin.x - b.origin.x) <= 0.01 &&
+    return isfinite(a.origin.x) && isfinite(a.origin.y) &&
+           isfinite(a.size.width) && isfinite(a.size.height) &&
+           isfinite(b.origin.x) && isfinite(b.origin.y) &&
+           isfinite(b.size.width) && isfinite(b.size.height) &&
+           fabs(a.origin.x - b.origin.x) <= 0.01 &&
            fabs(a.origin.y - b.origin.y) <= 0.01 &&
            fabs(a.size.width - b.size.width) <= 0.01 &&
            fabs(a.size.height - b.size.height) <= 0.01;
@@ -213,6 +224,16 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
             id row = ((__bridge NSArray *)windows)[i];
             id number = [row isKindOfClass:[NSDictionary class]]
                 ? row[(NSString *)kCGWindowNumber] : nil;
+            id layer = [row isKindOfClass:[NSDictionary class]]
+                ? row[(NSString *)kCGWindowLayer] : nil;
+            id raw_bounds = [row isKindOfClass:[NSDictionary class]]
+                ? row[(NSString *)kCGWindowBounds] : nil;
+            CGRect public_bounds = CGRectZero;
+            bool public_bounds_known = [raw_bounds isKindOfClass:[NSDictionary class]] &&
+                CGRectMakeWithDictionaryRepresentation(
+                    (__bridge CFDictionaryRef)raw_bounds, &public_bounds);
+            bool layer_zero = [layer isKindOfClass:[NSNumber class]] &&
+                [layer integerValue] == 0;
             if (![number isKindOfClass:[NSNumber class]] ||
                 [number unsignedLongLongValue] > UINT32_MAX || ![number unsignedIntValue]) continue;
             ++diagnostic->tile_rect_calls;
@@ -229,10 +250,20 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
 #endif
                 rect_known = true;
                 ++diagnostic->tile_rect_successes;
-                if (isfinite(rect.origin.x) && isfinite(rect.origin.y) &&
-                    isfinite(rect.size.width) && isfinite(rect.size.height) &&
-                    rect.size.width > 0.0 && rect.size.height > 0.0) {
+                if (rect_nonempty(rect)) {
                     ++diagnostic->tile_rect_nonempty;
+                    if (layer_zero) ++diagnostic->tile_rect_nonempty_layer_zero;
+                    else ++diagnostic->tile_rect_nonempty_layer_nonzero;
+                    if (public_bounds_known && rect_equal(rect, public_bounds)) {
+                        ++diagnostic->tile_rect_nonempty_matches_public_bounds;
+                    }
+                } else {
+                    ++diagnostic->tile_rect_empty;
+                    if (layer_zero) ++diagnostic->tile_rect_empty_layer_zero;
+                    else ++diagnostic->tile_rect_empty_layer_nonzero;
+                    if (public_bounds_known && rect_nonempty(public_bounds)) {
+                        ++diagnostic->tile_rect_empty_with_public_bounds;
+                    }
                 }
             }
             if (diagnostic->direct_abi_verified) {
@@ -240,6 +271,8 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
                 CGRect direct_value = direct_rect(SLSMainConnectionID(), wid);
                 if (rect_known && rect_equal(direct_value, rect)) {
                     ++diagnostic->direct_tile_rect_matches;
+                } else if (rect_known && !rect_nonempty(direct_value) && !rect_nonempty(rect)) {
+                    ++diagnostic->direct_tile_rect_empty_matches;
                 }
             }
             release_object(result); release_object(operation);
