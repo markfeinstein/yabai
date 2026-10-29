@@ -61,7 +61,11 @@ and cadence statistics describe observations only and do not establish that a
 single production animation clock can safely span displays.
 
 Mixed-refresh conclusions require simultaneous displays with different current
-refresh modes. The live run used for this slice exposed two current displays,
-with aggregate nominal/current modes of 60 Hz and 120 Hz respectively, so this
-host had no external-display availability blocker for the mixed-refresh slice.
-No display was attached and no preferences were changed.
+refresh modes. The reviewed two-second live run exposed two 2× displays at 60 Hz
+and 120 Hz. Target-timestamp p50 was 16.668 ms and 8.333 ms; p95 was 20.586 ms
+and 9.301 ms. Wall-clock callback p95 was 32.474 ms and 14.253 ms, exceeding one
+nominal display interval on both screens under this run-loop sampler. All target
+timestamps remained strictly monotonic, 301 callbacks were observed before
+invalidation, and zero callbacks arrived during the bounded post-invalidate
+wait. This is useful blocking evidence, not a production pacing pass. No display
+was attached and no preferences were changed.

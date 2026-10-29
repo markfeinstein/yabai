@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -32,6 +33,7 @@ struct display_cadence_runtime
     size_t screen_count;
     size_t max_samples;
     size_t links_created;
+    pthread_mutex_t lock;
 };
 
 @interface DisplayCadenceProbe : NSObject
@@ -54,6 +56,7 @@ struct display_cadence_runtime
 - (void)displayLinkDidFire:(CADisplayLink *)sender
 {
     if (!_runtime || !sender) return;
+    pthread_mutex_lock(&_runtime->lock);
     for (size_t i = 0; i < _runtime->screen_count; ++i) {
         struct display_cadence_runtime_screen *screen = _runtime->screen_data + i;
         if (screen->link != sender) continue;
@@ -61,11 +64,13 @@ struct display_cadence_runtime
         if (screen->sample_count < _runtime->max_samples) {
             screen->samples[screen->sample_count++] = (struct display_cadence_sample) {
                 .target_timestamp = sender.targetTimestamp,
-                .wall_timestamp = CFAbsoluteTimeGetCurrent()
+                .wall_timestamp = CACurrentMediaTime()
             };
         }
+        pthread_mutex_unlock(&_runtime->lock);
         return;
     }
+    pthread_mutex_unlock(&_runtime->lock);
 }
 @end
 
@@ -178,25 +183,33 @@ static bool display_cadence_run(struct display_cadence_runtime *runtime,
         if ([next compare:deadline] == NSOrderedDescending) next = deadline;
         [run_loop runMode:NSDefaultRunLoopMode beforeDate:next];
     }
+    pthread_mutex_lock(&runtime->lock);
     for (size_t i = 0; i < runtime->screen_count; ++i) {
         *callbacks_before += runtime->screen_data[i].callback_count;
-        if (runtime->screen_data[i].link) {
-            [runtime->screen_data[i].link invalidate];
-            [runtime->screen_data[i].link release];
-            runtime->screen_data[i].link = nil;
-        }
+    }
+    pthread_mutex_unlock(&runtime->lock);
+    for (size_t i = 0; i < runtime->screen_count; ++i) {
+        if (runtime->screen_data[i].link) [runtime->screen_data[i].link invalidate];
     }
 
-    CFAbsoluteTime wait_start = CFAbsoluteTimeGetCurrent();
+    CFTimeInterval wait_start = CACurrentMediaTime();
     NSDate *wait_deadline = [NSDate dateWithTimeIntervalSinceNow:DISPLAY_CADENCE_INVALIDATION_WAIT];
     while ([wait_deadline timeIntervalSinceNow] > 0.0) {
         NSDate *next = [NSDate dateWithTimeIntervalSinceNow:0.05];
         if ([next compare:wait_deadline] == NSOrderedDescending) next = wait_deadline;
         [run_loop runMode:NSDefaultRunLoopMode beforeDate:next];
     }
-    *wait_seconds = CFAbsoluteTimeGetCurrent() - wait_start;
+    *wait_seconds = CACurrentMediaTime() - wait_start;
+    pthread_mutex_lock(&runtime->lock);
     for (size_t i = 0; i < runtime->screen_count; ++i) {
         *callbacks_after += runtime->screen_data[i].callback_count;
+    }
+    pthread_mutex_unlock(&runtime->lock);
+    for (size_t i = 0; i < runtime->screen_count; ++i) {
+        if (runtime->screen_data[i].link) {
+            [runtime->screen_data[i].link release];
+            runtime->screen_data[i].link = nil;
+        }
     }
     [probe release];
     return true;
@@ -238,17 +251,23 @@ int main(int argc, char **argv)
 
         NSArray *screens = [[NSScreen screens] copy];
         size_t screen_count = screens.count;
+        if (screen_count > 64) { [screens release]; return EXIT_FAILURE; }
         struct display_cadence_runtime runtime = {
             .screens = screens,
             .screen_count = screen_count,
             .max_samples = max_samples,
             .links_created = 0
         };
+        if (pthread_mutex_init(&runtime.lock, NULL) != 0) {
+            [screens release];
+            return EXIT_FAILURE;
+        }
         runtime.screen_data = calloc(screen_count, sizeof(*runtime.screen_data));
         if ((!runtime.screen_data && screen_count) ||
-            (screen_count && max_samples > SIZE_MAX / sizeof(*runtime.screen_data[0].samples))) {
+            max_samples > SIZE_MAX / sizeof(struct display_cadence_sample)) {
             [screens release];
             free(runtime.screen_data);
+            pthread_mutex_destroy(&runtime.lock);
             return EXIT_FAILURE;
         }
         for (size_t i = 0; i < screen_count; ++i) {
@@ -257,6 +276,7 @@ int main(int argc, char **argv)
                 for (size_t j = 0; j < i; ++j) free(runtime.screen_data[j].samples);
                 free(runtime.screen_data);
                 [screens release];
+                pthread_mutex_destroy(&runtime.lock);
                 return EXIT_FAILURE;
             }
         }
@@ -274,6 +294,7 @@ int main(int argc, char **argv)
             free(screens_out); free(os_version); free(os_build);
             for (size_t i = 0; i < screen_count; ++i) free(runtime.screen_data[i].samples);
             free(runtime.screen_data); [screens release];
+            pthread_mutex_destroy(&runtime.lock);
             return EXIT_FAILURE;
         }
         for (size_t i = 0; i < screen_count; ++i) {
@@ -304,6 +325,7 @@ int main(int argc, char **argv)
         free(screens_out); free(os_version); free(os_build);
         for (size_t i = 0; i < screen_count; ++i) free(runtime.screen_data[i].samples);
         free(runtime.screen_data); [screens release];
+        pthread_mutex_destroy(&runtime.lock);
         return written ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 }

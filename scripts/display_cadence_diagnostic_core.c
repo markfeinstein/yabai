@@ -43,7 +43,7 @@ bool display_cadence_target_timestamps_are_monotonic(
     if (!samples && sample_count) return false;
     for (size_t i = 0; i < sample_count; ++i) {
         if (!isfinite(samples[i].target_timestamp)) return false;
-        if (i && samples[i].target_timestamp < samples[i - 1].target_timestamp) return false;
+        if (i && samples[i].target_timestamp <= samples[i - 1].target_timestamp) return false;
     }
     return true;
 }
@@ -72,7 +72,7 @@ bool display_cadence_delta_stats(const struct display_cadence_sample *samples,
         double current = target_timestamp ? samples[i].target_timestamp
                                           : samples[i].wall_timestamp;
         deltas[i - 1] = current - previous;
-        if (!isfinite(deltas[i - 1])) {
+        if (!isfinite(deltas[i - 1]) || deltas[i - 1] <= 0.0) {
             free(deltas);
             return false;
         }

@@ -2840,8 +2840,13 @@ TEST_FUNC(display_cadence_core_stats_are_deterministic,
 TEST_FUNC(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite,
 {
     const struct display_cadence_sample regression[] = { { 1.0, 1.0 }, { 0.5, 2.0 } };
+    const struct display_cadence_sample duplicate[] = { { 1.0, 1.0 }, { 1.0, 2.0 } };
+    const struct display_cadence_sample zero_wall_delta[] = { { 1.0, 2.0 }, { 2.0, 2.0 } };
     const struct display_cadence_sample nan_value[] = { { NAN, 1.0 } };
+    struct display_cadence_delta_stats stats = {0};
     TEST_CHECK(display_cadence_target_timestamps_are_monotonic(regression, 2), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(duplicate, 2), false);
+    TEST_CHECK(display_cadence_delta_stats(zero_wall_delta, 2, false, &stats), false);
     TEST_CHECK(display_cadence_target_timestamps_are_monotonic(nan_value, 1), false);
     TEST_CHECK(display_cadence_target_timestamps_are_monotonic(NULL, 0), true);
 });
