@@ -123,7 +123,9 @@ Comparison headers retain aggregate class, comparison, false-positive/negative, 
 - AX classifier status and separate observation status;
 - redacted owner, parent, title, frame, level, tag, and attribute categories.
 
-AX inventory and role read failures are classified conservatively as unavailable for the candidate rather than being conflated with a successful no-match. Forced-unavailable evidence on 27.0.1 showed that root dialogs and inactive native tabs can be indistinguishable from ordinary documents using the current WindowServer facts. The candidate therefore keeps all untracked AX-unavailable documents `uncertain`; only already-tracked windows retain manageable status. `no_ax_document` remains a diagnostic phenotype and is accompanied by `ax_unavailable_conservative`.
+AX inventory and role read failures are classified conservatively as unavailable for the candidate rather than being conflated with a successful no-match. Capture headers split no-match, inventory-error, and role-error observations into on-screen/offscreen profiles. A controlled AppKit host on 27.0.1 exposed eight CG surfaces but only three AX windows; all three AX IDs matched CG, both on-screen CG surfaces matched AX, and the five unmatched CG surfaces were offscreen/helper/tab representations. The profile distinguishes that normal partial inventory from owner-level AX inventory failures.
+
+Forced-unavailable evidence on 27.0.1 showed that root dialogs and inactive native tabs can be indistinguishable from ordinary documents using the current WindowServer facts. The candidate therefore keeps all untracked AX-unavailable documents `uncertain`; only already-tracked windows retain manageable status. `no_ax_document` remains a diagnostic phenotype and is accompanied by `ax_unavailable_conservative`.
 
 ## Offline evidence gate
 
