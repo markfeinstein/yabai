@@ -2851,6 +2851,46 @@ TEST_FUNC(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite,
     TEST_CHECK(display_cadence_target_timestamps_are_monotonic(NULL, 0), true);
 });
 
+TEST_FUNC(display_cadence_stress_json_is_bounded_and_redacted,
+{
+    struct display_cadence_stress_lane lane = {
+        .facts = { .nominal_refresh_available = true, .nominal_refresh_hz = 120.0,
+                   .backing_scale_available = true, .backing_scale = 2.0 },
+        .cycles_seen = 4, .cycles_with_callback = 4,
+        .callback_count = 24, .callbacks_after_invalidate = 0
+    };
+    struct display_cadence_stress_metadata metadata = {
+        .source_revision = "stress-commit", .fixture_revision = "stress-fixture-v1",
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .cycles_requested = 4, .cycles_completed = 4, .reinventory_interval = 2,
+        .reinventory_count = 1, .screen_count = 1, .links_created = 4,
+        .cycles_with_all_lanes_callback = 4, .callbacks_before_invalidate = 24,
+        .active_cycle_seconds = 0.08, .invalidation_wait_seconds = 0.025,
+        .main_thread_load_ms = 5.0, .lane_completion_skew_max_seconds = 0.001,
+        .production_backend_unchanged = true
+    };
+    char output[4096] = {0};
+    FILE *stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_stress_write_json(stream, &metadata, &lane), true);
+        TEST_CHECK(strstr(output, "yabai.display-cadence-stress/v1") != NULL, true);
+        TEST_CHECK(strstr(output, "callbacks_after_invalidate\":0") != NULL, true);
+        TEST_CHECK(strstr(output, "production_backend_unchanged\":true") != NULL, true);
+        TEST_CHECK(strstr(output, "display-id") == NULL, true);
+        TEST_CHECK(strstr(output, "NSScreenNumber") == NULL, true);
+        TEST_CHECK(strstr(output, "Sensitive Display Name") == NULL, true);
+        TEST_CHECK(fclose(stream), 0);
+    }
+    metadata.cycles_requested = DISPLAY_CADENCE_DIAGNOSTIC_MAX_STRESS_CYCLES + 1;
+    stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_stress_write_json(stream, &metadata, &lane), false);
+        TEST_CHECK(fclose(stream), 0);
+    }
+});
+
 TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
 {
     const struct display_cadence_sample samples[] = { { 1.0, 2.0 }, { 1.01, 2.02 } };
@@ -2894,6 +2934,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
     TEST_ENTRY(display_cadence_core_stats_are_deterministic) \
     TEST_ENTRY(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite) \
+    TEST_ENTRY(display_cadence_stress_json_is_bounded_and_redacted) \
     TEST_ENTRY(display_cadence_core_json_is_redacted_and_machine_readable) \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
