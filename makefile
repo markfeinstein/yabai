@@ -40,7 +40,7 @@ OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s 
 TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/window_server_tags.h src/misc/extern.h makefile
 NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
-NATIVE_TILE_DIAGNOSTIC_DEPS = scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c scripts/native_tile_diagnostic_core.h src/window_management_bridge.m src/window_management_bridge.h makefile
+NATIVE_TILE_DIAGNOSTIC_DEPS = scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c scripts/native_tile_diagnostic_core.h src/window_management_bridge.m src/window_management_bridge.h src/misc/extern.h makefile
 ACTIVE_HIGHLIGHT_PROBE_DEPS = scripts/active_window_highlight_probe.m scripts/active_window_highlight_probe.Info.plist src/window_server_tags.h src/misc/extern.h makefile
 CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_corner_geometry.c src/window_corner_geometry.h src/misc/extern.h makefile
 WINDOW_CONSTRAINTS_PROBE_DEPS = scripts/window_constraints_probe.m src/window_constraints.c src/window_constraints.h src/misc/extern.h makefile
@@ -172,7 +172,7 @@ $(NATIVE_TAB_RECORDER_BIN): $(NATIVE_TAB_RECORDER_DEPS)
 
 $(NATIVE_TILE_DIAGNOSTIC_BIN): $(NATIVE_TILE_DIAGNOSTIC_DEPS)
 	@mkdir -p '$(dir $@)'
-	$(XCRUN) clang scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c src/window_management_bridge.m -o '$@' $(COMMON_FLAGS) -O0 -framework Foundation
+	$(XCRUN) clang scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c src/window_management_bridge.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
 
 $(ACTIVE_HIGHLIGHT_PROBE_BIN): $(ACTIVE_HIGHLIGHT_PROBE_DEPS)
 	@mkdir -p '$(dir $@)' '$(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents'

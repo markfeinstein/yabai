@@ -7,7 +7,7 @@ make native-tile-diagnostic
 bin/debug/native-tile-diagnostic
 ```
 
-The aggregate-only output reports managed displays/Spaces, parent Spaces with tile membership, tile Space count, failed queries, and ABI/capability status without IDs, application identity, titles, paths, or geometry.
+Schema v2 reports managed displays/Spaces, membership, divider-direction stability, window tile-rect availability, can-create feasibility, failed queries, and ABI/capability status without IDs, application identity, titles, paths, or raw geometry. All calls are synchronous read operations with exact runtime method-encoding checks; production tile commands remain disabled.
 
 ## Current macOS 27.0.1 physical fixture
 
@@ -19,16 +19,16 @@ A real user-created Split View was prepared and later restored manually. The rea
 - 0 tile Spaces;
 - 0 failed membership queries.
 
-The zero-membership result conflicts with the visible fixture and therefore does not establish that `SLSBridgedSpaceCopyTileSpacesOperation` models the currently presented Split View. It may distinguish fullscreen Split View from newer window tiling, use another parent/child representation, or require additional read-only operations.
+The zero-membership result conflicts with the visible fixture and therefore does not establish that `SLSBridgedSpaceCopyTileSpacesOperation` models the currently presented Split View. It may distinguish fullscreen Split View from newer window tiling or use another parent/child representation.
 
-Static inspection on the same build found read-only operation classes and result types for:
+On the current restored dual-display topology, v2 additionally observed:
 
-- tile-space divider directions;
-- window tile rect;
-- can-create-tile feasibility;
-- tile-space membership.
+- divider ABI verified; 20/20 successful calls, stable across 10 repeated Space pairs, all directions zero;
+- tile-rect ABI verified; 14/14 successful calls, 9 nonempty rects;
+- can-create ABI verified; 10/10 successful calls, all feasibility results false;
+- membership remained 0 tiled parents / 0 tile Spaces with 0 failed queries.
 
-Their runtime semantics and exact ABI remain research-gated. Do not add mutation commands or production tile ownership from the current result.
+The results are read-only evidence, not tile ownership semantics. Do not add mutation commands or production tile ownership from them.
 
 ## Physical accessibility acceptance
 
@@ -37,6 +37,6 @@ The native menu passed keyboard navigation and open/close acceptance without han
 ## Remaining gates
 
 - explain the visible-fixture/zero-membership disagreement;
-- add safe runtime metadata and bounded read-only calls for divider directions, tile rect, and feasibility;
+- explain why divider/membership/feasibility remain zero while ordinary windows return nonempty tile rects;
 - repeat on macOS 26.6 and 27.2;
 - validate real parent/child semantics before any separate tile-command proposal.
