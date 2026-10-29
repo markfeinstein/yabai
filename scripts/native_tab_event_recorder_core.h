@@ -69,6 +69,12 @@ enum native_tab_event_type
     NATIVE_TAB_EVENT_AX_DEMINIMIZED,
     NATIVE_TAB_EVENT_AX_FOCUSED,
     NATIVE_TAB_EVENT_AX_FOCUS_STABLE,
+    NATIVE_TAB_EVENT_CONTROL_CLOSE,
+    NATIVE_TAB_EVENT_CONTROL_MINIMIZE,
+    NATIVE_TAB_EVENT_CONTROL_RESTORE,
+    NATIVE_TAB_EVENT_CONTROL_HIDE,
+    NATIVE_TAB_EVENT_CONTROL_UNHIDE,
+    NATIVE_TAB_EVENT_CONTROL_SPACE_CHANGE,
     NATIVE_TAB_EVENT_APP_HIDDEN,
     NATIVE_TAB_EVENT_APP_VISIBLE,
     NATIVE_TAB_EVENT_APP_TERMINATED,
@@ -91,6 +97,7 @@ struct native_tab_event
     uint32_t subscription_generation;
     bool payload_valid;
     bool duplicate;
+    bool control_correlated;
     bool subscribed_before_known;
     bool subscribed_before;
     bool target_pid_known;
@@ -131,7 +138,8 @@ enum native_tab_lifecycle_exclusion
     NATIVE_TAB_EXCLUSION_APP_UNHIDE      = 1u << 5,
     NATIVE_TAB_EXCLUSION_APP_TERMINATE   = 1u << 6,
     NATIVE_TAB_EXCLUSION_SPACE_CHANGE    = 1u << 7,
-    NATIVE_TAB_EXCLUSION_MISSION_CONTROL = 1u << 8
+    NATIVE_TAB_EXCLUSION_MISSION_CONTROL = 1u << 8,
+    NATIVE_TAB_EXCLUSION_CONTROL_MARKER   = 1u << 9
 };
 
 struct native_tab_delivery_counts
@@ -203,6 +211,7 @@ struct native_tab_recorder_metadata
     const char *expectation;
     unsigned planned_repeat;
     bool ax_available;
+    bool control_events_available;
 };
 
 struct native_tab_recorder
@@ -224,7 +233,16 @@ struct native_tab_recorder
     uint32_t gate_eligible_count;
     uint32_t incomplete_count;
     uint32_t dropped_count;
+    uint32_t control_marker_count;
+    uint32_t control_close_count;
+    uint32_t control_minimize_count;
+    uint32_t control_restore_count;
+    uint32_t control_hide_count;
+    uint32_t control_unhide_count;
+    uint32_t control_space_change_count;
     uint32_t next_episode_id;
+    enum native_tab_event_type last_control_event;
+    uint64_t last_control_event_ns;
     uint64_t last_inventory_change_ns;
     uint64_t last_action_end_ns;
     struct native_tab_delivery_counts session_815;

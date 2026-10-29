@@ -110,6 +110,17 @@ def evaluate(traces):
                    resolution.get("unresolved_outside"):
                     blockers.add("candidate-ambiguity:" + label)
             elif expectation == "negative-control":
+                if summary.get("control_markers", 0) < 1:
+                    blockers.add("negative-control-marker-missing:" + label)
+                marker_requirements = {
+                    "close": ("control_close",),
+                    "minimize": ("control_minimize", "control_restore"),
+                    "hide": ("control_hide", "control_unhide"),
+                    "space-change": ("control_space_change",),
+                }
+                for field in marker_requirements.get(session.get("direction"), ()):
+                    if summary.get(field, 0) < 1:
+                        blockers.add("negative-control-marker-missing-" + field + ":" + label)
                 if any(row.get("gate_eligible") is True for row in resolutions):
                     blockers.add("negative-control-eligible:" + label)
                 if any(row.get("action_separation_violated") is True for row in resolutions):
@@ -199,6 +210,7 @@ def synthetic_trace(repeat, expectation="candidate", inconsistent=False):
         "type": "summary",
         "inventory_incomplete": 0,
         "dropped_records": 0,
+        "control_markers": 1 if expectation == "negative-control" else 0,
         "production_identity_mutation": False,
     }
     return session, resolutions, summary
