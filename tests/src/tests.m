@@ -101,6 +101,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"
 #include "native_tile_diagnostic.c"
+#include "../../scripts/display_cadence_diagnostic_core.c"
 #include "window_corner_geometry.c"
 #include "window_server_snapshot.c"
 #include "window_server_tags.c"
@@ -2817,6 +2818,72 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     }
 });
 
+TEST_FUNC(display_cadence_core_stats_are_deterministic,
+{
+    const struct display_cadence_sample samples[] = {
+        { 10.0, 20.0 }, { 11.0, 21.0 }, { 13.0, 24.0 },
+        { 16.0, 28.0 }, { 20.0, 33.0 }
+    };
+    struct display_cadence_delta_stats stats = {0};
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(samples, 5), true);
+    TEST_CHECK(display_cadence_delta_stats(samples, 5, true, &stats), true);
+    TEST_CHECK(stats.count, 4U);
+    TEST_CHECK(stats.p50, 2.0);
+    TEST_CHECK(stats.p95, 4.0);
+    TEST_CHECK(stats.min, 1.0);
+    TEST_CHECK(stats.max, 4.0);
+    TEST_CHECK(display_cadence_delta_stats(samples, 5, false, &stats), true);
+    TEST_CHECK(stats.p50, 3.0);
+    TEST_CHECK(stats.p95, 5.0);
+});
+
+TEST_FUNC(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite,
+{
+    const struct display_cadence_sample regression[] = { { 1.0, 1.0 }, { 0.5, 2.0 } };
+    const struct display_cadence_sample duplicate[] = { { 1.0, 1.0 }, { 1.0, 2.0 } };
+    const struct display_cadence_sample zero_wall_delta[] = { { 1.0, 2.0 }, { 2.0, 2.0 } };
+    const struct display_cadence_sample nan_value[] = { { NAN, 1.0 } };
+    struct display_cadence_delta_stats stats = {0};
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(regression, 2), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(duplicate, 2), false);
+    TEST_CHECK(display_cadence_delta_stats(zero_wall_delta, 2, false, &stats), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(nan_value, 1), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(NULL, 0), true);
+});
+
+TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
+{
+    const struct display_cadence_sample samples[] = { { 1.0, 2.0 }, { 1.01, 2.02 } };
+    const struct display_cadence_screen screen = {
+        .nominal_refresh_available = true, .nominal_refresh_hz = 120.0,
+        .current_mode_refresh_available = true, .current_mode_refresh_hz = 119.88,
+        .backing_scale_available = true, .backing_scale = 2.0,
+        .series = { samples, 2, 2 }
+    };
+    const struct display_cadence_metadata metadata = {
+        .source_revision = "f699bc5f", .fixture_revision = "cadence-fixture-v1",
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .requested_duration_seconds = 1.0, .requested_max_samples = 100,
+        .screen_count = 1, .links_created = 1, .callbacks_before_invalidate = 2,
+        .callbacks_after_invalidate = 0, .invalidation_wait_seconds = 0.25,
+        .invalidation_wait_bounded = true, .production_backend_unchanged = true
+    };
+    char output[4096] = {0};
+    FILE *stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_diagnostic_write_json(stream, &metadata, &screen), true);
+        TEST_CHECK(strstr(output, "display-cadence-diagnostic") != NULL, true);
+        TEST_CHECK(strstr(output, "strict-v1") != NULL, true);
+        TEST_CHECK(strstr(output, "production_backend_unchanged\":true") != NULL, true);
+        TEST_CHECK(strstr(output, "display-id") == NULL, true);
+        TEST_CHECK(strstr(output, "NSScreenNumber") == NULL, true);
+        TEST_CHECK(strstr(output, "absolute-origin") == NULL, true);
+        TEST_CHECK(strstr(output, "Sensitive Display Name") == NULL, true);
+        TEST_CHECK(fclose(stream), 0);
+    }
+});
+
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
     TEST_ENTRY(window_management_bridge_exact_abi_runs_only_allowlisted_read) \
@@ -2825,6 +2892,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
     TEST_ENTRY(native_tile_diagnostic_json_is_stable_aggregate_and_redacted) \
     TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
+    TEST_ENTRY(display_cadence_core_stats_are_deterministic) \
+    TEST_ENTRY(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite) \
+    TEST_ENTRY(display_cadence_core_json_is_redacted_and_machine_readable) \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
