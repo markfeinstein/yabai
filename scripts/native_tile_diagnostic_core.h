@@ -12,6 +12,7 @@ struct native_tile_extended_diagnostic
     bool divider_available;
     bool tile_rect_available;
     bool can_create_available;
+    bool direct_abi_verified;
     uint32_t divider_calls;
     uint32_t divider_successes;
     uint32_t divider_nonzero;
@@ -22,6 +23,12 @@ struct native_tile_extended_diagnostic
     uint32_t can_create_calls;
     uint32_t can_create_successes;
     uint32_t can_create_true;
+    uint32_t direct_divider_calls;
+    uint32_t direct_divider_matches;
+    uint32_t direct_tile_rect_calls;
+    uint32_t direct_tile_rect_matches;
+    uint32_t direct_can_create_calls;
+    uint32_t direct_can_create_matches;
 };
 
 struct native_tile_platform

@@ -9,6 +9,14 @@ bin/debug/native-tile-diagnostic
 
 Schema v2 reports managed displays/Spaces, membership, divider-direction stability, window tile-rect availability, can-create feasibility, failed queries, and ABI/capability status without IDs, application identity, titles, paths, or raw geometry. All calls are synchronous read operations with exact runtime method-encoding checks; production tile commands remain disabled.
 
+On macOS 27.0.1 build 26A434, arm64 disassembly also validates the direct read-only export shapes used for shadow correlation:
+
+- `SLSGetTileSpaceDividerDirections(uint64_t space_id) -> uint64_t` (0xf4-byte implementation);
+- `SLSWindowGetTileRect(int connection, uint32_t window_id) -> CGRect` (0xf0-byte implementation);
+- `SLSSpaceCanCreateTile(int connection, uint64_t space_id, CGSize minimum_size) -> bool` (0xf4-byte implementation).
+
+The direct functions are called only on that exact verified build. Other builds report `direct-abi-verified:false` and skip them.
+
 ## Current macOS 27.0.1 physical fixture
 
 A real user-created Split View was prepared and later restored manually. The read-only diagnostic completed successfully but reported:
@@ -26,6 +34,7 @@ On the current restored dual-display topology, v2 additionally observed:
 - divider ABI verified; 20/20 successful calls, stable across 10 repeated Space pairs, all directions zero;
 - tile-rect ABI verified; 14/14 successful calls, 9 nonempty rects;
 - can-create ABI verified; 10/10 successful calls, all feasibility results false;
+- direct divider and can-create exports matched every bridged call; tile-rect matched all 8 nonempty bridged rects, while 2 empty-result rows remain unresolved.
 - membership remained 0 tiled parents / 0 tile Spaces with 0 failed queries.
 
 The results are read-only evidence, not tile ownership semantics. Do not add mutation commands or production tile ownership from them.
