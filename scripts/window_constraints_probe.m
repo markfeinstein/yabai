@@ -642,6 +642,114 @@ static NSWindow *make_window(NSRect frame, NSWindowStyleMask style)
     return window;
 }
 
+static bool constraints_equal(const struct raw_constraints *a,
+                              const struct raw_constraints *b)
+{
+    return a->available == b->available && a->status == b->status &&
+           (!a->available || (size_equal(a->minimum, b->minimum) &&
+                              size_equal(a->maximum, b->maximum) &&
+                              size_equal(a->current, b->current)));
+}
+
+static bool public_size_matches(CGSize raw, CGSize public_size)
+{
+    return finite_positive(raw) && finite_positive(public_size) && size_equal(raw, public_size);
+}
+
+static bool run_external_read_only(constraints_iterator_fn iterator_getter,
+                                   constraints_packages_fn packages_getter)
+{
+    NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
+    char build[256] = "unknown"; size_t build_size = sizeof(build);
+    if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0) strcpy(build, "unknown");
+    struct utsname system = {0}; uname(&system);
+    printf("{\"schema\":\"yabai.window-constraints-probe/v3\","
+           "\"kind\":\"run\",\"mode\":\"external-read-only\","
+           "\"os_version\":\"%ld.%ld.%ld\",\"os_build\":\"%s\","
+           "\"architecture\":\"%s\",\"sample_limit\":32,"
+           "\"iterator_symbol\":%s,\"packages_symbol\":%s,"
+           "\"ax_queries\":0,\"ax_writes\":0,\"tcc_prompt_requested\":false,"
+           "\"absolute_geometry_emitted\":false,\"production_policy_enabled\":false}\n",
+           version.majorVersion, version.minorVersion, version.patchVersion, build,
+           system.machine, iterator_getter ? "true" : "false",
+           packages_getter ? "true" : "false");
+
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!windows || CFGetTypeID(windows) != CFArrayGetTypeID()) {
+        if (windows) CFRelease(windows);
+        return false;
+    }
+    NSUInteger candidates = 0, sampled = 0, iterator_available = 0;
+    NSUInteger packages_available = 0, equal = 0;
+    NSUInteger direct_repeat_stable = 0;
+    NSUInteger limit = MIN((NSUInteger)CFArrayGetCount(windows), (NSUInteger)512);
+    for (NSUInteger i = 0; i < limit && sampled < 32; ++i) {
+        id row = ((__bridge NSArray *)windows)[i];
+        if (![row isKindOfClass:[NSDictionary class]]) continue;
+        NSNumber *owner = row[(NSString *)kCGWindowOwnerPID];
+        NSNumber *number = row[(NSString *)kCGWindowNumber];
+        NSNumber *layer = row[(NSString *)kCGWindowLayer];
+        NSDictionary *raw_bounds = row[(NSString *)kCGWindowBounds];
+        CGRect bounds = CGRectZero;
+        if (![owner isKindOfClass:[NSNumber class]] || owner.intValue <= 1 ||
+            owner.intValue == getpid() || ![number isKindOfClass:[NSNumber class]] ||
+            !number.unsignedIntValue || number.unsignedLongLongValue > UINT32_MAX ||
+            ![layer isKindOfClass:[NSNumber class]] ||
+            ![raw_bounds isKindOfClass:[NSDictionary class]] ||
+            !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)raw_bounds, &bounds) ||
+            !finite_positive(bounds.size)) continue;
+        ++candidates;
+        uint32_t wid = number.unsignedIntValue;
+        struct raw_constraints iterator_first, packages_first, iterator_second, packages_second;
+        iterator_constraints(wid, iterator_getter, &iterator_first);
+        packages_constraints(wid, packages_getter, &packages_first);
+        packages_constraints(wid, packages_getter, &packages_second);
+        iterator_constraints(wid, iterator_getter, &iterator_second);
+        if (iterator_first.available) ++iterator_available;
+        if (packages_first.available) ++packages_available;
+        if (iterator_first.available && packages_first.available &&
+            !strcmp(agreement(&iterator_first, &packages_first), "equal")) ++equal;
+        if ((iterator_first.available || packages_first.available) &&
+            constraints_equal(&iterator_first, &iterator_second) &&
+            constraints_equal(&packages_first, &packages_second)) ++direct_repeat_stable;
+        ++sampled;
+        printf("{\"schema\":\"yabai.window-constraints-probe/v3\","
+               "\"kind\":\"external_observation\",\"ordinal\":%lu,"
+               "\"owner_class\":\"external\",\"layer_class\":\"%s\",",
+               (unsigned long)sampled,
+               layer.intValue == 0 ? "zero" : "nonzero");
+        print_raw("iterator", &iterator_first);
+        fputs(",", stdout); print_raw("packages", &packages_first);
+        printf(",\"getter_agreement\":\"%s\",\"repeat_stable\":%s,"
+               "\"public_bounds_match\":{\"iterator_min\":%s,\"iterator_max\":%s,"
+               "\"iterator_current\":%s,\"packages_min\":%s,\"packages_max\":%s,"
+               "\"packages_current\":%s},\"identifiers_emitted\":false,"
+               "\"ax_query\":false,\"ax_write\":false}\n",
+               agreement(&iterator_first, &packages_first),
+               constraints_equal(&iterator_first, &iterator_second) &&
+               constraints_equal(&packages_first, &packages_second) ? "true" : "false",
+               public_size_matches(iterator_first.minimum, bounds.size) ? "true" : "false",
+               public_size_matches(iterator_first.maximum, bounds.size) ? "true" : "false",
+               public_size_matches(iterator_first.current, bounds.size) ? "true" : "false",
+               public_size_matches(packages_first.minimum, bounds.size) ? "true" : "false",
+               public_size_matches(packages_first.maximum, bounds.size) ? "true" : "false",
+               public_size_matches(packages_first.current, bounds.size) ? "true" : "false");
+    }
+    CFRelease(windows);
+    printf("{\"schema\":\"yabai.window-constraints-probe/v3\","
+           "\"kind\":\"external_summary\",\"candidate_windows\":%lu,"
+           "\"sampled\":%lu,\"iterator_available\":%lu,\"packages_available\":%lu,"
+           "\"getter_equal\":%lu,\"repeat_stable\":%lu,\"ax_queries\":0,"
+           "\"ax_writes\":0,"
+           "\"production_policy_enabled\":false}\n",
+           (unsigned long)candidates, (unsigned long)sampled,
+           (unsigned long)iterator_available, (unsigned long)packages_available,
+           (unsigned long)equal, (unsigned long)direct_repeat_stable);
+    return true;
+}
+
 static void print_fixture(const struct fixture *fixture)
 {
     printf("{\"schema\":\"yabai.window-constraints-probe/v2\",\"kind\":\"fixture\","
@@ -678,26 +786,34 @@ int main(int argc, char **argv)
             return ax_controller_execute((pid_t)pid_value, (uint32_t)wid_value, write_request,
                 CGSizeMake(values[0], values[1]), CGSizeMake(values[2], values[3]));
         }
-        if (argc != 1) return EXIT_FAILURE;
+        bool observe_only = argc == 2 && strcmp(argv[1], "--observe-only") == 0;
+        bool external_read_only = argc == 2 && strcmp(argv[1], "--external-read-only") == 0;
+        if (argc != 1 && !observe_only && !external_read_only) return EXIT_FAILURE;
         constraints_iterator_fn iterator_getter = (constraints_iterator_fn)
             dlsym(RTLD_DEFAULT, "SLSWindowIteratorGetConstraints");
         constraints_packages_fn packages_getter = (constraints_packages_fn)
             dlsym(RTLD_DEFAULT, "SLSPackagesGetWindowConstraints");
+        if (external_read_only) return run_external_read_only(iterator_getter, packages_getter)
+            ? EXIT_SUCCESS : EXIT_FAILURE;
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         char build[256] = "unknown"; size_t build_size = sizeof(build);
         if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0) strcpy(build, "unknown");
         struct utsname system = {0}; uname(&system);
         printf("{\"schema\":\"yabai.window-constraints-probe/v2\",\"kind\":\"run\","
-               "\"run_id\":\"controlled-appkit-v2\",\"os_version\":\"%ld.%ld.%ld\","
+               "\"run_id\":\"controlled-appkit-v2\",\"mode\":\"%s\","
+               "\"ax_writes_enabled\":%s,\"tcc_prompt_requested\":false,"
+               "\"os_version\":\"%ld.%ld.%ld\","
                "\"os_build\":\"%s\",\"architecture\":\"%s\","
                "\"symbols\":{\"iterator\":%s,\"packages\":%s},\"ax_trusted\":%s,"
                "\"sampling_schedule_ms\":\"0..250/10,300..1000/50,1250,1500,2000,3000,5000\","
                "\"electron_fixture\":\"external-controlled-host-unavailable\","
                "\"production_policy_enabled\":false}\n",
+               observe_only ? "observe-only" : "resize-trials",
+               observe_only ? "false" : "true",
                version.majorVersion, version.minorVersion, version.patchVersion, build, system.machine,
                iterator_getter ? "true" : "false", packages_getter ? "true" : "false",
                AXIsProcessTrusted() ? "true" : "false");
-        if (!iterator_getter || !AXIsProcessTrusted()) return EXIT_FAILURE;
+        if (!iterator_getter || (!observe_only && !AXIsProcessTrusted())) return EXIT_FAILURE;
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -834,7 +950,7 @@ int main(int argc, char **argv)
         [lifecycle->window deminiaturize:nil]; [lifecycle->window orderFront:nil]; spin_ms(500);
         sample_transition(lifecycle, "restored", 3, iterator_getter, packages_getter, &summary);
 
-        for (size_t i = 0; i < count; ++i) if (fixtures[i].matrix) {
+        for (size_t i = 0; !observe_only && i < count; ++i) if (fixtures[i].matrix) {
             if (i == 9 || i == 10) {
                 [fixtures[i].window makeKeyAndOrderFront:nil];
                 spin_ms(250);
