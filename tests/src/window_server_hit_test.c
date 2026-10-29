@@ -91,6 +91,12 @@ TEST_FUNC(window_server_hit_test_comparison_is_optional_and_legacy_authoritative
     TEST_CHECK(hit_test_last_request.reserved, 0);
     TEST_CHECK(CGPointEqualToPoint(hit_test_last_request.screen_point, CGPointMake(100, 200)), true);
 
+    hit_test_legacy_cid = hit_test_geometry_cid = 0;
+    window_server_hit_test_compare(&request, &comparison);
+    TEST_CHECK(comparison.same_window, true);
+    TEST_CHECK(comparison.same_owner, false);
+
+    hit_test_legacy_cid = 7;
     hit_test_geometry_id = 43; hit_test_geometry_cid = 8; hit_test_geometry_point = CGPointMake(9, 10);
     window_server_hit_test_compare(&request, &comparison);
     TEST_CHECK(comparison.legacy.window_id, 42U);

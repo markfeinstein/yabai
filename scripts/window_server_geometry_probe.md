@@ -22,6 +22,8 @@ The controlled harness creates and closes only probe-owned AppKit fixtures and s
 - utility panel;
 - transparent click-through panel;
 - attached sheet;
+- a blocking menu center while the menu is open;
+- a popover center while the popover is open;
 - just inside, exactly on, and just outside the main display’s left edge.
 
 A manual point remains available:
@@ -62,7 +64,7 @@ Schema `yabai.window-server-geometry-probe/v3` distinguishes:
 - per-side error outcomes;
 - `relationship-metadata-unknown` when parent/association inspection is unavailable.
 
-Both basic and filtered variants receive a full relationship label and status pair. False and unavailable metadata are not conflated.
+Both basic and filtered variants receive a full relationship label and status pair. False and unavailable metadata are not conflated. Successful hits with a missing owner-connection output remain usable for WindowServer ID, bounds, and local-point comparison; the schema reports per-side owner-connection availability, and two zero connections are never treated as same-owner evidence. A successful no-hit after filtering is also a valid diagnostic outcome.
 
 ## Exact ABI evidence
 
@@ -72,14 +74,14 @@ On macOS 27.0.1 build 26A434, read-only arm64 disassembly established the shared
 
 With only the internal 2× display active, ten controlled points selected the same WindowServer surface in both APIs. After connecting an external 2× fixed-60 Hz main display beside the built-in 120 Hz display, the same corpus produced six same-window points and four stable different-owner overlaps; those four disagreed in all 100 repetitions. This confirms that mode-0/mode-1 semantics depend on exact stacking and multi-display surface composition rather than timing noise.
 
-The deployed highlight remained click-through in the separate highlight acceptance probe. Additional separate-process opaque-overlap and click-through-overlay attempts selected the same surface in both APIs for 200/200 repetitions under the tested stacking. Automated menu/popover lifetime control was not stable enough to claim a semantic row; the private manifest support now permits a future controlled host to label those associated surfaces without exposing raw correlation values. A real animation proxy or insertion-feedback fixture was not available. Removed external border software is not a supported fixture.
+The deployed highlight remained click-through in the separate highlight acceptance probe. Additional separate-process opaque-overlap and click-through-overlay attempts selected the same surface in both APIs for 200/200 repetitions under the tested stacking. The controlled harness now keeps menu/popover transients open through their samples: current 200-iteration center batches returned the same WindowServer ID, valid bounds/local points, and zero legacy/geometry disagreements for both. The returned transient surfaces were not attributable to the controlled process in every run, so this closes the lifetime-control gap but does not establish a general semantic relationship. A real animation proxy or insertion-feedback fixture was not available. Removed external border software is not a supported fixture.
 
 ## Remaining gates
 
 Production remains legacy-authoritative until controlled evidence explains relationships across:
 
 - different-process overlap;
-- menus and popovers;
+- independently attributable menu and popover surfaces across apps;
 - real animation proxies and insertion feedback;
 - multiple displays, negative origins, shared boundaries, and mixed scales;
 - macOS 26.6 and 27.2.

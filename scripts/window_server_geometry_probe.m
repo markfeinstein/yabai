@@ -82,8 +82,7 @@ static bool parse_point(const char *text, CGPoint *point)
 static bool result_valid(const struct window_server_hit_test_result *result)
 {
     return result->status != kCGErrorSuccess ||
-           (result->window_id && result->window_connection &&
-            isfinite(result->window_point.x) && isfinite(result->window_point.y));
+           (isfinite(result->window_point.x) && isfinite(result->window_point.y));
 }
 
 static bool parent_id(int cid, uint32_t wid, uint32_t *parent)
@@ -226,14 +225,18 @@ static const char *fixture_kind(const struct fixture_manifest *manifest, uint32_
     return "external-window";
 }
 
+static void add_fixture_id(struct fixture_manifest *manifest, uint32_t window_id,
+                           pid_t owner_pid, const char *kind)
+{
+    if (!manifest || (!window_id && owner_pid <= 0) || !kind || manifest->count >= 32) return;
+    manifest->entries[manifest->count++] = (struct fixture_entry) {
+        .window_id = window_id, .owner_pid = owner_pid, .kind = kind
+    };
+}
+
 static void add_fixture(struct fixture_manifest *manifest, NSWindow *window, const char *kind)
 {
-    if (!manifest || !window || manifest->count >= 32) return;
-    manifest->entries[manifest->count++] = (struct fixture_entry) {
-        .window_id = (uint32_t)window.windowNumber,
-        .owner_pid = getpid(),
-        .kind = kind
-    };
+    if (window) add_fixture_id(manifest, (uint32_t)window.windowNumber, getpid(), kind);
 }
 
 static bool load_fixture_manifest(const char *path, struct fixture_manifest *manifest)
@@ -430,6 +433,8 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
            "\"basic\":{\"legacy_status\":%d,\"geometry_status\":%d,"
            "\"relation\":\"%s\",\"legacy_kind\":\"%s\","
            "\"geometry_kind\":\"%s\",\"same_owner\":%s,"
+           "\"legacy_owner_connection_available\":%s,"
+           "\"geometry_owner_connection_available\":%s,"
            "\"parent_metadata_known\":%s,\"association_metadata_known\":%s,"
            "\"legacy_bounds_contain\":%s,\"geometry_bounds_contain\":%s,"
            "\"legacy_local_matches\":%s,\"geometry_local_matches\":%s},"
@@ -451,6 +456,8 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
            basic.legacy.status, basic.geometry.status,
            detailed_relation(&basic, &basic_facts), fixture_kind(manifest, basic.legacy.window_id),
            fixture_kind(manifest, basic.geometry.window_id), basic.same_owner ? "true" : "false",
+           basic.legacy.window_connection ? "true" : "false",
+           basic.geometry.window_connection ? "true" : "false",
            basic_facts.parent_known ? "true" : "false",
            basic_facts.legacy_association_known && basic_facts.geometry_association_known ? "true" : "false",
            legacy_contains ? "true" : "false", geometry_contains ? "true" : "false",
@@ -545,6 +552,52 @@ static bool run_controlled(int iterations, const char *source_revision,
         CGPointMake(CGRectGetMidX(sheet_bounds), CGRectGetMidY(sheet_bounds)), iterations,
         source_revision, fixture_revision, &manifest);
     [base endSheet:sheet]; [sheet close];
+
+    struct fixture_manifest *manifest_ptr = &manifest;
+    NSMenu *menu = [NSMenu new];
+    NSMenuItem *menu_item = [[NSMenuItem alloc] initWithTitle:@"First" action:nil keyEquivalent:@""];
+    NSView *menu_item_view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 180, 28)];
+    menu_item.view = menu_item_view;
+    [menu addItem:menu_item];
+    [menu addItemWithTitle:@"Second" action:nil keyEquivalent:@""];
+    __block bool menu_observed = false;
+    __block bool menu_result = false;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        uint32_t window_id = (uint32_t)menu_item_view.window.windowNumber;
+        CGRect bounds = cg_bounds(window_id);
+        if (window_id && !CGRectIsEmpty(bounds)) {
+            add_fixture_id(manifest_ptr, window_id, getpid(), "menu-surface");
+            menu_result = emit_point("menu", "menu-center",
+                CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds)), iterations,
+                source_revision, fixture_revision, manifest_ptr);
+            menu_observed = true;
+        }
+        [menu cancelTracking];
+    });
+    [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(220, 180)
+                           inView:base.contentView];
+    success &= menu_observed && menu_result;
+
+    NSButton *anchor = [[NSButton alloc] initWithFrame:NSMakeRect(220, 150, 100, 30)];
+    [base.contentView addSubview:anchor];
+    NSPopover *popover = [NSPopover new];
+    popover.contentViewController = [NSViewController new];
+    popover.contentViewController.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 180)];
+    [popover showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMaxY];
+    spin_ms(300);
+    uint32_t popover_id = (uint32_t)popover.contentViewController.view.window.windowNumber;
+    CGRect popover_bounds = cg_bounds(popover_id);
+    bool popover_observed = popover_id && !CGRectIsEmpty(popover_bounds);
+    if (popover_observed) {
+        add_fixture_id(&manifest, popover_id, getpid(), "popover-surface");
+        success &= emit_point("popover", "popover-center",
+            CGPointMake(CGRectGetMidX(popover_bounds), CGRectGetMidY(popover_bounds)), iterations,
+            source_revision, fixture_revision, &manifest);
+    } else {
+        success = false;
+    }
+    [popover close];
 
     CGRect display = CGDisplayBounds(CGMainDisplayID());
     success &= emit_point("display-edge", "left-inside",
