@@ -3087,6 +3087,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks) \
     TEST_ENTRY(window_visibility_handlers_query_order_before_snapshot_diagnostics) \
     TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
+    TEST_ENTRY(imperative_layout_transaction_synthesizes_identity_for_empty_uuid) \
     TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
     TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
