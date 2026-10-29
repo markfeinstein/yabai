@@ -1,9 +1,211 @@
-#import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
+#include <dlfcn.h>
+#include <math.h>
+#include <string.h>
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 
+#include "../src/misc/extern.h"
 #include "native_tile_diagnostic_core.h"
+
+#define WM_SKYLIGHT_PATH "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
+#define WM_FRAMEWORK_PATH "/System/Library/PrivateFrameworks/WindowManagement.framework/WindowManagement"
+
+static const char *encoding(Class cls, const char *selector)
+{
+    Method method = cls ? class_getInstanceMethod(cls, sel_registerName(selector)) : NULL;
+    return method ? method_getTypeEncoding(method) : NULL;
+}
+
+static bool matches(Class cls, const char *selector, const char *expected)
+{
+    const char *actual = encoding(cls, selector);
+    return actual && strcmp(actual, expected) == 0;
+}
+
+static id init0(Class cls, const char *selector)
+{
+    id object = cls ? ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc")) : nil;
+    return object ? ((id (*)(id, SEL))objc_msgSend)(object, sel_registerName(selector)) : nil;
+}
+
+static id init_u64(Class cls, const char *selector, uint64_t value)
+{
+    id object = cls ? ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc")) : nil;
+    return object ? ((id (*)(id, SEL, uint64_t))objc_msgSend)(
+        object, sel_registerName(selector), value) : nil;
+}
+
+static id init_u32(Class cls, const char *selector, uint32_t value)
+{
+    id object = cls ? ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc")) : nil;
+    return object ? ((id (*)(id, SEL, uint32_t))objc_msgSend)(
+        object, sel_registerName(selector), value) : nil;
+}
+
+static id init_u64_size(Class cls, const char *selector, uint64_t value, CGSize size)
+{
+    id object = cls ? ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc")) : nil;
+    return object ? ((id (*)(id, SEL, uint64_t, CGSize))objc_msgSend)(
+        object, sel_registerName(selector), value, size) : nil;
+}
+
+static id perform(id manager, id operation)
+{
+    if (!manager || !operation) return nil;
+    id result = ((id (*)(id, SEL, id))objc_msgSend)(manager,
+        sel_registerName("performSynchronousBridgedWindowManagementOperation:"), operation);
+    return result ? ((id (*)(id, SEL))objc_msgSend)(result, sel_registerName("retain")) : nil;
+}
+
+static bool kind(id object, Class cls)
+{
+    for (Class current = object ? object_getClass(object) : Nil; current;
+         current = class_getSuperclass(current)) if (current == cls) return true;
+    return false;
+}
+
+static void release_object(id object)
+{
+    if (object) ((void (*)(id, SEL))objc_msgSend)(object, sel_registerName("release"));
+}
+
+static bool positive_u64(id value, uint64_t *result)
+{
+    if (![value isKindOfClass:[NSNumber class]]) return false;
+    long long number = [value longLongValue];
+    if (number <= 0) return false;
+    *result = (uint64_t)number;
+    return true;
+}
+
+static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic)
+{
+    *diagnostic = (struct native_tile_extended_diagnostic) {0};
+    void *skylight = dlopen(WM_SKYLIGHT_PATH, RTLD_LAZY | RTLD_LOCAL);
+    void *framework = dlopen(WM_FRAMEWORK_PATH, RTLD_LAZY | RTLD_LOCAL);
+    if (!skylight || !framework) goto out;
+
+    Class client = objc_lookUpClass("WMClientWindowManager");
+    Class synchronous = objc_lookUpClass("SLSSynchronousBridgedWindowManagementOperation");
+    Class result_base = objc_lookUpClass("SLSBridgedWindowManagementOperationResult");
+    Class divider_op = objc_lookUpClass("SLSBridgedGetTileSpaceDividerDirectionsOperation");
+    Class divider_result = objc_lookUpClass(
+        "SLSBridgedWindowManagementOperationSpaceResizeDirectionsResult");
+    Class rect_op = objc_lookUpClass("SLSBridgedWindowGetTileRectOperation");
+    Class rect_result = objc_lookUpClass("SLSBridgedWindowManagementOperationRectResult");
+    Class can_op = objc_lookUpClass("SLSBridgedSpaceCanCreateTileOperation");
+    Class bool_result = objc_lookUpClass("SLSBridgedWindowManagementOperationBoolResult");
+    if (!client || !synchronous || !result_base || !divider_op || !divider_result ||
+        !rect_op || !rect_result || !can_op || !bool_result) goto out;
+
+    bool manager_abi = matches(client, "init", "@16@0:8") &&
+        matches(client, "invalidate", "v16@0:8") &&
+        matches(client, "performSynchronousBridgedWindowManagementOperation:", "@24@0:8@16");
+    diagnostic->divider_available = class_getSuperclass(divider_op) == synchronous &&
+        class_getSuperclass(divider_result) == result_base &&
+        matches(divider_op, "initWithSpaceID:", "@24@0:8Q16") &&
+        matches(divider_result, "spaceResizeDirections", "Q16@0:8");
+    diagnostic->tile_rect_available = class_getSuperclass(rect_op) == synchronous &&
+        class_getSuperclass(rect_result) == result_base &&
+        matches(rect_op, "initWithWindowID:", "@20@0:8I16") &&
+        matches(rect_result, "rect", "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8");
+    diagnostic->can_create_available = class_getSuperclass(can_op) == synchronous &&
+        class_getSuperclass(bool_result) == result_base &&
+        matches(can_op, "initWithSpaceID:minSize:", "@40@0:8Q16{CGSize=dd}24") &&
+        matches(bool_result, "boolValue", "B16@0:8");
+    diagnostic->metadata_verified = manager_abi && diagnostic->divider_available &&
+        diagnostic->tile_rect_available && diagnostic->can_create_available;
+    if (!diagnostic->metadata_verified) goto out;
+
+    id manager = init0(client, "init");
+    if (!manager) goto out;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(SLSMainConnectionID());
+    if (topology && CFGetTypeID(topology) == CFArrayGetTypeID()) {
+        for (id display in (__bridge NSArray *)topology) {
+            id spaces = [display isKindOfClass:[NSDictionary class]] ? display[@"Spaces"] : nil;
+            if (![spaces isKindOfClass:[NSArray class]]) continue;
+            for (id space in spaces) {
+                uint64_t sid = 0;
+                if (![space isKindOfClass:[NSDictionary class]] ||
+                    !positive_u64(space[@"id64"], &sid)) continue;
+
+                uint64_t values[2] = {0}; bool successes[2] = {false};
+                for (int repeat = 0; repeat < 2; ++repeat) {
+                    ++diagnostic->divider_calls;
+                    id operation = init_u64(divider_op, "initWithSpaceID:", sid);
+                    id result = perform(manager, operation);
+                    if (kind(result, divider_result)) {
+                        values[repeat] = ((uint64_t (*)(id, SEL))objc_msgSend)(
+                            result, sel_registerName("spaceResizeDirections"));
+                        successes[repeat] = true;
+                        ++diagnostic->divider_successes;
+                        if (values[repeat]) ++diagnostic->divider_nonzero;
+                    }
+                    release_object(result); release_object(operation);
+                }
+                if (successes[0] && successes[1] && values[0] == values[1]) {
+                    ++diagnostic->divider_repeat_stable;
+                }
+
+                ++diagnostic->can_create_calls;
+                id operation = init_u64_size(can_op, "initWithSpaceID:minSize:", sid,
+                                              CGSizeMake(320.0, 240.0));
+                id result = perform(manager, operation);
+                if (kind(result, bool_result)) {
+                    bool value = ((bool (*)(id, SEL))objc_msgSend)(
+                        result, sel_registerName("boolValue"));
+                    ++diagnostic->can_create_successes;
+                    if (value) ++diagnostic->can_create_true;
+                }
+                release_object(result); release_object(operation);
+            }
+        }
+    }
+    if (topology) CFRelease(topology);
+
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (windows && CFGetTypeID(windows) == CFArrayGetTypeID()) {
+        NSUInteger limit = MIN((NSUInteger)CFArrayGetCount(windows), (NSUInteger)256);
+        for (NSUInteger i = 0; i < limit; ++i) {
+            id row = ((__bridge NSArray *)windows)[i];
+            id number = [row isKindOfClass:[NSDictionary class]]
+                ? row[(NSString *)kCGWindowNumber] : nil;
+            if (![number isKindOfClass:[NSNumber class]] ||
+                [number unsignedLongLongValue] > UINT32_MAX || ![number unsignedIntValue]) continue;
+            ++diagnostic->tile_rect_calls;
+            id operation = init_u32(rect_op, "initWithWindowID:", [number unsignedIntValue]);
+            id result = perform(manager, operation);
+            if (kind(result, rect_result)) {
+                CGRect rect = CGRectZero;
+#ifdef __x86_64__
+                ((void (*)(CGRect *, id, SEL))objc_msgSend_stret)(
+                    &rect, result, sel_registerName("rect"));
+#else
+                rect = ((CGRect (*)(id, SEL))objc_msgSend)(result, sel_registerName("rect"));
+#endif
+                ++diagnostic->tile_rect_successes;
+                if (isfinite(rect.origin.x) && isfinite(rect.origin.y) &&
+                    isfinite(rect.size.width) && isfinite(rect.size.height) &&
+                    rect.size.width > 0.0 && rect.size.height > 0.0) {
+                    ++diagnostic->tile_rect_nonempty;
+                }
+            }
+            release_object(result); release_object(operation);
+        }
+    }
+    if (windows) CFRelease(windows);
+    ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("invalidate"));
+    release_object(manager);
+out:
+    if (framework) dlclose(framework);
+    if (skylight) dlclose(skylight);
+}
 
 static void native_tile_usage(const char *program)
 {
@@ -24,20 +226,22 @@ int main(int argc, char **argv)
 
         struct wm_tile_membership_diagnostic diagnostic;
         if (!window_management_bridge_diagnose_tile_membership_readonly(&diagnostic)) return 3;
+        struct native_tile_extended_diagnostic extended;
+        diagnose_extended(&extended);
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         char build[256] = {0}; size_t build_size = sizeof(build); struct utsname system = {0};
         if (sysctlbyname("kern.osversion", build, &build_size, NULL, 0) != 0 ||
             !memchr(build, '\0', sizeof(build)) || uname(&system) != 0) return 3;
         struct native_tile_platform platform = {
-            .os_major = (int) version.majorVersion,
-            .os_minor = (int) version.minorVersion,
-            .os_patch = (int) version.patchVersion,
+            .os_major = (int)version.majorVersion,
+            .os_minor = (int)version.minorVersion,
+            .os_patch = (int)version.patchVersion,
             .build = build,
             .architecture = system.machine
         };
-        if (!native_tile_diagnostic_write_json(stdout, &platform, &diagnostic)) return 3;
+        if (!native_tile_diagnostic_write_json(stdout, &platform, &diagnostic, &extended)) return 3;
         switch (diagnostic.status) {
-        case WM_TILE_MEMBERSHIP_OK: return 0;
+        case WM_TILE_MEMBERSHIP_OK: return extended.metadata_verified ? 0 : 2;
         case WM_TILE_MEMBERSHIP_UNAVAILABLE:
         case WM_TILE_MEMBERSHIP_ABI_MISMATCH: return 2;
         case WM_TILE_MEMBERSHIP_PARTIAL:
