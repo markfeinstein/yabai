@@ -14,6 +14,7 @@ typedef CGError (*sls_find_window_by_geometry_fn)(
     const CGPoint *screen_point, CGPoint *window_point,
     uint32_t *window_id, int32_t *window_cid);
 
+#ifndef TESTS
 static sls_find_window_by_geometry_fn window_server_hit_test_geometry_impl;
 static pthread_once_t window_server_hit_test_geometry_once = PTHREAD_ONCE_INIT;
 
@@ -22,6 +23,7 @@ static void window_server_hit_test_resolve_geometry(void)
     window_server_hit_test_geometry_impl = (sls_find_window_by_geometry_fn)
         dlsym(RTLD_DEFAULT, "SLSFindWindowByGeometry");
 }
+#endif
 
 #ifdef TESTS
 static OSStatus (*window_server_hit_test_legacy_impl)(int, int, int, int, CGPoint *, CGPoint *, uint32_t *, int *) =

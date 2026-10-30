@@ -86,7 +86,7 @@ typedef TEST_SIG(function);
 #define TEST_CHECK(r, e) do { \
     __auto_type test_actual = (r); \
     __auto_type test_expected = (e); \
-    if (test_actual != test_expected) { \
+    if (test_actual != (__typeof__(test_actual)) test_expected) { \
         printf("                   \e[1;33m%s\e[m\e[1;31m#%d %s == %s\e[m\n", test_name, __LINE__, #r, #e); \
         result = false; \
     } \
@@ -3034,6 +3034,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
     TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
+    TEST_ENTRY(application_create_copies_initial_window_inventory_context) \
     TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
     TEST_ENTRY(window_subrole_is_unknown)                      \
     TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
@@ -3096,6 +3097,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(single_window_zoom_bypasses_and_restores_responsive_width) \
     TEST_ENTRY(single_window_width_ratio_reconciles_stack_membership_transitions) \
     TEST_ENTRY(single_window_width_ratio_reconciles_bsp_split_and_collapse) \
+    TEST_ENTRY(single_window_auto_split_uses_ordinary_root_geometry) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
     TEST_ENTRY(active_window_highlight_geometry_is_bounded_and_outset) \
@@ -3109,6 +3111,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
     TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
+    TEST_ENTRY(startup_inventory_moves_rule_targets_without_following_space) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
@@ -3120,6 +3123,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
+    TEST_ENTRY(window_space_move_sa_requires_observed_postcondition) \
     TEST_ENTRY(window_space_move_prefers_observable_sa_then_verified_fallbacks) \
     TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
@@ -3282,6 +3286,8 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
     TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
     TEST_ENTRY(window_manager_scratchpad_refresh_routes_inventory_changes) \
+    TEST_ENTRY(menu_bar_manager_focus_action_switches_space) \
+    TEST_ENTRY(menu_bar_manager_focus_action_reports_failures_and_rejects_missing_spaces) \
     TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
     TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
     TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \
@@ -3588,9 +3594,9 @@ int main(int argc, char **argv)
         return window_server_tag_corpus_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-classifier") == 0) {
-        return (window_server_classifier_benchmark_run() &
-                window_server_classifier_comparison_benchmark_run())
-             ? EXIT_SUCCESS : EXIT_FAILURE;
+        bool classifier = window_server_classifier_benchmark_run();
+        bool comparison = window_server_classifier_comparison_benchmark_run();
+        return classifier && comparison ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-constraints") == 0) {
         return window_constraints_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;

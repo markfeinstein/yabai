@@ -16,6 +16,7 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(strcmp(menu_bar_manager_interface_string((enum menu_bar_interface) -1), "menu"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_COMPACT), "compact"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_EXPANDED), "expanded"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_AUTOMATIC), "automatic"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "expanded"), 0);
 
     enum menu_bar_enabled enabled = MENU_BAR_ENABLED;
@@ -43,8 +44,10 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(style, MENU_BAR_STYLE_COMPACT);
     TEST_CHECK(menu_bar_manager_parse_style("expanded", 8, &style), true);
     TEST_CHECK(style, MENU_BAR_STYLE_EXPANDED);
+    TEST_CHECK(menu_bar_manager_parse_style("automatic", 9, &style), true);
+    TEST_CHECK(style, MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(menu_bar_manager_parse_style("wide", 4, &style), false);
-    TEST_CHECK(style, MENU_BAR_STYLE_EXPANDED);
+    TEST_CHECK(style, MENU_BAR_STYLE_AUTOMATIC);
 
     TEST_CHECK(menu_bar_manager_parse_space_filter("occupied", 8, &filter), true);
     TEST_CHECK(filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
@@ -66,6 +69,9 @@ static bool g_menu_bar_manager_test_native_sticky_window;
 static int g_menu_bar_manager_test_inventory_call_count;
 static int g_menu_bar_manager_test_snapshot_space_type_calls;
 static int g_menu_bar_manager_test_topology_call_count;
+static int g_menu_bar_manager_test_focus_call_count;
+static uint64_t g_menu_bar_manager_test_focused_space_id;
+static enum space_op_error g_menu_bar_manager_test_focus_result;
 
 static CFArrayRef menu_bar_manager_test_managed_display_spaces(void)
 {
@@ -139,6 +145,14 @@ static uint64_t *menu_bar_manager_test_window_space_list(uint32_t wid, int *coun
     if (count) *count = g_menu_bar_manager_test_native_sticky_window ? 2 : 1;
     return spaces;
 }
+
+static enum space_op_error menu_bar_manager_test_focus_space(uint64_t sid)
+{
+    ++g_menu_bar_manager_test_focus_call_count;
+    g_menu_bar_manager_test_focused_space_id = sid;
+    return g_menu_bar_manager_test_focus_result;
+}
+
 
 static struct window_server_snapshot *menu_bar_manager_test_window_snapshot(
     const uint32_t *window_ids, int window_count)
@@ -398,6 +412,9 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_inventory_call_count = 0;
     g_menu_bar_manager_test_snapshot_space_type_calls = 0;
     g_menu_bar_manager_test_topology_call_count = 0;
+    g_menu_bar_manager_test_focus_call_count = 0;
+    g_menu_bar_manager_test_focused_space_id = 0;
+    g_menu_bar_manager_test_focus_result = SPACE_OP_ERROR_SUCCESS;
 }
 
 static void menu_bar_manager_test_install_native_seams(void)
@@ -412,6 +429,7 @@ static void menu_bar_manager_test_install_native_seams(void)
     g_menu_bar_manager_native.mission_control_index = menu_bar_manager_test_mission_control_index;
     g_menu_bar_manager_native.space_window_list = menu_bar_manager_test_space_window_list;
     g_menu_bar_manager_native.window_space_list = menu_bar_manager_test_window_space_list;
+    g_menu_bar_manager_native.focus_space = menu_bar_manager_test_focus_space;
 }
 
 static void menu_bar_manager_test_begin_queue(void)
@@ -845,12 +863,71 @@ TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
+TEST_FUNC(menu_bar_manager_focus_action_switches_space, {
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_install_native_seams();
+    menu_bar_manager_test_set_enabled_snapshot(5, 5);
+
+    struct menu_bar_action *focus = menu_bar_manager_test_action(MENU_BAR_ACTION_FOCUS_SPACE, 5);
+    focus->data.focus_space.space_id = 42;
+    menu_bar_manager_handle_action(focus);
+
+    TEST_CHECK(g_menu_bar_manager_test_focus_call_count, 1);
+    TEST_CHECK(g_menu_bar_manager_test_focused_space_id, 42ULL);
+    TEST_CHECK(g_menu_bar_manager.action_failure_text == NULL, true);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, true);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons,
+               MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
+TEST_FUNC(menu_bar_manager_focus_action_reports_failures_and_rejects_missing_spaces, {
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_install_native_seams();
+    menu_bar_manager_test_set_enabled_snapshot(8, 8);
+    g_menu_bar_manager_test_focus_result = SPACE_OP_ERROR_GESTURE;
+
+    struct menu_bar_action *failed = menu_bar_manager_test_action(MENU_BAR_ACTION_FOCUS_SPACE, 8);
+    failed->data.focus_space.space_id = 42;
+    menu_bar_manager_handle_action(failed);
+
+    TEST_CHECK(g_menu_bar_manager_test_focus_call_count, 1);
+    TEST_CHECK(g_menu_bar_manager.action_failure_generation, 8ULL);
+    TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text,
+                      "cannot focus space because the fallback gesture failed");
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    struct menu_bar_action *missing = menu_bar_manager_test_action(MENU_BAR_ACTION_FOCUS_SPACE, 8);
+    missing->data.focus_space.space_id = 84;
+    menu_bar_manager_handle_action(missing);
+
+    TEST_CHECK(g_menu_bar_manager_test_focus_call_count, 1);
+    TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text, "space is no longer available");
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons,
+               MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
 TEST_FUNC(menu_bar_manager_ignores_setting_actions_after_disable, {
     menu_bar_manager_test_reset();
     menu_bar_manager_test_install_native_seams();
     menu_bar_manager_test_set_enabled_snapshot(5, 5);
 
     TEST_CHECK(menu_bar_manager_set_enabled(MENU_BAR_DISABLED), true);
+
+    struct menu_bar_action *focus = menu_bar_manager_test_action(MENU_BAR_ACTION_FOCUS_SPACE, 5);
+    focus->data.focus_space.space_id = 42;
+    menu_bar_manager_handle_action(focus);
 
     struct menu_bar_action *style = menu_bar_manager_test_action(MENU_BAR_ACTION_SET_STYLE, 5);
     style->data.set_style.style = MENU_BAR_STYLE_EXPANDED;
@@ -860,6 +937,7 @@ TEST_FUNC(menu_bar_manager_ignores_setting_actions_after_disable, {
     filter->data.set_space_filter.filter = MENU_BAR_SPACE_FILTER_ALL;
     menu_bar_manager_handle_action(filter);
 
+    TEST_CHECK(g_menu_bar_manager_test_focus_call_count, 0);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_COMPACT);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);

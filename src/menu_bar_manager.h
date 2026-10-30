@@ -17,6 +17,7 @@
 #define MENU_BAR_INTERFACE_AUTO_STR       "auto"
 #define MENU_BAR_STYLE_COMPACT_STR       "compact"
 #define MENU_BAR_STYLE_EXPANDED_STR      "expanded"
+#define MENU_BAR_STYLE_AUTOMATIC_STR     "automatic"
 #define MENU_BAR_SPACE_FILTER_OCCUPIED_STR "occupied"
 #define MENU_BAR_SPACE_FILTER_ALL_STR      "all"
 

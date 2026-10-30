@@ -196,7 +196,8 @@ static bool window_server_classifier_benchmark_case(size_t record_count)
 
 static bool window_server_classifier_benchmark_run(void)
 {
-    return window_server_classifier_benchmark_case(10) &
-           window_server_classifier_benchmark_case(100) &
-           window_server_classifier_benchmark_case(1000);
+    bool small = window_server_classifier_benchmark_case(10);
+    bool medium = window_server_classifier_benchmark_case(100);
+    bool large = window_server_classifier_benchmark_case(1000);
+    return small && medium && large;
 }

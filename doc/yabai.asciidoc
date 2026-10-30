@@ -183,7 +183,7 @@ Enum fields are:
 * `window_shadow`: `off`, `float`, `on`;
 * `menubar`: `off`, `on`;
 * `menubar_interface`: `menu`, `panel`, `auto`;
-* `menubar_style`: `compact`, `expanded`;
+* `menubar_style`: `automatic`, `compact`, `expanded`;
 * `menubar_space_filter`: `occupied`, `all`;
 * `layout`: `bsp`, `stack`, `float`, `accordion_horizontal`, `accordion_vertical`;
 * `split_type`: `vertical`, `horizontal`, `auto`;
@@ -334,6 +334,8 @@ Each `rules` entry accepts exactly `label`, `one_shot`, `match` and `effects`. `
 
 A rule cannot specify both `scratchpad` and `manage`. If both display and Space are present, Space wins and the shared `follow` applies to it.
 
+During daemon startup, target moves still apply while each pre-existing application's initial window inventory converges, but `follow` is suppressed so restarting yabai does not change the active Space. Window-created retries retain that startup context. Later windows and explicit `rule --apply` operations use normal follow behavior; native fullscreen continues to focus its target.
+
 The native `sticky`, `sub_layer` and `opacity` effects call the scripting addition and require partial SIP disablement. Assigning a `scratchpad` label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
 
 Native display and Space targets use one-based indices only. Display indices resolve using the candidate `display_arrangement_order`; equal coordinates use the captured managed-display ordinal as the final tie-break. Space indices use the captured global Mission Control order. A positive authored index absent from the current valid topology is accepted, and the native rule remains installed with its source order and label. Runtime preparation still strictly rejects malformed, incomplete, duplicate, zero-ID or ambiguous display/Space topology instead of filtering it.
@@ -472,8 +474,8 @@ Global Settings
     'off':  Do not apply any special padding.
 
 *menubar* ['<BOOL_SEL>']::
-    Show yabai Spaces as a read-only native macOS menu bar status item. Default is 'off'. +
-    The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
+    Show yabai Spaces as a native macOS menu bar status item. Default is 'off'. +
+    Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right-click, or press and hold to open the menu. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
 
 *menubar_interface* ['menu|panel|auto']::
     Select the read-only menu bar item's expanded interface. Default is 'menu'. +
@@ -482,16 +484,17 @@ Global Settings
     'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
     The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It does not expose window content and does not require Screen Recording permission.
 
-*menubar_style* ['compact|expanded']::
+*menubar_style* ['automatic|compact|expanded']::
     Set the menu bar status item layout. Default is 'expanded'. +
+    'automatic': Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout. +
     'compact': Show one screen outline for the keyboard-focused display's visible space. +
-    'expanded': Show a bounded display-grouped interval of filtered spaces around the focused space in the menu bar; when every outline does not fit within the 520-point strip, an `…+N` control represents the omitted spaces.
+    'expanded': Show a bounded display-grouped interval of filtered spaces around the focused space in the menu bar. When every outline does not fit within the 520-point strip, `←+N` and `+N→` controls separately report spaces omitted before and after the visible interval.
 
 *menubar_space_filter* ['occupied|all']::
     Select which spaces are shown by the menu bar item and its menu. Default is 'occupied'. +
     'occupied': Show spaces with user-facing application windows, spaces that are currently visible on a display, and spaces with unresolved occupancy. Floating, unmanaged, minimized, hidden and native-fullscreen application windows count. Sticky-only, system and transient windows do not make a space occupied. +
     'all': Show all user-navigation spaces reported by macOS, including native-fullscreen spaces. Virtual spaces are not created or shown. +
-    The compact and expanded layouts share the same display-grouped informational menu. A checkmark marks each display's visible space; the focused display is the display with keyboard focus and is tracked separately from visible spaces. Space and display rows never focus or switch Spaces; clicking the expanded indicator opens the menu. Layout and filter choices remain interactive and change the running configuration only; set these options in *yabairc* to persist them.
+    The automatic, compact and expanded layouts share the same flat menu. Each display appears as a labeled section header with its Space rows directly below it, and a checkmark marks that display's visible space. Choosing a Space row dismisses the menu without animation and focuses that Space, including Spaces on another display; choosing the already focused Space is a no-op. The focused display is the display with keyboard focus and is tracked separately from visible spaces. Overflow controls open the menu. Accessibility exposes the visible Space summary for every display through the status button and labeled display sections. Layout and filter choices change the running configuration only; set these options in *yabairc* to persist them.
 
 *menubar_opacity* ['<UNIT_SEL>']::
     Changes the transparency of the macOS menubar. +

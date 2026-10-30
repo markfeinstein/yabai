@@ -16,8 +16,9 @@ extern "C" {
  * The implementation owns all NSStatusItem/NSMenu/custom-view state on the main
  * thread and exposes no mutable UI objects. It receives immutable owned model
  * snapshots from the daemon/event worker and emits small typed actions through
- * the injected callback. The callback applies settings and menu-tracking state on
- * the daemon worker; it must not run shell commands to mutate yabai state.
+ * the injected callback. The callback handles Space focus, settings and
+ * menu-tracking state on the daemon worker; it must not run shell commands to
+ * mutate yabai state.
  *
  * This API is safe to include from C or Objective-C under -fno-objc-arc.
  */
@@ -25,9 +26,15 @@ extern "C" {
 enum menu_bar_action_type
 {
     MENU_BAR_ACTION_NONE = 0,
+    MENU_BAR_ACTION_FOCUS_SPACE,
     MENU_BAR_ACTION_SET_STYLE,
     MENU_BAR_ACTION_SET_SPACE_FILTER,
     MENU_BAR_ACTION_MENU_TRACKING_CHANGED
+};
+
+struct menu_bar_action_focus_space
+{
+    uint64_t space_id;
 };
 
 struct menu_bar_action_set_style
@@ -54,6 +61,7 @@ struct menu_bar_action
     uint64_t generation;
 
     union {
+        struct menu_bar_action_focus_space focus_space;
         struct menu_bar_action_set_style set_style;
         struct menu_bar_action_set_space_filter set_space_filter;
         struct menu_bar_action_menu_tracking menu_tracking;

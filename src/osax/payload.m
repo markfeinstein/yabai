@@ -1,6 +1,6 @@
 #include <Foundation/Foundation.h>
 
-#include <mach-o/getsect.h>
+#include <mach-o/loader.h>
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -147,11 +147,44 @@ static Class dump_class_info_by_name(const char *name)
     return c;
 }
 
+static const struct segment_command_64 *find_segment_command_64(
+    const struct mach_header_64 *header, const char *name)
+{
+    if (!header || !name || header->magic != MH_MAGIC_64 || header->filetype != MH_EXECUTE) return NULL;
+    size_t segment_name_size = sizeof(((struct segment_command_64 *) 0)->segname);
+    size_t name_length = strnlen(name, segment_name_size + 1);
+    if (name_length == 0 || name_length > segment_name_size) return NULL;
+
+    const uint8_t *cursor = (const uint8_t *) (header + 1);
+    size_t remaining = header->sizeofcmds;
+    for (uint32_t i = 0; i < header->ncmds; ++i) {
+        if (remaining < sizeof(struct load_command)) return NULL;
+        const struct load_command *command = (const struct load_command *) cursor;
+        if (command->cmdsize < sizeof(*command) || command->cmdsize > remaining) return NULL;
+        if (command->cmd == LC_SEGMENT_64) {
+            if (command->cmdsize < sizeof(struct segment_command_64)) return NULL;
+            const struct segment_command_64 *segment = (const struct segment_command_64 *) command;
+            bool matches = name_length == segment_name_size
+                         ? memcmp(segment->segname, name, segment_name_size) == 0
+                         : memcmp(segment->segname, name, name_length) == 0 &&
+                           segment->segname[name_length] == '\0';
+            if (matches) return segment;
+        }
+        cursor += command->cmdsize;
+        remaining -= command->cmdsize;
+    }
+    return NULL;
+}
+
+static const struct segment_command_64 *main_image_segment(const char *name)
+{
+    return find_segment_command_64((const struct mach_header_64 *) _dyld_get_image_header(0), name);
+}
+
 static uint64_t static_base_address(void)
 {
-    const struct segment_command_64 *command = getsegbyname("__TEXT");
-    uint64_t addr = command->vmaddr;
-    return addr;
+    const struct segment_command_64 *segment = main_image_segment("__TEXT");
+    return segment ? segment->vmaddr : 0;
 }
 
 static uint64_t image_slide(void)
@@ -212,7 +245,7 @@ static bool apply_slide_and_size(uint64_t address, uint64_t size, int64_t slide,
 
 static bool main_segment_bounds_real(const char *name, uint64_t *start, uint64_t *end)
 {
-    const struct segment_command_64 *segment = getsegbyname(name);
+    const struct segment_command_64 *segment = main_image_segment(name);
     int64_t slide;
     return segment && main_image_slide(&slide) &&
            apply_slide_and_size(segment->vmaddr, segment->vmsize, slide, start, end);

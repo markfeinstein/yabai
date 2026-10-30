@@ -463,7 +463,7 @@ static inline bool sls_window_disable_shadow(uint32_t id)
 }
 
 // An empty input is a successful conversion and returns an empty array.
-static inline CFArrayRef cfarray_of_cfnumbers(void *values, size_t size, int count, CFNumberType type)
+static inline CFArrayRef cfarray_of_cfnumbers(const void *values, size_t size, int count, CFNumberType type)
 {
     if (count < 0 || (count && (!values || !size))) return NULL;
 
@@ -471,7 +471,7 @@ static inline CFArrayRef cfarray_of_cfnumbers(void *values, size_t size, int cou
     if (!result) return NULL;
 
     for (int i = 0; i < count; ++i) {
-        CFNumberRef number = YABAI_CFNUMBER_CREATE(NULL, type, ((char *) values) + (size * i));
+        CFNumberRef number = YABAI_CFNUMBER_CREATE(NULL, type, ((const char *) values) + (size * i));
         if (!number) {
             CFRelease(result);
             return NULL;

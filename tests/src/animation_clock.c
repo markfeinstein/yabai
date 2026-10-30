@@ -169,7 +169,9 @@ TEST_FUNC(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread,
     pthread_t invoking_thread = pthread_self();
     CVTimeStamp now = { .hostTime = 100 };
     CVTimeStamp output = { .hostTime = 110 };
-    TEST_CHECK(animation_clock_test_callback(NULL, &now, &output, 0, NULL,
+    CVOptionFlags output_flags = 0;
+    CVDisplayLinkRef link = (CVDisplayLinkRef) &animation_clock_test_link_token;
+    TEST_CHECK(animation_clock_test_callback(link, &now, &output, 0, &output_flags,
                                              animation_clock_test_callback_context), kCVReturnSuccess);
     TEST_CHECK(animation_clock_test_tick_calls, 1);
     TEST_CHECK(animation_clock_test_last_tick.elapsed_ticks, 10.0);
@@ -178,7 +180,7 @@ TEST_FUNC(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread,
 
     now.hostTime = 999;
     output.hostTime = 130;
-    animation_clock_test_callback(NULL, &now, &output, 0, NULL,
+    animation_clock_test_callback(link, &now, &output, 0, &output_flags,
                                   animation_clock_test_callback_context);
     TEST_CHECK(animation_clock_test_tick_calls, 2);
     TEST_CHECK(animation_clock_test_last_tick.elapsed_ticks, 30.0);

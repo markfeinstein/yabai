@@ -12,6 +12,7 @@ struct process
     void *ns_application;
     int policy;
     uint8_t launch_retries;
+    bool volatile initial_window_inventory;
     bool volatile terminated;
 };
 
@@ -28,6 +29,16 @@ static inline int process_policy_load(struct process *process)
 static inline void process_policy_store(struct process *process, int policy)
 {
     __atomic_store_n(&process->policy, policy, __ATOMIC_RELEASE);
+}
+
+static inline bool process_initial_window_inventory_load(struct process *process)
+{
+    return __atomic_load_n(&process->initial_window_inventory, __ATOMIC_ACQUIRE);
+}
+
+static inline void process_initial_window_inventory_store(struct process *process, bool initial_window_inventory)
+{
+    __atomic_store_n(&process->initial_window_inventory, initial_window_inventory, __ATOMIC_RELEASE);
 }
 
 static inline uint8_t process_launch_retries_load(struct process *process)

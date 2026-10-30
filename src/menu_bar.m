@@ -28,7 +28,8 @@
  * not silently fall back to the native menu in Nix/CI builds. */
 #define YB_MENU_BAR_HAS_EXPANDED_INTERFACE 1
 
-#define YB_MENU_BAR_MAX_EXPANDED_WIDTH 520.0
+#define YB_MENU_BAR_MAX_EXPANDED_WIDTH  520.0
+#define YB_MENU_BAR_MAX_AUTOMATIC_WIDTH 260.0
 #define YB_MENU_BAR_STATUS_HEIGHT       22.0
 #define YB_MENU_BAR_BUTTON_PAD_X         7.0
 #define YB_MENU_BAR_GAP                  0.0
@@ -45,6 +46,8 @@
 #define YB_MENU_BAR_SCREEN_RADIUS        3.0
 #define YB_MENU_BAR_INDEX_FONT_SIZE     12.0
 #define YB_MENU_BAR_INDEX_PAD_X          8.0
+#define YB_MENU_BAR_LONG_PRESS_DURATION  0.45
+#define YB_MENU_BAR_DRAG_TOLERANCE       4.0
 
 static int g_yb_menu_bar_contrast_override = -1;
 #if defined(YB_MENU_BAR_TEST)
@@ -65,7 +68,8 @@ enum yb_menu_bar_screen_state
 
 enum yb_menu_bar_control_kind
 {
-    YB_MENU_BAR_CONTROL_OPEN_MENU = 0,
+    YB_MENU_BAR_CONTROL_FOCUS_SPACE = 0,
+    YB_MENU_BAR_CONTROL_OPEN_MENU,
     YB_MENU_BAR_CONTROL_SET_STYLE,
     YB_MENU_BAR_CONTROL_SET_FILTER
 };
@@ -98,6 +102,7 @@ enum yb_menu_bar_control_kind
     enum yb_menu_bar_screen_state yb_state;
     uint32_t yb_index;
     size_t yb_display_index;
+    uint64_t yb_space_id;
     bool yb_pressed;
 }
 - (void)setYBPressed:(bool)pressed;
@@ -107,6 +112,7 @@ enum yb_menu_bar_control_kind
 @public
     enum yb_menu_bar_control_kind yb_kind;
     uint64_t yb_generation;
+    uint64_t yb_space_id;
     enum menu_bar_style yb_style;
     enum menu_bar_space_filter yb_filter;
 }
@@ -117,8 +123,14 @@ enum yb_menu_bar_control_kind
 
 @interface YBMenuBarStripView : NSView {
 @public
+    YBMenuBarController *yb_controller;
+    NSTimer *yb_long_press_timer;
+    NSPoint yb_mouse_down_point;
+    bool yb_long_press_fired;
+    bool yb_click_cancelled;
     bool yb_expanded_interface;
 }
+- (void)activatePoint:(NSPoint)point;
 @end
 
 static bool yb_increased_contrast(void);
@@ -186,18 +198,20 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     bool _is_tearing_down_status_item;
     uint64_t _tracking_generation;
 #if defined(YB_MENU_BAR_TEST)
-    bool _test_has_strip_action_point;
-    NSPoint _test_strip_action_point;
     NSUInteger _test_accessibility_redraw_count;
 #endif
 }
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
-- (void)accessibilityPreferencesChanged;
+- (void)showStatusMenu:(id)sender;
+- (void)performScreenAction:(id)sender;
 - (void)performMenuAction:(id)sender;
-- (void)performStripAction:(id)sender;
-- (void)openMenu:(id)sender;
+- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter;
+- (void)clearNativeMenusFromStatusViews;
+- (void)installStripView:(NSView *)strip;
+- (void)installStatusStrip:(NSView *)strip;
+- (void)accessibilityPreferencesChanged;
 - (void)cancelExpandedInterface;
 - (void)performPanelFilterAction:(id)sender;
 - (void)performPanelStyleAction:(id)sender;
@@ -213,9 +227,10 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (bool)testHasStatusItem;
 - (NSUInteger)testStatusItemCount;
 - (NSUInteger)testStatusButtonCount;
-- (bool)testStatusItemOwnsStripView;
+- (bool)testStatusButtonOwnsStripView;
+- (bool)testStatusViewsUseManualMenu;
+- (NSStatusBarButton *)testStatusButton;
 - (NSView *)testStripView;
-- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point;
 - (bool)testIsTrackingMenu;
 - (uint64_t)testTrackingGeneration;
 - (uint64_t)testSnapshotGeneration;
@@ -262,11 +277,93 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 @end
 
 @implementation YBMenuBarStripView
+- (void)dealloc
+{
+    [yb_long_press_timer invalidate];
+    [yb_long_press_timer release];
+    [super dealloc];
+}
+
+- (void)cancelLongPressTimer
+{
+    [yb_long_press_timer invalidate];
+    [yb_long_press_timer release];
+    yb_long_press_timer = nil;
+}
+
+- (void)longPressTimerFired:(NSTimer *)timer
+{
+    if (timer != yb_long_press_timer || yb_click_cancelled) return;
+
+    yb_long_press_fired = true;
+    [self cancelLongPressTimer];
+    [yb_controller showStatusMenu:self];
+}
+
 - (NSView *)hitTest:(NSPoint)point
 {
-    if (yb_expanded_interface) return nil;
-    NSView *target = [super hitTest:point];
-    return target == self ? nil : target;
+    // Route the entire strip through one tracking view. Nested NSButton tracking
+    // inside NSStatusBarButton is unreliable after the status item is rebuilt.
+    return !yb_expanded_interface && NSPointInRect(point, [self bounds]) ? self : nil;
+}
+
+- (void)activatePoint:(NSPoint)point
+{
+    for (NSView *view in [[self subviews] reverseObjectEnumerator]) {
+        if (!NSPointInRect(point, [view frame])) continue;
+        if ([view isKindOfClass:[YBMenuBarScreenCell class]] &&
+            [(NSButton *) view action] == @selector(performScreenAction:)) {
+            [yb_controller performScreenAction:view];
+        } else {
+            [yb_controller showStatusMenu:view];
+        }
+        return;
+    }
+
+    [yb_controller showStatusMenu:self];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    [self cancelLongPressTimer];
+    yb_mouse_down_point = [self convertPoint:[event locationInWindow] fromView:nil];
+    yb_long_press_fired = false;
+    yb_click_cancelled = false;
+
+    yb_long_press_timer = [[NSTimer timerWithTimeInterval:YB_MENU_BAR_LONG_PRESS_DURATION
+                                                   target:self
+                                                 selector:@selector(longPressTimerFired:)
+                                                 userInfo:nil
+                                                  repeats:NO] retain];
+    [[NSRunLoop mainRunLoop] addTimer:yb_long_press_timer forMode:NSRunLoopCommonModes];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    if (hypot(point.x - yb_mouse_down_point.x, point.y - yb_mouse_down_point.y) <= YB_MENU_BAR_DRAG_TOLERANCE) return;
+
+    yb_click_cancelled = true;
+    [self cancelLongPressTimer];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    [self cancelLongPressTimer];
+    if (!yb_long_press_fired && !yb_click_cancelled && NSPointInRect(point, [self bounds])) {
+        [self activatePoint:point];
+    }
+    yb_long_press_fired = false;
+    yb_click_cancelled = false;
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    (void) event;
+    [self cancelLongPressTimer];
+    yb_click_cancelled = true;
+    [yb_controller showStatusMenu:self];
 }
 
 - (void)drawRect:(NSRect)dirty_rect
@@ -699,6 +796,26 @@ yb_find_visible_space(const struct menu_bar_display *display, enum menu_bar_spac
     return NULL;
 }
 
+static NSString *
+yb_status_accessibility_value(const struct menu_bar_snapshot *snapshot)
+{
+    if (!snapshot || snapshot->display_count == 0) return @"No displays available";
+
+    NSMutableArray *summaries = [NSMutableArray arrayWithCapacity:snapshot->display_count];
+    for (size_t display_index = 0; display_index < snapshot->display_count; ++display_index) {
+        const struct menu_bar_display *display = &snapshot->displays[display_index];
+        NSMutableString *summary = [NSMutableString stringWithString:yb_display_accessibility_title(display, display_index)];
+        const struct menu_bar_space *space = yb_find_visible_space(display, snapshot->settings.space_filter);
+        if (space) {
+            [summary appendFormat:@", visible space %@", yb_space_display_label(space)];
+        } else {
+            [summary appendString:@", visible space unresolved"];
+        }
+        [summaries addObject:summary];
+    }
+    return [summaries componentsJoinedByString:@"; "];
+}
+
 static CGFloat
 yb_title_width(NSString *title, NSFont *font)
 {
@@ -738,18 +855,35 @@ struct yb_screen_selection
     size_t count;
 };
 
+static NSString *
+yb_overflow_title(size_t omitted, bool leading)
+{
+    if (!omitted) return @"";
+    return leading
+         ? [NSString stringWithFormat:@"←+%zu", omitted]
+         : [NSString stringWithFormat:@"+%zu→", omitted];
+}
+
 static CGFloat
-yb_overflow_width(size_t omitted)
+yb_overflow_width(size_t omitted, bool leading)
 {
     if (!omitted) return 0.0;
-    NSString *title = [NSString stringWithFormat:@"…+%zu", omitted];
+    NSString *title = yb_overflow_title(omitted, leading);
     return MIN(64.0, MAX(34.0, yb_title_width(title, [NSFont menuBarFontOfSize:0.0]) + 14.0));
 }
 
 static CGFloat
-yb_screen_interval_width(const struct yb_screen_entry *entries, size_t start, size_t count, size_t omitted)
+yb_screen_interval_width(const struct yb_screen_entry *entries, size_t total, size_t start, size_t count)
 {
+    size_t omitted_before = start;
+    size_t omitted_after = total - start - count;
     CGFloat width = YB_MENU_BAR_OUTER_INSET;
+
+    if (omitted_before) {
+        width += yb_overflow_width(omitted_before, true);
+        if (count) width += YB_MENU_BAR_GAP;
+    }
+
     for (size_t i = 0; i < count; ++i) {
         if (i) {
             width += entries[start + i - 1].display == entries[start + i].display
@@ -758,7 +892,11 @@ yb_screen_interval_width(const struct yb_screen_entry *entries, size_t start, si
         const struct menu_bar_space *space = entries[start + i].space;
         width += yb_screen_cell_width(space ? space->mission_control_index : 0);
     }
-    if (omitted) width += YB_MENU_BAR_GAP + yb_overflow_width(omitted);
+
+    if (omitted_after) {
+        if (count || omitted_before) width += YB_MENU_BAR_GAP;
+        width += yb_overflow_width(omitted_after, false);
+    }
     return width + YB_MENU_BAR_OUTER_INSET;
 }
 
@@ -768,7 +906,7 @@ yb_screen_interval_fits(const struct yb_screen_entry *entries,
                         size_t start,
                         size_t count)
 {
-    return yb_screen_interval_width(entries, start, count, total - count) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH;
+    return yb_screen_interval_width(entries, total, start, count) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH;
 }
 
 static struct yb_screen_selection
@@ -776,7 +914,7 @@ yb_select_screen_interval(const struct yb_screen_entry *entries, size_t total, s
 {
     struct yb_screen_selection selection = { 0, 0 };
     if (!entries || !total) return selection;
-    if (yb_screen_interval_width(entries, 0, total, 0) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH) {
+    if (yb_screen_interval_width(entries, total, 0, total) <= YB_MENU_BAR_MAX_EXPANDED_WIDTH) {
         selection.count = total;
         return selection;
     }
@@ -817,6 +955,21 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""] autorelease];
     [item setEnabled:YES];
     [item setIndentationLevel:indentation];
+    [item setToolTip:tool_tip];
+    [item setAccessibilityRole:NSAccessibilityStaticTextRole];
+    [item setAccessibilityLabel:title];
+    return item;
+}
+
+static NSMenuItem *
+yb_section_header_menu_item(NSString *title, NSString *tool_tip)
+{
+    NSMenuItem *item = nil;
+    if (@available(macOS 14.0, *)) {
+        item = [NSMenuItem sectionHeaderWithTitle:title];
+    } else {
+        item = yb_informational_menu_item(title, 0, tool_tip);
+    }
     [item setToolTip:tool_tip];
     [item setAccessibilityRole:NSAccessibilityStaticTextRole];
     [item setAccessibilityLabel:title];
@@ -897,8 +1050,14 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         [self endMenuTrackingApplyDeferred:false];
     }
 
+    [_strip_view removeFromSuperview];
+
     if (_status_item) {
-    #if YB_MENU_BAR_HAS_EXPANDED_INTERFACE
+        NSStatusBarButton *button = [_status_item button];
+        [button setMenu:nil];
+        [button setTarget:nil];
+        [button setAction:NULL];
+#if YB_MENU_BAR_HAS_EXPANDED_INTERFACE
         if (@available(macOS 27.0, *)) [_status_item setExpandedInterfaceDelegate:nil];
 #endif
         [_status_item setMenu:nil];
@@ -1102,8 +1261,9 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
     NSPopUpButton *style = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(215, 40, 188, 28)
                                                         pullsDown:NO] autorelease];
-    [style addItemsWithTitles:@[ @"Compact", @"Expanded" ]];
-    [style selectItemAtIndex:_snapshot->settings.style == MENU_BAR_STYLE_COMPACT ? 0 : 1];
+    [style addItemsWithTitles:@[ @"Compact", @"Expanded", @"Automatic" ]];
+    [style selectItemAtIndex:_snapshot->settings.style == MENU_BAR_STYLE_COMPACT ? 0 :
+                             _snapshot->settings.style == MENU_BAR_STYLE_AUTOMATIC ? 2 : 1];
     [style setTarget:self];
     [style setAction:@selector(performPanelStyleAction:)];
     [style setAccessibilityLabel:@"Menu bar layout"];
@@ -1197,16 +1357,23 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [self rebuildMenu];
     [self configureStatusItemInterface];
 
-    if (_snapshot->settings.style == MENU_BAR_STYLE_EXPANDED) {
+    switch (_snapshot->settings.style) {
+    case MENU_BAR_STYLE_EXPANDED:
         [self renderExpandedStatusItem];
-    } else {
+        break;
+    case MENU_BAR_STYLE_COMPACT:
         [self renderCompactStatusItem];
+        break;
+    case MENU_BAR_STYLE_AUTOMATIC:
+        [self renderAutomaticStatusItem];
+        break;
     }
 }
 
 - (void)rebuildMenu
 {
     if (_menu) {
+        if (_status_item && [_status_item menu] == _menu) [_status_item setMenu:nil];
         [_menu cancelTracking];
         [_menu setDelegate:nil];
     }
@@ -1216,16 +1383,15 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [_menu setDelegate:self];
     [_menu setAutoenablesItems:NO];
 
-    NSMenuItem *title = yb_informational_menu_item(@"yabai Spaces — Read Only",
-                                                   0,
-                                                   @"Space and application information; use the controls below to change the indicator layout.");
+    NSMenuItem *title = yb_section_header_menu_item(@"yabai Spaces",
+                                                    @"Choose a Space to focus it; use the controls below to change the indicator layout.");
     [_menu addItem:title];
 
     NSString *failure = yb_nsstring(_snapshot->action_failure_text);
     if ([failure length]) {
         NSMenuItem *failure_item = yb_informational_menu_item([NSString stringWithFormat:@"Last action failed: %@", failure],
                                                               0,
-                                                              @"The most recent menu bar setting change failed.");
+                                                              @"The most recent menu bar action failed.");
         [_menu addItem:failure_item];
     }
 
@@ -1234,21 +1400,28 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     bool added_display = false;
     for (size_t display_index = 0; display_index < _snapshot->display_count; ++display_index) {
         const struct menu_bar_display *display = &_snapshot->displays[display_index];
-        NSMenuItem *display_item = yb_informational_menu_item(yb_display_menu_title(display, display_index),
-                                                              0,
-                                                              yb_display_accessibility_title(display, display_index));
-        if (display->has_focus) [display_item setState:NSControlStateValueMixed];
-        [_menu addItem:display_item];
+        NSString *display_title = yb_display_menu_title(display, display_index);
+        NSString *display_accessibility = yb_display_accessibility_title(display, display_index);
+
+        if (added_display) [_menu addItem:[NSMenuItem separatorItem]];
+        [_menu addItem:yb_section_header_menu_item(display_title, display_accessibility)];
 
         bool added_space = false;
         for (size_t space_index = 0; space_index < display->space_count; ++space_index) {
             const struct menu_bar_space *space = &display->spaces[space_index];
             if (!yb_space_matches_filter(space, _snapshot->settings.space_filter)) continue;
 
-            NSMenuItem *space_item = yb_informational_menu_item(yb_space_menu_title(space),
-                                                                1,
-                                                                yb_space_accessibility_title(display, display_index, space));
+            NSString *space_accessibility = yb_space_accessibility_title(display, display_index, space);
+            YBMenuBarActionTarget *space_target = yb_action_target(YB_MENU_BAR_CONTROL_FOCUS_SPACE, _snapshot->generation);
+            space_target->yb_space_id = space->space_id;
+            NSMenuItem *space_item = yb_menu_item(yb_space_menu_title(space),
+                                                  @selector(performMenuAction:),
+                                                  self,
+                                                  space_target);
             [space_item setState:space->is_visible ? NSControlStateValueOn : NSControlStateValueOff];
+            [space_item setIndentationLevel:1];
+            [space_item setToolTip:[NSString stringWithFormat:@"%@. Choose to focus this space.", space_accessibility]];
+            [space_item setAccessibilityLabel:space_accessibility];
             [_menu addItem:space_item];
             added_space = true;
         }
@@ -1257,14 +1430,13 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
             [_menu addItem:yb_informational_menu_item(@"No matching spaces", 1, @"No spaces match the current filter.")];
         }
 
-        [_menu addItem:[NSMenuItem separatorItem]];
         added_display = true;
     }
 
     if (!added_display) {
         [_menu addItem:yb_informational_menu_item(@"No displays available", 0, @"macOS did not report any displays.")];
-        [_menu addItem:[NSMenuItem separatorItem]];
     }
+    [_menu addItem:[NSMenuItem separatorItem]];
 
     enum menu_bar_space_filter next_filter = _snapshot->settings.space_filter == MENU_BAR_SPACE_FILTER_ALL
                                            ? MENU_BAR_SPACE_FILTER_OCCUPIED
@@ -1279,6 +1451,13 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     NSMenuItem *style_root = [[[NSMenuItem alloc] initWithTitle:@"Menu bar layout" action:nil keyEquivalent:@""] autorelease];
     NSMenu *style_menu = [[[NSMenu alloc] initWithTitle:@"Menu bar layout"] autorelease];
     [style_menu setAutoenablesItems:NO];
+
+    YBMenuBarActionTarget *automatic_target = yb_action_target(YB_MENU_BAR_CONTROL_SET_STYLE, _snapshot->generation);
+    automatic_target->yb_style = MENU_BAR_STYLE_AUTOMATIC;
+    NSMenuItem *automatic = yb_menu_item(@"Automatic", @selector(performMenuAction:), self, automatic_target);
+    [automatic setState:_snapshot->settings.style == MENU_BAR_STYLE_AUTOMATIC ? NSControlStateValueOn : NSControlStateValueOff];
+    [automatic setToolTip:@"Use expanded layout up to 260 points, otherwise compact layout."];
+    [style_menu addItem:automatic];
 
     YBMenuBarActionTarget *compact_target = yb_action_target(YB_MENU_BAR_CONTROL_SET_STYLE, _snapshot->generation);
     compact_target->yb_style = MENU_BAR_STYLE_COMPACT;
@@ -1306,21 +1485,28 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [cell setImage:nil];
     [cell setBordered:NO];
     [cell setButtonType:NSButtonTypeMomentaryPushIn];
-    [cell setTarget:self];
-    [cell setAction:@selector(performStripAction:)];
-    cell->yb_kind = YB_MENU_BAR_CONTROL_OPEN_MENU;
-    cell->yb_generation = _snapshot ? _snapshot->generation : 0;
     cell->yb_state = yb_screen_state(display, space);
     cell->yb_index = space ? space->mission_control_index : 0;
     cell->yb_display_index = display ? display_index : 0;
+    cell->yb_generation = _snapshot ? _snapshot->generation : 0;
+    cell->yb_space_id = space ? space->space_id : 0;
+
+    bool can_focus = display && space && !(display->has_focus && space->is_visible);
+    [cell setTarget:self];
+    [cell setAction:can_focus ? @selector(performScreenAction:) : @selector(showStatusMenu:)];
+    cell->yb_kind = can_focus ? YB_MENU_BAR_CONTROL_FOCUS_SPACE : YB_MENU_BAR_CONTROL_OPEN_MENU;
+    cell->yb_style = _snapshot->settings.style;
+    cell->yb_filter = _snapshot->settings.space_filter;
 
     NSString *description = display && space
-                          ? [NSString stringWithFormat:@"%@; read-only; opens yabai Spaces menu",
-                             yb_space_accessibility_title(display, display_index, space)]
-                          : @"Focused display or visible space unresolved; read-only; opens yabai Spaces menu";
+                          ? yb_space_accessibility_title(display, display_index, space)
+                          : @"Focused display or visible space unresolved";
     [cell setToolTip:description];
     [cell setAccessibilityRole:NSAccessibilityButtonRole];
     [cell setAccessibilityLabel:description];
+    [cell setAccessibilityHelp:can_focus
+                              ? @"Click to focus this Space. Right-click or press and hold to open the Spaces menu."
+                              : @"Click, right-click or press and hold to open the Spaces menu."];
     return cell;
 }
 
@@ -1335,6 +1521,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     CGFloat cell_width = yb_screen_cell_width(space ? space->mission_control_index : 0);
     CGFloat width = YB_MENU_BAR_OUTER_INSET * 2.0 + cell_width;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
+    strip->yb_controller = self;
     strip->yb_expanded_interface = [self wantsExpandedPanel];
 
     YBMenuBarScreenCell *cell = [self screenCellForDisplay:display
@@ -1362,22 +1549,84 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 
 - (void)installStatusStrip:(NSView *)strip
 {
+    if (!_status_item || !strip) return;
+    if (![self wantsExpandedPanel]) {
+        [self installStripView:strip];
+        return;
+    }
+
     [_status_item setMenu:nil];
+    [_strip_view removeFromSuperview];
     [_status_item setView:nil];
     [_strip_view release];
     _strip_view = [strip retain];
     [_status_item setLength:NSWidth([_strip_view frame])];
-    if ([self wantsExpandedPanel]) {
-        NSStatusBarButton *button = [_status_item button];
-        NSImage *image = [self imageForStatusStrip:_strip_view];
-        [button setImage:image];
-        [button setImagePosition:NSImageOnly];
-        [button setToolTip:@"Open yabai Spaces — Read Only"];
-        [button setAccessibilityLabel:@"Open yabai Spaces — Read Only"];
+
+    NSStatusBarButton *button = [_status_item button];
+    [button setTarget:nil];
+    [button setAction:NULL];
+    [button setImage:[self imageForStatusStrip:_strip_view]];
+    [button setImagePosition:NSImageOnly];
+    [button setToolTip:@"Open yabai Spaces — Read Only"];
+    [button setAccessibilityLabel:@"Open yabai Spaces — Read Only"];
+    [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
+}
+
+- (void)clearNativeMenusFromStatusViews
+{
+    if (!_status_item) return;
+
+    // NSButton.menu captures the primary click before the custom strip sees it.
+    // Keep every native menu property empty and present _menu only through the
+    // explicit active/gap/right-click/long-press handlers.
+    NSStatusBarButton *button = [_status_item button];
+    [button setMenu:nil];
+    [_strip_view setMenu:nil];
+    for (NSView *view in [_strip_view subviews]) {
+        if ([view isKindOfClass:[NSButton class]]) [(NSButton *) view setMenu:nil];
+    }
+}
+
+- (void)installStripView:(NSView *)strip
+{
+    if (!_status_item || !strip) return;
+
+    [_status_item setMenu:nil];
+    [_strip_view removeFromSuperview];
+    [_strip_view release];
+    _strip_view = [strip retain];
+
+    [_status_item setView:nil];
+    [_status_item setLength:NSWidth([_strip_view frame])];
+
+    // Host the custom strip inside the standard status button instead of
+    // replacing the status-item view. This preserves native menu anchoring,
+    // tracking, highlighting and keyboard behavior.
+    NSStatusBarButton *button = [_status_item button];
+    if (button) {
+        [button setTitle:@""];
+        [button setImage:nil];
+        [button setTarget:self];
+        [button setAction:@selector(showStatusMenu:)];
+        [button setToolTip:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
+        [button setAccessibilityLabel:@"yabai Spaces"];
+        [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
+        [button setAccessibilityHelp:@"Click an inactive Space to focus it. Click the active Space, right-click or press and hold to open the menu."];
+
+        NSRect frame = [_strip_view frame];
+        CGFloat host_height = NSHeight([button bounds]);
+        frame.origin = NSMakePoint(0.0,
+                                   host_height > NSHeight(frame)
+                                 ? floor((host_height - NSHeight(frame)) * 0.5)
+                                 : 0.0);
+        [_strip_view setFrame:frame];
+        [_strip_view setAutoresizingMask:NSViewMinYMargin | NSViewMaxYMargin];
+        [button addSubview:_strip_view];
     } else {
-        [[_status_item button] setImage:nil];
         [_status_item setView:_strip_view];
     }
+
+    [self clearNativeMenusFromStatusViews];
 }
 
 - (void)renderCompactStatusItem
@@ -1385,7 +1634,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [self installStatusStrip:[self buildCompactStrip]];
 }
 
-- (YBMenuBarButton *)buttonWithTitle:(NSString *)title frame:(NSRect)frame kind:(enum yb_menu_bar_control_kind)kind
+- (YBMenuBarButton *)buttonWithTitle:(NSString *)title frame:(NSRect)frame
 {
     YBMenuBarButton *button = [[[YBMenuBarButton alloc] initWithFrame:frame] autorelease];
     [button setTitle:title];
@@ -1393,11 +1642,22 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [button setBezelStyle:NSBezelStyleTexturedRounded];
     [button setBordered:NO];
     [button setFont:[NSFont menuBarFontOfSize:0.0]];
-    [button setTarget:self];
-    [button setAction:@selector(performStripAction:)];
-    button->yb_kind = kind;
-    button->yb_generation = _snapshot ? _snapshot->generation : 0;
+    [button setAccessibilityRole:NSAccessibilityButtonRole];
     return button;
+}
+
+- (YBMenuBarButton *)overflowButtonForOmitted:(size_t)omitted leading:(bool)leading frame:(NSRect)frame
+{
+    YBMenuBarButton *overflow = [self buttonWithTitle:yb_overflow_title(omitted, leading) frame:frame];
+    NSString *direction = leading ? @"before" : @"after";
+    [overflow setToolTip:[NSString stringWithFormat:@"%zu spaces %@ the visible interval are listed in the yabai Spaces menu",
+                                                        omitted, direction]];
+    [overflow setAccessibilityLabel:[NSString stringWithFormat:@"%zu spaces %@ the visible interval",
+                                                               omitted, direction]];
+    [overflow setAccessibilityHelp:@"Open the Spaces menu to view omitted Spaces."];
+    [overflow setTarget:self];
+    [overflow setAction:@selector(showStatusMenu:)];
+    return overflow;
 }
 
 - (NSView *)buildExpandedStrip
@@ -1428,14 +1688,26 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     total = output;
 
     struct yb_screen_selection selection = yb_select_screen_interval(entries, total, active);
-    size_t omitted = total - selection.count;
+    size_t omitted_before = selection.start;
+    size_t omitted_after = total - selection.start - selection.count;
     CGFloat strip_width = total
-                        ? yb_screen_interval_width(entries, selection.start, selection.count, omitted)
+                        ? yb_screen_interval_width(entries, total, selection.start, selection.count)
                         : YB_MENU_BAR_OUTER_INSET * 2.0 + YB_MENU_BAR_CELL_WIDTH;
     YBMenuBarStripView *strip = [[[YBMenuBarStripView alloc] initWithFrame:NSMakeRect(0.0, 0.0, strip_width, YB_MENU_BAR_STATUS_HEIGHT)] autorelease];
+    strip->yb_controller = self;
     strip->yb_expanded_interface = [self wantsExpandedPanel];
 
     CGFloat x = YB_MENU_BAR_OUTER_INSET;
+    if (omitted_before) {
+        CGFloat width = yb_overflow_width(omitted_before, true);
+        YBMenuBarButton *overflow = [self overflowButtonForOmitted:omitted_before
+                                                           leading:true
+                                                             frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
+        [strip addSubview:overflow];
+        x += width;
+        if (selection.count) x += YB_MENU_BAR_GAP;
+    }
+
     if (!selection.count) {
         YBMenuBarScreenCell *placeholder = [self screenCellForDisplay:NULL
                                                          displayIndex:0
@@ -1465,15 +1737,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         x += cell_width;
     }
 
-    if (omitted) {
-        x += YB_MENU_BAR_GAP;
-        NSString *title = [NSString stringWithFormat:@"…+%zu", omitted];
-        CGFloat width = yb_overflow_width(omitted);
-        YBMenuBarButton *overflow = [self buttonWithTitle:title
-                                                    frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)
-                                                     kind:YB_MENU_BAR_CONTROL_OPEN_MENU];
-        [overflow setToolTip:@"Open menu for omitted spaces"];
-        [overflow setAccessibilityLabel:@"Open yabai Spaces menu for omitted spaces"];
+    if (omitted_after) {
+        if (selection.count || omitted_before) x += YB_MENU_BAR_GAP;
+        CGFloat width = yb_overflow_width(omitted_after, false);
+        YBMenuBarButton *overflow = [self overflowButtonForOmitted:omitted_after
+                                                           leading:false
+                                                             frame:NSMakeRect(x, 0.0, width, YB_MENU_BAR_STATUS_HEIGHT)];
         [strip addSubview:overflow];
     }
 
@@ -1486,17 +1755,65 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [self installStatusStrip:[self buildExpandedStrip]];
 }
 
+- (void)renderAutomaticStatusItem
+{
+    NSView *expanded = [self buildExpandedStrip];
+    if (NSWidth([expanded frame]) <= YB_MENU_BAR_MAX_AUTOMATIC_WIDTH) {
+        [self installStatusStrip:expanded];
+    } else {
+        [self installStatusStrip:[self buildCompactStrip]];
+    }
+}
+
+- (void)showStatusMenu:(id)sender
+{
+    if ([self wantsExpandedPanel] || !_status_item || !_menu || _is_tracking_menu) return;
+
+    YBMenuBarScreenCell *pressed = [sender isKindOfClass:[YBMenuBarScreenCell class]]
+                                 ? (YBMenuBarScreenCell *) sender : nil;
+    [pressed retain];
+    [pressed setYBPressed:true];
+    [pressed displayIfNeeded];
+    @try {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [_status_item popUpStatusItemMenu:_menu];
+#pragma clang diagnostic pop
+    } @finally {
+        [pressed setYBPressed:false];
+        [pressed setNeedsDisplay:YES];
+        [pressed release];
+    }
+}
+
 - (void)sendAction:(struct menu_bar_action)action
 {
     if (_callbacks.action) _callbacks.action(&action, _callbacks.context);
 }
 
-- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter
+- (void)performScreenAction:(id)sender
+{
+    if (![sender isKindOfClass:[YBMenuBarScreenCell class]]) return;
+
+    YBMenuBarScreenCell *cell = sender;
+    if (!cell->yb_generation || !cell->yb_space_id) return;
+    [self performActionKind:YB_MENU_BAR_CONTROL_FOCUS_SPACE
+                 generation:cell->yb_generation
+                      space:cell->yb_space_id
+                      style:MENU_BAR_STYLE_EXPANDED
+                     filter:MENU_BAR_SPACE_FILTER_OCCUPIED];
+}
+
+- (void)performActionKind:(enum yb_menu_bar_control_kind)kind generation:(uint64_t)generation space:(uint64_t)space_id style:(enum menu_bar_style)style filter:(enum menu_bar_space_filter)filter
 {
     struct menu_bar_action action = {0};
     action.generation = generation;
 
     switch (kind) {
+    case YB_MENU_BAR_CONTROL_FOCUS_SPACE:
+        action.type = MENU_BAR_ACTION_FOCUS_SPACE;
+        action.data.focus_space.space_id = space_id;
+        break;
     case YB_MENU_BAR_CONTROL_SET_STYLE:
         action.type = MENU_BAR_ACTION_SET_STYLE;
         action.data.set_style.style = style;
@@ -1505,9 +1822,6 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
         action.type = MENU_BAR_ACTION_SET_SPACE_FILTER;
         action.data.set_space_filter.filter = filter;
         break;
-    case YB_MENU_BAR_CONTROL_OPEN_MENU:
-        [self openMenu:nil];
-        return;
     default:
         return;
     }
@@ -1519,103 +1833,16 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 {
     YBMenuBarActionTarget *target = [sender representedObject];
     if (![target isKindOfClass:[YBMenuBarActionTarget class]]) return;
-    [self performActionKind:target->yb_kind
+
+    enum yb_menu_bar_control_kind kind = target->yb_kind;
+    [self performActionKind:kind
                  generation:target->yb_generation
+                      space:target->yb_space_id
                       style:target->yb_style
                      filter:target->yb_filter];
-}
-
-- (YBMenuBarButton *)resolvedStripButtonForSender:(id)sender usedLocation:(bool *)used_location
-{
-    if (used_location) *used_location = false;
-    if (!_strip_view) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
-
-    NSPoint strip_point = NSZeroPoint;
-    bool has_point = false;
-#if defined(YB_MENU_BAR_TEST)
-    if (_test_has_strip_action_point) {
-        strip_point = _test_strip_action_point;
-        has_point = true;
-    } else
-#endif
-    {
-        NSEvent *event = [NSApp currentEvent];
-        NSEventType type = event ? [event type] : 0;
-        bool mouse_event = type == NSEventTypeLeftMouseDown ||
-                           type == NSEventTypeLeftMouseUp ||
-                           type == NSEventTypeRightMouseDown ||
-                           type == NSEventTypeRightMouseUp ||
-                           type == NSEventTypeOtherMouseDown ||
-                           type == NSEventTypeOtherMouseUp;
-        NSWindow *window = [_strip_view window];
-        if (mouse_event && window) {
-            NSPoint window_point = [window convertPointFromScreen:[NSEvent mouseLocation]];
-            strip_point = [_strip_view convertPoint:window_point fromView:nil];
-            has_point = true;
-        }
+    if (kind == YB_MENU_BAR_CONTROL_FOCUS_SPACE && _is_tracking_menu) {
+        [_menu cancelTrackingWithoutAnimation];
     }
-
-    if (!has_point) return [sender isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) sender : nil;
-    if (used_location) *used_location = true;
-
-    NSView *hit = [_strip_view hitTest:strip_point];
-    return [hit isKindOfClass:[YBMenuBarButton class]] ? (YBMenuBarButton *) hit : nil;
-}
-
-- (void)performStripAction:(id)sender
-{
-    if (![sender isKindOfClass:[YBMenuBarButton class]]) return;
-
-    bool used_location = false;
-    YBMenuBarButton *button = [self resolvedStripButtonForSender:sender usedLocation:&used_location];
-    if (!button) {
-        if (used_location) [self openMenu:_strip_view];
-        return;
-    }
-
-    if (button->yb_kind == YB_MENU_BAR_CONTROL_OPEN_MENU) {
-        YBMenuBarScreenCell *pressed_cell = [button isKindOfClass:[YBMenuBarScreenCell class]]
-                                          ? (YBMenuBarScreenCell *) button
-                                          : nil;
-        if (pressed_cell) {
-            for (NSView *view in [[pressed_cell superview] subviews]) {
-                if ([view isKindOfClass:[YBMenuBarScreenCell class]] && view != pressed_cell) {
-                    [(YBMenuBarScreenCell *) view setYBPressed:false];
-                }
-            }
-            [pressed_cell retain];
-            @try {
-                [pressed_cell setYBPressed:true];
-                [pressed_cell displayIfNeeded];
-                [self openMenu:button];
-            } @finally {
-                [pressed_cell setYBPressed:false];
-                [pressed_cell setNeedsDisplay:YES];
-                [pressed_cell release];
-            }
-        } else {
-            [self openMenu:button];
-        }
-        return;
-    }
-
-    [self performActionKind:button->yb_kind
-                 generation:button->yb_generation
-                      style:button->yb_style
-                     filter:button->yb_filter];
-}
-
-- (void)openMenu:(id)sender
-{
-    if ([self wantsExpandedPanel]) return;
-    if (!_status_item || !_menu) return;
-
-    NSView *view = [sender isKindOfClass:[NSView class]] ? (NSView *) sender : _strip_view;
-    if (!view) view = [_status_item button];
-    if (!view) return;
-
-    NSPoint point = NSMakePoint(NSMidX([view bounds]), NSMinY([view bounds]));
-    [_menu popUpMenuPositioningItem:nil atLocation:point inView:view];
 }
 
 - (void)performPanelFilterAction:(id)sender
@@ -1626,6 +1853,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
                                       : MENU_BAR_SPACE_FILTER_ALL;
     [self performActionKind:YB_MENU_BAR_CONTROL_SET_FILTER
                  generation:_tracking_generation
+                      space:0
                       style:_snapshot->settings.style
                      filter:filter];
     [self cancelExpandedInterface];
@@ -1634,10 +1862,12 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 - (void)performPanelStyleAction:(id)sender
 {
     if (![sender isKindOfClass:[NSPopUpButton class]]) return;
-    enum menu_bar_style style = [(NSPopUpButton *) sender indexOfSelectedItem] == 0
-                              ? MENU_BAR_STYLE_COMPACT : MENU_BAR_STYLE_EXPANDED;
+    NSInteger selection = [(NSPopUpButton *) sender indexOfSelectedItem];
+    enum menu_bar_style style = selection == 0 ? MENU_BAR_STYLE_COMPACT :
+                                selection == 2 ? MENU_BAR_STYLE_AUTOMATIC : MENU_BAR_STYLE_EXPANDED;
     [self performActionKind:YB_MENU_BAR_CONTROL_SET_STYLE
                  generation:_tracking_generation
+                      space:0
                       style:style
                      filter:_snapshot->settings.space_filter];
     [self cancelExpandedInterface];
@@ -1724,6 +1954,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     [_menu release];
     _menu = [menu retain];
     [_menu setDelegate:self];
+    [self clearNativeMenusFromStatusViews];
 }
 
 - (void)testRebuildMenu
@@ -1761,25 +1992,32 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
     return [[_strip_view subviews] count];
 }
 
-- (bool)testStatusItemOwnsStripView
+- (bool)testStatusButtonOwnsStripView
 {
-    return _status_item && [_status_item view] == _strip_view;
+    NSStatusBarButton *button = _status_item ? [_status_item button] : nil;
+    return button && [_status_item view] == nil && [_strip_view superview] == button;
+}
+
+- (bool)testStatusViewsUseManualMenu
+{
+    if (!_status_item || !_menu || [_status_item menu] != nil) return false;
+
+    NSStatusBarButton *button = [_status_item button];
+    if (!button || [button menu] != nil || [_strip_view menu] != nil) return false;
+    for (NSView *view in [_strip_view subviews]) {
+        if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != nil) return false;
+    }
+    return true;
+}
+
+- (NSStatusBarButton *)testStatusButton
+{
+    return _status_item ? [_status_item button] : nil;
 }
 
 - (NSView *)testStripView
 {
     return _strip_view;
-}
-
-- (void)testPerformStripAction:(id)sender localPoint:(NSPoint)point
-{
-    _test_has_strip_action_point = true;
-    _test_strip_action_point = point;
-    @try {
-        [self performStripAction:sender];
-    } @finally {
-        _test_has_strip_action_point = false;
-    }
 }
 
 - (bool)testIsTrackingMenu

@@ -556,7 +556,7 @@ TEST_FUNC(window_created_retry_rejection_consumes_context_and_ax_reference_once,
         event_queue_retry_release_count = 0;
         unsigned destroys = window_manager_test_retry_destroy_count;
         AXUIElementRef ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("queue-retry-owner"));
-        struct window_created_retry *retry = window_manager_create_window_created_retry(ref, &application, true, application.pid);
+        struct window_created_retry *retry = window_manager_create_window_created_retry(ref, &application, true, application.pid, false);
         TEST_CHECK(retry != NULL, true);
         TEST_CHECK(event_loop_try_post(&event_loop, WINDOW_CREATED_RETRY, retry, 0), false);
         TEST_CHECK(event_queue_retry_retain_count, 1);
@@ -818,7 +818,7 @@ static enum declarative_topology_result topology_fixture_capture(
 {
     int capture = ++topology_fixture_capture_count;
     memset(out, 0, sizeof(*out));
-    if (!bounds || bounds->external_bar_mode != g_display_manager.mode ||
+    if (!bounds || bounds->external_bar_mode != (int) g_display_manager.mode ||
         bounds->external_bar_top_padding != g_display_manager.top_padding ||
         bounds->external_bar_bottom_padding != g_display_manager.bottom_padding)
         return DECLARATIVE_TOPOLOGY_INVALID;

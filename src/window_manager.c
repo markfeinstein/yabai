@@ -227,11 +227,21 @@ void window_manager_apply_manage_rule_effects_to_window(struct space_manager *sm
 
 #ifdef TESTS
 static char *(*window_manager_rule_scratchpad_copy)(char *) = string_copy;
+static bool (*window_manager_rule_window_is_fullscreen)(struct window *) = window_is_fullscreen;
+static uint64_t (*window_manager_rule_window_space)(uint32_t) = window_space;
+static bool (*window_manager_rule_space_is_fullscreen)(uint64_t) = space_is_fullscreen;
+static bool (*window_manager_rule_send_window_to_space)(struct space_manager *, struct window_manager *, struct window *, uint64_t, bool) = window_manager_send_window_to_space;
+static enum space_op_error (*window_manager_rule_focus_space)(uint64_t) = space_manager_focus_space;
 #else
 #define window_manager_rule_scratchpad_copy string_copy
+#define window_manager_rule_window_is_fullscreen window_is_fullscreen
+#define window_manager_rule_window_space window_space
+#define window_manager_rule_space_is_fullscreen space_is_fullscreen
+#define window_manager_rule_send_window_to_space window_manager_send_window_to_space
+#define window_manager_rule_focus_space space_manager_focus_space
 #endif
 
-void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects)
+static void window_manager_apply_rule_effects_to_window_with_context(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects, bool suppress_rule_follow)
 {
     char *scratchpad = NULL;
     if (effects->scratchpad) {
@@ -240,11 +250,13 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
     }
 
     if (effects->sid || effects->did) {
-        if (!window_is_fullscreen(window) && !space_is_fullscreen(window_space(window->id))) {
+        if (!window_manager_rule_window_is_fullscreen(window) &&
+            !window_manager_rule_space_is_fullscreen(window_manager_rule_window_space(window->id))) {
             uint64_t sid = effects->sid ? effects->sid : display_space_id(effects->did);
-            window_manager_send_window_to_space(sm, wm, window, sid, true);
-            if (rule_effects_check_flag(effects, RULE_FOLLOW_SPACE) || effects->fullscreen == RULE_PROP_ON) {
-                space_manager_focus_space(sid);
+            window_manager_rule_send_window_to_space(sm, wm, window, sid, true);
+            if ((!suppress_rule_follow && rule_effects_check_flag(effects, RULE_FOLLOW_SPACE)) ||
+                effects->fullscreen == RULE_PROP_ON) {
+                window_manager_rule_focus_space(sid);
             }
         }
     }
@@ -284,6 +296,11 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
     if (effects->grid[0] != 0 && effects->grid[1] != 0) {
         window_manager_apply_grid(sm, wm, window, effects->grid[0], effects->grid[1], effects->grid[2], effects->grid[3], effects->grid[4], effects->grid[5]);
     }
+}
+
+void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects)
+{
+    window_manager_apply_rule_effects_to_window_with_context(sm, wm, window, effects, false);
 }
 
 static bool window_manager_rule_is_available(struct rule *rule, struct application *application,
@@ -331,7 +348,7 @@ void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struc
     free(effects.scratchpad);
 }
 
-void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid)
+static void window_manager_apply_rules_to_window_with_context(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow)
 {
     bool match = false;
     struct rule_effects effects = {0};
@@ -358,8 +375,14 @@ void window_manager_apply_rules_to_window(struct space_manager *sm, struct windo
         }
     }
 
-    if (match) window_manager_apply_rule_effects_to_window(sm, wm, window, &effects);
+    if (match) window_manager_apply_rule_effects_to_window_with_context(sm, wm, window, &effects, suppress_rule_follow);
     free(effects.scratchpad);
+}
+
+void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid)
+{
+    window_manager_apply_rules_to_window_with_context(sm, wm, window, window_title, window_role, window_subrole,
+                                                      one_shot_rules, one_shot_owner_pid, false);
 }
 
 #ifdef TESTS
@@ -2621,7 +2644,7 @@ bool window_manager_refresh_window_ref(struct window_manager *wm, struct window 
     return fresh_ref ? window_manager_replace_window_ref(wm, window, fresh_ref) : false;
 }
 
-struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
+struct window_created_retry *window_manager_create_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow)
 {
 #ifdef TESTS
     struct window_created_retry *retry = window_manager_test_retry_allocate(sizeof(*retry));
@@ -2639,7 +2662,8 @@ struct window_created_retry *window_manager_create_window_created_retry(AXUIElem
         .application_psn = application->psn,
         .application_pid = application->pid,
         .one_shot_rules = one_shot_rules,
-        .one_shot_owner_pid = one_shot_owner_pid
+        .one_shot_owner_pid = one_shot_owner_pid,
+        .suppress_rule_follow = suppress_rule_follow
     };
     return retry;
 }
@@ -2660,9 +2684,9 @@ void window_manager_destroy_window_created_retry(struct window_created_retry *re
     free(retry);
 }
 
-void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
+void window_manager_schedule_window_created_retry(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow)
 {
-    struct window_created_retry *retry = window_manager_create_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
+    struct window_created_retry *retry = window_manager_create_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid, suppress_rule_follow);
 #ifdef TESTS
     if (window_manager_test_retry_release) window_manager_test_retry_release(window_ref); else CFRelease(window_ref);
 #else
@@ -2704,7 +2728,7 @@ static struct window *window_manager_create_and_add_window_with_server_record(
     struct space_manager *sm, struct window_manager *wm, struct application *application,
     AXUIElementRef window_ref, uint32_t window_id,
     const struct window_server_window_record *server_record,
-    bool one_shot_rules, pid_t one_shot_owner_pid, bool *retry)
+    bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry)
 {
     if (retry) *retry = false;
     if (one_shot_rules && !rule_retry_pending_one_shots()) {
@@ -2828,14 +2852,15 @@ static struct window *window_manager_create_and_add_window_with_server_record(
 #ifdef TESTS
         if (test_rule_window) {
             window->is_eligible = true;
-            window_manager_apply_rules_to_window(sm, wm, window, window_title, window_role, window_subrole,
-                                                 one_shot_rules, one_shot_owner_pid);
+            window_manager_apply_rules_to_window_with_context(sm, wm, window, window_title, window_role, window_subrole,
+                                                              one_shot_rules, one_shot_owner_pid, suppress_rule_follow);
             goto out;
         }
 #endif
         if (window_manager_is_window_eligible(window)) {
             window->is_eligible = true;
-            window_manager_apply_rules_to_window(sm, wm, window, window_title, window_role, window_subrole, one_shot_rules, one_shot_owner_pid);
+            window_manager_apply_rules_to_window_with_context(sm, wm, window, window_title, window_role, window_subrole,
+                                                              one_shot_rules, one_shot_owner_pid, suppress_rule_follow);
             window_manager_purify_window(wm, window);
             window_manager_set_window_opacity(wm, window, wm->normal_window_opacity);
 
@@ -2894,11 +2919,11 @@ out:
 struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm,
                                                     struct application *application, AXUIElementRef window_ref,
                                                     uint32_t window_id, bool one_shot_rules,
-                                                    pid_t one_shot_owner_pid, bool *retry)
+                                                    pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry)
 {
     return window_manager_create_and_add_window_with_server_record(
         sm, wm, application, window_ref, window_id, NULL,
-        one_shot_rules, one_shot_owner_pid, retry);
+        one_shot_rules, one_shot_owner_pid, suppress_rule_follow, retry);
 }
 
 static void window_manager_enqueue_application_refresh(struct window_manager *wm,
@@ -2929,11 +2954,13 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
             if (!window_id || window_manager_find_window(wm, window_id)) continue;
 
             bool retry = false;
-            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true, application->pid, &retry);
+            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true,
+                                                                          application->pid, application->initial_window_inventory, &retry);
             if (window) {
                 buf_push(list, window);
             } else if (retry) {
-                window_manager_schedule_window_created_retry(window_ref, application, true, application->pid);
+                window_manager_schedule_window_created_retry(window_ref, application, true, application->pid,
+                                                              application->initial_window_inventory);
             }
         }
         CFRelease(window_list);
@@ -3130,7 +3157,7 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                 window_server_snapshot_find(window_server_snapshot, window_id);
             struct window *window = window_manager_create_and_add_window_with_server_record(
                 sm, wm, application, CFRetain(window_ref), window_id, server_record,
-                one_shot_rules, one_shot_owner_pid, NULL);
+                one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
             if (window && created_windows) buf_push(*created_windows, window);
         }
     }
@@ -3236,13 +3263,13 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                                                                       server_record, one_shot_rules, one_shot_owner_pid) :
                                     window_manager_create_and_add_window_with_server_record(
                                         sm, wm, application, element_ref, element_wid, server_record,
-                                        one_shot_rules, one_shot_owner_pid, NULL);
+                                        one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
 #else
                                 const struct window_server_window_record *server_record =
                                     window_server_snapshot_find(window_server_snapshot, element_wid);
                                 struct window *window = window_manager_create_and_add_window_with_server_record(
                                     sm, wm, application, element_ref, element_wid, server_record,
-                                    one_shot_rules, one_shot_owner_pid, NULL);
+                                    one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
 #endif
                                 if (window) {
                                     if (created_windows) buf_push(*created_windows, window);
@@ -3298,6 +3325,8 @@ probe_complete:
     if (fully_resolved && finalization_ok) {
         application->inactive_probe_cursor = 0;
         application->launch_refresh = false;
+        // Future windows use ordinary rule-follow behavior after startup inventory converges.
+        application->initial_window_inventory = false;
     } else if (fully_resolved) {
         window_manager_enqueue_application_refresh(wm, application);
     }
@@ -4542,6 +4571,8 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
 #else
         if (workspace_application_is_observable(process)) {
 #endif
+            // Preserve startup semantics if application creation or observation is retried asynchronously.
+            process_initial_window_inventory_store(process, true);
             struct application *application = application_create(process);
             if (!application) {
                 event_loop_schedule_application_launch_retry(process);

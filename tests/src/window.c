@@ -1445,6 +1445,17 @@ static AXUIElementRef lifecycle_test_ax_application_failure(pid_t pid)
     return NULL;
 }
 
+static bool lifecycle_test_application_visible(struct application *application)
+{
+    (void) application;
+    return false;
+}
+
+static void lifecycle_test_application_connection(struct application *application)
+{
+    application->connection = 77;
+}
+
 TEST_FUNC(process_create_allocation_failure_does_not_publish_owned_state,
 {
     ProcessSerialNumber psn = {0};
@@ -1474,6 +1485,35 @@ TEST_FUNC(application_create_rejects_invalid_and_allocation_failure,
     application_create_ax_element = lifecycle_test_ax_application_failure;
     TEST_CHECK(application_create(&process) == NULL, true);
     application_create_ax_element = saved_create;
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+});
+
+TEST_FUNC(application_create_copies_initial_window_inventory_context,
+{
+    __auto_type saved_hidden = application_create_is_hidden;
+    __auto_type saved_connection = application_create_connection;
+    application_create_is_hidden = lifecycle_test_application_visible;
+    application_create_connection = lifecycle_test_application_connection;
+
+    struct process process = { .pid = getpid(), .name = "startup" };
+    process_initial_window_inventory_store(&process, true);
+    struct application *application = application_create(&process);
+    TEST_CHECK(application != NULL, true);
+    if (application) {
+        TEST_CHECK(application->initial_window_inventory, true);
+        TEST_CHECK(application->connection, 77);
+        application_destroy(application);
+    }
+    process_initial_window_inventory_store(&process, false);
+    application = application_create(&process);
+    TEST_CHECK(application != NULL, true);
+    if (application) {
+        TEST_CHECK(application->initial_window_inventory, false);
+        application_destroy(application);
+    }
+
+    application_create_is_hidden = saved_hidden;
+    application_create_connection = saved_connection;
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 });
 

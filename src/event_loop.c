@@ -456,6 +456,7 @@ void event_loop_post_managed_window_correction_hint(AXObserverRef observer, AXUI
 
 static EVENT_HANDLER(MANAGED_WINDOW_CORRECTION_HINT)
 {
+    (void) param1;
     struct managed_window_correction_hint_context *hint = context;
     managed_window_correction_schedule_application_hint(managed_window_correction_hint_application(hint));
     managed_window_correction_hint_context_destroy(hint);
@@ -1464,7 +1465,8 @@ static struct application *event_loop_find_processed_front_application(void)
 }
 
 static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application,
-                                             bool one_shot_rules, pid_t one_shot_owner_pid);
+                                             bool one_shot_rules, pid_t one_shot_owner_pid,
+                                             bool suppress_rule_follow);
 
 static struct application *event_loop_application_for_window_id(uint32_t window_id)
 {
@@ -1495,7 +1497,7 @@ static bool event_loop_try_adopt_focused_window(struct application *application,
         return true;
     }
 #endif
-    event_loop_handle_window_created(window_ref, application, true, 0);
+    event_loop_handle_window_created(window_ref, application, true, 0, false);
     return true;
 }
 
@@ -1762,7 +1764,7 @@ static bool event_loop_window_ref_is_window(AXUIElementRef window_ref)
     return result;
 }
 
-static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid)
+static void event_loop_handle_window_created(AXUIElementRef window_ref, struct application *application, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow)
 {
     uint32_t window_id = window_manager_ax_window_id(window_ref);
     if (!window_id) { CFRelease(window_ref); return; }
@@ -1787,10 +1789,15 @@ static void event_loop_handle_window_created(AXUIElementRef window_ref, struct a
         if (window_pid) application = window_manager_find_application(&g_window_manager, window_pid);
     }
     if (!application) { CFRelease(window_ref); return; }
+    suppress_rule_follow = suppress_rule_follow || application->initial_window_inventory;
 
     bool retry = false;
-    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id, one_shot_rules, one_shot_owner_pid, &retry);
-    if (!window && retry) window_manager_schedule_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid);
+    struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id,
+                                                                 one_shot_rules, one_shot_owner_pid, suppress_rule_follow, &retry);
+    if (!window && retry) {
+        window_manager_schedule_window_created_retry(window_ref, application, one_shot_rules, one_shot_owner_pid,
+                                                     suppress_rule_follow);
+    }
     if (!window) return;
     application->adopt_attempted_window_id = 0;
 
@@ -1820,7 +1827,7 @@ static void event_loop_handle_window_created(AXUIElementRef window_ref, struct a
 
 static EVENT_HANDLER(WINDOW_CREATED)
 {
-    event_loop_handle_window_created(context, NULL, true, 0);
+    event_loop_handle_window_created(context, NULL, true, 0, false);
 }
 
 static EVENT_HANDLER(WINDOW_CREATED_RETRY)
@@ -1834,9 +1841,10 @@ static EVENT_HANDLER(WINDOW_CREATED_RETRY)
     }
     pid_t one_shot_owner_pid = window_manager_window_created_retry_owner(application, retry);
     bool one_shot_rules = window_manager_window_created_retry_uses_one_shots(application, retry);
+    bool suppress_rule_follow = retry->suppress_rule_follow;
     retry->window_ref = NULL;
     window_manager_destroy_window_created_retry(retry);
-    event_loop_handle_window_created(window_ref, application, one_shot_rules, one_shot_owner_pid);
+    event_loop_handle_window_created(window_ref, application, one_shot_rules, one_shot_owner_pid, suppress_rule_follow);
 }
 
 static EVENT_HANDLER(WINDOW_DESTROYED)

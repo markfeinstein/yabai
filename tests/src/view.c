@@ -320,6 +320,45 @@ TEST_FUNC(single_window_width_ratio_reconciles_bsp_split_and_collapse,
     view_test_set_platform_ops(NULL);
 });
 
+TEST_FUNC(single_window_auto_split_uses_ordinary_root_geometry,
+{
+    struct window_node root = {
+        .window_count = 1, .window_list = { 1 }, .window_order = { 1 }
+    };
+    struct view view = {
+        .layout = VIEW_BSP, .root = &root, .single_window_width_ratio = 0.3f,
+        .split_type = SPLIT_AUTO, .split_ratio = 0.5f
+    };
+    struct single_window_lifecycle_context context = {
+        .full = { .x = 100.0f, .y = 20.0f, .w = 3000.0f, .h = 1200.0f }
+    };
+    struct view_test_platform_ops ops = {
+        .update_windows = single_window_lifecycle_update, .context = &context
+    };
+    view_test_set_platform_ops(&ops);
+
+    view_update(&view);
+    TEST_CHECK(fabsf(root.area.w - 900.0f) < 0.001f, true);
+
+    struct window second = { .id = 2 };
+    struct view_insertion_plan plan;
+    TEST_CHECK(view_prepare_window_node_insertion(&view, &second, 0, &plan), true);
+    TEST_CHECK(view_commit_window_node_insertion(&view, &second, 0, &plan), &root);
+    view_abort_window_node_insertion(&plan);
+
+    TEST_CHECK(root.split, SPLIT_Y);
+    TEST_CHECK(memcmp(&root.area, &context.full, sizeof(context.full)), 0);
+    TEST_CHECK(root.left != NULL && root.right != NULL, true);
+    TEST_CHECK(root.left ? root.left->area.w : 0.0f, 1500.0f);
+    TEST_CHECK(root.right ? root.right->area.x : 0.0f, 1600.0f);
+    TEST_CHECK(root.right ? root.right->area.w : 0.0f, 1500.0f);
+
+    legacy_allocation_free(root.left);
+    legacy_allocation_free(root.right);
+    root.left = root.right = NULL;
+    view_test_set_platform_ops(NULL);
+});
+
 static size_t insert_feedback_refresh_test_calls;
 static struct window_node *insert_feedback_refresh_test_nodes[2];
 static void insert_feedback_refresh_test_record(struct window_node *node)

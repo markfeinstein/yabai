@@ -14,6 +14,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `single_window_max_width` ceiling, that centers one managed window while
   preserving ordinary multi-window layouts; `zoom-fullscreen` temporarily
   bypasses responsive singleton sizing.
+- Choose the first automatic BSP split from the ordinary full root when a
+  responsive singleton opens a second managed window.
+- Compile the core test translation unit with warnings treated as errors while
+  retaining narrow exceptions for deliberate fixtures and legacy APIs.
+- Parse the injected process's main-image Mach-O load commands directly instead
+  of using deprecated segment lookup APIs.
+- Pass the embedded Info.plist section flag only when linking daemon binaries,
+  not when compiling the standalone menu-bar model object.
 - Recover windows whose accessibility reference is replaced, and adopt focused
   windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
 - Preserve BSP membership and complete-tree geometry across native-fullscreen
@@ -39,6 +47,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   current display bounds without changing configured split ratios.
 - Leave actively dragged cross-display windows under mouse-up ownership instead
   of reconciling them into the destination Space early [#2843](https://github.com/asmvik/yabai/issues/2843).
+- Preserve the active Space during daemon startup by applying persistent rule
+  target moves without following them until each pre-existing application's
+  initial window inventory converges.
 - Ignore zero-area helper windows unless an explicit rule manages them.
 - Use modern Objective-C ivar accessors for scripting-addition compatibility
   with current Apple Silicon SDKs.
@@ -51,6 +62,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Reuse window, Space and managed-display topology metadata within each integrated
   menu-bar snapshot, avoiding redundant synchronous WindowServer queries per window,
   Space and display.
+- Improve the native Spaces indicator with per-display submenus and section headers,
+  directional overflow counts, structured accessibility summaries, and an automatic
+  layout that expands within a 260-point budget before falling back to compact mode.
 - Reuse managed-Space topology and ordered-display metadata across each window-query
   request, avoiding repeated IPC for Space enumeration and serialized Space/display indices.
 - Add non-mutating window diagnostics for raw parent id, WindowServer tags,

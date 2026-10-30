@@ -111,7 +111,7 @@ static CGContextRef animation_test_context_ok(int cid, uint32_t wid, CFDictionar
     CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
     if (!color_space) return NULL;
     CGContextRef context = CGBitmapContextCreate(NULL, 2, 2, 8, 8, color_space,
-                                                  kCGImageAlphaPremultipliedLast);
+                                                  (CGBitmapInfo) kCGImageAlphaPremultipliedLast);
     CGColorSpaceRelease(color_space);
     return context;
 }
@@ -146,7 +146,7 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
 {
     CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
     CGContextRef bitmap = CGBitmapContextCreate(NULL, 1, 1, 8, 4, color_space,
-                                                 kCGImageAlphaPremultipliedLast);
+                                                 (CGBitmapInfo) kCGImageAlphaPremultipliedLast);
     CGImageRef image = bitmap ? CGBitmapContextCreateImage(bitmap) : NULL;
     TEST_CHECK(image != NULL, true);
 

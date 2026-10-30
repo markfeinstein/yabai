@@ -948,25 +948,43 @@ static bool space_manager_move_window_list_with_ops(uint64_t sid, uint32_t *wind
 #define WINDOW_SPACE_MOVE_WAIT_ATTEMPTS 50
 #define WINDOW_SPACE_MOVE_WAIT_INTERVAL_US 10000
 
+#ifdef TESTS
+static uint64_t (*space_manager_test_window_space)(uint32_t);
+static int (*space_manager_test_move_wait)(useconds_t);
+#endif
+
 static bool space_manager_wait_for_window_list_space(uint64_t sid, uint32_t *window_list, int window_count)
 {
     for (int attempt = 0; attempt < WINDOW_SPACE_MOVE_WAIT_ATTEMPTS; ++attempt) {
         bool complete = true;
         for (int i = 0; i < window_count; ++i) {
-            if (window_space(window_list[i]) != sid) {
+#ifdef TESTS
+            uint64_t observed_sid = space_manager_test_window_space
+                                  ? space_manager_test_window_space(window_list[i])
+                                  : window_space(window_list[i]);
+#else
+            uint64_t observed_sid = window_space(window_list[i]);
+#endif
+            if (observed_sid != sid) {
                 complete = false;
                 break;
             }
         }
         if (complete) return true;
+#ifdef TESTS
+        if (space_manager_test_move_wait) space_manager_test_move_wait(WINDOW_SPACE_MOVE_WAIT_INTERVAL_US);
+        else usleep(WINDOW_SPACE_MOVE_WAIT_INTERVAL_US);
+#else
         usleep(WINDOW_SPACE_MOVE_WAIT_INTERVAL_US);
+#endif
     }
     return false;
 }
 
 static bool space_manager_move_window_list_using_sa(uint64_t sid, uint32_t *window_list, int window_count)
 {
-    return scripting_addition_move_window_list_to_space(sid, window_list, window_count);
+    if (!scripting_addition_move_window_list_to_space(sid, window_list, window_count)) return false;
+    return space_manager_wait_for_window_list_space(sid, window_list, window_count);
 }
 
 static bool space_manager_move_window_list_using_bridge(uint64_t sid, uint32_t *window_list, int window_count)

@@ -258,6 +258,13 @@ static inline enum window_node_split window_node_get_split(struct view *view, st
     return node->area.w >= node->area.h ? SPLIT_Y : SPLIT_X;
 }
 
+static inline bool window_node_uses_auto_split(struct view *view, struct window_node *node)
+{
+    if (node->split != SPLIT_NONE) return false;
+    if (view->split_type != SPLIT_NONE) return view->split_type == SPLIT_AUTO;
+    return g_space_manager.split_type == SPLIT_AUTO;
+}
+
 static inline float window_node_get_ratio(struct view *view, struct window_node *node)
 {
     return in_range_ii(node->ratio, 0.1f, 0.9f) ? node->ratio : view->split_ratio;
@@ -364,6 +371,14 @@ static bool view_reconcile_single_window_geometry(struct view *view, bool was_si
     if (was_single == is_single) return false;
     view_update(view);
     return true;
+}
+
+static void view_restore_single_window_root_for_auto_split(struct view *view)
+{
+    if (!view_single_window_width_is_active(view) || view_check_flag(view, VIEW_SINGLE_WINDOW_ZOOM)) return;
+    view_set_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
+    view_update(view);
+    view_clear_flag(view, VIEW_SINGLE_WINDOW_ZOOM);
 }
 
 static inline bool window_node_is_left_child(struct window_node *node)
@@ -1060,6 +1075,9 @@ struct window_node *view_commit_window_node_insertion(struct view *view, struct 
             if (!leaf) leaf = view_find_min_depth_leaf_node(view->root);
         }
 
+        if (was_single && window_node_uses_auto_split(view, leaf)) {
+            view_restore_single_window_root_for_auto_split(view);
+        }
         if (!plan->left || !plan->right) return NULL;
         struct window_node *left = plan->left;
         struct window_node *right = plan->right;

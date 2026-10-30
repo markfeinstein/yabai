@@ -144,23 +144,23 @@ static bool declarative_install_test_candidate_value_applied(
     switch (id) {
     case DECLARATIVE_CONFIG_DEBUG_OUTPUT: return bundle->verbose == value->boolean;
     case DECLARATIVE_CONFIG_MFF: return bundle->window_manager.enable_mff == value->boolean;
-    case DECLARATIVE_CONFIG_FFM: return bundle->window_manager.configured_ffm_mode == value->enumeration;
-    case DECLARATIVE_CONFIG_DISPLAY_ORDER: return bundle->display_manager.order == value->enumeration;
-    case DECLARATIVE_CONFIG_WINDOW_ORIGIN: return bundle->window_manager.window_origin_mode == value->enumeration;
-    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: return bundle->window_manager.window_focus_fallback == value->enumeration;
-    case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: return bundle->space_manager.window_placement == value->enumeration;
-    case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: return bundle->space_manager.window_insertion_point == value->enumeration;
+    case DECLARATIVE_CONFIG_FFM: return (int) bundle->window_manager.configured_ffm_mode == value->enumeration;
+    case DECLARATIVE_CONFIG_DISPLAY_ORDER: return (int) bundle->display_manager.order == value->enumeration;
+    case DECLARATIVE_CONFIG_WINDOW_ORIGIN: return (int) bundle->window_manager.window_origin_mode == value->enumeration;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: return (int) bundle->window_manager.window_focus_fallback == value->enumeration;
+    case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: return (int) bundle->space_manager.window_placement == value->enumeration;
+    case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: return (int) bundle->space_manager.window_insertion_point == value->enumeration;
     case DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST: return bundle->space_manager.window_zoom_persist == value->boolean;
     case DECLARATIVE_CONFIG_SKIP_SPACE_ANIMATION: return bundle->space_manager.skip_window_focus_animation == value->boolean;
     case DECLARATIVE_CONFIG_OPACITY: return bundle->window_manager.enable_window_opacity == value->boolean;
     case DECLARATIVE_CONFIG_OPACITY_DURATION: return bundle->window_manager.window_opacity_duration == value->real;
     case DECLARATIVE_CONFIG_ANIMATION_DURATION: return bundle->window_manager.window_animation_duration == value->real;
     case DECLARATIVE_CONFIG_ANIMATION_EASING: return bundle->window_manager.window_animation_easing == value->enumeration;
-    case DECLARATIVE_CONFIG_SHADOW: return bundle->window_manager.purify_mode == value->enumeration;
-    case DECLARATIVE_CONFIG_MENUBAR: return bundle->menu_settings.enabled == value->enumeration;
-    case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: return bundle->menu_settings.interface == value->enumeration;
-    case DECLARATIVE_CONFIG_MENUBAR_STYLE: return bundle->menu_settings.style == value->enumeration;
-    case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return bundle->menu_settings.space_filter == value->enumeration;
+    case DECLARATIVE_CONFIG_SHADOW: return (int) bundle->window_manager.purify_mode == value->enumeration;
+    case DECLARATIVE_CONFIG_MENUBAR: return (int) bundle->menu_settings.enabled == value->enumeration;
+    case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: return (int) bundle->menu_settings.interface == value->enumeration;
+    case DECLARATIVE_CONFIG_MENUBAR_STYLE: return (int) bundle->menu_settings.style == value->enumeration;
+    case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return (int) bundle->menu_settings.space_filter == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return bundle->window_manager.menubar_opacity == value->real;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: return bundle->window_manager.active_window_opacity == value->real;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return bundle->window_manager.normal_window_opacity == value->real;
@@ -180,17 +180,17 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: return bundle->space_manager.single_window_max_width == value->integer;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH: return bundle->space_manager.single_window_min_width == value->integer;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: return bundle->space_manager.single_window_width_ratio == value->real;
-    case DECLARATIVE_CONFIG_LAYOUT: return bundle->space_manager.layout == value->enumeration;
+    case DECLARATIVE_CONFIG_LAYOUT: return (int) bundle->space_manager.layout == value->enumeration;
     case DECLARATIVE_CONFIG_SPLIT_RATIO: return bundle->space_manager.split_ratio == value->real;
-    case DECLARATIVE_CONFIG_SPLIT_TYPE: return bundle->space_manager.split_type == value->enumeration;
+    case DECLARATIVE_CONFIG_SPLIT_TYPE: return (int) bundle->space_manager.split_type == value->enumeration;
     case DECLARATIVE_CONFIG_AUTO_BALANCE: return bundle->space_manager.auto_balance == value->u32;
     case DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE: return bundle->mouse_state.native_edge_resize == value->boolean;
     case DECLARATIVE_CONFIG_MOUSE_MOD: return bundle->mouse_state.modifier == value->enumeration;
-    case DECLARATIVE_CONFIG_MOUSE_ACTION1: return bundle->mouse_state.action1 == value->enumeration;
-    case DECLARATIVE_CONFIG_MOUSE_ACTION2: return bundle->mouse_state.action2 == value->enumeration;
-    case DECLARATIVE_CONFIG_MOUSE_DROP_ACTION: return bundle->mouse_state.drop_action == value->enumeration;
+    case DECLARATIVE_CONFIG_MOUSE_ACTION1: return (int) bundle->mouse_state.action1 == value->enumeration;
+    case DECLARATIVE_CONFIG_MOUSE_ACTION2: return (int) bundle->mouse_state.action2 == value->enumeration;
+    case DECLARATIVE_CONFIG_MOUSE_DROP_ACTION: return (int) bundle->mouse_state.drop_action == value->enumeration;
     case DECLARATIVE_CONFIG_EXTERNAL_BAR:
-        return bundle->display_manager.mode == value->external_bar.mode &&
+        return (int) bundle->display_manager.mode == value->external_bar.mode &&
                bundle->display_manager.top_padding == value->external_bar.top_padding &&
                bundle->display_manager.bottom_padding == value->external_bar.bottom_padding;
     default: return false;
