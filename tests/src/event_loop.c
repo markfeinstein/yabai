@@ -14,6 +14,18 @@ static AXError managed_window_correction_unobserve_result[2];
 static bool managed_window_correction_admit_result;
 static pid_t managed_window_correction_hint_pid;
 static uint64_t managed_window_correction_time;
+static bool managed_window_correction_live_frame_result;
+static CGRect managed_window_correction_live_frame_value;
+static int managed_window_correction_live_frame_calls;
+
+static bool managed_window_correction_read_live_frame(struct window *window, CGRect *frame)
+{
+    (void) window;
+    ++managed_window_correction_live_frame_calls;
+    if (!managed_window_correction_live_frame_result) return false;
+    *frame = managed_window_correction_live_frame_value;
+    return true;
+}
 
 static AXError managed_window_correction_observe(AXObserverRef observer, AXUIElementRef element,
                                                  CFStringRef notification, void *context)
@@ -707,6 +719,80 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals,
     g_window_manager.managed_window = saved_managed;
 });
 
+TEST_FUNC(managed_window_correction_failed_reads_preserve_cache_and_advance_lease,
+{
+    struct table saved_windows = g_window_manager.window;
+    struct table saved_managed = g_window_manager.managed_window;
+    struct mouse_state saved_mouse_state = g_mouse_state;
+    __auto_type saved_live_frame = event_loop_test_managed_window_correction_live_frame;
+    __auto_type saved_flush = event_loop_test_managed_window_correction_flush;
+
+    table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
+    table_init(&g_window_manager.managed_window, 1, hash_wm, compare_wm);
+    struct application application = {
+        .pid = 919,
+        .name = "read-failure",
+        .is_observing = true,
+        .notification = AX_APPLICATION_FRAME_RECOVERY
+    };
+    CGRect cached = CGRectMake(20, 30, 600, 300);
+    struct window window = {
+        .application = &application,
+        .id = 818,
+        .frame = cached,
+        .frame_correction_pending = true,
+        .frame_correction_retry_active = true,
+        .frame_correction_retry_index = 0,
+        .frame_correction_started_at = 1000000000ULL,
+        .frame_correction_retry_at = 1000000000ULL
+    };
+    window.id_ptr = &window.id;
+    struct window_node node = {
+        .area = { .x = 20, .y = 30, .w = 400, .h = 300 },
+        .window_count = 1,
+        .window_list = { 818 },
+        .window_order = { 818 }
+    };
+    struct view view = { .sid = 1, .layout = VIEW_BSP, .root = &node };
+    table_add(&g_window_manager.window, &window.id, &window);
+    table_add(&g_window_manager.managed_window, &window.id, &view);
+    g_mouse_state = (struct mouse_state) { .active_button = MOUSE_BUTTON_NONE };
+    managed_window_correction_live_frame_result = false;
+    managed_window_correction_live_frame_calls = 0;
+    managed_window_correction_flush_count = 0;
+    event_loop_test_managed_window_correction_live_frame = managed_window_correction_read_live_frame;
+    event_loop_test_managed_window_correction_flush = managed_window_correction_flush_test;
+
+    managed_window_correction_retry_window(&window, false, window.frame_correction_retry_at);
+    TEST_CHECK(CGRectEqualToRect(window.frame, cached), true);
+    TEST_CHECK(managed_window_correction_live_frame_calls, 1);
+    TEST_CHECK(managed_window_correction_flush_count, 0);
+    TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK(window.frame_correction_retry_active, true);
+    TEST_CHECK(window.frame_correction_retry_index, 1);
+    TEST_CHECK(window.frame_correction_retry_at,
+               window.frame_correction_started_at + frame_correction_retry_delay_ms[1] * 1000000ULL);
+
+    window.frame_correction_retry_index = FRAME_CORRECTION_RETRY_WRITE_COUNT;
+    window.frame_correction_retry_active = true;
+    window.frame_correction_retry_at += 1;
+    managed_window_correction_retry_window(&window, false, window.frame_correction_retry_at);
+    TEST_CHECK(CGRectEqualToRect(window.frame, cached), true);
+    TEST_CHECK(managed_window_correction_live_frame_calls, 2);
+    TEST_CHECK(managed_window_correction_flush_count, 0);
+    TEST_CHECK(window.frame_correction_pending, true);
+    TEST_CHECK(window.frame_correction_retry_active, false);
+    TEST_CHECK(window.frame_correction_retry_index, FRAME_CORRECTION_RETRY_WRITE_COUNT);
+
+    event_loop_test_managed_window_correction_live_frame = saved_live_frame;
+    event_loop_test_managed_window_correction_flush = saved_flush;
+    g_mouse_state = saved_mouse_state;
+    table_free(&g_window_manager.window);
+    table_free(&g_window_manager.managed_window);
+    g_window_manager.window = saved_windows;
+    g_window_manager.managed_window = saved_managed;
+});
+
 TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state,
 {
     struct event_loop saved_event_loop = g_event_loop;
@@ -1052,11 +1138,13 @@ static CFArrayRef launch_path_empty_window_list(struct application *application)
     return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
 }
 
-static bool launch_path_empty_inventory(struct application *application, uint32_t **list, int *count)
+static bool launch_path_empty_inventory(struct application *application, uint32_t **list, int *count,
+                                        struct window_server_snapshot **snapshot_out)
 {
     (void) application;
     *list = NULL;
     *count = 0;
+    *snapshot_out = NULL;
     return true;
 }
 
@@ -2289,12 +2377,7 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     struct table saved_window_table = g_window_manager.window;
     uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
     bool saved_menu_bar_initialized = g_menu_bar_manager.initialized;
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     g_event_loop = (struct event_loop) {0};
     g_window_manager.window = (struct table) {0};
@@ -2350,12 +2433,7 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     g_window_manager.window = saved_window_table;
     g_window_manager.focused_window_id = saved_focused_window_id;
     g_menu_bar_manager.initialized = saved_menu_bar_initialized;
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_event_loop = saved_event_loop;
 });
 
@@ -2860,6 +2938,34 @@ TEST_FUNC(display_change_rejects_invalid_pairs_before_commit,
     TEST_CHECK(dm.current_display_id, 3U);
     TEST_CHECK(sm.last_space_id, 20ULL);
     TEST_CHECK(sm.current_space_id, 30ULL);
+});
+
+static uint32_t display_change_test_active_display_id(void)
+{
+    return 7;
+}
+
+TEST_FUNC(duplicate_display_change_does_not_reserve_topology_recovery,
+{
+    uint32_t (*saved_active_display_id)(void) = event_loop_test_active_display_id;
+    uint32_t saved_current_display_id = g_display_manager.current_display_id;
+    uint32_t saved_topology_resync_pending = g_event_loop.topology_resync_pending;
+    sem_t *saved_semaphore = g_event_loop.semaphore;
+
+    event_loop_test_active_display_id = display_change_test_active_display_id;
+    g_display_manager.current_display_id = 7;
+    g_event_loop.topology_resync_pending = 0;
+    g_event_loop.semaphore = NULL;
+
+    EVENT_HANDLER_DISPLAY_CHANGED(NULL, 0);
+
+    TEST_CHECK(g_display_manager.current_display_id, 7U);
+    TEST_CHECK(g_event_loop.topology_resync_pending, 0U);
+
+    event_loop_test_active_display_id = saved_active_display_id;
+    g_display_manager.current_display_id = saved_current_display_id;
+    g_event_loop.topology_resync_pending = saved_topology_resync_pending;
+    g_event_loop.semaphore = saved_semaphore;
 });
 
 static int ordinary_application_front_test_update_calls;

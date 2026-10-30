@@ -7,7 +7,6 @@
 #include <mach-o/dyld.h>
 #include <mach-o/fat.h>
 #include <mach-o/swap.h>
-#include <bootstrap.h>
 
 #ifdef __x86_64__
 #include <emmintrin.h>
@@ -76,6 +75,7 @@
 #include "osax/common.h"
 
 #include "declarative_runtime_types.h"
+#include "animation_clock.h"
 #include "view.h"
 #include "sa.h"
 #include "event_loop.h"
@@ -91,12 +91,20 @@
 #include "declarative_space.h"
 #include "declarative_topology.h"
 #include "declarative_install.h"
+#include "window_management_bridge.h"
 #include "doctor.h"
 #include "message.h"
 #include "display.h"
 #include "space.h"
 #include "space_gesture.h"
+#include "window_constraints.h"
+#include "window_corner_geometry.h"
 #include "window.h"
+#include "window_server_snapshot.h"
+#include "window_server_classifier.h"
+#include "window_server_hit_test.h"
+#include "window_server_tags.h"
+#include "active_window_highlight.h"
 #include "process_manager.h"
 #include "application.h"
 #include "display_manager.h"
@@ -104,6 +112,7 @@
 #include "space_manager.h"
 #include "window_manager.h"
 #include "mouse_handler.h"
+#include "accessibility_preferences.h"
 #include "menu_bar_model.h"
 #include "menu_bar.h"
 #include "menu_bar_manager.h"
@@ -111,6 +120,7 @@
 #include "sa.m"
 #include "mission_control.c"
 #include "event_queue.c"
+#include "accessibility_preferences.m"
 #include "menu_bar.m"
 #include "menu_bar_manager.c"
 #include "event_loop.c"
@@ -126,9 +136,16 @@
 #include "message.c"
 #include "daemon_io.c"
 #include "display.c"
+#include "window_constraints.c"
+#include "window_corner_geometry.c"
+#include "window_server_snapshot.c"
+#include "window_server_classifier.c"
+#include "window_server_hit_test.c"
+#include "active_window_highlight.c"
 #include "space.c"
 #include "space_gesture.c"
 #include "view.c"
+#include "animation_clock.c"
 #include "window.c"
 #include "process_manager.c"
 #include "application.c"
@@ -140,4 +157,5 @@
 #include "declarative_space.c"
 #include "declarative_install.c"
 #include "yabai.c"
+#include "window_management_bridge.m"
 #include "doctor.m"

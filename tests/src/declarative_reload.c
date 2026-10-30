@@ -17,6 +17,7 @@ struct declarative_reload_fixture
     size_t postcommit_calls;
     size_t postcommit_failures;
     size_t probe_calls;
+    size_t highlight_refresh_calls;
     size_t refresh_calls;
     struct declarative_space_postcommit_ops postcommit_ops;
     uint32_t wids[4];
@@ -170,6 +171,11 @@ static bool declarative_reload_test_postcommit_feedback(struct window_node *node
     return !fixture->postcommit_fail;
 }
 
+static void declarative_reload_test_refresh_active_window_highlight(void *context)
+{
+    ++((struct declarative_reload_fixture *) context)->highlight_refresh_calls;
+}
+
 static void declarative_reload_test_refresh_insert_feedback(void *context)
 {
     ++((struct declarative_reload_fixture *) context)->refresh_calls;
@@ -201,6 +207,7 @@ static struct declarative_reload_test_ops declarative_reload_test_ops(struct dec
         .find_window = declarative_reload_test_find_window,
         .is_eligible = declarative_reload_test_is_eligible,
         .postcommit_ops = &fixture->postcommit_ops,
+        .refresh_active_window_highlight = declarative_reload_test_refresh_active_window_highlight,
         .refresh_insert_feedback = declarative_reload_test_refresh_insert_feedback,
         .postcommit_probe = declarative_reload_test_postcommit_probe,
         .context = fixture
@@ -271,9 +278,9 @@ static bool declarative_reload_test_setup(struct declarative_reload_fixture *fix
 static void declarative_reload_test_teardown(struct declarative_reload_fixture *fixture,
                                              const struct declarative_reload_saved_state *saved)
 {
+    if (g_event_loop.semaphore) event_loop_end(&g_event_loop);
     declarative_reload_test_set_message_ops(NULL);
     declarative_reload_test_fail_stage(DECLARATIVE_RELOAD_TEST_STAGE_NONE);
-    if (g_event_loop.semaphore) event_loop_end(&g_event_loop);
     declarative_install_test_reset();
     declarative_topology_test_fixture_destroy(&fixture->topology);
     menu_bar_manager_startup_staging_abort();
@@ -753,6 +760,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
            stages, allocator_failures);
     TEST_CHECK(stages, (size_t) DECLARATIVE_RELOAD_TEST_STAGE_COUNT - 1);
     TEST_CHECK(allocator_failures, 4U);
+    TEST_CHECK(fixture.highlight_refresh_calls, 0U);
     TEST_CHECK(fixture.refresh_calls, 0U);
     declarative_reload_test_teardown(&fixture, &saved);
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
@@ -761,7 +769,7 @@ TEST_FUNC(declarative_reload_stage_failure_matrix_preserves_installed_state,
 TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
 {
     static const char candidate_json[] =
-        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17,\"insert_feedback_radius\":15,\"insert_feedback_width\":4},"
+        "{\"version\":1,\"config\":{\"layout\":\"accordion_horizontal\",\"accordion_padding\":31,\"window_gap\":17,\"active_window_highlight\":true,\"active_window_highlight_color\":4278255360,\"active_window_highlight_radius\":12,\"active_window_highlight_width\":5,\"insert_feedback_radius\":15,\"insert_feedback_width\":4},"
         "\"rules\":[{\"label\":\"native-once\",\"one_shot\":true,"
         "\"match\":{\"app\":{\"pattern\":\"^App$\"}},\"effects\":{\"manage\":true}}]}";
     struct declarative_reload_fixture fixture = {
@@ -817,7 +825,12 @@ TEST_FUNC(declarative_reload_success_is_synchronous_atomic_and_rearms_rules,
     TEST_CHECK(strcmp(output, "configuration reloaded\n"), 0);
     TEST_CHECK(fixture.probe_calls, 1U);
     TEST_CHECK(fixture.probe_committed, true);
+    TEST_CHECK(fixture.highlight_refresh_calls, 1U);
     TEST_CHECK(fixture.refresh_calls, 1U);
+    TEST_CHECK(g_window_manager.enable_active_window_highlight, true);
+    TEST_CHECK(g_window_manager.active_window_highlight_color.p, 0xff00ff00U);
+    TEST_CHECK(g_window_manager.active_window_highlight_radius, 12.0f);
+    TEST_CHECK(g_window_manager.active_window_highlight_width, 5.0f);
     TEST_CHECK(g_window_manager.insert_feedback_radius, 15.0f);
     TEST_CHECK(g_window_manager.insert_feedback_width, 4.0f);
     TEST_CHECK(declarative_installed.generation, old_generation + 1);
@@ -1607,8 +1620,8 @@ TEST_FUNC(declarative_modes_runtime_worker_transaction_and_topology_gate,
     struct declarative_mode_worker_context committed = { .name = "home", .activate = true };
     TEST_CHECK(declarative_mode_run(&committed), true);
     TEST_CHECK(committed.result, true);
-    fixture.postcommit_fail = false;
     TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+    fixture.postcommit_fail = false;
     TEST_CHECK(strcmp(declarative_installed_selected_mode(), "home"), 0);
     TEST_CHECK(fixture.postcommit_failures > 0, true);
 
@@ -1713,13 +1726,13 @@ TEST_FUNC(declarative_mode_messages_classify_typed_failures_without_spurious_rec
             TEST_CHECK(message.reservation != 0, cases[i].reconcile);
             TEST_CHECK(declarative_installed_selected_mode(), NULL);
             free(message.output);
+            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
+            TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
             declarative_mode_fault_topology_result = DECLARATIVE_TOPOLOGY_OK;
             declarative_space_test_fail_allocation_at(0);
             declarative_space_test_set_admission(0, true);
             ops.query_sid_result = NULL;
             declarative_mode_space_window_list = saved_window_list;
-            TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
-            TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
         }
     }
     declarative_mode_space_window_list = saved_window_list;
@@ -1765,14 +1778,15 @@ static bool declarative_mode_stale_topology_case(int scenario)
     struct declarative_mode_worker_context mode = {
         .name = "work", .activate = true, .query_counter = &fixture.query_calls
     };
-    ok = ok && declarative_mode_run(&mode) && !mode.result &&
+    bool mode_completed = declarative_mode_run(&mode);
+    bool reconcile_completed = mode_completed &&
+        event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL);
+    ok = ok && mode_completed && reconcile_completed && !mode.result &&
          mode.query_calls_after == query_before &&
          mode.error.code == DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED &&
          declarative_installed_selected_mode() == NULL &&
          (!view || view->root == root) && g_window_manager.rules == rules &&
          rule_native_generation() == generation;
-    (void) event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL);
-    ok = ok && declarative_installed_selected_mode() == NULL && (!view || view->root == root);
     declarative_reload_test_teardown(&fixture, &saved);
     return ok && declarative_install_test_outstanding_allocations() == 0;
 }
@@ -1784,6 +1798,113 @@ TEST_FUNC(declarative_modes_runtime_stale_topology_matrix,
         TEST_CHECK(declarative_mode_stale_topology_case(scenario), true);
         if (!result) fprintf(stderr, "mode stale topology scenario: %s\n", names[scenario]);
     }
+})
+
+struct declarative_reload_teardown_lifecycle
+{
+    struct declarative_reload_fixture *fixture;
+    const struct declarative_reload_saved_state *saved;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool reconcile_entered;
+    bool release_reconcile;
+    bool shutdown_admitted;
+    bool teardown_completed;
+};
+
+static struct declarative_reload_teardown_lifecycle *declarative_reload_teardown_active;
+
+static void declarative_reload_teardown_reconcile_hook(void)
+{
+    struct declarative_reload_teardown_lifecycle *lifecycle = declarative_reload_teardown_active;
+    if (!lifecycle) return;
+    pthread_mutex_lock(&lifecycle->mutex);
+    lifecycle->reconcile_entered = true;
+    pthread_cond_broadcast(&lifecycle->cond);
+    while (!lifecycle->release_reconcile) pthread_cond_wait(&lifecycle->cond, &lifecycle->mutex);
+    pthread_mutex_unlock(&lifecycle->mutex);
+}
+
+static void declarative_reload_teardown_shutdown_hook(struct event_loop *event_loop)
+{
+    (void) event_loop;
+    struct declarative_reload_teardown_lifecycle *lifecycle = declarative_reload_teardown_active;
+    if (!lifecycle) return;
+    pthread_mutex_lock(&lifecycle->mutex);
+    lifecycle->shutdown_admitted = true;
+    pthread_cond_broadcast(&lifecycle->cond);
+    pthread_mutex_unlock(&lifecycle->mutex);
+}
+
+static void *declarative_reload_teardown_thread(void *context)
+{
+    struct declarative_reload_teardown_lifecycle *lifecycle = context;
+    declarative_reload_test_teardown(lifecycle->fixture, lifecycle->saved);
+    pthread_mutex_lock(&lifecycle->mutex);
+    lifecycle->teardown_completed = true;
+    pthread_cond_broadcast(&lifecycle->cond);
+    pthread_mutex_unlock(&lifecycle->mutex);
+    return NULL;
+}
+
+TEST_FUNC(declarative_reload_teardown_joins_reconcile_before_clearing_test_state,
+{
+    static const char json[] = "{\"version\":2,\"modes\":[],\"rules\":[]}";
+    struct declarative_reload_fixture fixture = {
+        .json = json, .path = "/tmp/reload-teardown-lifecycle.jsonc"
+    };
+    struct declarative_reload_saved_state saved;
+    TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
+    if (!g_event_loop.semaphore) return result;
+    struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
+    TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    declarative_reload_test_set_message_ops(&ops);
+    uint64_t generation = rule_native_generation();
+    struct rule *rules = g_window_manager.rules;
+
+    struct declarative_reload_teardown_lifecycle lifecycle = {
+        .fixture = &fixture,
+        .saved = &saved,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .cond = PTHREAD_COND_INITIALIZER
+    };
+    __auto_type saved_reconcile_hook = declarative_reload_reconcile_entry_test_hook;
+    __auto_type saved_shutdown_hook = event_loop_shutdown_admitted_test_hook;
+    declarative_reload_teardown_active = &lifecycle;
+    declarative_reload_test_set_reconcile_entry_hook(declarative_reload_teardown_reconcile_hook);
+    event_loop_shutdown_admitted_test_hook = declarative_reload_teardown_shutdown_hook;
+    declarative_configuration_request_reconcile();
+
+    pthread_mutex_lock(&lifecycle.mutex);
+    while (!lifecycle.reconcile_entered) pthread_cond_wait(&lifecycle.cond, &lifecycle.mutex);
+    pthread_mutex_unlock(&lifecycle.mutex);
+    declarative_reload_test_set_reconcile_entry_hook(NULL);
+
+    pthread_t teardown_thread;
+    TEST_CHECK(pthread_create(&teardown_thread, NULL, declarative_reload_teardown_thread, &lifecycle), 0);
+    pthread_mutex_lock(&lifecycle.mutex);
+    while (!lifecycle.shutdown_admitted) pthread_cond_wait(&lifecycle.cond, &lifecycle.mutex);
+    TEST_CHECK(lifecycle.teardown_completed, false);
+    pthread_mutex_unlock(&lifecycle.mutex);
+    event_loop_shutdown_admitted_test_hook = NULL;
+
+    TEST_CHECK(declarative_reload_message_test_ops, &ops);
+    TEST_CHECK(rule_native_generation(), generation);
+    TEST_CHECK(g_window_manager.rules, rules);
+
+    pthread_mutex_lock(&lifecycle.mutex);
+    lifecycle.release_reconcile = true;
+    pthread_cond_broadcast(&lifecycle.cond);
+    pthread_mutex_unlock(&lifecycle.mutex);
+    pthread_join(teardown_thread, NULL);
+
+    declarative_reload_teardown_active = NULL;
+    declarative_reload_reconcile_entry_test_hook = saved_reconcile_hook;
+    event_loop_shutdown_admitted_test_hook = saved_shutdown_hook;
+    TEST_CHECK(lifecycle.teardown_completed, true);
+    TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
+    pthread_cond_destroy(&lifecycle.cond);
+    pthread_mutex_destroy(&lifecycle.mutex);
 })
 
 struct declarative_reconcile_retry_capture
@@ -1849,6 +1970,7 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, false);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(mode.error.code, DECLARATIVE_MODES_ERROR_RECONCILIATION_REQUIRED);
     TEST_CHECK(strcmp(mode.error.detail.message,
                       "mode topology changed during activation; reconciliation is required before retry"), 0);
@@ -1862,7 +1984,6 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
 
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 1U);
     fixture.mutate_topology_at_call = 0;
     fixture.topology.replacement_uuid_sid = 0;
@@ -1874,10 +1995,10 @@ TEST_FUNC(declarative_modes_runtime_second_topology_gate_and_recovery,
     mode = (struct declarative_mode_worker_context) { .name = "work", .activate = true };
     TEST_CHECK(declarative_mode_run(&mode), true);
     TEST_CHECK(mode.result, true);
+    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     TEST_CHECK(strcmp(declarative_installed_selected_mode(), "work"), 0);
     TEST_CHECK(g_window_manager.rules, rules);
     TEST_CHECK(rule_native_generation(), generation);
-    TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
 
     declarative_reload_test_set_reconcile_retry_hook(NULL, NULL);
     declarative_reload_test_teardown(&fixture, &saved);
@@ -2017,12 +2138,12 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
         TEST_CHECK(declarative_mode_run(&attempt), true);
         TEST_CHECK(attempt.result, false);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
         TEST_CHECK(declarative_installed_selected_mode(), NULL);
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
         declarative_install_test_fail_allocation_at(0);
-        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_install_test_fail_allocation_at(0);
     for (size_t ordinal = 1; ordinal <= space_allocations; ++ordinal) {
@@ -2030,12 +2151,12 @@ TEST_FUNC(declarative_modes_runtime_allocation_failure_publication_matrix,
         struct declarative_mode_worker_context attempt = { .name = "work", .activate = true };
         TEST_CHECK(declarative_mode_run(&attempt), true);
         TEST_CHECK(attempt.result, false);
+        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
         TEST_CHECK(declarative_installed_selected_mode(), NULL);
         TEST_CHECK(view ? view->root : NULL, root);
         TEST_CHECK(g_window_manager.rules, rules);
         TEST_CHECK(rule_native_generation(), generation);
         declarative_space_test_fail_allocation_at(0);
-        TEST_CHECK(event_loop_perform_sync(&g_event_loop, declarative_reload_barrier, NULL), true);
     }
     declarative_space_test_fail_allocation_at(0);
     declarative_install_test_fail_allocation_at(0);

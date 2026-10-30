@@ -56,7 +56,8 @@ struct menu_bar_manager_native_seams
     uint64_t (*display_space_id)(uint32_t did);
     int (*space_type)(int cid, uint64_t sid);
     int (*mission_control_index)(uint64_t sid);
-    uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized, bool *success);
+    uint32_t *(*space_window_list)(uint64_t sid, int *count, bool include_minimized, bool *success,
+                                   struct window_server_snapshot **snapshot_out);
     uint64_t *(*window_space_list)(uint32_t wid, int *count);
     enum space_op_error (*focus_space)(uint64_t sid);
 };
@@ -67,6 +68,12 @@ static struct menu_bar_manager_native_seams g_menu_bar_manager_native;
 static bool menu_bar_manager_valid_enabled(enum menu_bar_enabled enabled)
 {
     return enabled == MENU_BAR_DISABLED || enabled == MENU_BAR_ENABLED;
+}
+
+static bool menu_bar_manager_valid_interface(enum menu_bar_interface interface)
+{
+    return interface == MENU_BAR_INTERFACE_MENU || interface == MENU_BAR_INTERFACE_PANEL ||
+           interface == MENU_BAR_INTERFACE_AUTO;
 }
 
 static bool menu_bar_manager_valid_style(enum menu_bar_style style)
@@ -204,13 +211,17 @@ static int menu_bar_manager_native_mission_control_index(CFArrayRef topology, ui
         : managed_space_index(topology, sid);
 }
 
-static uint32_t *menu_bar_manager_native_space_window_list(uint64_t sid, int *count,
-                                                           bool include_minimized, bool *success)
+static uint32_t *menu_bar_manager_native_space_window_list(
+    uint64_t sid, int *count, bool include_minimized, bool *success,
+    struct window_server_snapshot **snapshot_out)
 {
+    if (snapshot_out) *snapshot_out = NULL;
     if (g_menu_bar_manager_native.space_window_list) {
-        return g_menu_bar_manager_native.space_window_list(sid, count, include_minimized, success);
+        return g_menu_bar_manager_native.space_window_list(
+            sid, count, include_minimized, success, snapshot_out);
     }
-    return space_window_list_for_connection_with_status(&sid, 1, 0, count, include_minimized, success);
+    return space_window_list_for_connection_with_snapshot(
+        &sid, 1, 0, count, include_minimized, success, snapshot_out);
 }
 
 static uint64_t *menu_bar_manager_native_window_space_list(uint32_t wid, int *count)
@@ -484,21 +495,43 @@ static bool menu_bar_manager_collect_raw_untracked(struct menu_bar_display_build
 
             int raw_window_count = 0;
             bool query_succeeded = false;
+            struct window_server_snapshot *window_server_snapshot = NULL;
             uint32_t *raw_window_list = menu_bar_manager_native_space_window_list(
-                space_input->space_id, &raw_window_count, true, &query_succeeded);
+                space_input->space_id, &raw_window_count, true, &query_succeeded,
+                &window_server_snapshot);
             space->raw_query_succeeded = query_succeeded && raw_window_count >= 0 &&
                                          (raw_window_count == 0 || raw_window_list);
+            if (space->raw_query_succeeded && raw_window_count > 0) {
+                if (!window_server_snapshot) {
+                    space->raw_query_succeeded = false;
+                } else {
+                    for (int i = 0; i < raw_window_count; ++i) {
+                        if (!window_server_snapshot_find(window_server_snapshot, raw_window_list[i])) {
+                            space->raw_query_succeeded = false;
+                            break;
+                        }
+                    }
+                }
+            }
             if (!space->raw_query_succeeded) {
+                window_server_snapshot_destroy(window_server_snapshot);
                 if (!menu_bar_manager_mark_space_unknown(space, space_input->space_id)) return false;
                 continue;
             }
-            if (raw_window_count == 0) continue;
+            if (raw_window_count == 0) {
+                window_server_snapshot_destroy(window_server_snapshot);
+                continue;
+            }
 
             space->raw_window_ids = malloc((size_t) raw_window_count * sizeof(uint32_t));
-            if (!space->raw_window_ids) return false;
+            if (!space->raw_window_ids) {
+                window_server_snapshot_destroy(window_server_snapshot);
+                return false;
+            }
             memcpy(space->raw_window_ids, raw_window_list,
                    (size_t) raw_window_count * sizeof(uint32_t));
             space->raw_window_count = (size_t) raw_window_count;
+            window_server_snapshot_destroy(window_server_snapshot);
 
             for (size_t i = 0; i < space->raw_window_count; ++i) {
                 if (!window_manager_find_window(&g_window_manager, space->raw_window_ids[i])) {
@@ -930,6 +963,11 @@ enum menu_bar_enabled menu_bar_manager_enabled(void)
     return g_menu_bar_manager.settings.enabled;
 }
 
+enum menu_bar_interface menu_bar_manager_interface(void)
+{
+    return g_menu_bar_manager.settings.interface;
+}
+
 enum menu_bar_style menu_bar_manager_style(void)
 {
     return g_menu_bar_manager.settings.style;
@@ -948,6 +986,16 @@ const char *menu_bar_manager_enabled_string(enum menu_bar_enabled enabled)
     }
 
     return "off";
+}
+
+const char *menu_bar_manager_interface_string(enum menu_bar_interface interface)
+{
+    switch (interface) {
+    case MENU_BAR_INTERFACE_MENU:  return MENU_BAR_INTERFACE_MENU_STR;
+    case MENU_BAR_INTERFACE_PANEL: return MENU_BAR_INTERFACE_PANEL_STR;
+    case MENU_BAR_INTERFACE_AUTO:  return MENU_BAR_INTERFACE_AUTO_STR;
+    }
+    return MENU_BAR_INTERFACE_MENU_STR;
 }
 
 const char *menu_bar_manager_style_string(enum menu_bar_style style)
@@ -983,6 +1031,24 @@ bool menu_bar_manager_parse_enabled(const char *text, size_t length, enum menu_b
         return true;
     }
 
+    return false;
+}
+
+bool menu_bar_manager_parse_interface(const char *text, size_t length,
+                                      enum menu_bar_interface *interface)
+{
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_INTERFACE_MENU_STR)) {
+        if (interface) *interface = MENU_BAR_INTERFACE_MENU;
+        return true;
+    }
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_INTERFACE_PANEL_STR)) {
+        if (interface) *interface = MENU_BAR_INTERFACE_PANEL;
+        return true;
+    }
+    if (menu_bar_manager_text_equals(text, length, MENU_BAR_INTERFACE_AUTO_STR)) {
+        if (interface) *interface = MENU_BAR_INTERFACE_AUTO;
+        return true;
+    }
     return false;
 }
 
@@ -1057,6 +1123,13 @@ bool menu_bar_manager_startup_stage_enabled(enum menu_bar_enabled enabled)
     return true;
 }
 
+bool menu_bar_manager_startup_stage_interface(enum menu_bar_interface interface)
+{
+    if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_interface(interface)) return false;
+    g_menu_bar_manager.settings.interface = interface;
+    return true;
+}
+
 bool menu_bar_manager_startup_stage_style(enum menu_bar_style style)
 {
     if (!menu_bar_manager_startup_staging_is_open || !menu_bar_manager_valid_style(style)) return false;
@@ -1075,6 +1148,7 @@ bool menu_bar_manager_startup_settings_can_commit(const struct menu_bar_settings
 {
     return settings && menu_bar_manager_startup_staging_is_open &&
            menu_bar_manager_valid_enabled(settings->enabled) &&
+           menu_bar_manager_valid_interface(settings->interface) &&
            menu_bar_manager_valid_style(settings->style) &&
            menu_bar_manager_valid_space_filter(settings->space_filter);
 }
@@ -1088,6 +1162,7 @@ void menu_bar_manager_startup_settings_commit(const struct menu_bar_settings *se
 void menu_bar_manager_settings_commit_no_post(const struct menu_bar_settings *settings)
 {
     assert(settings && menu_bar_manager_valid_enabled(settings->enabled) &&
+           menu_bar_manager_valid_interface(settings->interface) &&
            menu_bar_manager_valid_style(settings->style) &&
            menu_bar_manager_valid_space_filter(settings->space_filter));
     g_menu_bar_manager.settings = *settings;
@@ -1115,6 +1190,7 @@ void menu_bar_manager_settings_postcommit(const struct menu_bar_settings *previo
     }
     if (g_menu_bar_manager.settings.enabled == MENU_BAR_ENABLED &&
         (previous->enabled != g_menu_bar_manager.settings.enabled ||
+         previous->interface != g_menu_bar_manager.settings.interface ||
          previous->style != g_menu_bar_manager.settings.style ||
          previous->space_filter != g_menu_bar_manager.settings.space_filter)) {
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_STARTUP);
@@ -1144,6 +1220,16 @@ bool menu_bar_manager_set_enabled(enum menu_bar_enabled enabled)
         menu_bar_manager_publish_disabled_snapshot();
     }
 
+    return true;
+}
+
+bool menu_bar_manager_set_interface(enum menu_bar_interface interface)
+{
+    if (!menu_bar_manager_valid_interface(interface)) return false;
+    if (g_menu_bar_manager.settings.interface == interface) return true;
+    g_menu_bar_manager.settings.interface = interface;
+    menu_bar_manager_clear_action_failure();
+    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_CONFIG);
     return true;
 }
 

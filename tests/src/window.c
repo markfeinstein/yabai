@@ -1,3 +1,812 @@
+TEST_FUNC(window_sub_level_message_id_tracks_tahoe_protocol,
+{
+    long saved_macos_version = workspace_macos_major_version();
+
+    workspace_set_macos_version(15);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x73C3));
+    workspace_set_macos_version(26);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+    workspace_set_macos_version(27);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+    workspace_set_macos_version(28);
+    TEST_CHECK(window_sub_level_message_id(), UINT32_C(0x76E3));
+
+    workspace_set_macos_version(saved_macos_version);
+});
+
+enum window_ax_snapshot_test_mode
+{
+    WINDOW_AX_SNAPSHOT_TEST_VALID,
+    WINDOW_AX_SNAPSHOT_TEST_MIXED,
+    WINDOW_AX_SNAPSHOT_TEST_SHORT,
+    WINDOW_AX_SNAPSHOT_TEST_OVERSIZED,
+    WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE,
+    WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE,
+    WINDOW_AX_SNAPSHOT_TEST_NONFINITE,
+    WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE
+};
+
+static enum window_ax_snapshot_test_mode window_ax_snapshot_test_mode;
+static bool window_ax_snapshot_test_create_failure;
+static bool window_ax_snapshot_test_size_fallback_failure;
+static AXUIElementRef window_ax_snapshot_test_parent_value;
+static CGRect window_ax_snapshot_test_frame_value;
+static CGRect window_ax_snapshot_test_fallback_frame_value;
+static int window_ax_snapshot_test_create_calls;
+static int window_ax_snapshot_test_multiple_calls;
+static int window_ax_snapshot_test_single_calls;
+static AXCopyMultipleAttributeOptions window_ax_snapshot_test_last_options;
+static CFIndex window_ax_snapshot_test_last_attribute_count;
+static bool window_ax_snapshot_test_attribute_order_valid;
+
+static CFArrayRef window_ax_snapshot_test_create(CFAllocatorRef allocator, const void **values,
+                                                  CFIndex count, const CFArrayCallBacks *callbacks)
+{
+    ++window_ax_snapshot_test_create_calls;
+    return window_ax_snapshot_test_create_failure ? NULL : CFArrayCreate(allocator, values, count, callbacks);
+}
+
+static CFTypeRef window_ax_snapshot_test_value(CFStringRef attribute)
+{
+    if (CFEqual(attribute, kAXPositionAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE) {
+            CGSize size = CGSizeMake(300, 200);
+            return AXValueCreate(kAXValueTypeCGSize, &size);
+        }
+        CGPoint position = window_ax_snapshot_test_frame_value.origin;
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_NONFINITE) position.x = NAN;
+        return AXValueCreate(kAXValueTypeCGPoint, &position);
+    }
+    if (CFEqual(attribute, kAXSizeAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) return CFRetain(kCFNull);
+        CGSize size = window_ax_snapshot_test_frame_value.size;
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE) size.width = 0.0;
+        return AXValueCreate(kAXValueTypeCGSize, &size);
+    }
+    if (CFEqual(attribute, kAXRoleAttribute)) {
+        return CFRetain(window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED
+                        ? (CFTypeRef) kCFBooleanTrue : (CFTypeRef) kAXWindowRole);
+    }
+    if (CFEqual(attribute, kAXSubroleAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            AXError error = kAXErrorNoValue;
+            return AXValueCreate(kAXValueTypeAXError, &error);
+        }
+        return CFRetain(kAXStandardWindowSubrole);
+    }
+    if (CFEqual(attribute, kAXTitleAttribute)) {
+        return CFRetain(window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED
+                        ? (CFTypeRef) kCFNull : (CFTypeRef) CFSTR("snapshot-title"));
+    }
+    if (CFEqual(attribute, kAXParentAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            return CFRetain(CFSTR("not-an-ax-element"));
+        }
+        return window_ax_snapshot_test_parent_value
+             ? CFRetain(window_ax_snapshot_test_parent_value)
+             : AXUIElementCreateApplication(getpid());
+    }
+    if (CFEqual(attribute, kAXMinimizedAttribute)) {
+        if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
+            AXError error = kAXErrorAttributeUnsupported;
+            return AXValueCreate(kAXValueTypeAXError, &error);
+        }
+        return CFRetain(kCFBooleanFalse);
+    }
+    if (CFEqual(attribute, kAXFullscreenAttribute)) return CFRetain(kCFBooleanTrue);
+    return CFRetain(kCFNull);
+}
+
+static AXError window_ax_snapshot_test_copy_multiple(AXUIElementRef element, CFArrayRef attributes,
+                                                      AXCopyMultipleAttributeOptions options,
+                                                      CFArrayRef *values)
+{
+    (void) element;
+    ++window_ax_snapshot_test_multiple_calls;
+    window_ax_snapshot_test_last_options = options;
+    window_ax_snapshot_test_last_attribute_count = CFArrayGetCount(attributes);
+    window_ax_snapshot_test_attribute_order_valid = true;
+    int previous_slot = -1;
+    for (CFIndex index = 0; index < window_ax_snapshot_test_last_attribute_count; ++index) {
+        CFStringRef attribute = CFArrayGetValueAtIndex(attributes, index);
+        int slot = -1;
+        for (int candidate = 0; candidate < WINDOW_AX_SNAPSHOT_SLOT_COUNT; ++candidate) {
+            if (CFEqual(attribute, window_ax_snapshot_attribute[candidate])) {
+                slot = candidate;
+                break;
+            }
+        }
+        if (slot <= previous_slot) window_ax_snapshot_test_attribute_order_valid = false;
+        previous_slot = slot;
+    }
+    *values = NULL;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE) {
+        return kAXErrorCannotComplete;
+    }
+
+    CFIndex attribute_count = CFArrayGetCount(attributes);
+    CFIndex value_count = attribute_count;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_SHORT && value_count > 0) --value_count;
+    if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_OVERSIZED) ++value_count;
+
+    CFTypeRef result_values[WINDOW_AX_SNAPSHOT_SLOT_COUNT + 1] = {0};
+    for (CFIndex index = 0; index < value_count; ++index) {
+        if (index < attribute_count) {
+            CFStringRef attribute = CFArrayGetValueAtIndex(attributes, index);
+            result_values[index] = window_ax_snapshot_test_value(attribute);
+        } else {
+            result_values[index] = CFRetain(kCFNull);
+        }
+    }
+
+    *values = CFArrayCreate(NULL, (const void **) result_values, value_count, &kCFTypeArrayCallBacks);
+    for (CFIndex index = 0; index < value_count; ++index) CFRelease(result_values[index]);
+    return *values ? kAXErrorSuccess : kAXErrorFailure;
+}
+
+static AXError window_ax_snapshot_test_copy_single(AXUIElementRef element, CFStringRef attribute,
+                                                    CFTypeRef *value)
+{
+    (void) element;
+    ++window_ax_snapshot_test_single_calls;
+    *value = NULL;
+
+    if (CFEqual(attribute, kAXPositionAttribute)) {
+        CGPoint position = window_ax_snapshot_test_fallback_frame_value.origin;
+        *value = AXValueCreate(kAXValueTypeCGPoint, &position);
+    } else if (CFEqual(attribute, kAXSizeAttribute)) {
+        if (window_ax_snapshot_test_size_fallback_failure) return kAXErrorCannotComplete;
+        CGSize size = window_ax_snapshot_test_fallback_frame_value.size;
+        *value = AXValueCreate(kAXValueTypeCGSize, &size);
+    } else if (CFEqual(attribute, kAXRoleAttribute) &&
+               window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE) {
+        *value = CFRetain(kAXWindowRole);
+    } else if (CFEqual(attribute, kAXSubroleAttribute)) {
+        *value = CFRetain(kAXDialogSubrole);
+    } else if (CFEqual(attribute, kAXParentAttribute) && window_ax_snapshot_test_parent_value) {
+        *value = CFRetain(window_ax_snapshot_test_parent_value);
+    } else if (CFEqual(attribute, kAXMinimizedAttribute)) {
+        *value = CFRetain(kCFBooleanTrue);
+    } else if (CFEqual(attribute, kAXTitleAttribute)) {
+        return kAXErrorCannotComplete;
+    } else {
+        return kAXErrorAttributeUnsupported;
+    }
+
+    return *value ? kAXErrorSuccess : kAXErrorFailure;
+}
+
+static void window_ax_snapshot_test_begin(enum window_ax_snapshot_test_mode mode)
+{
+    window_ax_snapshot_test_mode = mode;
+    window_ax_snapshot_test_create_failure = false;
+    window_ax_snapshot_test_size_fallback_failure = false;
+    window_ax_snapshot_test_parent_value = NULL;
+    window_ax_snapshot_test_frame_value = CGRectMake(10, 20, 300, 200);
+    window_ax_snapshot_test_fallback_frame_value = CGRectMake(40, 50, 600, 700);
+    window_ax_snapshot_test_create_calls = 0;
+    window_ax_snapshot_test_multiple_calls = 0;
+    window_ax_snapshot_test_single_calls = 0;
+    window_ax_snapshot_test_last_options = 0;
+    window_ax_snapshot_test_last_attribute_count = 0;
+    window_ax_snapshot_test_attribute_order_valid = true;
+    window_ax_snapshot_create_attributes = window_ax_snapshot_test_create;
+    window_ax_snapshot_copy_multiple = window_ax_snapshot_test_copy_multiple;
+    window_ax_snapshot_copy_single = window_ax_snapshot_test_copy_single;
+}
+
+static void window_ax_snapshot_test_end(void)
+{
+    window_ax_snapshot_create_attributes = CFArrayCreate;
+    window_ax_snapshot_copy_multiple = AXUIElementCopyMultipleAttributeValues;
+    window_ax_snapshot_copy_single = AXUIElementCopyAttributeValue;
+}
+
+TEST_FUNC(window_ax_snapshot_reads_and_owns_valid_batch_values,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
+                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), true);
+    TEST_CHECK(snapshot.requested, requested);
+    TEST_CHECK(snapshot.valid, requested);
+    TEST_CHECK(snapshot.position.x, 10.0);
+    TEST_CHECK(snapshot.position.y, 20.0);
+    TEST_CHECK(snapshot.size.width, 300.0);
+    TEST_CHECK(snapshot.size.height, 200.0);
+    TEST_CHECK(snapshot.role != NULL, true);
+    if (snapshot.role) TEST_CHECK(CFEqual(snapshot.role, kAXWindowRole), true);
+    TEST_CHECK(snapshot.subrole != NULL, true);
+    if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXStandardWindowSubrole), true);
+    TEST_CHECK(snapshot.title != NULL, true);
+    if (snapshot.title) TEST_CHECK(CFEqual(snapshot.title, CFSTR("snapshot-title")), true);
+    TEST_CHECK(snapshot.parent != NULL, true);
+    if (snapshot.parent) TEST_CHECK(CFGetTypeID(snapshot.parent), AXUIElementGetTypeID());
+    TEST_CHECK(snapshot.minimized, false);
+    TEST_CHECK(snapshot.fullscreen, true);
+    TEST_CHECK(window_ax_snapshot_test_create_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+
+    CGRect frame = CGRectZero;
+    TEST_CHECK(window_ax_snapshot_frame(&snapshot, &frame), true);
+    TEST_CHECK(CGRectEqualToRect(frame, CGRectMake(10, 20, 300, 200)), true);
+
+    window_ax_snapshot_destroy(&snapshot);
+    TEST_CHECK(snapshot.requested, 0U);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.role == NULL, true);
+    TEST_CHECK(snapshot.parent == NULL, true);
+    window_ax_snapshot_destroy(&snapshot);
+    CFRelease(ref);
+    window_ax_snapshot_test_end();
+});
+
+TEST_FUNC(window_ax_snapshot_validates_slots_and_couples_frame_fallback,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
+                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), false);
+    uint32_t expected_valid = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_SUBROLE |
+                              WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    TEST_CHECK(snapshot.valid, expected_valid);
+    TEST_CHECK(snapshot.position.x, 40.0);
+    TEST_CHECK(snapshot.position.y, 50.0);
+    TEST_CHECK(snapshot.size.width, 600.0);
+    TEST_CHECK(snapshot.size.height, 700.0);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_SUBROLE_SLOT], kAXErrorSuccess);
+    TEST_CHECK(snapshot.subrole != NULL, true);
+    if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXDialogSubrole), true);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_TITLE_SLOT], kAXErrorCannotComplete);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_PARENT_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_MINIMIZED_SLOT], kAXErrorSuccess);
+    TEST_CHECK(snapshot.minimized, true);
+    TEST_CHECK(snapshot.fullscreen, true);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 5);
+
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_single_calls = 0;
+    window_ax_snapshot_test_size_fallback_failure = true;
+    uint32_t frame_fields = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    TEST_CHECK(window_ax_snapshot_read(ref, frame_fields, &snapshot), false);
+    TEST_CHECK(snapshot.valid & frame_fields, 0U);
+    TEST_CHECK(CGPointEqualToPoint(snapshot.position, CGPointZero), true);
+    TEST_CHECK(CGSizeEqualToSize(snapshot.size, CGSizeZero), true);
+    CGRect frame = CGRectZero;
+    TEST_CHECK(window_ax_snapshot_frame(&snapshot, &frame), false);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+
+    window_ax_snapshot_destroy(&snapshot);
+    CFRelease(ref);
+    window_ax_snapshot_test_end();
+});
+
+TEST_FUNC(window_ax_snapshot_rejects_malformed_batch_shapes_and_types,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window_ax_snapshot snapshot = {0};
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_SHORT);
+    uint32_t text_fields = WINDOW_AX_ROLE | WINDOW_AX_TITLE;
+    TEST_CHECK(window_ax_snapshot_read(ref, text_fields, &snapshot), false);
+    TEST_CHECK(snapshot.valid, WINDOW_AX_ROLE);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_TITLE_SLOT], kAXErrorCannotComplete);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 1);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_OVERSIZED);
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_ROLE, &snapshot), false);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorAttributeUnsupported);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 1);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_WRONG_AX_TYPE);
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_POSITION, &snapshot), false);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_POSITION_SLOT], kAXErrorIllegalArgument);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
+TEST_FUNC(window_ax_frame_status_uses_complete_validated_snapshots,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window window = { .ref = ref, .frame = CGRectMake(5, 6, 700, 500) };
+    CGRect output = CGRectMake(1, 2, 3, 4);
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_ax_snapshot_test_frame_value = CGRectMake(-80, 25, 320, 240);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), true);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(-80, 25, 320, 240)), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    window_ax_snapshot_test_frame_value = CGRectMake(10, 20, 330, 250);
+    window_ax_snapshot_test_fallback_frame_value = CGRectMake(40, 50, 600, 700);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), true);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(40, 50, 600, 700)), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_NONFINITE);
+    output = CGRectMake(1, 2, 3, 4);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), false);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(1, 2, 3, 4)), true);
+    TEST_CHECK(CGRectEqualToRect(window_ax_frame(&window), window.frame), true);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE);
+    output = CGRectMake(1, 2, 3, 4);
+    TEST_CHECK(window_ax_frame_with_status(&window, &output), false);
+    TEST_CHECK(CGRectEqualToRect(output, CGRectMake(1, 2, 3, 4)), true);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
+TEST_FUNC(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window_ax_snapshot snapshot = {0};
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE;
+    TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), true);
+    TEST_CHECK(snapshot.valid, requested);
+    TEST_CHECK(snapshot.position.x, 40.0);
+    TEST_CHECK(snapshot.size.width, 600.0);
+    TEST_CHECK(snapshot.role != NULL, true);
+    if (snapshot.role) TEST_CHECK(CFEqual(snapshot.role, kAXWindowRole), true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 3);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_ax_snapshot_test_create_failure = true;
+    TEST_CHECK(window_ax_snapshot_read(ref, WINDOW_AX_ROLE, &snapshot), false);
+    TEST_CHECK(snapshot.requested, WINDOW_AX_ROLE);
+    TEST_CHECK(snapshot.valid, 0U);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_ROLE_SLOT], kAXErrorAttributeUnsupported);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 0);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 1);
+    window_ax_snapshot_destroy(&snapshot);
+    window_ax_snapshot_test_end();
+
+    CFRelease(ref);
+});
+
+static int window_ax_benchmark_compare_u64(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *) left;
+    uint64_t b = *(const uint64_t *) right;
+    return (a > b) - (a < b);
+}
+
+static bool window_ax_benchmark_legacy_frame(AXUIElementRef ref, CGRect *frame)
+{
+    CFTypeRef position = NULL;
+    CFTypeRef size = NULL;
+    struct window_ax_snapshot snapshot = {0};
+    AXError position_error = window_ax_snapshot_test_copy_single(ref, kAXPositionAttribute, &position);
+    AXError size_error = window_ax_snapshot_test_copy_single(ref, kAXSizeAttribute, &size);
+    bool success = position_error == kAXErrorSuccess && size_error == kAXErrorSuccess &&
+                   window_ax_snapshot_store_value(&snapshot, WINDOW_AX_POSITION_SLOT, position) == kAXErrorSuccess &&
+                   window_ax_snapshot_store_value(&snapshot, WINDOW_AX_SIZE_SLOT, size) == kAXErrorSuccess &&
+                   window_ax_snapshot_frame(&snapshot, frame);
+    if (position) CFRelease(position);
+    if (size) CFRelease(size);
+    return success;
+}
+
+static bool window_ax_benchmark_case(const char *name, enum window_ax_snapshot_test_mode mode,
+                                     bool legacy, bool fail_fallback)
+{
+    enum { sample_count = 20, iterations_per_sample = 1000 };
+    uint64_t elapsed[sample_count];
+    double checksum = 0.0;
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window window = { .ref = ref, .frame = CGRectMake(7, 8, 640, 480) };
+    window_ax_snapshot_test_begin(mode);
+    CGRect expected = CGRectMake(-40, 25, 320, 240);
+    window_ax_snapshot_test_frame_value = expected;
+    window_ax_snapshot_test_fallback_frame_value = expected;
+    window_ax_snapshot_test_size_fallback_failure = fail_fallback;
+    window_ax_snapshot_test_multiple_calls = 0;
+    window_ax_snapshot_test_single_calls = 0;
+    int successes = 0;
+
+    for (int sample = 0; sample < sample_count; ++sample) {
+        uint64_t start = read_os_timer();
+        for (int iteration = 0; iteration < iterations_per_sample; ++iteration) {
+            CGRect frame = CGRectZero;
+            bool success = legacy ? window_ax_benchmark_legacy_frame(ref, &frame)
+                                  : window_ax_frame_with_status(&window, &frame);
+            successes += success;
+            if (success) checksum += frame.origin.x + frame.origin.y + frame.size.width + frame.size.height;
+        }
+        elapsed[sample] = (read_os_timer() - start) / iterations_per_sample;
+    }
+
+    qsort(elapsed, sample_count, sizeof(elapsed[0]), window_ax_benchmark_compare_u64);
+    int total = sample_count * iterations_per_sample;
+    int p95_index = (sample_count * 95 + 99) / 100 - 1;
+    int ax_calls = window_ax_snapshot_test_multiple_calls + window_ax_snapshot_test_single_calls;
+    printf("{\"case\":\"%s\",\"iterations\":%d,\"p50_ns\":%llu,\"p95_ns\":%llu,"
+           "\"ax_calls\":%d,\"batch_calls\":%d,\"single_calls\":%d,"
+           "\"successes\":%d,\"checksum\":%.0f}\n",
+           name, total,
+           (unsigned long long) elapsed[sample_count / 2],
+           (unsigned long long) elapsed[p95_index],
+           ax_calls,
+           window_ax_snapshot_test_multiple_calls,
+           window_ax_snapshot_test_single_calls,
+           successes, checksum);
+
+    bool expected_success = !fail_fallback;
+    bool valid = successes == (expected_success ? total : 0);
+    if (legacy) {
+        valid = valid && window_ax_snapshot_test_multiple_calls == 0 &&
+                window_ax_snapshot_test_single_calls == total * 2;
+    } else {
+        int expected_single_calls = mode == WINDOW_AX_SNAPSHOT_TEST_VALID ? 0 : total * 2;
+        valid = valid && window_ax_snapshot_test_multiple_calls == total &&
+                window_ax_snapshot_test_single_calls == expected_single_calls;
+    }
+
+    window_ax_snapshot_test_end();
+    CFRelease(ref);
+    return valid;
+}
+
+static bool window_ax_frame_benchmark_run(void)
+{
+    bool valid = true;
+    valid &= window_ax_benchmark_case("legacy-two-single-success", WINDOW_AX_SNAPSHOT_TEST_VALID, true, false);
+    valid &= window_ax_benchmark_case("snapshot-batch-success", WINDOW_AX_SNAPSHOT_TEST_VALID, false, false);
+    valid &= window_ax_benchmark_case("snapshot-slot-error-fallback-success", WINDOW_AX_SNAPSHOT_TEST_MIXED, false, false);
+    valid &= window_ax_benchmark_case("snapshot-batch-error-fallback-success", WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE, false, false);
+    valid &= window_ax_benchmark_case("snapshot-total-failure", WINDOW_AX_SNAPSHOT_TEST_MIXED, false, true);
+    return valid;
+}
+
+static uint32_t window_create_test_parent_id;
+static bool window_create_test_shadow_result;
+static bool window_create_test_sticky_result;
+static uint64_t window_create_test_space_id;
+static bool window_create_test_space_fullscreen_result;
+static bool window_create_test_can_move_result;
+static bool window_create_test_can_resize_result;
+static int window_create_test_parent_calls;
+static int window_create_test_shadow_calls;
+static int window_create_test_sticky_calls;
+static int window_create_test_space_calls;
+static int window_create_test_space_fullscreen_calls;
+static uint64_t window_create_test_last_space_id;
+static int window_create_test_can_move_calls;
+static int window_create_test_can_resize_calls;
+
+static uint32_t window_create_test_parent(uint32_t wid)
+{
+    (void) wid;
+    ++window_create_test_parent_calls;
+    return window_create_test_parent_id;
+}
+
+static bool window_create_test_shadow(uint32_t wid)
+{
+    (void) wid;
+    ++window_create_test_shadow_calls;
+    return window_create_test_shadow_result;
+}
+
+static bool window_create_test_sticky(uint32_t wid)
+{
+    (void) wid;
+    ++window_create_test_sticky_calls;
+    return window_create_test_sticky_result;
+}
+
+static uint64_t window_create_test_space(uint32_t wid)
+{
+    (void) wid;
+    ++window_create_test_space_calls;
+    return window_create_test_space_id;
+}
+
+static bool window_create_test_space_is_fullscreen(uint64_t sid)
+{
+    window_create_test_last_space_id = sid;
+    ++window_create_test_space_fullscreen_calls;
+    return window_create_test_space_fullscreen_result;
+}
+
+static bool window_create_test_can_move(struct window *window)
+{
+    (void) window;
+    ++window_create_test_can_move_calls;
+    return window_create_test_can_move_result;
+}
+
+static bool window_create_test_can_resize(struct window *window)
+{
+    (void) window;
+    ++window_create_test_can_resize_calls;
+    return window_create_test_can_resize_result;
+}
+
+static void window_create_test_begin(void)
+{
+    window_create_test_parent_id = 0;
+    window_create_test_shadow_result = false;
+    window_create_test_sticky_result = false;
+    window_create_test_space_id = 0;
+    window_create_test_space_fullscreen_result = false;
+    window_create_test_can_move_result = false;
+    window_create_test_can_resize_result = false;
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    window_create_test_sticky_calls = 0;
+    window_create_test_space_calls = 0;
+    window_create_test_space_fullscreen_calls = 0;
+    window_create_test_last_space_id = 0;
+    window_create_test_can_move_calls = 0;
+    window_create_test_can_resize_calls = 0;
+    window_create_parent_id = window_create_test_parent;
+    window_create_shadow = window_create_test_shadow;
+    window_create_sticky = window_create_test_sticky;
+    window_create_space_id = window_create_test_space;
+    window_create_space_is_fullscreen = window_create_test_space_is_fullscreen;
+    window_create_can_move = window_create_test_can_move;
+    window_create_can_resize = window_create_test_can_resize;
+}
+
+static void window_create_test_end(void)
+{
+    window_create_parent_id = window_parent;
+    window_create_shadow = window_shadow;
+    window_create_sticky = window_is_sticky;
+    window_create_space_id = window_space;
+    window_create_space_is_fullscreen = space_is_fullscreen;
+    window_create_can_move = window_ax_can_move;
+    window_create_can_resize = window_ax_can_resize;
+}
+
+TEST_FUNC(window_create_uses_one_complete_snapshot_and_independent_capabilities,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_create_test_begin();
+
+    struct application application = {0};
+    application.ref = AXUIElementCreateApplication(getpid());
+    window_ax_snapshot_test_parent_value = application.ref;
+    window_create_test_parent_id = 99;
+    window_create_test_shadow_result = true;
+    window_create_test_sticky_result = true;
+    window_create_test_space_id = 42;
+    window_create_test_can_move_result = true;
+    window_create_test_can_resize_result = false;
+
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window *window = window_create(&application, ref, 77);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(CGRectEqualToRect(window->frame, CGRectMake(10, 20, 300, 200)), true);
+        TEST_CHECK(window->role != NULL, true);
+        if (window->role) TEST_CHECK(CFEqual(window->role, kAXWindowRole), true);
+        TEST_CHECK(window->subrole != NULL, true);
+        if (window->subrole) TEST_CHECK(CFEqual(window->subrole, kAXStandardWindowSubrole), true);
+        TEST_CHECK(window->title != NULL, true);
+        if (window->title) TEST_CHECK(CFEqual(window->title, CFSTR("snapshot-title")), true);
+        TEST_CHECK(window->is_root, true);
+        TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_MOVABLE), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_RESIZABLE), false);
+        TEST_CHECK(window_check_flag(window, WINDOW_MINIMIZE), false);
+        TEST_CHECK(window_check_flag(window, WINDOW_FULLSCREEN), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_STICKY), true);
+        window_destroy(window);
+    }
+
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    TEST_CHECK(window_ax_snapshot_test_last_options, 0U);
+    TEST_CHECK(window_ax_snapshot_test_last_attribute_count, 8L);
+    TEST_CHECK(window_ax_snapshot_test_attribute_order_valid, true);
+    TEST_CHECK(window_create_test_parent_calls, 1);
+    TEST_CHECK(window_create_test_shadow_calls, 1);
+    TEST_CHECK(window_create_test_sticky_calls, 1);
+    TEST_CHECK(window_create_test_can_move_calls, 1);
+    TEST_CHECK(window_create_test_can_resize_calls, 1);
+    TEST_CHECK(window_create_test_space_calls, 0);
+    TEST_CHECK(window_create_test_space_fullscreen_calls, 0);
+
+    CFRelease(application.ref);
+    window_create_test_end();
+    window_ax_snapshot_test_end();
+});
+
+TEST_FUNC(window_create_preserves_partial_snapshot_root_and_space_fallbacks,
+{
+    struct application application = {0};
+    application.ref = AXUIElementCreateApplication(getpid());
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    window_create_test_begin();
+    window_create_test_parent_id = 99;
+    window_create_test_can_move_result = false;
+    window_create_test_can_resize_result = true;
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window *window = window_create(&application, ref, 78);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(CGRectEqualToRect(window->frame, CGRectMake(40, 50, 600, 700)), true);
+        TEST_CHECK(window->role == NULL, true);
+        TEST_CHECK(window->subrole != NULL, true);
+        if (window->subrole) TEST_CHECK(CFEqual(window->subrole, kAXDialogSubrole), true);
+        TEST_CHECK(window->title == NULL, true);
+        TEST_CHECK(window->is_root, false);
+        TEST_CHECK(window_check_flag(window, WINDOW_MINIMIZE), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_FULLSCREEN), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_MOVABLE), false);
+        TEST_CHECK(window_check_flag(window, WINDOW_RESIZABLE), true);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 5);
+    TEST_CHECK(window_create_test_space_calls, 0);
+    window_create_test_end();
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    window_create_test_begin();
+    window_ax_snapshot_test_parent_value = application.ref;
+    window_create_test_parent_id = 99;
+    window_create_test_space_id = 44;
+    window_create_test_space_fullscreen_result = true;
+    ref = AXUIElementCreateApplication(getpid());
+    window = window_create(&application, ref, 79);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->is_root, true);
+        TEST_CHECK(window_check_flag(window, WINDOW_MINIMIZE), true);
+        TEST_CHECK(window_check_flag(window, WINDOW_FULLSCREEN), true);
+        TEST_CHECK(window->role != NULL, true);
+        if (window->role) TEST_CHECK(CFEqual(window->role, kAXWindowRole), true);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 8);
+    TEST_CHECK(window_create_test_space_calls, 1);
+    TEST_CHECK(window_create_test_space_fullscreen_calls, 1);
+    TEST_CHECK(window_create_test_last_space_id, 44ULL);
+    window_create_test_end();
+    window_ax_snapshot_test_end();
+
+    CFRelease(application.ref);
+});
+
+TEST_FUNC(window_create_reuses_matching_server_record_and_falls_back_by_field,
+{
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_create_test_begin();
+
+    struct application application = {0};
+    application.ref = AXUIElementCreateApplication(getpid());
+    AXUIElementRef other_parent = AXUIElementCreateSystemWide();
+    window_ax_snapshot_test_parent_value = other_parent;
+    window_create_test_parent_id = 91;
+    window_create_test_shadow_result = true;
+
+    struct window_server_window_record record = {
+        .id = 80,
+        .parent_id = 45,
+        .tags = UINT64_C(0x8),
+        .constraints = {
+            .minimum = { 120, 90 }, .maximum = { 1600, 1000 }, .current = { 280, 176 }
+        },
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
+                        WINDOW_SERVER_WINDOW_FIELD_TAGS |
+                        WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS
+    };
+    struct window *window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 80, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->is_root, false);
+        TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), false);
+        TEST_CHECK(window_constraints_has_limits(&window->constraints), true);
+        TEST_CHECK(window_constraints_has_current(&window->constraints), true);
+        TEST_CHECK(window_constraints_has_ax_corroboration(&window->constraints), true);
+        TEST_CHECK(window->constraints.decoration_delta.width, 20.0);
+        TEST_CHECK(window->constraints.decoration_delta.height, 24.0);
+        TEST_CHECK(window->constraints.source, WINDOW_CONSTRAINT_SOURCE_ITERATOR);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 81;
+    record.parent_id = 0;
+    record.tags = 0;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 81, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->is_root, true);
+        TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), true);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 82;
+    record.parent_id = 12;
+    record.tags = UINT64_C(0x8);
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 82, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) {
+        TEST_CHECK(window->constraints.validity, 0);
+        window_destroy(window);
+    }
+    TEST_CHECK(window_create_test_parent_calls, 1);
+    TEST_CHECK(window_create_test_shadow_calls, 0);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 83;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_PARENT_ID;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 83, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) window_destroy(window);
+    TEST_CHECK(window_create_test_parent_calls, 0);
+    TEST_CHECK(window_create_test_shadow_calls, 1);
+
+    window_create_test_parent_calls = 0;
+    window_create_test_shadow_calls = 0;
+    record.id = 999;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID |
+                          WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
+                          WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window = window_create_with_server_record(
+        &application, AXUIElementCreateApplication(getpid()), 84, &record);
+    TEST_CHECK(window != NULL, true);
+    if (window) window_destroy(window);
+    TEST_CHECK(window_create_test_parent_calls, 1);
+    TEST_CHECK(window_create_test_shadow_calls, 1);
+
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 5);
+    CFRelease(other_parent);
+    CFRelease(application.ref);
+    window_create_test_end();
+    window_ax_snapshot_test_end();
+});
+
 static AXError window_test_observe_result;
 static int window_test_observe_call_count;
 
@@ -204,6 +1013,185 @@ enum window_serialization_membership_fixture_mode
 };
 
 static enum window_serialization_membership_fixture_mode window_serialization_membership_mode;
+static int window_serialization_snapshot_parent_calls;
+static int window_serialization_snapshot_level_calls;
+static int window_serialization_snapshot_tags_calls;
+static int window_serialization_snapshot_shadow_calls;
+static bool window_serialization_snapshot_parent_success;
+static bool window_serialization_snapshot_tags_success;
+static uint32_t window_serialization_snapshot_parent_value;
+static int window_serialization_snapshot_level_value;
+static uint64_t window_serialization_snapshot_tags_value;
+static bool window_serialization_snapshot_shadow_value;
+
+static bool window_serialization_snapshot_parent(uint32_t wid, uint32_t *parent)
+{
+    (void) wid;
+    ++window_serialization_snapshot_parent_calls;
+    *parent = window_serialization_snapshot_parent_value;
+    return window_serialization_snapshot_parent_success;
+}
+
+static int window_serialization_snapshot_level(uint32_t wid)
+{
+    (void) wid;
+    ++window_serialization_snapshot_level_calls;
+    return window_serialization_snapshot_level_value;
+}
+
+static bool window_serialization_snapshot_tags(uint32_t wid, uint64_t *tags)
+{
+    (void) wid;
+    ++window_serialization_snapshot_tags_calls;
+    *tags = window_serialization_snapshot_tags_value;
+    return window_serialization_snapshot_tags_success;
+}
+
+static bool window_serialization_snapshot_shadow(uint32_t wid)
+{
+    (void) wid;
+    ++window_serialization_snapshot_shadow_calls;
+    return window_serialization_snapshot_shadow_value;
+}
+
+static void window_serialization_snapshot_reset_calls(void)
+{
+    window_serialization_snapshot_parent_calls = 0;
+    window_serialization_snapshot_level_calls = 0;
+    window_serialization_snapshot_tags_calls = 0;
+    window_serialization_snapshot_shadow_calls = 0;
+}
+
+static void window_serialization_snapshot_render(char *buffer, size_t buffer_size,
+                                                 struct window *window, uint32_t wid,
+                                                 uint64_t flags,
+                                                 const struct window_serialization_context *context)
+{
+    FILE *file = tmpfile();
+    if (!file) {
+        if (buffer_size) buffer[0] = '\0';
+        return;
+    }
+    if (window) window_serialize_with_context(file, window, flags, context);
+    else window_nonax_serialize_with_context(file, wid, flags, context);
+    rewind(file);
+    if (buffer_size) {
+        size_t length = fread(buffer, 1, buffer_size - 1, file);
+        buffer[length] = '\0';
+    }
+    fclose(file);
+}
+
+TEST_FUNC(window_serialization_prefers_snapshot_fields_and_falls_back_independently,
+{
+    __auto_type saved_parent = window_test_serialization_parent;
+    __auto_type saved_level = window_test_serialization_level;
+    __auto_type saved_tags = window_test_serialization_tags;
+    __auto_type saved_shadow = window_test_serialization_shadow;
+    window_test_serialization_parent = window_serialization_snapshot_parent;
+    window_test_serialization_level = window_serialization_snapshot_level;
+    window_test_serialization_tags = window_serialization_snapshot_tags;
+    window_test_serialization_shadow = window_serialization_snapshot_shadow;
+    window_serialization_snapshot_parent_success = true;
+    window_serialization_snapshot_tags_success = true;
+    window_serialization_snapshot_parent_value = 91;
+    window_serialization_snapshot_level_value = 7;
+    window_serialization_snapshot_tags_value = 0x8;
+    window_serialization_snapshot_shadow_value = false;
+
+    uint64_t flags = WINDOW_PROPERTY_ROOT_WINDOW | WINDOW_PROPERTY_PARENT |
+                     WINDOW_PROPERTY_LEVEL | WINDOW_PROPERTY_LAYER |
+                     WINDOW_PROPERTY_TAGS | WINDOW_PROPERTY_HAS_SHADOW;
+    struct window_server_window_record record = {
+        .id = 77,
+        .parent_id = 0,
+        .level = 0,
+        .tags = 0,
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE
+    };
+    struct window_serialization_context context = { .window_server_record = &record };
+    struct window window = { .id = 77, .is_root = false };
+    char output[1024];
+
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(strstr(output, "\"root-window\":true") != NULL, true);
+    TEST_CHECK(strstr(output, "\"parent\":0") != NULL, true);
+    TEST_CHECK(strstr(output, "\"level\":0") != NULL, true);
+    TEST_CHECK(strstr(output, "\"tags\":\"0x0000000000000000\"") != NULL, true);
+    TEST_CHECK(strstr(output, "\"has-shadow\":true") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    record.parent_id = 44;
+    record.level = 7;
+    record.tags = 0x8;
+    window.is_root = true;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), &window, 77, flags, &context);
+    TEST_CHECK(strstr(output, "\"root-window\":true") != NULL, true);
+    TEST_CHECK(strstr(output, "\"parent\":44") != NULL, true);
+    TEST_CHECK(strstr(output, "\"level\":7") != NULL, true);
+    TEST_CHECK(strstr(output, "\"has-shadow\":false") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    char legacy[1024];
+    char snapshot[1024];
+    window_serialization_snapshot_parent_value = record.parent_id;
+    window_serialization_snapshot_level_value = record.level;
+    window_serialization_snapshot_tags_value = record.tags;
+    window_serialization_snapshot_shadow_value = !(record.tags & 0x8);
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(legacy, sizeof(legacy), NULL, 77, flags, NULL);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(snapshot, sizeof(snapshot), NULL, 77, flags, &context);
+    TEST_CHECK(strcmp(snapshot, legacy), 0);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 0);
+
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_LEVEL;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 0);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+
+    record.id = 78;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_BASE;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, flags, &context);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_level_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_tags_calls, 1);
+    TEST_CHECK(window_serialization_snapshot_shadow_calls, 1);
+
+    record.id = 77;
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_LEVEL |
+                          WINDOW_SERVER_WINDOW_FIELD_TAGS;
+    window_serialization_snapshot_parent_success = false;
+    window_serialization_snapshot_reset_calls();
+    window_serialization_snapshot_render(output, sizeof(output), NULL, 77, WINDOW_PROPERTY_PARENT, &context);
+    TEST_CHECK(strstr(output, "\"parent\":null") != NULL, true);
+    TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
+
+    window_test_serialization_parent = saved_parent;
+    window_test_serialization_level = saved_level;
+    window_test_serialization_tags = saved_tags;
+    window_test_serialization_shadow = saved_shadow;
+});
+
 static int window_serialization_membership_copy_calls;
 static int window_serialization_membership_fallback_calls;
 static int window_serialization_membership_combined_calls;

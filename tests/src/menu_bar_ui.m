@@ -12,6 +12,8 @@ struct menu_bar_ui_action_log
     uint64_t space_id[16];
     bool is_tracking[16];
     uint32_t focused_display_id[16];
+    enum menu_bar_style style[16];
+    enum menu_bar_space_filter filter[16];
 };
 
 static void
@@ -32,6 +34,20 @@ menu_bar_ui_record_action(const struct menu_bar_action *action, void *context)
     log->focused_display_id[index] = action->type == MENU_BAR_ACTION_MENU_TRACKING_CHANGED
                                    ? action->data.menu_tracking.focused_display_id
                                    : 0;
+    if (action->type == MENU_BAR_ACTION_SET_STYLE) log->style[index] = action->data.set_style.style;
+    if (action->type == MENU_BAR_ACTION_SET_SPACE_FILTER) log->filter[index] = action->data.set_space_filter.filter;
+}
+
+static void
+menu_bar_ui_set_accessibility_preferences(bool reduce_transparency,
+                                          bool differentiate_without_color)
+{
+    g_yb_menu_bar_accessibility_override = true;
+    g_yb_menu_bar_accessibility_preferences = (struct accessibility_display_preferences) {
+        .reduce_motion = false,
+        .reduce_transparency = reduce_transparency,
+        .differentiate_without_color = differentiate_without_color
+    };
 }
 
 static struct menu_bar_callbacks
@@ -167,6 +183,17 @@ menu_bar_ui_overflow_snapshot(uint64_t generation, size_t active_index)
         return false; \
     } \
 } while (0)
+
+@interface YBMenuBarTestExpandedSession : NSObject {
+@public
+    NSUInteger cancel_count;
+}
+- (void)cancel;
+@end
+
+@implementation YBMenuBarTestExpandedSession
+- (void)cancel { ++cancel_count; }
+@end
 
 @interface YBMenuBarSynchronousCloseMenu : NSMenu
 @end
@@ -1145,6 +1172,217 @@ test_screen_number_visual_states_are_centered_monochrome_and_unfilled(void)
 }
 
 static bool
+test_pressed_active_screen_cell_is_colorized_only_while_explicitly_pressed(void)
+{
+    YBMenuBarScreenCell *cell = [[YBMenuBarScreenCell alloc] initWithFrame:NSMakeRect(0.0, 0.0,
+                                                                                     YB_MENU_BAR_CELL_WIDTH,
+                                                                                     YB_MENU_BAR_STATUS_HEIGHT)];
+    [cell setTitle:@""];
+    [cell setImage:nil];
+    [cell setBordered:NO];
+    [cell setButtonType:NSButtonTypeMomentaryPushIn];
+    NSObject *target = [[NSObject alloc] init];
+    [cell setTarget:target];
+    [cell setAction:@selector(showStatusMenu:)];
+    [cell setToolTip:@"unchanged tooltip"];
+    [cell setAccessibilityLabel:@"unchanged accessibility label"];
+    cell->yb_kind = YB_MENU_BAR_CONTROL_OPEN_MENU;
+    cell->yb_index = 8;
+    cell->yb_state = YB_MENU_BAR_SCREEN_ACTIVE;
+
+    TEST_CHECK(yb_screen_pressed_color() != nil);
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.22);
+    TEST_CHECK(![cell isHighlighted]);
+    TEST_CHECK(!cell->yb_pressed);
+    struct menu_bar_ui_bitmap_metrics normal_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    struct menu_bar_ui_bitmap_metrics normal_dark = menu_bar_ui_render_screen(cell, NSAppearanceNameDarkAqua, false);
+    TEST_CHECK(normal_aqua.maximum_channel_spread <= 0.03);
+    TEST_CHECK(normal_dark.maximum_channel_spread <= 0.03);
+    TEST_CHECK(normal_aqua.colorized_pixel_count == 0);
+    TEST_CHECK(normal_dark.colorized_pixel_count == 0);
+    TEST_CHECK(normal_aqua.unexpected_interior_painted_pixel_count == 0);
+    TEST_CHECK(normal_dark.unexpected_interior_painted_pixel_count == 0);
+
+    [cell highlight:YES];
+    TEST_CHECK([cell isHighlighted]);
+    TEST_CHECK(!cell->yb_pressed);
+    struct menu_bar_ui_bitmap_metrics ambient_highlight_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(ambient_highlight_aqua.maximum_channel_spread <= 0.03);
+    TEST_CHECK(ambient_highlight_aqua.colorized_pixel_count == 0);
+    TEST_CHECK(ambient_highlight_aqua.unexpected_interior_painted_pixel_count == 0);
+
+    [cell setYBPressed:true];
+    TEST_CHECK(cell->yb_pressed);
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.22);
+    struct menu_bar_ui_bitmap_metrics pressed_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    struct menu_bar_ui_bitmap_metrics pressed_dark = menu_bar_ui_render_screen(cell, NSAppearanceNameDarkAqua, false);
+    g_yb_menu_bar_contrast_override = 1;
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 0.34);
+    g_yb_menu_bar_contrast_override = -1;
+    struct menu_bar_ui_bitmap_metrics pressed_contrast = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, true);
+    TEST_CHECK(pressed_aqua.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_dark.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_contrast.maximum_channel_spread > 0.20);
+    TEST_CHECK(pressed_aqua.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_dark.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_contrast.colorized_pixel_count > 0);
+    TEST_CHECK(pressed_aqua.interior_colorized_pixel_count > normal_aqua.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_dark.interior_colorized_pixel_count > normal_dark.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_contrast.interior_colorized_pixel_count >= pressed_aqua.interior_colorized_pixel_count);
+    TEST_CHECK(pressed_aqua.unexpected_interior_painted_pixel_count > 0);
+    TEST_CHECK(pressed_dark.unexpected_interior_painted_pixel_count > 0);
+    TEST_CHECK(pressed_contrast.interior_alpha_sum > pressed_aqua.interior_alpha_sum);
+    TEST_CHECK(pressed_aqua.alpha_sum > normal_aqua.alpha_sum);
+    TEST_CHECK(pressed_dark.alpha_sum > normal_dark.alpha_sum);
+
+    [cell setYBPressed:false];
+    TEST_CHECK(!cell->yb_pressed);
+    TEST_CHECK([cell isHighlighted]);
+    struct menu_bar_ui_bitmap_metrics released_aqua = menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(released_aqua.maximum_channel_spread <= 0.03);
+    TEST_CHECK(released_aqua.colorized_pixel_count == 0);
+    TEST_CHECK(released_aqua.unexpected_interior_painted_pixel_count == 0);
+    [cell highlight:NO];
+    TEST_CHECK(![cell isHighlighted]);
+    TEST_CHECK([cell action] == @selector(showStatusMenu:));
+    TEST_CHECK([cell target] == target);
+    TEST_CHECK(cell->yb_kind == YB_MENU_BAR_CONTROL_OPEN_MENU);
+    TEST_CHECK([[cell toolTip] isEqualToString:@"unchanged tooltip"]);
+    TEST_CHECK([[cell accessibilityLabel] isEqualToString:@"unchanged accessibility label"]);
+
+    [target release];
+    [cell release];
+    return true;
+}
+
+static bool
+test_accessibility_preferences_change_visuals_without_color_only_state(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    [controller testSetSnapshot:menu_bar_ui_default_layout_snapshot(90)];
+    NSView *expanded = [controller testBuildExpandedStrip];
+    YBMenuBarScreenCell *visible_other = [[expanded subviews] objectAtIndex:0];
+    YBMenuBarScreenCell *occupied_two = [[expanded subviews] objectAtIndex:2];
+    CGFloat display_gap = (NSMaxX([[[expanded subviews] objectAtIndex:1] frame]) +
+                           NSMinX([occupied_two frame])) * 0.5;
+
+    menu_bar_ui_set_accessibility_preferences(false, false);
+    struct menu_bar_ui_strip_decoration_metrics translucent =
+        menu_bar_ui_render_strip_decorations((YBMenuBarStripView *) expanded,
+                                             NSMakePoint(NSMinX([visible_other frame]), NSMidY([expanded bounds])),
+                                             NSMakePoint(NSMinX([occupied_two frame]), NSMidY([expanded bounds])),
+                                             NSMakePoint(display_gap, NSMidY([expanded bounds])));
+    menu_bar_ui_set_accessibility_preferences(true, false);
+    struct menu_bar_ui_strip_decoration_metrics opaque =
+        menu_bar_ui_render_strip_decorations((YBMenuBarStripView *) expanded,
+                                             NSMakePoint(NSMinX([visible_other frame]), NSMidY([expanded bounds])),
+                                             NSMakePoint(NSMinX([occupied_two frame]), NSMidY([expanded bounds])),
+                                             NSMakePoint(display_gap, NSMidY([expanded bounds])));
+    TEST_CHECK(translucent.first_group_alpha < 0.20);
+    TEST_CHECK(translucent.second_group_alpha < 0.20);
+    TEST_CHECK(opaque.first_group_alpha > 0.99);
+    TEST_CHECK(opaque.second_group_alpha > 0.99);
+    TEST_CHECK(opaque.separator_alpha > 0.80);
+
+    YBMenuBarScreenCell *cell = [[YBMenuBarScreenCell alloc] initWithFrame:NSMakeRect(0.0, 0.0,
+                                                                                     YB_MENU_BAR_CELL_WIDTH,
+                                                                                     YB_MENU_BAR_STATUS_HEIGHT)];
+    [cell setTitle:@""];
+    [cell setImage:nil];
+    [cell setBordered:NO];
+    cell->yb_index = 8;
+    cell->yb_state = YB_MENU_BAR_SCREEN_ACTIVE;
+    [cell setYBPressed:true];
+    menu_bar_ui_set_accessibility_preferences(false, false);
+    struct menu_bar_ui_bitmap_metrics translucent_pressed =
+        menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    menu_bar_ui_set_accessibility_preferences(true, false);
+    TEST_CHECK(yb_screen_pressed_fill_alpha() == 1.0);
+    struct menu_bar_ui_bitmap_metrics opaque_pressed =
+        menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(opaque_pressed.interior_alpha_sum > translucent_pressed.interior_alpha_sum);
+
+    [cell setYBPressed:false];
+    cell->yb_state = YB_MENU_BAR_SCREEN_VISIBLE_OTHER;
+    menu_bar_ui_set_accessibility_preferences(false, false);
+    struct menu_bar_ui_bitmap_metrics color_cues =
+        menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(!yb_screen_has_noncolor_marker(YB_MENU_BAR_SCREEN_VISIBLE_OTHER));
+    menu_bar_ui_set_accessibility_preferences(false, true);
+    TEST_CHECK(yb_screen_line_width(YB_MENU_BAR_SCREEN_ACTIVE) == 2.5);
+    TEST_CHECK(yb_screen_line_width(YB_MENU_BAR_SCREEN_VISIBLE_OTHER) == 1.75);
+    TEST_CHECK(yb_screen_line_width(YB_MENU_BAR_SCREEN_OCCUPIED) == 1.25);
+    TEST_CHECK(yb_screen_is_dashed(YB_MENU_BAR_SCREEN_UNKNOWN));
+    TEST_CHECK(yb_screen_has_noncolor_marker(YB_MENU_BAR_SCREEN_VISIBLE_OTHER));
+    TEST_CHECK(!yb_screen_has_noncolor_marker(YB_MENU_BAR_SCREEN_ACTIVE));
+    struct menu_bar_ui_bitmap_metrics noncolor_cues =
+        menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(noncolor_cues.unexpected_interior_painted_pixel_count >
+               color_cues.unexpected_interior_painted_pixel_count);
+
+    cell->yb_state = YB_MENU_BAR_SCREEN_ACTIVE;
+    [cell setYBPressed:true];
+    struct menu_bar_ui_bitmap_metrics noncolor_pressed =
+        menu_bar_ui_render_screen(cell, NSAppearanceNameAqua, false);
+    TEST_CHECK(noncolor_pressed.unexpected_interior_painted_pixel_count > 0);
+    TEST_CHECK(noncolor_pressed.maximum_channel_spread <= 0.03);
+
+    menu_bar_ui_set_accessibility_preferences(false, false);
+    [cell release];
+    [controller release];
+    return true;
+}
+
+static bool
+test_accessibility_preference_redraw_preserves_live_menu_state(void)
+{
+    menu_bar_shutdown();
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    TEST_CHECK(menu_bar_init(&callbacks));
+    YBMenuBarController *controller = [g_menu_bar_controller retain];
+    TEST_CHECK(controller != nil);
+    if (!controller) return false;
+
+    [controller receiveSnapshot:menu_bar_ui_default_layout_snapshot(100) clear:false];
+    NSView *strip = [controller testStripView];
+    TEST_CHECK(strip != nil);
+    CGFloat length = [controller testStatusItemLength];
+    NSUInteger button_count = [controller testStatusButtonCount];
+    NSView *first = [[strip subviews] firstObject];
+    NSPoint hit_point = NSMakePoint(NSMidX([first frame]), NSMidY([first frame]));
+    TEST_CHECK([strip hitTest:hit_point] == strip);
+
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"test"];
+    [controller testSetMenu:menu];
+    [controller menuWillOpen:menu];
+    [controller receiveSnapshot:menu_bar_ui_default_layout_snapshot(101) clear:false];
+    TEST_CHECK([controller testIsTrackingMenu]);
+    TEST_CHECK([controller testSnapshotGeneration] == 100);
+    TEST_CHECK([controller testDeferredSnapshotGeneration] == 101);
+
+    NSUInteger redraw_count = [controller testAccessibilityRedrawCount];
+    menu_bar_accessibility_preferences_changed();
+
+    TEST_CHECK([controller testAccessibilityRedrawCount] == redraw_count + 1);
+    TEST_CHECK([controller testSnapshotGeneration] == 100);
+    TEST_CHECK([controller testDeferredSnapshotGeneration] == 101);
+    TEST_CHECK([controller testStatusItemLength] == length);
+    TEST_CHECK([controller testStatusButtonCount] == button_count);
+    TEST_CHECK([controller testIsTrackingMenu]);
+    TEST_CHECK([strip hitTest:hit_point] == strip);
+
+    [controller menuDidClose:menu];
+    [menu release];
+    menu_bar_shutdown();
+    [controller release];
+    menu_bar_accessibility_preferences_changed();
+    return true;
+}
+
+static bool
 test_multi_digit_number_geometry_stays_compact_and_within_bounds(void)
 {
     NSFont *font = yb_screen_index_font();
@@ -1333,6 +1571,134 @@ test_generation_ordering_without_status_item_delivery(void)
     return true;
 }
 
+static bool
+menu_bar_ui_view_tree_contains_class(NSView *root, Class class_value)
+{
+    if ([root isKindOfClass:class_value]) return true;
+    for (NSView *view in [root subviews]) {
+        if (menu_bar_ui_view_tree_contains_class(view, class_value)) return true;
+    }
+    return false;
+}
+
+static bool
+test_expanded_panel_lifecycle_actions_and_deferred_snapshot(void)
+{
+    g_yb_menu_bar_panel_capability_override = 2;
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+    struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(200);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK([controller testWantsExpandedPanel]);
+    TEST_CHECK(![controller testStatusItemHasMenu]);
+    TEST_CHECK(![controller testStatusButtonOwnsStripView]);
+    TEST_CHECK([[controller testStatusItemButton] image] != nil);
+
+    YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:session];
+    TEST_CHECK([controller testExpandedPanel] != nil);
+    TEST_CHECK([controller testExpandedSpaceCardCount] == 2);
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
+    TEST_CHECK(log.is_tracking[0]);
+    TEST_CHECK(log.generation[0] == 200);
+    TEST_CHECK(log.focused_display_id[0] == 1);
+    TEST_CHECK(!menu_bar_ui_view_tree_contains_class([[controller testExpandedPanel] contentView], [NSImageView class]));
+
+    struct menu_bar_snapshot *deferred = menu_bar_ui_detailed_snapshot(201);
+    deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:deferred clear:false];
+    deferred = menu_bar_ui_detailed_snapshot(202);
+    deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:deferred clear:false];
+    TEST_CHECK([controller testHasDeferredSnapshot]);
+    TEST_CHECK([controller testDeferredSnapshotGeneration] == 202);
+
+    [controller performPanelFilterAction:nil];
+    TEST_CHECK(session->cancel_count == 1);
+    TEST_CHECK(log.count == 2);
+    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_SET_SPACE_FILTER);
+    TEST_CHECK(log.generation[1] == 200);
+    TEST_CHECK(log.filter[1] == MENU_BAR_SPACE_FILTER_ALL);
+    [controller testEndExpandedInterface];
+    TEST_CHECK([controller testExpandedPanel] == nil);
+    TEST_CHECK(![controller testHasDeferredSnapshot]);
+    TEST_CHECK([controller testSnapshotGeneration] == 202);
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.type[2] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
+    TEST_CHECK(!log.is_tracking[2]);
+    TEST_CHECK(log.generation[2] == 200);
+    [session release];
+
+    YBMenuBarTestExpandedSession *style_session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:style_session];
+    NSPopUpButton *style = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 100, 24)] autorelease];
+    [style addItemsWithTitles:@[ @"Compact", @"Expanded" ]];
+    [style selectItemAtIndex:0];
+    [controller performPanelStyleAction:style];
+    TEST_CHECK(style_session->cancel_count == 1);
+    TEST_CHECK(log.type[4] == MENU_BAR_ACTION_SET_STYLE);
+    TEST_CHECK(log.generation[4] == 202);
+    TEST_CHECK(log.style[4] == MENU_BAR_STYLE_COMPACT);
+    [controller testEndExpandedInterface];
+    [style_session release];
+
+    YBMenuBarTestExpandedSession *automatic_session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:automatic_session];
+    NSPopUpButton *automatic = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 100, 24)] autorelease];
+    [automatic addItemsWithTitles:@[ @"Compact", @"Expanded", @"Automatic" ]];
+    [automatic selectItemAtIndex:2];
+    [controller performPanelStyleAction:automatic];
+    TEST_CHECK(automatic_session->cancel_count == 1);
+    TEST_CHECK(log.type[7] == MENU_BAR_ACTION_SET_STYLE);
+    TEST_CHECK(log.generation[7] == 202);
+    TEST_CHECK(log.style[7] == MENU_BAR_STYLE_AUTOMATIC);
+    [controller testEndExpandedInterface];
+    [automatic_session release];
+
+    [controller shutdown];
+    [controller release];
+    g_yb_menu_bar_panel_capability_override = -1;
+    return true;
+}
+
+static bool
+test_expanded_panel_modes_and_unavailable_fallback(void)
+{
+    struct menu_bar_ui_action_log log = {0};
+    struct menu_bar_callbacks callbacks = menu_bar_ui_callbacks(&log);
+    YBMenuBarController *controller = [[YBMenuBarController alloc] initWithCallbacks:&callbacks];
+
+    g_yb_menu_bar_panel_capability_override = 0;
+    struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(300);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK(![controller testWantsExpandedPanel]);
+    YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
+    [controller testBeginExpandedInterfaceWithSession:session];
+    TEST_CHECK(session->cancel_count == 1);
+    TEST_CHECK([controller testExpandedPanel] == nil);
+    TEST_CHECK(log.count == 0);
+    [session release];
+
+    g_yb_menu_bar_panel_capability_override = 2;
+    snapshot = menu_bar_ui_detailed_snapshot(301);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_MENU;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK(![controller testWantsExpandedPanel]);
+    snapshot = menu_bar_ui_detailed_snapshot(302);
+    snapshot->settings.interface = MENU_BAR_INTERFACE_AUTO;
+    [controller receiveSnapshot:snapshot clear:false];
+    TEST_CHECK([controller testWantsExpandedPanel]);
+
+    [controller shutdown];
+    [controller release];
+    g_yb_menu_bar_panel_capability_override = -1;
+    return true;
+}
+
 struct menu_bar_ui_test_case
 {
     const char *name;
@@ -1357,9 +1723,14 @@ int main(void)
             { "automatic_layout_uses_width_budget_and_accessibility_summary", test_automatic_layout_uses_width_budget_and_accessibility_summary },
             { "invalid_index_placeholder_has_transparent_interior", test_invalid_index_placeholder_has_transparent_interior },
             { "screen_number_visual_states_are_centered_monochrome_and_unfilled", test_screen_number_visual_states_are_centered_monochrome_and_unfilled },
+            { "pressed_active_screen_cell_is_colorized_only_while_explicitly_pressed", test_pressed_active_screen_cell_is_colorized_only_while_explicitly_pressed },
+            { "accessibility_preferences_change_visuals_without_color_only_state", test_accessibility_preferences_change_visuals_without_color_only_state },
+            { "accessibility_preference_redraw_preserves_live_menu_state", test_accessibility_preference_redraw_preserves_live_menu_state },
             { "multi_digit_number_geometry_stays_compact_and_within_bounds", test_multi_digit_number_geometry_stays_compact_and_within_bounds },
             { "overflow_keeps_active_and_nearest_source_neighbors", test_overflow_keeps_active_and_nearest_source_neighbors },
             { "generation_ordering_without_status_item_delivery", test_generation_ordering_without_status_item_delivery },
+            { "expanded_panel_lifecycle_actions_and_deferred_snapshot", test_expanded_panel_lifecycle_actions_and_deferred_snapshot },
+            { "expanded_panel_modes_and_unavailable_fallback", test_expanded_panel_modes_and_unavailable_fallback },
         };
 
         size_t passed = 0;

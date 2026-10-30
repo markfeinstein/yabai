@@ -37,6 +37,9 @@ void table_free(struct table *table);
 void _table_add(struct table *table, void *key, int key_size, void *value);
 bool _table_try_add(struct table *table, void *key, int key_size, void *value);
 bool table_replace(struct table *table, void *key, void *value);
+#define table_rekey(table, old_key, new_key) \
+    _table_rekey((table), (old_key), (new_key), sizeof(*(old_key)))
+bool _table_rekey(struct table *table, const void *old_key, const void *new_key, size_t key_size);
 #ifdef TESTS
 void table_test_fail_allocation_after(int successful_allocations);
 #endif
@@ -201,6 +204,22 @@ bool table_replace(struct table *table, void *key, void *value)
     struct bucket *bucket = *table_get_bucket(table, key);
     if (!bucket) return false;
     bucket->value = value;
+    return true;
+}
+
+bool _table_rekey(struct table *table, const void *old_key, const void *new_key, size_t key_size)
+{
+    if (!table || !table->buckets || table->capacity <= 0 || !table->hash || !table->cmp ||
+        !old_key || !new_key || !key_size || table->cmp((void *) old_key, (void *) new_key)) return false;
+    struct bucket **old_slot = table_get_bucket(table, (void *) old_key);
+    if (!*old_slot || *table_get_bucket(table, (void *) new_key)) return false;
+
+    struct bucket *bucket = *old_slot;
+    *old_slot = bucket->next;
+    memcpy(bucket->key, new_key, key_size);
+    unsigned long new_index = table->hash(bucket->key) % table->capacity;
+    bucket->next = table->buckets[new_index];
+    table->buckets[new_index] = bucket;
     return true;
 }
 

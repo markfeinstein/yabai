@@ -6,15 +6,21 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
 
     struct menu_bar_settings defaults = menu_bar_manager_settings();
     TEST_CHECK(defaults.enabled, MENU_BAR_DISABLED);
+    TEST_CHECK(defaults.interface, MENU_BAR_INTERFACE_MENU);
     TEST_CHECK(defaults.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(defaults.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
 
+    TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_MENU), "menu"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_PANEL), "panel"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_AUTO), "auto"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_interface_string((enum menu_bar_interface) -1), "menu"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_COMPACT), "compact"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_EXPANDED), "expanded"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_AUTOMATIC), "automatic"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "expanded"), 0);
 
     enum menu_bar_enabled enabled = MENU_BAR_ENABLED;
+    enum menu_bar_interface interface = MENU_BAR_INTERFACE_MENU;
     enum menu_bar_style style = MENU_BAR_STYLE_EXPANDED;
     enum menu_bar_space_filter filter = MENU_BAR_SPACE_FILTER_ALL;
 
@@ -24,6 +30,15 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
     TEST_CHECK(enabled, MENU_BAR_ENABLED);
     TEST_CHECK(menu_bar_manager_parse_enabled("enabled", 7, &enabled), false);
     TEST_CHECK(enabled, MENU_BAR_ENABLED);
+
+    TEST_CHECK(menu_bar_manager_parse_interface("menu", 4, &interface), true);
+    TEST_CHECK(interface, MENU_BAR_INTERFACE_MENU);
+    TEST_CHECK(menu_bar_manager_parse_interface("panel", 5, &interface), true);
+    TEST_CHECK(interface, MENU_BAR_INTERFACE_PANEL);
+    TEST_CHECK(menu_bar_manager_parse_interface("auto", 4, &interface), true);
+    TEST_CHECK(interface, MENU_BAR_INTERFACE_AUTO);
+    TEST_CHECK(menu_bar_manager_parse_interface("popover", 7, &interface), false);
+    TEST_CHECK(interface, MENU_BAR_INTERFACE_AUTO);
 
     TEST_CHECK(menu_bar_manager_parse_style("compact", 7, &style), true);
     TEST_CHECK(style, MENU_BAR_STYLE_COMPACT);
@@ -47,6 +62,8 @@ TEST_FUNC(menu_bar_manager_config_value_parsing, {
 static sem_t g_menu_bar_manager_test_sem;
 static bool g_menu_bar_manager_test_raw_contains_window;
 static bool g_menu_bar_manager_test_raw_queries_fail;
+static bool g_menu_bar_manager_test_snapshot_missing;
+static bool g_menu_bar_manager_test_snapshot_mismatch;
 static bool g_menu_bar_manager_test_native_fullscreen_space;
 static bool g_menu_bar_manager_test_native_sticky_window;
 static int g_menu_bar_manager_test_inventory_call_count;
@@ -136,12 +153,39 @@ static enum space_op_error menu_bar_manager_test_focus_space(uint64_t sid)
     return g_menu_bar_manager_test_focus_result;
 }
 
-static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *count,
-                                                         bool include_minimized, bool *success)
+
+static struct window_server_snapshot *menu_bar_manager_test_window_snapshot(
+    const uint32_t *window_ids, int window_count)
+{
+    if (window_count <= 0 || g_menu_bar_manager_test_snapshot_missing) return NULL;
+
+    window_server_snapshot_fake_begin(window_count);
+    for (int i = 0; i < window_count; ++i) {
+        uint32_t id = window_ids[window_count - i - 1];
+        window_server_snapshot_fake.records[i] = (struct window_server_snapshot_fake_record) {
+            .id = g_menu_bar_manager_test_snapshot_mismatch && i == 0 ? id + 10000 : id,
+            .parent_id = 0,
+            .level = 0,
+            .tags = 0,
+            .attributes = 0
+        };
+    }
+    CFArrayRef id_array = cfarray_of_cfnumbers(window_ids, sizeof(window_ids[0]), window_count,
+                                                kCFNumberSInt32Type);
+    struct window_server_snapshot *snapshot = window_server_snapshot_create(21, id_array, window_count);
+    if (id_array) CFRelease(id_array);
+    window_server_snapshot_fake_end();
+    return snapshot;
+}
+
+static uint32_t *menu_bar_manager_test_space_window_list(
+    uint64_t sid, int *count, bool include_minimized, bool *success,
+    struct window_server_snapshot **snapshot_out)
 {
     static uint32_t windows[] = { 1001 };
     (void) include_minimized;
     ++g_menu_bar_manager_test_inventory_call_count;
+    *snapshot_out = NULL;
 
     if (g_menu_bar_manager_test_raw_queries_fail || sid != 42) {
         if (count) *count = 0;
@@ -156,6 +200,7 @@ static uint32_t *menu_bar_manager_test_space_window_list(uint64_t sid, int *coun
     }
 
     if (count) *count = 1;
+    *snapshot_out = menu_bar_manager_test_window_snapshot(windows, 1);
     return windows;
 }
 
@@ -360,6 +405,8 @@ static void menu_bar_manager_test_reset(void)
 
     g_menu_bar_manager_test_raw_contains_window = false;
     g_menu_bar_manager_test_raw_queries_fail = false;
+    g_menu_bar_manager_test_snapshot_missing = false;
+    g_menu_bar_manager_test_snapshot_mismatch = false;
     g_menu_bar_manager_test_native_fullscreen_space = false;
     g_menu_bar_manager_test_native_sticky_window = false;
     g_menu_bar_manager_test_inventory_call_count = 0;
@@ -643,12 +690,7 @@ TEST_FUNC(menu_bar_manager_startup_staging_seal_reports_refresh_rejection,
 });
 
 TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
     int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
 
     workspace_set_macos_version(15);
@@ -677,7 +719,7 @@ TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_WINDOW);
     TEST_CHECK(g_window_notification_rebuild_count, 1);
 
-    // Newer-than-listed macOS releases use the Tahoe notification path.
+    // Golden Gate retains the modern all-window notification path without being classified as Tahoe.
     workspace_set_macos_version(27);
 
     // A fully resolved retry returning true that adds a window also dirties and coalesces.
@@ -689,12 +731,7 @@ TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
@@ -742,12 +779,7 @@ static bool menu_bar_manager_test_scratchpad_refresh_application_windows(struct 
 }
 
 TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
     int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
     __auto_type saved_window_list = window_manager_scratchpad_existing_application_window_list;
     __auto_type saved_order_window_in = window_manager_scratchpad_order_window_in;
@@ -827,12 +859,7 @@ TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     window_manager_scratchpad_refresh_application_windows = saved_refresh_application_windows;
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
     g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
@@ -1013,14 +1040,17 @@ TEST_FUNC(menu_bar_manager_late_close_after_disable_does_not_overemit, {
 });
 
 static int menu_bar_manager_test_raw_capture_calls;
-static uint32_t *menu_bar_manager_test_two_raw_windows(uint64_t sid, int *count,
-                                                       bool include_minimized, bool *success)
+static uint32_t *menu_bar_manager_test_two_raw_windows(
+    uint64_t sid, int *count, bool include_minimized, bool *success,
+    struct window_server_snapshot **snapshot_out)
 {
     static uint32_t windows[] = {1001, 1002};
     (void) include_minimized;
     ++menu_bar_manager_test_raw_capture_calls;
+    *snapshot_out = NULL;
     if (success) *success = sid == 42;
     if (count) *count = sid == 42 ? 2 : 0;
+    if (sid == 42) *snapshot_out = menu_bar_manager_test_window_snapshot(windows, 2);
     return sid == 42 ? windows : NULL;
 }
 
@@ -1057,10 +1087,44 @@ TEST_FUNC(menu_bar_manager_raw_membership_is_captured_once_per_space,
     TEST_CHECK(menu_bar_manager_add_tracked_window_from_raw_membership(&display, 1, &second, transient_flags), true);
     TEST_CHECK(menu_bar_manager_test_raw_capture_calls, 1);
     TEST_CHECK(builder.raw_window_count, 2U);
+    TEST_CHECK(builder.raw_window_ids[0], 1001U);
+    TEST_CHECK(builder.raw_window_ids[1], 1002U);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
 
     free(builder.raw_window_ids);
     free(builder.windows);
     free((void *) input.apps);
+
+    input.apps = NULL;
+    input.app_count = 0;
+    input.membership = MENU_BAR_SPACE_MEMBERSHIP_EMPTY;
+    builder = (struct menu_bar_space_builder) { .input = &input };
+    g_menu_bar_manager_test_snapshot_missing = true;
+    TEST_CHECK(menu_bar_manager_collect_raw_untracked(&display, 1), true);
+    TEST_CHECK(builder.raw_query_succeeded, false);
+    TEST_CHECK(builder.raw_window_ids == NULL, true);
+    TEST_CHECK(builder.window_count, 1U);
+    TEST_CHECK(builder.windows[0].flags & MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN,
+               MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN);
+    free(builder.windows);
+
+    input.membership = MENU_BAR_SPACE_MEMBERSHIP_EMPTY;
+    builder = (struct menu_bar_space_builder) { .input = &input };
+    g_menu_bar_manager_test_snapshot_missing = false;
+    g_menu_bar_manager_test_snapshot_mismatch = true;
+    TEST_CHECK(menu_bar_manager_collect_raw_untracked(&display, 1), true);
+    TEST_CHECK(builder.raw_query_succeeded, false);
+    TEST_CHECK(builder.raw_window_ids == NULL, true);
+    TEST_CHECK(builder.window_count, 1U);
+    TEST_CHECK(builder.windows[0].flags & MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN,
+               MENU_BAR_WINDOW_MEMBERSHIP_UNKNOWN);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+    TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
+    free(builder.windows);
+
     table_free(&g_window_manager.window);
     g_window_manager.window = saved_windows;
     menu_bar_manager_test_reset();

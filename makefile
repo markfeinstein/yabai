@@ -1,7 +1,8 @@
 FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
 FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
-COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64
+MACOS_MIN_VERSION = 14.0
+COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64
 INFO_PLIST_LINK_FLAGS = -sectcreate __TEXT __info_plist $(INFO_PLIST)
 DEBUG_FLAGS    = $(COMMON_FLAGS) -O0
 RELEASE_FLAGS  = $(COMMON_FLAGS) -DNDEBUG -O3
@@ -22,6 +23,15 @@ DEBUG_BIN      = $(BUILD_PATH)/debug/yabai
 RELEASE_BIN    = $(BUILD_PATH)/release/yabai
 ASAN_BIN       = $(BUILD_PATH)/asan/yabai
 TSAN_BIN       = $(BUILD_PATH)/tsan/yabai
+TAG_CORPUS_BIN = $(BUILD_PATH)/debug/window-server-tag-corpus
+GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-server-geometry-probe
+NATIVE_TAB_RECORDER_BIN = $(BUILD_PATH)/debug/native-tab-event-recorder
+NATIVE_TILE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/native-tile-diagnostic
+ACTIVE_HIGHLIGHT_PROBE_APP = $(BUILD_PATH)/debug/active-window-highlight-probe.app
+ACTIVE_HIGHLIGHT_PROBE_BIN = $(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents/MacOS/active-window-highlight-probe
+CORNER_GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-corner-geometry-probe
+WINDOW_CONSTRAINTS_PROBE_BIN = $(BUILD_PATH)/debug/window-constraints-probe
+DISPLAY_CADENCE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/display-cadence-diagnostic
 YABAI_COMMON   = ./src/manifest.m
 YABAI_DEPS     = $(filter-out ./src/menu_bar_model.c ./src/menu_bar_model.h,$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
 DEBUG_MODEL    = $(BUILD_PATH)/debug/menu_bar_model.o
@@ -29,6 +39,14 @@ RELEASE_MODEL  = $(BUILD_PATH)/release/menu_bar_model.o
 ASAN_MODEL     = $(BUILD_PATH)/asan/menu_bar_model.o
 TSAN_MODEL     = $(BUILD_PATH)/tsan/menu_bar_model.o
 OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
+TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
+GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/window_server_tags.h src/misc/extern.h makefile
+NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
+NATIVE_TILE_DIAGNOSTIC_DEPS = scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c scripts/native_tile_diagnostic_core.h src/window_management_bridge.m src/window_management_bridge.h src/misc/extern.h makefile
+ACTIVE_HIGHLIGHT_PROBE_DEPS = scripts/active_window_highlight_probe.m scripts/active_window_highlight_probe.Info.plist src/window_server_tags.h src/misc/extern.h makefile
+CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_corner_geometry.c src/window_corner_geometry.h src/misc/extern.h makefile
+WINDOW_CONSTRAINTS_PROBE_DEPS = scripts/window_constraints_probe.m src/window_constraints.c src/window_constraints.h src/misc/extern.h makefile
+DISPLAY_CADENCE_DIAGNOSTIC_DEPS = scripts/display_cadence_diagnostic.m scripts/display_cadence_diagnostic_core.c scripts/display_cadence_diagnostic_core.h makefile
 OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
 XCRUN          ?= xcrun
 XXD            ?= xxd
@@ -50,8 +68,8 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-arm64 test-x86_64 test-architectures test-all syntax \
+.PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
         integration-hide-on-close integration \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
@@ -62,6 +80,18 @@ debug: $(DEBUG_BIN)
 release: $(RELEASE_BIN)
 asan: $(ASAN_BIN)
 tsan: $(TSAN_BIN)
+window-server-tag-corpus: $(TAG_CORPUS_BIN)
+classifier-corpus-gate:
+	$(PYTHON) scripts/window_server_classifier_gate.py --self-test
+window-server-geometry-probe: $(GEOMETRY_PROBE_BIN)
+window-corner-geometry-probe: $(CORNER_GEOMETRY_PROBE_BIN)
+window-constraints-probe: $(WINDOW_CONSTRAINTS_PROBE_BIN)
+display-cadence-diagnostic: $(DISPLAY_CADENCE_DIAGNOSTIC_BIN)
+native-tab-event-recorder: $(NATIVE_TAB_RECORDER_BIN)
+native-tab-evidence-gate:
+	$(PYTHON) scripts/native_tab_evidence_gate.py --self-test
+native-tile-diagnostic: $(NATIVE_TILE_DIAGNOSTIC_BIN)
+active-window-highlight-probe: $(ACTIVE_HIGHLIGHT_PROBE_BIN)
 # Historical "install" builds the optimized artifact; it does not copy files.
 install: release
 
@@ -73,6 +103,36 @@ test-asan:
 
 test-tsan:
 	$(MAKE) -C tests run-tsan
+
+test-benchmark-ax:
+	$(MAKE) -C tests benchmark-ax
+
+test-benchmark-ws-snapshot:
+	$(MAKE) -C tests benchmark-ws-snapshot
+
+test-benchmark-space-inventory:
+	$(MAKE) -C tests benchmark-space-inventory
+
+test-benchmark-window-query:
+	$(MAKE) -C tests benchmark-window-query
+
+test-benchmark-snapshot-reuse:
+	$(MAKE) -C tests benchmark-snapshot-reuse
+
+test-benchmark-animation-clock:
+	$(MAKE) -C tests benchmark-animation-clock
+
+test-benchmark-window-server-tag-corpus:
+	$(MAKE) -C tests benchmark-window-server-tag-corpus
+
+test-benchmark-window-server-classifier:
+	$(MAKE) -C tests benchmark-window-server-classifier
+
+test-benchmark-window-constraints:
+	$(MAKE) -C tests benchmark-window-constraints
+
+test-benchmark-window-server-hit-test:
+	$(MAKE) -C tests benchmark-window-server-hit-test
 
 test-arm64:
 	$(MAKE) -C tests arch-arm64
@@ -94,6 +154,40 @@ integration-hide-on-close: debug
 
 integration: integration-hide-on-close
 
+$(TAG_CORPUS_BIN): $(TAG_CORPUS_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/window_server_tag_corpus.m src/window_corner_geometry.c -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(GEOMETRY_PROBE_BIN): $(GEOMETRY_PROBE_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/window_server_geometry_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(CORNER_GEOMETRY_PROBE_BIN): $(CORNER_GEOMETRY_PROBE_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/window_corner_geometry_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework QuartzCore -framework SkyLight
+
+$(WINDOW_CONSTRAINTS_PROBE_BIN): $(WINDOW_CONSTRAINTS_PROBE_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/window_constraints_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(DISPLAY_CADENCE_DIAGNOSTIC_BIN): $(DISPLAY_CADENCE_DIAGNOSTIC_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/display_cadence_diagnostic.m scripts/display_cadence_diagnostic_core.c -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework QuartzCore -framework CoreGraphics
+
+$(NATIVE_TAB_RECORDER_BIN): $(NATIVE_TAB_RECORDER_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(NATIVE_TILE_DIAGNOSTIC_BIN): $(NATIVE_TILE_DIAGNOSTIC_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/native_tile_diagnostic.m scripts/native_tile_diagnostic_core.c src/window_management_bridge.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+
+$(ACTIVE_HIGHLIGHT_PROBE_BIN): $(ACTIVE_HIGHLIGHT_PROBE_DEPS)
+	@mkdir -p '$(dir $@)' '$(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents'
+	@cp scripts/active_window_highlight_probe.Info.plist '$(ACTIVE_HIGHLIGHT_PROBE_APP)/Contents/Info.plist'
+	$(XCRUN) clang scripts/active_window_highlight_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
+	$(CODESIGN) --force --deep --sign - '$(ACTIVE_HIGHLIGHT_PROBE_APP)'
+
 # Generate both native scripting-addition artifacts as private temporaries,
 # then publish only one combined compiler input. Explicit source and makefile
 # dependencies keep unchanged builds incremental; a dependency change advances
@@ -104,8 +198,8 @@ $(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS)
 	dir='$(BUILD_PATH)/$(1)/osax'; mkdir -p "$$$$dir"; \
 	payload=$$$$(mktemp "$$$$dir/.payload.XXXXXX"); loader=$$$$(mktemp "$$$$dir/.loader.XXXXXX"); generated=$$$$(mktemp "$$$$dir/.generated.c.XXXXXX"); \
 	trap 'rm -f "$$$$payload" "$$$$loader" "$$$$generated"' 0 HUP INT TERM; \
-	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
-	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
+	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
+	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
 	$(XXD) -i -n __src_osax_payload "$$$$payload" > "$$$$generated"; \
 	$(XXD) -i -n __src_osax_loader "$$$$loader" >> "$$$$generated"; \
 	if [ -f "$$$$dir/generated.c" ] && cmp -s "$$$$generated" "$$$$dir/generated.c"; then touch "$$$$dir/generated.c"; rm -f "$$$$generated"; else mv -f "$$$$generated" "$$$$dir/generated.c"; fi; \

@@ -1,11 +1,7 @@
 bool workspace_event_handler_begin(void **context)
 {
-    workspace_set_macos_version([[NSProcessInfo processInfo] operatingSystemVersion].majorVersion);
-
-    // Use the most recent compatibility path as a safe default for newer
-    // macOS releases. Version-specific handling can override this once a
-    // behavioural difference has been identified.
-    _workspace_is_macos_version_tahoe = [[NSProcessInfo processInfo] operatingSystemVersion].majorVersion >= 26;
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    workspace_set_macos_version(os_version.majorVersion);
 
     workspace_context *ws_context = [workspace_context alloc];
     if (!ws_context) return false;

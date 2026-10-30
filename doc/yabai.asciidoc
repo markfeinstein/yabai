@@ -182,6 +182,7 @@ Enum fields are:
 * `window_insertion_point`: `focused`, `first`, `last`;
 * `window_shadow`: `off`, `float`, `on`;
 * `menubar`: `off`, `on`;
+* `menubar_interface`: `menu`, `panel`, `auto`;
 * `menubar_style`: `automatic`, `compact`, `expanded`;
 * `menubar_space_filter`: `occupied`, `all`;
 * `layout`: `bsp`, `stack`, `float`, `accordion_horizontal`, `accordion_vertical`;
@@ -198,6 +199,9 @@ Numeric fields are:
 * `window_animation_duration`: finite seconds greater than or equal to zero. A nonzero value requires nonprompting SIP and Screen Recording preflight during runtime preparation;
 * `menubar_opacity`: `0...1`;
 * `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
+* `active_window_highlight_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `active_window_highlight_radius`: finite display points greater than or equal to zero, default 9;
+* `active_window_highlight_width`: finite display points greater than zero, default 4; rendering clamps it to half the focused window's shorter dimension;
 * `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
 * `insert_feedback_radius`: finite display points greater than or equal to zero, default 9;
 * `insert_feedback_width`: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
@@ -473,6 +477,13 @@ Global Settings
     Show yabai Spaces as a native macOS menu bar status item. Default is 'off'. +
     Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right-click, or press and hold to open the menu. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
 
+*menubar_interface* ['menu|panel|auto']::
+    Select the read-only menu bar item's expanded interface. Default is 'menu'. +
+    'menu': Use the existing native informational menu. +
+    'panel': On macOS 27 or newer, use a transient keyboard-accessible read-only panel; fall back to the native menu when unavailable. +
+    'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
+    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It does not expose window content and does not require Screen Recording permission.
+
 *menubar_style* ['automatic|compact|expanded']::
     Set the menu bar status item layout. Default is 'expanded'. +
     'automatic': Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout. +
@@ -546,6 +557,20 @@ Global Settings
 *normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of an unfocused window. +
     System Integrity Protection must be partially disabled.
+
+*active_window_highlight* ['<BOOL_SEL>']::
+    Draw a click-through outline around the focused eligible window using a private WindowServer overlay; the scripting addition is not required. +
+    The highlight is hidden while the window is minimized, ordered out, in native fullscreen, represented by a yabai animation proxy, or while Mission Control is active. (default: off)
+
+*active_window_highlight_color* ['0xAARRGGBB']::
+    Color of the focused-window highlight. (default: 0xffd75f5f)
+
+*active_window_highlight_radius* ['float']::
+    Target corner radius in display points for the focused-window highlight. Must be finite and greater than or equal to zero. (default: 9)
+
+*active_window_highlight_width* ['float']::
+    Stroke width in display points for the focused-window highlight. Must be finite and greater than zero. +
+    Rendering clamps the width to half the focused window's shorter dimension. (default: 4)
 
 *window_animation_duration* ['<DURATION_SEL>']::
     Duration of window frame animation. +

@@ -6,18 +6,50 @@ extern int g_connection;
 
 #ifdef TESTS
 static AXError (*window_observe_add_notification)(AXObserverRef, AXUIElementRef, CFStringRef, void *) = AXObserverAddNotification;
+static CFArrayRef (*window_ax_snapshot_create_attributes)(CFAllocatorRef, const void **, CFIndex,
+                                                          const CFArrayCallBacks *) = CFArrayCreate;
+static AXError (*window_ax_snapshot_copy_multiple)(AXUIElementRef, CFArrayRef,
+                                                    AXCopyMultipleAttributeOptions,
+                                                    CFArrayRef *) = AXUIElementCopyMultipleAttributeValues;
+static AXError (*window_ax_snapshot_copy_single)(AXUIElementRef, CFStringRef,
+                                                  CFTypeRef *) = AXUIElementCopyAttributeValue;
+static uint32_t (*window_create_parent_id)(uint32_t) = window_parent;
+static bool (*window_create_shadow)(uint32_t) = window_shadow;
+static bool (*window_create_sticky)(uint32_t) = window_is_sticky;
+static uint64_t (*window_create_space_id)(uint32_t) = window_space;
+static bool (*window_create_space_is_fullscreen)(uint64_t) = space_is_fullscreen;
+static bool (*window_create_can_move)(struct window *) = window_ax_can_move;
+static bool (*window_create_can_resize)(struct window *) = window_ax_can_resize;
 static CGError (*window_test_is_ordered_in)(int, uint32_t, uint8_t *) = SLSWindowIsOrderedIn;
 static CFArrayRef (*window_test_description_from_array)(CFArrayRef) = CGWindowListCreateDescriptionFromArray;
 static uint64_t (*window_test_serialization_space)(uint32_t) = window_space;
 static bool (*window_test_serialization_is_sticky)(uint32_t) = window_is_sticky;
+static bool (*window_test_serialization_parent)(uint32_t, uint32_t *) = window_parent_with_status;
+static int (*window_test_serialization_level)(uint32_t) = window_level;
+static bool (*window_test_serialization_tags)(uint32_t, uint64_t *) = window_tags_with_status;
+static bool (*window_test_serialization_shadow)(uint32_t) = window_shadow;
 static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
 static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 #else
 #define window_observe_add_notification AXObserverAddNotification
+#define window_ax_snapshot_create_attributes CFArrayCreate
+#define window_ax_snapshot_copy_multiple AXUIElementCopyMultipleAttributeValues
+#define window_ax_snapshot_copy_single AXUIElementCopyAttributeValue
+#define window_create_parent_id window_parent
+#define window_create_shadow window_shadow
+#define window_create_sticky window_is_sticky
+#define window_create_space_id window_space
+#define window_create_space_is_fullscreen space_is_fullscreen
+#define window_create_can_move window_ax_can_move
+#define window_create_can_resize window_ax_can_resize
 #define window_test_is_ordered_in SLSWindowIsOrderedIn
 #define window_test_description_from_array CGWindowListCreateDescriptionFromArray
 #define window_test_serialization_space window_space
 #define window_test_serialization_is_sticky window_is_sticky
+#define window_test_serialization_parent window_parent_with_status
+#define window_test_serialization_level window_level
+#define window_test_serialization_tags window_tags_with_status
+#define window_test_serialization_shadow window_shadow
 #define window_test_space_display_id space_display_id
 #define window_test_display_id_arrangement display_manager_display_id_arrangement
 #endif
@@ -236,6 +268,14 @@ static uint64_t window_serialization_flags(uint64_t flags)
     return flags ? flags : ~WINDOW_PROPERTY_DIAGNOSTIC_FLAGS;
 }
 
+static const struct window_server_window_record *
+window_serialization_record(const struct window_serialization_context *context, uint32_t window_id)
+{
+    const struct window_server_window_record *record = context ? context->window_server_record : NULL;
+    if (!record || !(record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) || record->id != window_id) return NULL;
+    return record;
+}
+
 static int window_serialization_space_index(const struct window_serialization_context *context,
                                             uint64_t sid)
 {
@@ -275,7 +315,9 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     uint64_t tags = 0;
     bool parent_known = false;
     bool tags_known = false;
+    bool has_shadow = false;
     bool is_sticky = false;
+    const struct window_server_window_record *record = window_serialization_record(context, wid);
 
     if ((flags & WINDOW_PROPERTY_PID) ||
         (flags & WINDOW_PROPERTY_APP)) {
@@ -299,7 +341,8 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
         (flags & WINDOW_PROPERTY_LAYER)) {
-        level = window_level(wid);
+        level = record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_LEVEL) ?
+                record->level : window_test_serialization_level(wid);
     }
 
     if ((flags & WINDOW_PROPERTY_SUB_LEVEL) ||
@@ -309,10 +352,24 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
 
     if ((flags & WINDOW_PROPERTY_ROOT_WINDOW) ||
         (flags & WINDOW_PROPERTY_PARENT)) {
-        parent_known = window_parent_with_status(wid, &parent_wid);
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)) {
+            parent_wid = record->parent_id;
+            parent_known = true;
+        } else {
+            parent_known = window_test_serialization_parent(wid, &parent_wid);
+        }
     }
 
-    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(wid, &tags);
+    if ((flags & WINDOW_PROPERTY_TAGS) || (flags & WINDOW_PROPERTY_HAS_SHADOW)) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)) {
+            tags = record->tags;
+            tags_known = true;
+            has_shadow = !(tags & 0x8);
+        } else {
+            if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_test_serialization_tags(wid, &tags);
+            if (flags & WINDOW_PROPERTY_HAS_SHADOW) has_shadow = window_test_serialization_shadow(wid);
+        }
+    }
 
     bool did_output = false;
     fprintf(rsp, "{\n");
@@ -506,7 +563,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     if (flags & WINDOW_PROPERTY_HAS_SHADOW) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(window_shadow(wid)));
+        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(has_shadow));
         did_output = true;
     }
 
@@ -625,10 +682,12 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     uint64_t tags;
     bool parent_known;
     bool tags_known;
+    bool has_shadow = false;
     struct view *view;
     struct window_node *node;
     bool is_minimized;
     bool is_sticky;
+    const struct window_server_window_record *record = window_serialization_record(context, window->id);
 
     bool needs_sid = (flags & WINDOW_PROPERTY_DISPLAY) ||
                      (flags & WINDOW_PROPERTY_SPACE) ||
@@ -647,7 +706,8 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
         (flags & WINDOW_PROPERTY_LAYER)) {
-        level = window_level(window->id);
+        level = record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_LEVEL) ?
+                record->level : window_test_serialization_level(window->id);
     }
 
     if ((flags & WINDOW_PROPERTY_SUB_LEVEL) ||
@@ -655,8 +715,24 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
         sub_level = window_sub_level(window->id);
     }
 
-    if (flags & WINDOW_PROPERTY_PARENT) parent_known = window_parent_with_status(window->id, &parent_wid);
-    if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_tags_with_status(window->id, &tags);
+    if (flags & WINDOW_PROPERTY_PARENT) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)) {
+            parent_wid = record->parent_id;
+            parent_known = true;
+        } else {
+            parent_known = window_test_serialization_parent(window->id, &parent_wid);
+        }
+    }
+    if ((flags & WINDOW_PROPERTY_TAGS) || (flags & WINDOW_PROPERTY_HAS_SHADOW)) {
+        if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)) {
+            tags = record->tags;
+            tags_known = true;
+            has_shadow = !(tags & 0x8);
+        } else {
+            if (flags & WINDOW_PROPERTY_TAGS) tags_known = window_test_serialization_tags(window->id, &tags);
+            if (flags & WINDOW_PROPERTY_HAS_SHADOW) has_shadow = window_test_serialization_shadow(window->id);
+        }
+    }
 
     if ((flags & WINDOW_PROPERTY_SPLIT_TYPE) ||
         (flags & WINDOW_PROPERTY_SPLIT_CHILD) ||
@@ -864,7 +940,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_HAS_SHADOW) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(window_shadow(window->id)));
+        fprintf(rsp, "\t\"has-shadow\":%s", json_bool(has_shadow));
         did_output = true;
     }
 
@@ -993,6 +1069,213 @@ CFStringRef window_title(struct window *window)
     return value;
 }
 
+static const CFStringRef window_ax_snapshot_attribute[WINDOW_AX_SNAPSHOT_SLOT_COUNT] =
+{
+    [WINDOW_AX_POSITION_SLOT]   = kAXPositionAttribute,
+    [WINDOW_AX_SIZE_SLOT]       = kAXSizeAttribute,
+    [WINDOW_AX_ROLE_SLOT]       = kAXRoleAttribute,
+    [WINDOW_AX_SUBROLE_SLOT]    = kAXSubroleAttribute,
+    [WINDOW_AX_TITLE_SLOT]      = kAXTitleAttribute,
+    [WINDOW_AX_PARENT_SLOT]     = kAXParentAttribute,
+    [WINDOW_AX_MINIMIZED_SLOT]  = kAXMinimizedAttribute,
+    [WINDOW_AX_FULLSCREEN_SLOT] = kAXFullscreenAttribute
+};
+
+_Static_assert(WINDOW_AX_SNAPSHOT_SLOT_COUNT < 32, "snapshot fields must fit in the public masks");
+
+static inline uint32_t window_ax_snapshot_field_for_slot(int slot)
+{
+    return 1u << slot;
+}
+
+static bool window_ax_snapshot_error_allows_fallback(AXError error)
+{
+    return error == kAXErrorAttributeUnsupported ||
+           error == kAXErrorNoValue ||
+           error == kAXErrorCannotComplete ||
+           error == kAXErrorNotImplemented ||
+           error == kAXErrorFailure ||
+           error == kAXErrorInvalidUIElement;
+}
+
+static AXError window_ax_snapshot_store_value(struct window_ax_snapshot *snapshot, int slot, CFTypeRef value)
+{
+    if (!value || value == kCFNull) return kAXErrorNoValue;
+
+    if (cf_is_type(value, AXValueGetTypeID()) &&
+        AXValueGetType((AXValueRef) value) == kAXValueTypeAXError) {
+        AXError error = kAXErrorFailure;
+        return AXValueGetValue((AXValueRef) value, kAXValueTypeAXError, &error) ? error : kAXErrorFailure;
+    }
+
+    switch (slot) {
+    case WINDOW_AX_POSITION_SLOT:
+        if (!cf_is_type(value, AXValueGetTypeID()) ||
+            AXValueGetType((AXValueRef) value) != kAXValueTypeCGPoint ||
+            !AXValueGetValue((AXValueRef) value, kAXValueTypeCGPoint, &snapshot->position)) {
+            return kAXErrorIllegalArgument;
+        }
+        break;
+    case WINDOW_AX_SIZE_SLOT:
+        if (!cf_is_type(value, AXValueGetTypeID()) ||
+            AXValueGetType((AXValueRef) value) != kAXValueTypeCGSize ||
+            !AXValueGetValue((AXValueRef) value, kAXValueTypeCGSize, &snapshot->size)) {
+            return kAXErrorIllegalArgument;
+        }
+        break;
+    case WINDOW_AX_ROLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->role = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_SUBROLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->subrole = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_TITLE_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->title = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_PARENT_SLOT:
+        if (!cf_is_type(value, AXUIElementGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->parent = (AXUIElementRef) CFRetain(value);
+        break;
+    case WINDOW_AX_MINIMIZED_SLOT:
+        if (!cf_is_type(value, CFBooleanGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->minimized = CFBooleanGetValue(value);
+        break;
+    case WINDOW_AX_FULLSCREEN_SLOT:
+        if (!cf_is_type(value, CFBooleanGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->fullscreen = CFBooleanGetValue(value);
+        break;
+    default:
+        return kAXErrorIllegalArgument;
+    }
+
+    snapshot->valid |= window_ax_snapshot_field_for_slot(slot);
+    return kAXErrorSuccess;
+}
+
+static void window_ax_snapshot_fallback_field(AXUIElementRef ref, int slot,
+                                               struct window_ax_snapshot *snapshot)
+{
+    CFTypeRef value = NULL;
+    AXError error = window_ax_snapshot_copy_single(ref, window_ax_snapshot_attribute[slot], &value);
+    if (error == kAXErrorSuccess) {
+        error = window_ax_snapshot_store_value(snapshot, slot, value);
+    }
+    snapshot->slot_error[slot] = error;
+    if (value) CFRelease(value);
+}
+
+static void window_ax_snapshot_fallback_frame(AXUIElementRef ref, struct window_ax_snapshot *snapshot)
+{
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    snapshot->valid &= ~frame_mask;
+    snapshot->position = CGPointZero;
+    snapshot->size = CGSizeZero;
+
+    window_ax_snapshot_fallback_field(ref, WINDOW_AX_POSITION_SLOT, snapshot);
+    window_ax_snapshot_fallback_field(ref, WINDOW_AX_SIZE_SLOT, snapshot);
+
+    if ((snapshot->valid & frame_mask) != frame_mask) {
+        snapshot->valid &= ~frame_mask;
+        snapshot->position = CGPointZero;
+        snapshot->size = CGSizeZero;
+    }
+}
+
+bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct window_ax_snapshot *snapshot)
+{
+    if (!snapshot) return false;
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    const uint32_t known_fields = (1u << WINDOW_AX_SNAPSHOT_SLOT_COUNT) - 1u;
+    if (!ref || !requested || (requested & ~known_fields)) return false;
+    snapshot->requested = requested;
+
+    const void *attributes[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    uint8_t attribute_slots[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    CFIndex attribute_count = 0;
+    for (int slot = 0; slot < WINDOW_AX_SNAPSHOT_SLOT_COUNT; ++slot) {
+        if (!(requested & window_ax_snapshot_field_for_slot(slot))) continue;
+        attributes[attribute_count] = window_ax_snapshot_attribute[slot];
+        attribute_slots[attribute_count++] = (uint8_t) slot;
+        snapshot->slot_error[slot] = kAXErrorNoValue;
+    }
+
+    CFArrayRef attribute_array = window_ax_snapshot_create_attributes(NULL, attributes, attribute_count,
+                                                                       &kCFTypeArrayCallBacks);
+    CFArrayRef values = NULL;
+    AXError batch_error = kAXErrorFailure;
+    if (attribute_array) {
+        batch_error = window_ax_snapshot_copy_multiple(ref, attribute_array, 0, &values);
+        CFRelease(attribute_array);
+    }
+
+    if (batch_error == kAXErrorSuccess && cf_is_type(values, CFArrayGetTypeID())) {
+        CFIndex value_count = CFArrayGetCount(values);
+        if (value_count <= attribute_count) {
+            for (CFIndex index = 0; index < value_count; ++index) {
+                int slot = attribute_slots[index];
+                CFTypeRef value = CFArrayGetValueAtIndex(values, index);
+                snapshot->slot_error[slot] = window_ax_snapshot_store_value(snapshot, slot, value);
+            }
+        } else {
+            for (CFIndex index = 0; index < attribute_count; ++index) {
+                snapshot->slot_error[attribute_slots[index]] = kAXErrorFailure;
+            }
+        }
+    } else {
+        AXError error = batch_error == kAXErrorSuccess ? kAXErrorFailure : batch_error;
+        for (CFIndex index = 0; index < attribute_count; ++index) {
+            snapshot->slot_error[attribute_slots[index]] = error;
+        }
+    }
+
+    if (values) CFRelease(values);
+
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    bool full_frame_requested = (requested & frame_mask) == frame_mask;
+    if (full_frame_requested && (snapshot->valid & frame_mask) != frame_mask) {
+        window_ax_snapshot_fallback_frame(ref, snapshot);
+    }
+
+    for (int slot = 0; slot < WINDOW_AX_SNAPSHOT_SLOT_COUNT; ++slot) {
+        uint32_t field = window_ax_snapshot_field_for_slot(slot);
+        if (!(requested & field) || (snapshot->valid & field)) continue;
+        if (full_frame_requested && (field & frame_mask)) continue;
+        if (window_ax_snapshot_error_allows_fallback(snapshot->slot_error[slot])) {
+            window_ax_snapshot_fallback_field(ref, slot, snapshot);
+        }
+    }
+
+    return (snapshot->valid & requested) == requested;
+}
+
+void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot)
+{
+    if (!snapshot) return;
+    if (snapshot->role) CFRelease(snapshot->role);
+    if (snapshot->subrole) CFRelease(snapshot->subrole);
+    if (snapshot->title) CFRelease(snapshot->title);
+    if (snapshot->parent) CFRelease(snapshot->parent);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame)
+{
+    const uint32_t frame_mask = WINDOW_AX_POSITION | WINDOW_AX_SIZE;
+    if (!snapshot || !frame || (snapshot->valid & frame_mask) != frame_mask) return false;
+
+    CGRect candidate = { snapshot->position, snapshot->size };
+    if (!isfinite(candidate.origin.x) || !isfinite(candidate.origin.y) ||
+        !isfinite(candidate.size.width) || !isfinite(candidate.size.height) ||
+        candidate.size.width <= 0.0 || candidate.size.height <= 0.0) return false;
+
+    *frame = candidate;
+    return true;
+}
+
 CGPoint window_ax_origin(struct window *window)
 {
     CGPoint origin = {0};
@@ -1008,25 +1291,25 @@ CGPoint window_ax_origin(struct window *window)
     return origin;
 }
 
+bool window_ax_frame_with_status(struct window *window, CGRect *frame)
+{
+    if (!window || !window->ref || !frame) return false;
+
+    struct window_ax_snapshot snapshot = {0};
+    (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE, &snapshot);
+    CGRect candidate;
+    bool result = window_ax_snapshot_frame(&snapshot, &candidate);
+    window_ax_snapshot_destroy(&snapshot);
+    if (!result) return false;
+
+    *frame = candidate;
+    return true;
+}
+
 CGRect window_ax_frame(struct window *window)
 {
-    CGRect frame = {0};
-    CFTypeRef position_ref = NULL;
-    CFTypeRef size_ref = NULL;
-
-    AXUIElementCopyAttributeValue(window->ref, kAXPositionAttribute, &position_ref);
-    AXUIElementCopyAttributeValue(window->ref, kAXSizeAttribute, &size_ref);
-
-    if (position_ref) {
-        AXValueGetValue(position_ref, kAXValueTypeCGPoint, &frame.origin);
-        CFRelease(position_ref);
-    }
-
-    if (size_ref) {
-        AXValueGetValue(size_ref, kAXValueTypeCGSize, &frame.size);
-        CFRelease(size_ref);
-    }
-
+    CGRect frame = window ? window->frame : CGRectZero;
+    (void) window_ax_frame_with_status(window, &frame);
     return frame;
 }
 
@@ -1072,19 +1355,6 @@ bool window_is_undersized(struct window *window)
     if (window->frame.size.width  <= 500.0f) return true;
     if (window->frame.size.height <= 500.0f) return true;
     return false;
-}
-
-static bool window_is_minimized(struct window *window)
-{
-    Boolean result = 0;
-    CFTypeRef value;
-
-    if (AXUIElementCopyAttributeValue(window->ref, kAXMinimizedAttribute, &value) == kAXErrorSuccess) {
-        result = CFBooleanGetValue(value);
-        CFRelease(value);
-    }
-
-    return result;
 }
 
 bool window_is_fullscreen(struct window *window)
@@ -1170,7 +1440,7 @@ int window_level(uint32_t wid)
 {
     int level = 0;
 
-    if (workspace_is_macos_ventura() || workspace_is_macos_sonoma() || workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_ventura_or_newer()) {
         CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
         if (!window_ref) return 0;
 
@@ -1198,6 +1468,11 @@ int window_level(uint32_t wid)
     return level;
 }
 
+static uint32_t window_sub_level_message_id(void)
+{
+    return workspace_is_macos_tahoe_or_newer() ? 0x76E3 : 0x73C3;
+}
+
 static int SLSGetWindowSubLevel__Internal(int cid, uint32_t wid)
 {
     #pragma pack(push,4)
@@ -1216,7 +1491,7 @@ static int SLSGetWindowSubLevel__Internal(int cid, uint32_t wid)
     msg.header.msgh_bits = 0x1513;
     msg.header.msgh_remote_port = CGSGetConnectionPortById(cid);
     msg.header.msgh_local_port = mig_get_special_reply_port();
-    msg.header.msgh_id = workspace_is_macos_tahoe() ? 0x76E3 : 0x73C3;
+    msg.header.msgh_id = window_sub_level_message_id();
     mach_msg(&msg.header, MACH_SEND_MSG|MACH_RCV_MSG, 0x24, 0x30, msg.header.msgh_local_port, 0, 0);
 
     return msg.sub_level;
@@ -1343,19 +1618,6 @@ char *window_subrole_ts(struct window *window)
     return result;
 }
 
-static bool window_is_root(struct window *window)
-{
-    bool result = false;
-    CFTypeRef value = NULL;
-
-    if (AXUIElementCopyAttributeValue(window->ref, kAXParentAttribute, &value) == kAXErrorSuccess) {
-        result = !(value && !CFEqual(value, window->application->ref));
-    }
-
-    if (value) CFRelease(value);
-    return result;
-}
-
 bool window_is_real(struct window *window)
 {
     bool win = false;
@@ -1411,7 +1673,9 @@ bool window_is_unknown(struct window *window)
     return result;
 }
 
-struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+                                                uint32_t window_id,
+                                                const struct window_server_window_record *server_record)
 {
     if (!window_ref) return NULL;
     if (!application || !window_id) {
@@ -1428,38 +1692,73 @@ struct window *window_create(struct application *application, AXUIElementRef win
     window->ref = window_ref;
     window->id = window_id;
     window->id_ptr = &window->id;
-    window->frame = window_ax_frame(window);
-    window->role = window_ax_role(window);
-    window->subrole = window_ax_subrole(window);
-    window->title = window_title(window);
-    window->is_root = !window_parent(window->id) || window_is_root(window);
 
-    if (window_shadow(window->id)) {
-        window_set_flag(window, WINDOW_SHADOW);
+    const uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE |
+                               WINDOW_AX_SUBROLE | WINDOW_AX_TITLE | WINDOW_AX_PARENT |
+                               WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+    struct window_ax_snapshot snapshot = {0};
+    (void) window_ax_snapshot_read(window->ref, requested, &snapshot);
+
+    CGRect frame;
+    if (window_ax_snapshot_frame(&snapshot, &frame)) window->frame = frame;
+    window->role = snapshot.role;
+    snapshot.role = NULL;
+    window->subrole = snapshot.subrole;
+    snapshot.subrole = NULL;
+    window->title = snapshot.title;
+    snapshot.title = NULL;
+
+    bool record_matches = server_record &&
+                          (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) &&
+                          server_record->id == window->id;
+    if (record_matches &&
+        (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS)) {
+        const CGSize *ax_size = (snapshot.valid & WINDOW_AX_SIZE) ? &snapshot.size : NULL;
+        window_constraints_update(&window->constraints, &server_record->constraints,
+                                  WINDOW_CONSTRAINT_SOURCE_ITERATOR, ax_size, 0);
     }
+    uint32_t parent_id = record_matches &&
+                         (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_PARENT_ID)
+                       ? server_record->parent_id
+                       : window_create_parent_id(window->id);
+    bool ax_root = (snapshot.valid & WINDOW_AX_PARENT) &&
+                   (!snapshot.parent || CFEqual(snapshot.parent, window->application->ref));
+    window->is_root = !parent_id || ax_root;
 
-    if (window_is_minimized(window)) {
+    bool has_shadow = record_matches &&
+                      (server_record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_TAGS)
+                    ? !(server_record->tags & UINT64_C(0x8))
+                    : window_create_shadow(window->id);
+    if (has_shadow) window_set_flag(window, WINDOW_SHADOW);
+
+    if ((snapshot.valid & WINDOW_AX_MINIMIZED) && snapshot.minimized) {
         window_set_flag(window, WINDOW_MINIMIZE);
     }
 
-    if (window_ax_can_move(window)) {
+    if (window_create_can_move(window)) {
         window_set_flag(window, WINDOW_MOVABLE);
     }
 
-    if (window_ax_can_resize(window)) {
+    if (window_create_can_resize(window)) {
         window_set_flag(window, WINDOW_RESIZABLE);
     }
 
-    if ((window_is_fullscreen(window)) ||
-        (space_is_fullscreen(window_space(window->id)))) {
+    bool ax_fullscreen = (snapshot.valid & WINDOW_AX_FULLSCREEN) && snapshot.fullscreen;
+    if (ax_fullscreen || window_create_space_is_fullscreen(window_create_space_id(window->id))) {
         window_set_flag(window, WINDOW_FULLSCREEN);
     }
 
-    if (window_is_sticky(window->id)) {
+    if (window_create_sticky(window->id)) {
         window_set_flag(window, WINDOW_STICKY);
     }
 
+    window_ax_snapshot_destroy(&snapshot);
     return window;
+}
+
+struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
+{
+    return window_create_with_server_record(application, window_ref, window_id, NULL);
 }
 
 #ifdef TESTS

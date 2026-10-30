@@ -8,9 +8,13 @@
 #include "menu_bar.h"
 
 #define MENU_BAR_CONFIG_ENABLED      "menubar"
+#define MENU_BAR_CONFIG_INTERFACE    "menubar_interface"
 #define MENU_BAR_CONFIG_STYLE        "menubar_style"
 #define MENU_BAR_CONFIG_SPACE_FILTER "menubar_space_filter"
 
+#define MENU_BAR_INTERFACE_MENU_STR       "menu"
+#define MENU_BAR_INTERFACE_PANEL_STR      "panel"
+#define MENU_BAR_INTERFACE_AUTO_STR       "auto"
 #define MENU_BAR_STYLE_COMPACT_STR       "compact"
 #define MENU_BAR_STYLE_EXPANDED_STR      "expanded"
 #define MENU_BAR_STYLE_AUTOMATIC_STR     "automatic"
@@ -43,18 +47,22 @@ void menu_bar_manager_shutdown(void);
 struct menu_bar_settings menu_bar_manager_settings(void);
 
 enum menu_bar_enabled menu_bar_manager_enabled(void);
+enum menu_bar_interface menu_bar_manager_interface(void);
 enum menu_bar_style menu_bar_manager_style(void);
 enum menu_bar_space_filter menu_bar_manager_space_filter(void);
 
 const char *menu_bar_manager_enabled_string(enum menu_bar_enabled enabled);
+const char *menu_bar_manager_interface_string(enum menu_bar_interface interface);
 const char *menu_bar_manager_style_string(enum menu_bar_style style);
 const char *menu_bar_manager_space_filter_string(enum menu_bar_space_filter filter);
 
 bool menu_bar_manager_parse_enabled(const char *text, size_t length, enum menu_bar_enabled *enabled);
+bool menu_bar_manager_parse_interface(const char *text, size_t length, enum menu_bar_interface *interface);
 bool menu_bar_manager_parse_style(const char *text, size_t length, enum menu_bar_style *style);
 bool menu_bar_manager_parse_space_filter(const char *text, size_t length, enum menu_bar_space_filter *filter);
 
 bool menu_bar_manager_set_enabled(enum menu_bar_enabled enabled);
+bool menu_bar_manager_set_interface(enum menu_bar_interface interface);
 bool menu_bar_manager_set_style(enum menu_bar_style style);
 bool menu_bar_manager_set_space_filter(enum menu_bar_space_filter filter);
 
@@ -63,6 +71,7 @@ void menu_bar_manager_startup_staging_open(void);
 bool menu_bar_manager_startup_staging_seal(void);
 void menu_bar_manager_startup_staging_abort(void);
 bool menu_bar_manager_startup_stage_enabled(enum menu_bar_enabled enabled);
+bool menu_bar_manager_startup_stage_interface(enum menu_bar_interface interface);
 bool menu_bar_manager_startup_stage_style(enum menu_bar_style style);
 bool menu_bar_manager_startup_stage_space_filter(enum menu_bar_space_filter filter);
 bool menu_bar_manager_startup_settings_can_commit(const struct menu_bar_settings *settings);

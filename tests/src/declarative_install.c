@@ -62,6 +62,11 @@ static int declarative_install_test_mutex_destroy_counting(pthread_mutex_t *mute
     X(float, window_opacity_duration) \
     X(float, window_animation_duration) \
     X(int, window_animation_easing) \
+    X(bool, enable_active_window_highlight) \
+    X(struct rgba_color, active_window_highlight_color) \
+    X(float, active_window_highlight_radius) \
+    X(float, active_window_highlight_width) \
+    X(struct active_window_highlight, active_window_highlight) \
     X(struct rgba_color, insert_feedback_color) \
     X(float, insert_feedback_radius) \
     X(float, insert_feedback_width) \
@@ -153,11 +158,16 @@ static bool declarative_install_test_candidate_value_applied(
     case DECLARATIVE_CONFIG_ANIMATION_EASING: return bundle->window_manager.window_animation_easing == value->enumeration;
     case DECLARATIVE_CONFIG_SHADOW: return (int) bundle->window_manager.purify_mode == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR: return (int) bundle->menu_settings.enabled == value->enumeration;
+    case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: return (int) bundle->menu_settings.interface == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: return (int) bundle->menu_settings.style == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: return (int) bundle->menu_settings.space_filter == value->enumeration;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return bundle->window_manager.menubar_opacity == value->real;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: return bundle->window_manager.active_window_opacity == value->real;
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return bundle->window_manager.normal_window_opacity == value->real;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT: return bundle->window_manager.enable_active_window_highlight == value->boolean;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR: return bundle->window_manager.active_window_highlight_color.p == value->u32;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS: return bundle->window_manager.active_window_highlight_radius == value->real;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH: return bundle->window_manager.active_window_highlight_width == value->real;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: return bundle->window_manager.insert_feedback_color.p == value->u32;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return bundle->window_manager.insert_feedback_radius == value->real;
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return bundle->window_manager.insert_feedback_width == value->real;
@@ -231,7 +241,7 @@ static struct declarative_config_model *declarative_install_test_model(void)
 {
     static const char json[] =
         "{\"version\":2,\"config\":{\"layout\":\"bsp\",\"window_gap\":9,\"single_window_max_width\":1800,\"single_window_min_width\":1200,\"single_window_width_ratio\":0.9,\"focus_follows_mouse\":\"autofocus\","
-        "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
+        "\"window_focus_fallback\":\"recent\",\"menubar\":\"on\",\"menubar_interface\":\"panel\",\"menubar_style\":\"expanded\",\"menubar_space_filter\":\"all\"},"
         "\"modes\":[{\"name\":\"startup\",\"spaces\":[]}],\"active_mode\":\"startup\","
         "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"accordion_vertical\","
         "\"top_padding\":1,\"bottom_padding\":2,\"left_padding\":3,\"right_padding\":4,"
@@ -385,6 +395,7 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_AUTOFOCUS);
     TEST_CHECK(g_window_manager.window_focus_fallback, WINDOW_FOCUS_FALLBACK_RECENT);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
+    TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_PANEL);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_EXPANDED);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
     TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
@@ -502,6 +513,7 @@ TEST_FUNC(declarative_startup_install_failure_preserves_live_managers,
     TEST_CHECK(g_display_manager.order, DISPLAY_ARRANGEMENT_ORDER_Y);
     TEST_CHECK(g_mouse_state.modifier, MOUSE_MOD_ALT);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_DISABLED);
+    TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_MENU);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_COMPACT);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
     declarative_startup_destroy(&closed_startup);

@@ -15,9 +15,11 @@ enum declarative_test_effect {
     DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY,
     DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY,
     DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY,
+    DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH,
     DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH,
     DECLARATIVE_TEST_EFFECT_SHADOW,
     DECLARATIVE_TEST_EFFECT_MENU_ENABLED,
+    DECLARATIVE_TEST_EFFECT_MENU_INTERFACE,
     DECLARATIVE_TEST_EFFECT_MENU_STYLE,
     DECLARATIVE_TEST_EFFECT_MENU_FILTER,
     DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY,
@@ -120,9 +122,12 @@ static void declarative_test_opacity_enabled(void *manager, bool value) { ((stru
 static void declarative_test_menubar_opacity(void *manager, float value) { ((struct window_manager *) manager)->menubar_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY]; }
 static void declarative_test_active_opacity(void *manager, float value) { ((struct window_manager *) manager)->active_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY]; }
 static void declarative_test_normal_opacity(void *manager, float value) { ((struct window_manager *) manager)->normal_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY]; }
+static void declarative_test_active_highlight_enabled(void *manager, bool value) { ((struct window_manager *) manager)->enable_active_window_highlight = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH]; }
+static void declarative_test_refresh_active_highlight(void *manager) { (void) manager; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH]; }
 static void declarative_test_refresh_insert_feedback(void) { ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH]; }
 static void declarative_test_shadow(void *manager, int value) { ((struct window_manager *) manager)->purify_mode = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SHADOW]; }
 static void declarative_test_menu_enabled(int value) { g_menu_bar_manager.settings.enabled = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_ENABLED]; }
+static void declarative_test_menu_interface(int value) { g_menu_bar_manager.settings.interface = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_INTERFACE]; }
 static void declarative_test_menu_style(int value) { g_menu_bar_manager.settings.style = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_STYLE]; }
 static void declarative_test_menu_filter(int value) { g_menu_bar_manager.settings.space_filter = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_FILTER]; }
 static void declarative_test_mouse_modifier(void *state, int value) { ((struct mouse_state *) state)->modifier = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER]; }
@@ -146,9 +151,12 @@ static const struct declarative_runtime_operation_ops declarative_test_operation
     .set_menubar_opacity = declarative_test_menubar_opacity,
     .set_active_window_opacity = declarative_test_active_opacity,
     .set_normal_window_opacity = declarative_test_normal_opacity,
+    .set_active_window_highlight_enabled = declarative_test_active_highlight_enabled,
+    .refresh_active_window_highlight = declarative_test_refresh_active_highlight,
     .refresh_insert_feedback = declarative_test_refresh_insert_feedback,
     .set_shadow = declarative_test_shadow,
     .set_menu_enabled = declarative_test_menu_enabled,
+    .set_menu_interface = declarative_test_menu_interface,
     .set_menu_style = declarative_test_menu_style,
     .set_menu_space_filter = declarative_test_menu_filter,
     .set_mouse_modifier = declarative_test_mouse_modifier,
@@ -197,11 +205,16 @@ static const struct declarative_command_case declarative_command_cases[DECLARATI
     { DECLARATIVE_CONFIG_ANIMATION_EASING, "ease_in_sine", "ease_in_sine\n", -1 },
     { DECLARATIVE_CONFIG_SHADOW, "float", "float\n", DECLARATIVE_TEST_EFFECT_SHADOW },
     { DECLARATIVE_CONFIG_MENUBAR, "on", "on\n", DECLARATIVE_TEST_EFFECT_MENU_ENABLED },
+    { DECLARATIVE_CONFIG_MENUBAR_INTERFACE, "panel", "panel\n", DECLARATIVE_TEST_EFFECT_MENU_INTERFACE },
     { DECLARATIVE_CONFIG_MENUBAR_STYLE, "expanded", "expanded\n", DECLARATIVE_TEST_EFFECT_MENU_STYLE },
     { DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER, "all", "all\n", DECLARATIVE_TEST_EFFECT_MENU_FILTER },
     { DECLARATIVE_CONFIG_MENUBAR_OPACITY, "0.5", "0.5000\n", DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY },
     { DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, "0.8", "0.8000\n", DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY },
     { DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, "0.7", "0.7000\n", DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, "on", "on\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR, "0xff00ff00", "0xff00ff00\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, "11.5", "11.5\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, "4.25", "4.25\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
     { DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR, "0xff", "0xff\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
     { DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, "12.5", "12.5\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
     { DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, "3.25", "3.25\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
@@ -306,13 +319,17 @@ static struct declarative_value declarative_test_value(enum declarative_config_i
     case DECLARATIVE_CONFIG_ANIMATION_EASING: value.enumeration = 0; break;
     case DECLARATIVE_CONFIG_SHADOW: value.enumeration = PURIFY_DISABLED; break;
     case DECLARATIVE_CONFIG_MENUBAR: value.enumeration = MENU_BAR_DISABLED; break;
+    case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: value.enumeration = MENU_BAR_INTERFACE_MENU; break;
     case DECLARATIVE_CONFIG_MENUBAR_STYLE: value.enumeration = MENU_BAR_STYLE_COMPACT; break;
     case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: value.enumeration = MENU_BAR_SPACE_FILTER_OCCUPIED; break;
     case DECLARATIVE_CONFIG_MENUBAR_OPACITY: value.real = 0.5f; break;
     case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
     case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: value.real = 0.9f; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: value.u32 = 1; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: value.real = 0.0f; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH:
     case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: value.real = 0.5f; break;
     case DECLARATIVE_CONFIG_LAYOUT: value.enumeration = VIEW_BSP; break;
     case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: value.real = 0.85f; break;
@@ -359,8 +376,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
     declarative_runtime_reset_animation_permission_ops();
 )
 
-TEST_FUNC(declarative_command_matrix_covers_all_43_query_invalid_and_mutation_paths,
-    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), 43);
+TEST_FUNC(declarative_command_matrix_covers_all_settings_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), DECLARATIVE_CONFIG_COUNT);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -833,8 +850,8 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
     }
 )
 
-TEST_FUNC(declarative_runtime_live_matrix_covers_all_43_typed_setters,
-    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 43);
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 48);
     bool initialized_application_table = false;
     if (!g_window_manager.application.buckets) {
         table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
@@ -915,6 +932,10 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
         { "active_window_opacity", "1.01", false },
         { "normal_window_opacity", "0", false }, { "normal_window_opacity", "1", true },
         { "normal_window_opacity", "inf", false },
+        { "active_window_highlight_radius", "0", true }, { "active_window_highlight_radius", "12.5", true },
+        { "active_window_highlight_radius", "-1", false }, { "active_window_highlight_radius", "nan", false },
+        { "active_window_highlight_width", "0.5", true }, { "active_window_highlight_width", "4", true },
+        { "active_window_highlight_width", "0", false }, { "active_window_highlight_width", "inf", false },
         { "split_ratio", "0.1", true }, { "split_ratio", "0.9", true },
         { "split_ratio", "0", false }, { "split_ratio", "1", false },
         { "single_window_max_width", "0", true }, { "single_window_max_width", "1600", true },
@@ -936,6 +957,8 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
     float saved_normal = g_window_manager.normal_window_opacity;
     float saved_animation = g_window_manager.window_animation_duration;
     float saved_opacity_duration = g_window_manager.window_opacity_duration;
+    float saved_highlight_radius = g_window_manager.active_window_highlight_radius;
+    float saved_highlight_width = g_window_manager.active_window_highlight_width;
     float saved_split_ratio = g_space_manager.split_ratio;
     int saved_single_window_max_width = g_space_manager.single_window_max_width;
     int saved_single_window_min_width = g_space_manager.single_window_min_width;
@@ -960,6 +983,8 @@ TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
     g_window_manager.normal_window_opacity = saved_normal;
     g_window_manager.window_animation_duration = saved_animation;
     g_window_manager.window_opacity_duration = saved_opacity_duration;
+    g_window_manager.active_window_highlight_radius = saved_highlight_radius;
+    g_window_manager.active_window_highlight_width = saved_highlight_width;
     g_space_manager.split_ratio = saved_split_ratio;
     g_space_manager.single_window_max_width = saved_single_window_max_width;
     g_space_manager.single_window_min_width = saved_single_window_min_width;
@@ -981,6 +1006,17 @@ TEST_FUNC(documented_numeric_domains_match_runtime_boundaries,
     value.real = 1.01f;
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), false);
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), false);
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), false);
+    value.real = 4.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), true);
+    value.real = -1.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), false);
+    value.real = INFINITY;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), false);
 
     value.real = 0.1f;
     TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), true);
@@ -1057,10 +1093,13 @@ TEST_FUNC(declarative_runtime_scalar_application_records_ownership_after_success
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_ANIMATION_DURATION].present, false);
     struct declarative_value nonfinite = { .present = true, .real = INFINITY };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     nonfinite.real = NAN;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     invalid.real = 0.0f;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
 )
 
@@ -1328,13 +1367,16 @@ TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
     memset(&g_menu_bar_manager, 0, sizeof(g_menu_bar_manager));
     menu_bar_manager_startup_staging_is_open = false;
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), false);
     TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), false);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), false);
     menu_bar_manager_startup_staging_open();
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), true);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), true);
     TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), true);
     TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), true);
     TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
+    TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_PANEL);
     TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
@@ -1342,6 +1384,7 @@ TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
     TEST_CHECK(g_menu_bar_manager.last_snapshot == NULL, true);
     TEST_CHECK(g_menu_bar_manager.generation, 0ULL);
     TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, 0U);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface((enum menu_bar_interface) 99), false);
     TEST_CHECK(menu_bar_manager_startup_stage_style((enum menu_bar_style) 99), false);
     menu_bar_manager_startup_staging_seal();
     TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_DISABLED), false);

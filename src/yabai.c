@@ -35,7 +35,6 @@ struct event_loop g_event_loop;
 void *g_workspace_context;
 
 enum mission_control_mode g_mission_control_mode;
-double g_cv_host_clock_frequency;
 int g_layer_normal_window_level;
 int g_layer_below_window_level;
 int g_layer_above_window_level;
@@ -50,7 +49,6 @@ struct declarative_startup_state g_declarative_startup;
 static bool g_native_config_explicit;
 static int g_lock_fd = -1;
 
-mach_port_t g_bs_port;
 int g_connection;
 bool g_verbose;
 pid_t g_pid;
@@ -169,7 +167,6 @@ static inline bool configure_settings_and_acquire_lock(void)
     g_event_bytes = calloc(1, 0x100);
     if (!g_event_bytes) error("yabai: could not allocate event storage! abort..\n");
     g_connection = SLSMainConnectionID();
-    g_cv_host_clock_frequency   = CVGetHostClockFrequency();
     g_layer_normal_window_level = CGWindowLevelForKey(LAYER_NORMAL);
     g_layer_below_window_level  = CGWindowLevelForKey(LAYER_BELOW);
     g_layer_above_window_level  = CGWindowLevelForKey(LAYER_ABOVE);
@@ -181,7 +178,6 @@ static inline bool configure_settings_and_acquire_lock(void)
     CGSetLocalEventsSuppressionInterval(0.0f);
     CGEnableEventStateCombining(false);
     mouse_state_init(&g_mouse_state);
-    task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &g_bs_port);
 
     g_lock_fd = yabai_runtime_acquire_lock(g_lock_file, getuid());
     if (g_lock_fd == -1) {
@@ -416,7 +412,7 @@ static struct declarative_startup_completion_ops declarative_startup_production_
         .seal_menu_staging = declarative_startup_seal_menu,
         .start_socket = declarative_startup_start_socket,
         .execute_legacy_config = declarative_startup_execute_legacy_config,
-        .notifications_required = workspace_is_macos_sequoia() || workspace_is_macos_tahoe()
+        .notifications_required = workspace_is_macos_sequoia_or_newer()
     };
 }
 
@@ -461,6 +457,10 @@ int main(int argc, char **argv)
         error("yabai: could not acquire lock-file! abort..\n");
     }
 
+    if (!accessibility_preferences_begin()) {
+        warn("yabai: could not observe accessibility display preferences; using the initial snapshot\n");
+    }
+
     if (!menu_bar_manager_init()) {
         error("yabai: could not initialize menu bar manager! abort..\n");
     }
@@ -469,6 +469,7 @@ int main(int argc, char **argv)
     if (!event_loop_begin_bootstrap(&g_event_loop, declarative_startup_bootstrap, &g_declarative_startup)) {
         menu_bar_manager_startup_staging_abort();
         menu_bar_manager_shutdown();
+        accessibility_preferences_end();
         declarative_report_runtime(stderr, "runtime", g_declarative_startup.path, "$", 0, 0,
                                    "startup runtime preparation failed");
         declarative_startup_destroy(&g_declarative_startup);
@@ -492,17 +493,10 @@ int main(int argc, char **argv)
         error("yabai: could not start mouse handler! abort..\n");
     }
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         mission_control_ensure_observed();
 
-        if (workspace_is_macos_ventura() ||
-            workspace_is_macos_sonoma() ||
-            workspace_is_macos_sequoia() ||
-            workspace_is_macos_tahoe()) {
+        if (workspace_is_macos_ventura_or_newer()) {
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1327, NULL);
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1328, NULL);
         }
@@ -513,7 +507,7 @@ int main(int argc, char **argv)
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia_or_newer()) {
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 804, NULL);
 
         // NOTE: Only delivered for windows subscribed to, which is every window from Sequoia on.
@@ -542,6 +536,7 @@ int main(int argc, char **argv)
     }
 
     [NSApp run];
+    accessibility_preferences_end();
 
     return 0;
 }

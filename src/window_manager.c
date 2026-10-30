@@ -1,16 +1,15 @@
-extern mach_port_t g_bs_port;
 extern uint8_t *g_event_bytes;
 extern struct event_loop g_event_loop;
 extern void *g_workspace_context;
 extern struct process_manager g_process_manager;
 extern struct mouse_state g_mouse_state;
-extern double g_cv_host_clock_frequency;
 
 #ifdef TESTS
 static struct window *window_manager_test_rule_window;
 #endif
 
 static AXError window_manager_set_attribute_value(AXUIElementRef element, CFStringRef attribute, CFTypeRef value);
+static void window_manager_refresh_active_window_highlight_for_captures(struct window_capture *window_list, int window_count);
 
 static TABLE_HASH_FUNC(hash_wm)
 {
@@ -42,14 +41,18 @@ void window_manager_query_window_rules(FILE *rsp)
 }
 
 #ifdef TESTS
-static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *) =
-    space_window_list_for_connection_with_status;
+static uint32_t *(*window_manager_query_window_list)(uint64_t *, int, int, int *, bool, bool *,
+                                                      struct window_server_snapshot **) =
+    space_window_list_for_connection_with_snapshot;
+static void (*window_manager_query_snapshot_destroy)(struct window_server_snapshot *) =
+    window_server_snapshot_destroy;
 static CFArrayRef (*window_manager_query_managed_display_spaces)(int) = SLSCopyManagedDisplaySpaces;
 static CFArrayRef (*window_manager_query_ordered_display_uuids)(void) = display_manager_copy_ordered_display_uuids;
 static uint64_t *(*window_manager_query_display_space_list)(uint32_t, CFArrayRef, int *) =
     display_space_list_with_topology;
 #else
-#define window_manager_query_window_list space_window_list_for_connection_with_status
+#define window_manager_query_window_list space_window_list_for_connection_with_snapshot
+#define window_manager_query_snapshot_destroy window_server_snapshot_destroy
 #define window_manager_query_managed_display_spaces SLSCopyManagedDisplaySpaces
 #define window_manager_query_ordered_display_uuids display_manager_copy_ordered_display_uuids
 #define window_manager_query_display_space_list display_space_list_with_topology
@@ -81,9 +84,14 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
 {
     int window_count = 0;
     bool inventory_succeeded = false;
+    struct window_server_snapshot *window_server_snapshot = NULL;
     uint32_t *window_list = window_manager_query_window_list(space_list, space_count, 0, &window_count,
-                                                             true, &inventory_succeeded);
-    if (!inventory_succeeded) return false;
+                                                             true, &inventory_succeeded,
+                                                             &window_server_snapshot);
+    if (!inventory_succeeded) {
+        if (window_server_snapshot) window_manager_query_snapshot_destroy(window_server_snapshot);
+        return false;
+    }
 
     bool owns_topology = false;
     if (!has_topology_snapshot && window_manager_query_needs_topology(flags)) {
@@ -102,12 +110,14 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
     struct window_serialization_context context = {
         .managed_display_spaces = topology,
         .ordered_display_uuids = ordered_display_uuids,
+        .window_server_record = NULL,
         .has_managed_display_spaces_snapshot = has_topology_snapshot,
         .has_ordered_display_uuids_snapshot = has_ordered_display_uuids_snapshot
     };
 
     fprintf(rsp, "[");
     for (int i = 0; i < window_count; ++i) {
+        context.window_server_record = window_server_snapshot_find(window_server_snapshot, window_list[i]);
         struct window *window = window_manager_find_window(&g_window_manager, window_list[i]);
         if (window) {
             window_serialize_with_context(rsp, window, flags, &context);
@@ -117,6 +127,7 @@ static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
         if (i < window_count - 1) fprintf(rsp, ",");
     }
     fprintf(rsp, "]\n");
+    if (window_server_snapshot) window_manager_query_snapshot_destroy(window_server_snapshot);
     if (owns_ordered_display_uuids) CFRelease(ordered_display_uuids);
     if (owns_topology) CFRelease(topology);
     return true;
@@ -781,287 +792,10 @@ void window_manager_resize_window(struct window *window, float width, float heig
     }
 }
 
-struct jankyborders_animation_message
-{
-    uint32_t event;
-    uint32_t count;
-    uint32_t proxy_wid[512];
-    uint32_t real_wid[512];
-};
-
-#ifdef TESTS
-static int window_manager_pack_jankyborders_batch(struct window_animation *animation_list, int animation_count,
-                                                   int start, uint32_t event, bool skip,
-                                                   struct jankyborders_animation_message *message)
-{
-    *message = (struct jankyborders_animation_message) { .event = event };
-    int i = start;
-    while (i < animation_count && message->count < array_count(message->proxy_wid)) {
-        if (!skip || !__atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED)) {
-            message->proxy_wid[message->count] = animation_list[i].proxy.id;
-            message->real_wid[message->count] = animation_list[i].wid;
-            ++message->count;
-        }
-        ++i;
-    }
-    return i;
-}
-#endif
-
-#ifdef TESTS
-static kern_return_t (*window_manager_jankyborders_send)(mach_port_t, void *, uint32_t) = mach_send;
-#else
-#define window_manager_jankyborders_send mach_send
-#endif
-
-#ifdef TESTS
-static bool window_manager_send_jankyborders_batches(mach_port_t port, struct window_animation *animation_list,
-                                                       int animation_count, uint32_t event, bool skip)
-{
-    int cursor = 0;
-    while (cursor < animation_count) {
-        struct jankyborders_animation_message message;
-        int next = window_manager_pack_jankyborders_batch(animation_list, animation_count, cursor, event, skip, &message);
-        if (message.count && window_manager_jankyborders_send(port, &message, sizeof(message)) != KERN_SUCCESS) return false;
-        cursor = next;
-    }
-    return true;
-}
-#endif
-
 static uint64_t window_manager_retry_delay_ms(uint8_t attempt)
 {
     uint8_t shift = attempt < 6 ? attempt : 6;
     return 100ULL << shift;
-}
-
-struct jankyborders_desired_entry { uint32_t wid; uint64_t generation; };
-static struct {
-    pthread_mutex_t lock;
-    struct jankyborders_desired_entry *entries;
-    int count;
-    int capacity;
-    uint64_t next_generation;
-} g_jankyborders_desired = { .lock = PTHREAD_MUTEX_INITIALIZER };
-
-struct jankyborders_record
-{
-    uint32_t proxy_wid;
-    uint32_t real_wid;
-};
-
-struct jankyborders_reconciliation
-{
-    struct jankyborders_record *records;
-    int count;
-    uint32_t event;
-    uint64_t generation;
-    uint8_t attempt;
-};
-
-static int window_manager_jankyborders_generation_index_locked(uint32_t wid)
-{
-    for (int i = 0; i < g_jankyborders_desired.count; ++i) {
-        if (g_jankyborders_desired.entries[i].wid == wid) return i;
-    }
-    return -1;
-}
-
-#ifdef TESTS
-static bool window_manager_jankyborders_generation_matches(uint32_t wid, uint64_t generation)
-{
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    int index = window_manager_jankyborders_generation_index_locked(wid);
-    bool matches = index >= 0 && g_jankyborders_desired.entries[index].generation == generation;
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    return matches;
-}
-#endif
-
-static void window_manager_jankyborders_complete_stop_locked(struct jankyborders_reconciliation *state)
-{
-    if (state->event != 1326) return;
-    for (int i = 0; i < state->count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index >= 0 && g_jankyborders_desired.entries[index].generation == state->generation) {
-            g_jankyborders_desired.entries[index] = g_jankyborders_desired.entries[--g_jankyborders_desired.count];
-        }
-    }
-}
-
-static void window_manager_jankyborders_complete_stop(struct jankyborders_reconciliation *state)
-{
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    window_manager_jankyborders_complete_stop_locked(state);
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-}
-
-static struct jankyborders_reconciliation *window_manager_copy_jankyborders_state(struct window_animation *animation_list,
-                                                                                  int animation_count,
-                                                                                  uint32_t event, bool skip)
-{
-    int count = 0;
-    for (int i = 0; i < animation_count; ++i) {
-        if (!skip || !__atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) ++count;
-    }
-
-    struct jankyborders_reconciliation *state = calloc(1, sizeof(*state));
-    if (!state) goto fail;
-    state->records = count ? calloc((size_t) count, sizeof(*state->records)) : NULL;
-    if (count && !state->records) goto fail;
-    state->count = count;
-    state->event = event;
-    for (int i = 0, out = 0; i < animation_count; ++i) {
-        if (skip && __atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) continue;
-        state->records[out++] = (struct jankyborders_record) {
-            .proxy_wid = animation_list[i].proxy.id,
-            .real_wid = animation_list[i].wid
-        };
-    }
-
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    int required = g_jankyborders_desired.count + count;
-    if (required > g_jankyborders_desired.capacity) {
-        int capacity = g_jankyborders_desired.capacity ? g_jankyborders_desired.capacity : 16;
-        while (capacity < required) capacity *= 2;
-        void *entries = realloc(g_jankyborders_desired.entries, (size_t) capacity * sizeof(*g_jankyborders_desired.entries));
-        if (!entries) {
-            pthread_mutex_unlock(&g_jankyborders_desired.lock);
-            goto fail;
-        }
-        g_jankyborders_desired.entries = entries;
-        g_jankyborders_desired.capacity = capacity;
-    }
-    if (++g_jankyborders_desired.next_generation == 0) ++g_jankyborders_desired.next_generation;
-    state->generation = g_jankyborders_desired.next_generation;
-    for (int i = 0; i < count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index < 0) index = g_jankyborders_desired.count++;
-        g_jankyborders_desired.entries[index] = (struct jankyborders_desired_entry) {
-            .wid = state->records[i].real_wid,
-            .generation = state->generation
-        };
-    }
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    return state;
-
-fail:
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    if (++g_jankyborders_desired.next_generation == 0) ++g_jankyborders_desired.next_generation;
-    for (int i = 0; i < animation_count; ++i) {
-        if (skip && __atomic_load_n(&animation_list[i].skip, __ATOMIC_ACQUIRE)) continue;
-        int index = window_manager_jankyborders_generation_index_locked(animation_list[i].wid);
-        if (index < 0) continue;
-        if (event == 1326) {
-            g_jankyborders_desired.entries[index] = g_jankyborders_desired.entries[--g_jankyborders_desired.count];
-        } else {
-            g_jankyborders_desired.entries[index].generation = g_jankyborders_desired.next_generation;
-        }
-    }
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    warn("%s: unable to retain cosmetic border reconciliation state\n", __FUNCTION__);
-    if (state) { free(state->records); free(state); }
-    return NULL;
-}
-
-static bool window_manager_send_jankyborders_state(mach_port_t port, struct jankyborders_reconciliation *state)
-{
-    int capacity = (state->count + 511) / 512;
-    struct jankyborders_animation_message *messages = capacity ? calloc((size_t) capacity, sizeof(*messages)) : NULL;
-    if (capacity && !messages) return false;
-    int message_count = 0;
-
-    pthread_mutex_lock(&g_jankyborders_desired.lock);
-    for (int i = 0; i < state->count; ++i) {
-        int index = window_manager_jankyborders_generation_index_locked(state->records[i].real_wid);
-        if (index < 0 || g_jankyborders_desired.entries[index].generation != state->generation) continue;
-        if (!message_count || messages[message_count - 1].count == 512) {
-            messages[message_count++].event = state->event;
-        }
-        struct jankyborders_animation_message *message = &messages[message_count - 1];
-        message->proxy_wid[message->count] = state->records[i].proxy_wid;
-        message->real_wid[message->count] = state->records[i].real_wid;
-        ++message->count;
-    }
-
-    bool success = true;
-    for (int i = 0; i < message_count; ++i) {
-        if (window_manager_jankyborders_send(port, &messages[i], sizeof(messages[i])) != KERN_SUCCESS) {
-            success = false;
-            break;
-        }
-    }
-    if (success) window_manager_jankyborders_complete_stop_locked(state);
-    pthread_mutex_unlock(&g_jankyborders_desired.lock);
-    free(messages);
-    return success;
-}
-
-static void window_manager_free_jankyborders_state(struct jankyborders_reconciliation *state)
-{
-    if (!state) return;
-    free(state->records);
-    free(state);
-}
-
-static void window_manager_jankyborders_retry(struct jankyborders_reconciliation *state);
-static void window_manager_jankyborders_dispatch_retry(struct jankyborders_reconciliation *state, uint64_t delay_ms)
-{
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ms * NSEC_PER_MSEC),
-                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        window_manager_jankyborders_retry(state);
-    });
-}
-#ifdef TESTS
-static void (*window_manager_jankyborders_retry_scheduler)(struct jankyborders_reconciliation *, uint64_t) = window_manager_jankyborders_dispatch_retry;
-#else
-#define window_manager_jankyborders_retry_scheduler window_manager_jankyborders_dispatch_retry
-#endif
-
-static void window_manager_jankyborders_schedule_retry(struct jankyborders_reconciliation *state)
-{
-    uint64_t delay = window_manager_retry_delay_ms(state->attempt);
-    if (state->attempt != UINT8_MAX) ++state->attempt;
-    window_manager_jankyborders_retry_scheduler(state, delay);
-}
-
-static void window_manager_jankyborders_retry(struct jankyborders_reconciliation *state)
-{
-    mach_port_t port;
-    if (!g_bs_port || bootstrap_look_up(g_bs_port, "git.felix.jbevent", &port) != KERN_SUCCESS) {
-        window_manager_jankyborders_schedule_retry(state);
-        return;
-    }
-    bool success = window_manager_send_jankyborders_state(port, state);
-    mach_port_deallocate(mach_task_self(), port);
-    if (success) window_manager_free_jankyborders_state(state);
-    else window_manager_jankyborders_schedule_retry(state);
-}
-
-static bool window_manager_reconcile_jankyborders_state(mach_port_t port, struct jankyborders_reconciliation *state)
-{
-    if (!state) return false;
-    if (window_manager_send_jankyborders_state(port, state) || window_manager_send_jankyborders_state(port, state)) {
-        window_manager_free_jankyborders_state(state);
-        return true;
-    }
-    window_manager_jankyborders_schedule_retry(state);
-    return false;
-}
-
-static bool window_manager_send_prepared_jankyborders(struct jankyborders_reconciliation *state, bool wait)
-{
-    if (!state) return false;
-    mach_port_t port;
-    if (!g_bs_port || bootstrap_look_up(g_bs_port, "git.felix.jbevent", &port) != KERN_SUCCESS) {
-        window_manager_jankyborders_complete_stop(state);
-        window_manager_free_jankyborders_state(state);
-        return true;
-    }
-    bool success = window_manager_reconcile_jankyborders_state(port, state);
-    mach_port_deallocate(mach_task_self(), port);
-    if (success && wait) usleep(20000);
-    return success;
 }
 
 static void window_manager_destroy_window_proxy(int animation_connection, struct window_proxy *proxy);
@@ -1073,6 +807,12 @@ static CGError (*window_manager_proxy_new_window)(int, int, CFTypeRef, CFTypeRef
 static CGContextRef (*window_manager_proxy_new_context)(int, uint32_t, CFDictionaryRef) = SLWindowContextCreate;
 static CGError (*window_manager_proxy_release_window)(int, uint32_t) = SLSReleaseWindow;
 static CFArrayRef (*window_manager_proxy_capture)(int, uint32_t *, int, uint32_t) = SLSHWCaptureWindowList;
+static bool (*window_manager_proxy_disable_shadow)(uint32_t) = sls_window_disable_shadow;
+static CGError (*window_manager_proxy_set_opacity)(int, uint32_t, bool) = SLSSetWindowOpacity;
+static CGError (*window_manager_proxy_set_resolution)(int, uint32_t, double) = SLSSetWindowResolution;
+static CGError (*window_manager_proxy_set_alpha)(int, uint32_t, float) = SLSSetWindowAlpha;
+static CGError (*window_manager_proxy_set_level)(int, uint32_t, int) = SLSSetWindowLevel;
+static CGError (*window_manager_proxy_set_sub_level)(int, uint32_t, int) = SLSSetWindowSubLevel;
 #else
 #define window_manager_proxy_new_region CGSNewRegionWithRect
 #define window_manager_proxy_empty_region CGRegionCreateEmptyRegion
@@ -1080,6 +820,12 @@ static CFArrayRef (*window_manager_proxy_capture)(int, uint32_t *, int, uint32_t
 #define window_manager_proxy_new_context SLWindowContextCreate
 #define window_manager_proxy_release_window SLSReleaseWindow
 #define window_manager_proxy_capture SLSHWCaptureWindowList
+#define window_manager_proxy_disable_shadow sls_window_disable_shadow
+#define window_manager_proxy_set_opacity SLSSetWindowOpacity
+#define window_manager_proxy_set_resolution SLSSetWindowResolution
+#define window_manager_proxy_set_alpha SLSSetWindowAlpha
+#define window_manager_proxy_set_level SLSSetWindowLevel
+#define window_manager_proxy_set_sub_level SLSSetWindowSubLevel
 #endif
 
 static bool window_manager_create_window_proxy(int animation_connection, float alpha, struct window_proxy *proxy)
@@ -1097,13 +843,17 @@ static bool window_manager_create_window_proxy(int animation_connection, float a
                                         &tags, 0, 0, 64, &proxy->id, NULL) != kCGErrorSuccess || !proxy->id) goto fail;
     proxy->context = window_manager_proxy_new_context(animation_connection, proxy->id, 0);
     if (!proxy->context) goto fail;
+    // Corner rendering is cosmetic and proxy-only. A disabled or failing backend
+    // must preserve the existing rectangular animation proxy.
+    (void) window_corner_geometry_apply_to_proxy(animation_connection, proxy->id,
+                                                 proxy->frame.size, &proxy->corner_geometry);
     // Shadow suppression is cosmetic; keep the animation proxy usable if it fails.
-    (void) sls_window_disable_shadow(proxy->id);
-    SLSSetWindowOpacity(animation_connection, proxy->id, 0);
-    SLSSetWindowResolution(animation_connection, proxy->id, 2.0f);
-    SLSSetWindowAlpha(animation_connection, proxy->id, alpha);
-    SLSSetWindowLevel(animation_connection, proxy->id, proxy->level);
-    SLSSetWindowSubLevel(animation_connection, proxy->id, proxy->sub_level);
+    (void) window_manager_proxy_disable_shadow(proxy->id);
+    window_manager_proxy_set_opacity(animation_connection, proxy->id, 0);
+    window_manager_proxy_set_resolution(animation_connection, proxy->id, 2.0f);
+    window_manager_proxy_set_alpha(animation_connection, proxy->id, alpha);
+    window_manager_proxy_set_level(animation_connection, proxy->id, proxy->level);
+    window_manager_proxy_set_sub_level(animation_connection, proxy->id, proxy->sub_level);
 
     CGRect frame = { {0, 0}, proxy->frame.size };
     CGContextClearRect(proxy->context, frame);
@@ -1144,6 +894,20 @@ static CGImageRef window_manager_proxy_image_from_capture(CFArrayRef image_array
     CFTypeRef image = CFArrayGetValueAtIndex(image_array, 0);
     if (!image || CFGetTypeID(image) != CGImageGetTypeID()) return NULL;
     return alpha == 1.0f ? (CGImageRef) CFRetain(image) : cgimage_restore_alpha((CGImageRef) image);
+}
+
+static void window_manager_prepare_replacement_proxy(struct window_proxy *replacement,
+                                                     const struct window_proxy *existing)
+{
+    replacement->frame = (CGRect) { { existing->tx, existing->ty }, { existing->tw, existing->th } };
+    replacement->tx = existing->tx;
+    replacement->ty = existing->ty;
+    replacement->tw = existing->tw;
+    replacement->th = existing->th;
+    replacement->level = existing->level;
+    replacement->sub_level = existing->sub_level;
+    replacement->corner_geometry = existing->corner_geometry;
+    replacement->image = existing->image ? (CGImageRef) CFRetain(existing->image) : NULL;
 }
 
 static void *window_manager_build_window_proxy_thread_proc(void *data)
@@ -1188,17 +952,12 @@ static bool window_manager_animation_claim_completion(struct window_animation_co
     return !__atomic_exchange_n(&context->completion_claimed, true, __ATOMIC_ACQ_REL);
 }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-parameter"
-static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef link, const CVTimeStamp *now, const CVTimeStamp *output_time, CVOptionFlags flags, CVOptionFlags *flags_out, void *data)
+static void window_manager_animation_tick(void *data, const struct animation_clock_tick *tick)
 {
     struct window_animation_context *context = data;
     int animation_count = context->animation_count;
 
-    uint64_t current_clock = output_time->hostTime;
-    if (!context->animation_clock) context->animation_clock = now->hostTime;
-
-    double t = (double)(current_clock - context->animation_clock) / (double)(context->animation_duration * g_cv_host_clock_frequency);
+    double t = tick->elapsed_ticks / (double)(context->animation_duration * tick->ticks_per_second);
     if (t <= 0.0) t = 0.0f;
     if (t >= 1.0) t = 1.0f;
 
@@ -1235,26 +994,23 @@ static CVReturn window_manager_animate_window_list_thread_proc(CVDisplayLinkRef 
 
     if (t != 1.0f) {
         pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-        goto out;
+        return;
     }
 
     bool claimed = window_manager_animation_claim_completion(context);
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
     if (claimed) window_manager_animation_teardown_scheduler(context);
-
-out:
-    return kCVReturnSuccess;
 }
-#pragma clang diagnostic pop
 
 #ifdef TESTS
 static void *(*window_manager_animation_allocate)(size_t) = malloc;
 static CGError (*window_manager_animation_new_connection)(int, int *) = SLSNewConnection;
-static CVReturn (*window_manager_animation_display_link_create)(CVDisplayLinkRef *) = CVDisplayLinkCreateWithActiveCGDisplays;
-static CVReturn (*window_manager_animation_display_link_set_callback)(CVDisplayLinkRef, CVDisplayLinkOutputCallback, void *) = CVDisplayLinkSetOutputCallback;
-static CVReturn (*window_manager_animation_display_link_start)(CVDisplayLinkRef) = CVDisplayLinkStart;
-static CVReturn (*window_manager_animation_display_link_stop)(CVDisplayLinkRef) = CVDisplayLinkStop;
-static void (*window_manager_animation_display_link_release)(CVDisplayLinkRef) = CVDisplayLinkRelease;
+static struct animation_clock *(*window_manager_animation_clock_create)(animation_clock_tick_fn, void *) =
+    animation_clock_create;
+static bool (*window_manager_animation_clock_start)(struct animation_clock *) = animation_clock_start;
+static enum animation_clock_stop_result (*window_manager_animation_clock_stop)(struct animation_clock *) =
+    animation_clock_stop;
+static void (*window_manager_animation_clock_destroy)(struct animation_clock *) = animation_clock_destroy;
 static CGError (*window_manager_animation_release_connection)(int) = SLSReleaseConnection;
 static CGError (*window_manager_animation_disable_update)(int) = SLSDisableUpdate;
 static CGError (*window_manager_animation_reenable_update)(int) = SLSReenableUpdate;
@@ -1262,11 +1018,10 @@ static void (*window_manager_animation_set_frame)(struct window *, float, float,
 #else
 #define window_manager_animation_allocate malloc
 #define window_manager_animation_new_connection SLSNewConnection
-#define window_manager_animation_display_link_create CVDisplayLinkCreateWithActiveCGDisplays
-#define window_manager_animation_display_link_set_callback CVDisplayLinkSetOutputCallback
-#define window_manager_animation_display_link_start CVDisplayLinkStart
-#define window_manager_animation_display_link_stop CVDisplayLinkStop
-#define window_manager_animation_display_link_release CVDisplayLinkRelease
+#define window_manager_animation_clock_create animation_clock_create
+#define window_manager_animation_clock_start animation_clock_start
+#define window_manager_animation_clock_stop animation_clock_stop
+#define window_manager_animation_clock_destroy animation_clock_destroy
 #define window_manager_animation_release_connection SLSReleaseConnection
 #define window_manager_animation_disable_update SLSDisableUpdate
 #define window_manager_animation_reenable_update SLSReenableUpdate
@@ -1295,21 +1050,20 @@ static struct window_animation_context *window_manager_animation_create_context(
     return context;
 }
 
-static bool window_manager_animation_start_display_link(struct window_animation_context *context)
+static bool window_manager_animation_start_clock(struct window_animation_context *context)
 {
-    if (window_manager_animation_display_link_create(&context->display_link) != kCVReturnSuccess || !context->display_link) return false;
-    if (window_manager_animation_display_link_set_callback(context->display_link, window_manager_animate_window_list_thread_proc, context) != kCVReturnSuccess) return false;
-    context->display_link_may_be_running = true;
-    return window_manager_animation_display_link_start(context->display_link) == kCVReturnSuccess;
+    context->clock = window_manager_animation_clock_create(window_manager_animation_tick, context);
+    return context->clock && window_manager_animation_clock_start(context->clock);
 }
 
 static void window_manager_animation_release_context(struct window_animation_context *context, bool update_disabled)
 {
     if (update_disabled) (void) window_manager_animation_reenable_update(context->animation_connection);
-    if (context->display_link) window_manager_animation_display_link_release(context->display_link);
+    if (context->clock) window_manager_animation_clock_destroy(context->clock);
     if (context->animation_connection) (void) window_manager_animation_release_connection(context->animation_connection);
     free(context->animation_list);
     free(context);
+    event_loop_request_active_window_highlight_refresh();
 }
 
 static void window_manager_animation_destroy_context(struct window_animation_context *context, bool update_disabled)
@@ -1351,13 +1105,9 @@ static void window_manager_animation_retry(struct window_animation_context *cont
 static void window_manager_animation_teardown_attempt(void *data)
 {
     struct window_animation_context *context = data;
-    if (context->display_link_may_be_running) {
-        CVReturn stop_result = window_manager_animation_display_link_stop(context->display_link);
-        if (stop_result != kCVReturnSuccess && stop_result != kCVReturnDisplayLinkNotRunning) {
-            window_manager_animation_retry(context);
-            return;
-        }
-        context->display_link_may_be_running = false;
+    if (window_manager_animation_clock_stop(context->clock) == ANIMATION_CLOCK_STOP_RETRY) {
+        window_manager_animation_retry(context);
+        return;
     }
 
     (void) window_manager_animation_disable_update(context->animation_connection);
@@ -1378,8 +1128,6 @@ static void window_manager_animation_teardown_attempt(void *data)
         return;
     }
     context->proxies_may_be_installed = false;
-    struct jankyborders_reconciliation *border_state =
-        window_manager_copy_jankyborders_state(context->animation_list, context->animation_count, 1326, true);
 
     for (int i = 0; i < context->animation_count; ++i) {
         struct window_animation *animation = &context->animation_list[i];
@@ -1389,7 +1137,6 @@ static void window_manager_animation_teardown_attempt(void *data)
         }
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-    (void) window_manager_send_prepared_jankyborders(border_state, true);
     window_manager_animation_release_context(context, true);
 }
 
@@ -1449,9 +1196,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
 
     pthread_t *threads = window_manager_animation_allocate((size_t) window_count * sizeof(pthread_t));
     if (!threads) goto cleanup;
-    struct jankyborders_reconciliation **replacement_border_states = calloc((size_t) window_count * 2,
-                                                                            sizeof(*replacement_border_states));
-    if (!replacement_border_states) warn("%s: unable to retain replacement border state\n", __FUNCTION__);
 
     int thread_count = 0;
     bool update_disabled = true;
@@ -1470,16 +1214,8 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
         bool add_to_table = true;
         struct window_animation *existing_animation = table_find(&g_window_manager.window_animations_table, &context->animation_list[i].wid);
         if (existing_animation) {
-            context->animation_list[i].proxy.frame = (CGRect) { { existing_animation->proxy.tx, existing_animation->proxy.ty },
-                                                                { existing_animation->proxy.tw, existing_animation->proxy.th } };
-            context->animation_list[i].proxy.tx = existing_animation->proxy.tx;
-            context->animation_list[i].proxy.ty = existing_animation->proxy.ty;
-            context->animation_list[i].proxy.tw = existing_animation->proxy.tw;
-            context->animation_list[i].proxy.th = existing_animation->proxy.th;
-            context->animation_list[i].proxy.level = existing_animation->proxy.level;
-            context->animation_list[i].proxy.sub_level = existing_animation->proxy.sub_level;
-            context->animation_list[i].proxy.image = existing_animation->proxy.image ?
-                                                     (CGImageRef) CFRetain(existing_animation->proxy.image) : NULL;
+            window_manager_prepare_replacement_proxy(&context->animation_list[i].proxy,
+                                                     &existing_animation->proxy);
 
             float alpha = 1.0f;
             SLSGetWindowAlpha(context->animation_connection, context->animation_list[i].wid, &alpha);
@@ -1488,10 +1224,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
                 add_to_table = false;
             } else {
                 __atomic_store_n(&existing_animation->skip, true, __ATOMIC_RELEASE);
-                if (replacement_border_states) {
-                    replacement_border_states[i * 2] = window_manager_copy_jankyborders_state(existing_animation, 1, 1326, false);
-                    replacement_border_states[i * 2 + 1] = window_manager_copy_jankyborders_state(&context->animation_list[i], 1, 1325, true);
-                }
 
                 CFTypeRef transaction = SLSTransactionCreate(context->animation_connection);
                 if (transaction) {
@@ -1515,13 +1247,6 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
 
-    if (replacement_border_states) {
-        for (int i = 0; i < window_count * 2; ++i) {
-            if (replacement_border_states[i]) (void) window_manager_send_prepared_jankyborders(replacement_border_states[i], false);
-        }
-        free(replacement_border_states);
-    }
-
     for (int i = 0; i < thread_count; ++i) pthread_join(threads[i], NULL);
     free(threads);
 
@@ -1540,14 +1265,11 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
             __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
         }
     }
-    struct jankyborders_reconciliation *start_border_state =
-        window_manager_copy_jankyborders_state(context->animation_list, context->animation_count, 1325, true);
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
-    (void) window_manager_send_prepared_jankyborders(start_border_state, false);
 
     (void) window_manager_animation_reenable_update(context->animation_connection);
     update_disabled = false;
-    if (!window_manager_animation_start_display_link(context)) goto cleanup_ready;
+    if (!window_manager_animation_start_clock(context)) goto cleanup_ready;
     return;
 
 cleanup_ready:
@@ -1561,10 +1283,51 @@ set_final_frames:
         window_manager_animation_set_frame(window_list[i].window, window_list[i].x, window_list[i].y,
                                            window_list[i].w, window_list[i].h);
     }
+    window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
 }
 #ifdef TESTS
 static void (*window_manager_test_animate_observer)(struct window_capture *, int);
+static struct accessibility_display_preferences (*window_manager_animation_preferences)(void) =
+    accessibility_preferences_snapshot;
+static void (*window_manager_animation_async_route)(struct window_capture *, int) =
+    window_manager_animate_window_list_async;
+static void (*window_manager_animation_direct_route)(struct window *, float, float, float, float) =
+    window_manager_set_window_frame;
+#else
+#define window_manager_animation_preferences accessibility_preferences_snapshot
+#define window_manager_animation_async_route window_manager_animate_window_list_async
+#define window_manager_animation_direct_route window_manager_set_window_frame
 #endif
+
+static bool window_manager_should_animate(float configured_duration)
+{
+    struct accessibility_display_preferences preferences = window_manager_animation_preferences();
+    return configured_duration > 0.0f && !preferences.reduce_motion;
+}
+
+static struct window_capture *window_manager_find_window_capture(struct window_capture *window_list,
+                                                                  int window_count,
+                                                                  uint32_t window_id)
+{
+    if (!window_id) return NULL;
+    for (int i = 0; i < window_count; ++i) {
+        if (window_list[i].window && window_list[i].window->id == window_id) return &window_list[i];
+    }
+    return NULL;
+}
+
+static void window_manager_refresh_active_window_highlight_for_captures(struct window_capture *window_list,
+                                                                        int window_count)
+{
+    struct window_capture *capture = window_manager_find_window_capture(window_list, window_count,
+                                                                         g_window_manager.focused_window_id);
+    if (capture) {
+        CGRect frame = CGRectMake(capture->x, capture->y, capture->w, capture->h);
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, capture->window->id, frame);
+    } else {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
+}
 
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count)
 {
@@ -1576,12 +1339,19 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
     }
 #endif
 
-    if (g_window_manager.window_animation_duration) {
-        window_manager_animate_window_list_async(window_list, window_count);
+    if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        if (window_manager_find_window_capture(window_list, window_count,
+                                               g_window_manager.focused_window_id)) {
+            window_manager_hide_active_window_highlight(&g_window_manager);
+        }
+        window_manager_animation_async_route(window_list, window_count);
     } else {
         for (int i = 0; i < window_count; ++i) {
-            window_manager_set_window_frame(window_list[i].window, window_list[i].x, window_list[i].y, window_list[i].w, window_list[i].h);
+            window_manager_animation_direct_route(window_list[i].window, window_list[i].x,
+                                                   window_list[i].y, window_list[i].w,
+                                                   window_list[i].h);
         }
+        window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
     }
 }
 
@@ -1595,10 +1365,15 @@ void window_manager_animate_window(struct window_capture capture)
     }
 #endif
 
-    if (g_window_manager.window_animation_duration) {
-        window_manager_animate_window_list_async(&capture, 1);
+    if (window_manager_should_animate(g_window_manager.window_animation_duration)) {
+        if (capture.window && capture.window->id == g_window_manager.focused_window_id) {
+            window_manager_hide_active_window_highlight(&g_window_manager);
+        }
+        window_manager_animation_async_route(&capture, 1);
     } else {
-        window_manager_set_window_frame(capture.window, capture.x, capture.y, capture.w, capture.h);
+        window_manager_animation_direct_route(capture.window, capture.x, capture.y,
+                                              capture.w, capture.h);
+        window_manager_refresh_active_window_highlight_for_captures(&capture, 1);
     }
 }
 
@@ -1706,6 +1481,139 @@ void window_manager_set_normal_window_opacity(struct window_manager *wm, float o
             window_manager_set_window_opacity(wm, window, wm->normal_window_opacity);
         }
     })
+}
+
+#ifdef TESTS
+static void (*window_manager_test_active_window_highlight_refresh_observer)(struct window_manager *, uint32_t, const CGRect *);
+static void (*window_manager_test_active_window_highlight_hide_observer)(struct window_manager *);
+#endif
+
+static void window_manager_active_window_highlight_clear_pending_frame(struct active_window_highlight *highlight)
+{
+    highlight->pending_target_wid = 0;
+    highlight->pending_target_frame_valid = false;
+}
+
+static CGRect window_manager_active_window_highlight_resolve_frame(struct active_window_highlight *highlight,
+                                                                    uint32_t target_wid,
+                                                                    CGRect observed_frame)
+{
+    if (!highlight->pending_target_frame_valid) return observed_frame;
+    if (highlight->pending_target_wid != target_wid) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+        return observed_frame;
+    }
+    if (CGRectEqualToRect(highlight->pending_target_frame, observed_frame)) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+        return observed_frame;
+    }
+    return highlight->pending_target_frame;
+}
+
+static bool window_manager_active_window_highlight_window_is_animating(struct window_manager *wm,
+                                                                        uint32_t window_id)
+{
+    pthread_mutex_lock(&wm->window_animations_lock);
+    bool animating = table_find(&wm->window_animations_table, &window_id) != NULL;
+    pthread_mutex_unlock(&wm->window_animations_lock);
+    return animating;
+}
+
+void window_manager_hide_active_window_highlight(struct window_manager *wm)
+{
+    window_manager_active_window_highlight_clear_pending_frame(&wm->active_window_highlight);
+#ifdef TESTS
+    if (window_manager_test_active_window_highlight_hide_observer) {
+        window_manager_test_active_window_highlight_hide_observer(wm);
+        return;
+    }
+#endif
+    active_window_highlight_hide(&wm->active_window_highlight);
+}
+
+void window_manager_reorder_active_window_highlight(struct window_manager *wm)
+{
+    active_window_highlight_invalidate_order(&wm->active_window_highlight);
+    window_manager_refresh_active_window_highlight(wm);
+}
+
+static void window_manager_refresh_active_window_highlight_internal(struct window_manager *wm,
+                                                                     uint32_t target_wid,
+                                                                     const CGRect *target_frame)
+{
+#ifdef TESTS
+    if (window_manager_test_active_window_highlight_refresh_observer) {
+        window_manager_test_active_window_highlight_refresh_observer(wm, target_wid, target_frame);
+        return;
+    }
+#endif
+    struct active_window_highlight *highlight = &wm->active_window_highlight;
+    // AX frame writes can complete before WindowServer publishes matching bounds.
+    if (target_frame && target_wid == wm->focused_window_id) {
+        highlight->pending_target_frame = *target_frame;
+        highlight->pending_target_wid = target_wid;
+        highlight->pending_target_frame_valid = true;
+    } else if (highlight->pending_target_frame_valid &&
+               highlight->pending_target_wid != wm->focused_window_id) {
+        window_manager_active_window_highlight_clear_pending_frame(highlight);
+    }
+
+    if (!wm->enable_active_window_highlight || !wm->focused_window_id || mission_control_is_active()) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    struct window *window = window_manager_find_window(wm, wm->focused_window_id);
+    if (!window || !window->application || window->application->is_hidden ||
+        !window_manager_is_window_eligible(window) ||
+        window_check_flag(window, WINDOW_MINIMIZE) ||
+        window_check_flag(window, WINDOW_FULLSCREEN) ||
+        window_check_flag(window, WINDOW_ORDERED_OUT) ||
+        window_manager_active_window_highlight_window_is_animating(wm, window->id)) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    uint8_t ordered_in = 0;
+    CGRect observed_frame;
+    uint64_t tags = 0;
+    if (SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in) != kCGErrorSuccess || !ordered_in ||
+        SLSGetWindowBounds(g_connection, window->id, &observed_frame) != kCGErrorSuccess ||
+        !window_tags_with_status(window->id, &tags)) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    CGRect frame = window_manager_active_window_highlight_resolve_frame(highlight, window->id, observed_frame);
+    bool sticky = (tags & WINDOW_SERVER_TAG_ON_ALL_WORKSPACES) != 0;
+    uint64_t sid = window_space(window->id);
+    if ((!sticky && (!sid || !space_is_visible(sid))) ||
+        !active_window_highlight_show(highlight, window->id, frame,
+                                      window_level(window->id), window_sub_level(window->id),
+                                      sid, sticky, wm->active_window_highlight_color.p,
+                                      wm->active_window_highlight_width,
+                                      wm->active_window_highlight_radius)) {
+        window_manager_hide_active_window_highlight(wm);
+    }
+}
+
+void window_manager_refresh_active_window_highlight(struct window_manager *wm)
+{
+    window_manager_refresh_active_window_highlight_internal(wm, 0, NULL);
+}
+
+void window_manager_refresh_active_window_highlight_for_frame(struct window_manager *wm,
+                                                               uint32_t window_id,
+                                                               CGRect frame)
+{
+    window_manager_refresh_active_window_highlight_internal(wm, window_id, &frame);
+}
+
+void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled)
+{
+    wm->enable_active_window_highlight = enabled;
+    window_manager_refresh_active_window_highlight(wm);
+    event_loop_active_window_highlight_target_did_change();
 }
 
 #ifdef TESTS
@@ -1843,53 +1751,54 @@ struct window *window_manager_find_window_on_space_by_rank_filtering_window(stru
     return result;
 }
 
-static inline bool window_manager_window_connection_is_jankyborders(int window_cid)
+static bool window_manager_legacy_hit_test(CGPoint point, uint32_t filter_wid, int flags,
+                                           uint32_t *window_id, int *window_cid)
 {
-    static char process_name[PROC_PIDPATHINFO_MAXSIZE];
+    struct window_server_hit_test_result result;
+    window_server_hit_test_legacy(&(struct window_server_hit_test_request) {
+        .connection = g_connection,
+        .filter_window_id = filter_wid,
+        .flags = flags,
+        .reserved = 0,
+        .screen_point = point
+    }, &result);
+    if (!result.invoked || result.status != kCGErrorSuccess) return false;
+    *window_id = result.window_id;
+    *window_cid = result.window_connection;
+    return true;
+}
 
-    pid_t window_pid = 0;
-    process_name[0] = '\0';
-    if (SLSConnectionGetPID(window_cid, &window_pid) != kCGErrorSuccess || window_pid <= 0) return false;
-    proc_name(window_pid, process_name, sizeof(process_name));
+static bool window_manager_resolve_hit_test_window(CGPoint point, uint32_t filter_wid, int flags,
+                                                   uint32_t *window_id, int *window_cid)
+{
+    if (!window_manager_legacy_hit_test(point, filter_wid, flags, window_id, window_cid)) return false;
 
-    return strcmp(process_name, "borders") == 0;
+    for (int attempts = 0; attempts < 16; ++attempts) {
+        if (g_connection != *window_cid) return true;
+        uint32_t skipped_window_id = *window_id;
+        if (!skipped_window_id ||
+            !window_manager_legacy_hit_test(point, skipped_window_id, -1, window_id, window_cid) ||
+            *window_id == skipped_window_id) {
+            return false;
+        }
+    }
+
+    return false;
 }
 
 struct window *window_manager_find_window_at_point_filtering_window(struct window_manager *wm, CGPoint point, uint32_t filter_wid)
 {
-    CGPoint window_point = CGPointZero;
     uint32_t window_id = 0;
     int window_cid = 0;
-
-    if (SLSFindWindowAndOwner(g_connection, filter_wid, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-    if (g_connection == window_cid &&
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-
-    if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-        if (g_connection == window_cid &&
-            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-    }
-
+    if (!window_manager_resolve_hit_test_window(point, filter_wid, -1, &window_id, &window_cid)) return NULL;
     return window_manager_find_window(wm, window_id);
 }
 
 struct window *window_manager_find_window_at_point(struct window_manager *wm, CGPoint point)
 {
-    CGPoint window_point = CGPointZero;
     uint32_t window_id = 0;
     int window_cid = 0;
-
-    if (SLSFindWindowAndOwner(g_connection, 0, 1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-    if (g_connection == window_cid &&
-        SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-
-    if (window_manager_window_connection_is_jankyborders(window_cid)) {
-        if (SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-        if (g_connection == window_cid &&
-            SLSFindWindowAndOwner(g_connection, window_id, -1, 0, &point, &window_point, &window_id, &window_cid) != noErr) return NULL;
-    }
-
+    if (!window_manager_resolve_hit_test_window(point, 0, 1, &window_id, &window_cid)) return NULL;
     return window_manager_find_window(wm, window_id);
 }
 
@@ -2378,6 +2287,13 @@ static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
 static bool (*window_manager_test_window_observe)(struct window *, bool *);
 static void (*window_manager_test_window_unobserve)(struct window *);
 static AXError (*window_manager_test_set_attribute_value)(AXUIElementRef, CFStringRef, CFTypeRef);
+static AXError (*window_manager_identity_ax_pid)(AXUIElementRef, pid_t *) = AXUIElementGetPid;
+static struct window *(*window_manager_identity_create_candidate)(struct application *, AXUIElementRef, uint32_t) = window_create;
+static void (*window_manager_identity_release)(CFTypeRef) = CFRelease;
+#else
+#define window_manager_identity_ax_pid AXUIElementGetPid
+#define window_manager_identity_create_candidate window_create
+#define window_manager_identity_release CFRelease
 #endif
 
 uint32_t window_manager_ax_window_id(AXUIElementRef window_ref)
@@ -2421,6 +2337,256 @@ AXUIElementRef window_manager_copy_application_window_ref(struct application *ap
     return result;
 }
 
+struct window_identity_tree_scan
+{
+    struct view *list_view;
+    struct view *order_view;
+    struct view *insertion_view;
+    struct window_node *list_node;
+    struct window_node *order_node;
+    uint32_t *list_slot;
+    uint32_t *order_slot;
+    uint32_t *insertion_slot;
+    int old_list_count;
+    int old_order_count;
+    int old_insertion_count;
+    int new_count;
+};
+
+static void window_manager_identity_scan_node(struct window_node *node, struct view *view,
+                                              uint32_t old_id, uint32_t new_id,
+                                              struct window_identity_tree_scan *scan)
+{
+    if (!node) return;
+    for (int i = 0; i < node->window_count; ++i) {
+        if (node->window_list[i] == old_id) {
+            ++scan->old_list_count;
+            scan->list_slot = &node->window_list[i];
+            scan->list_node = node;
+            scan->list_view = view;
+        } else if (node->window_list[i] == new_id) {
+            ++scan->new_count;
+        }
+        if (node->window_order[i] == old_id) {
+            ++scan->old_order_count;
+            scan->order_slot = &node->window_order[i];
+            scan->order_node = node;
+            scan->order_view = view;
+        } else if (node->window_order[i] == new_id) {
+            ++scan->new_count;
+        }
+    }
+    window_manager_identity_scan_node(node->left, view, old_id, new_id, scan);
+    window_manager_identity_scan_node(node->right, view, old_id, new_id, scan);
+}
+
+static bool window_manager_identity_correction_is_clear(const struct window *window)
+{
+    return !window->frame_correction_pending && !window->frame_correction_retry_active &&
+           !window->frame_correction_retry_index && !window->frame_correction_hint_rearms &&
+           !window->frame_correction_started_at && !window->frame_correction_retry_at;
+}
+
+static void window_manager_identity_release_candidate(struct window *candidate)
+{
+    if (candidate) window_destroy(candidate);
+}
+
+static enum window_identity_replace_error
+window_manager_identity_preflight(struct space_manager *sm, struct window_manager *wm,
+                                  struct mouse_state *ms, struct window *window,
+                                  struct window *candidate, uint32_t old_id, uint32_t new_id,
+                                  struct window_identity_tree_scan *scan,
+                                  struct view **managed_view, bool *lost_focus)
+{
+    const uint16_t forbidden_flags = WINDOW_FULLSCREEN | WINDOW_MINIMIZE |
+                                     WINDOW_WINDOWED | WINDOW_ORDERED_OUT;
+    if (!window->application || window->application != candidate->application ||
+        window->id != old_id || window->id_ptr != &window->id ||
+        candidate->id != new_id || candidate->id_ptr != &candidate->id) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+    if (window->notification || candidate->notification) return WINDOW_IDENTITY_REPLACE_OBSERVATION_ACTIVE;
+    if ((window->flags | candidate->flags) & forbidden_flags || window->application->is_hidden) {
+        return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+    }
+    if (!window->is_root || !candidate->is_root || !candidate->ref ||
+        (window->ref && CFEqual(window->ref, candidate->ref)) ||
+        !window->role || !candidate->role || !CFEqual(window->role, candidate->role) ||
+        !window->subrole || !candidate->subrole || !CFEqual(window->subrole, candidate->subrole) ||
+        !isfinite(candidate->frame.origin.x) || !isfinite(candidate->frame.origin.y) ||
+        !isfinite(candidate->frame.size.width) || !isfinite(candidate->frame.size.height) ||
+        candidate->frame.size.width <= 0.0 || candidate->frame.size.height <= 0.0) {
+        return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+    }
+    if (ms->current_action != MOUSE_MODE_NONE || ms->native_resize.window_id ||
+        ms->window || ms->feedback_node) return WINDOW_IDENTITY_REPLACE_BUSY_MOUSE;
+    if (wm->insert_feedback.count) return WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK;
+    if (wm->window_animations_table.count) return WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION;
+    if (!window_manager_identity_correction_is_clear(window)) return WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION;
+
+    *managed_view = table_find(&wm->managed_window, &old_id);
+    if (table_find(&wm->managed_window, &new_id) ||
+        table_find(&wm->window_lost_focused_event, &new_id) ||
+        wm->focused_window_id == new_id || wm->last_window_id == new_id ||
+        window->application->adopt_attempted_window_id == new_id || ms->ffm_window_id == new_id) {
+        return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    }
+    *lost_focus = table_find(&wm->window_lost_focused_event, &old_id) != NULL;
+
+    table_for (struct view *view, sm->view, {
+        window_manager_identity_scan_node(view->root, view, old_id, new_id, scan);
+        if (view->insertion_point == old_id) {
+            ++scan->old_insertion_count;
+            scan->insertion_slot = &view->insertion_point;
+            scan->insertion_view = view;
+        } else if (view->insertion_point == new_id) {
+            ++scan->new_count;
+        }
+    })
+    if (scan->new_count) return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    if (*managed_view) {
+        if (!window->is_eligible || window_check_flag(window, WINDOW_FLOAT) ||
+            window_check_flag(candidate, WINDOW_STICKY) ||
+            !window_check_flag(candidate, WINDOW_MOVABLE)) {
+            return WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW;
+        }
+        if (scan->old_list_count != 1 || scan->old_order_count != 1 ||
+            scan->list_node != scan->order_node || scan->list_view != scan->order_view ||
+            scan->list_view != *managed_view || scan->old_insertion_count > 1 ||
+            (scan->old_insertion_count == 1 && scan->insertion_view != *managed_view)) {
+            return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+        }
+    } else if (scan->old_list_count || scan->old_order_count || scan->old_insertion_count) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+
+    int scratchpad_count = 0;
+    for (int i = 0; i < buf_len(wm->scratchpad_window); ++i) {
+        struct scratchpad *scratchpad = &wm->scratchpad_window[i];
+        if (scratchpad->window == window) {
+            ++scratchpad_count;
+            if (!window->scratchpad || scratchpad->label != window->scratchpad) {
+                return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+            }
+        } else if (scratchpad->window && scratchpad->window->id == new_id) {
+            return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+        }
+    }
+    if ((window->scratchpad && scratchpad_count != 1) || (!window->scratchpad && scratchpad_count)) {
+        return WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION;
+    }
+
+    for (int i = 0; i < buf_len(wm->rules); ++i) {
+        if (wm->rules[i].one_shot_window_id == new_id &&
+            wm->rules[i].one_shot_window_id != old_id) {
+            return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+        }
+    }
+    return WINDOW_IDENTITY_REPLACE_SUCCESS;
+}
+
+static void window_manager_identity_rekey_or_abort(struct table *table,
+                                                   uint32_t old_id, uint32_t new_id)
+{
+    if (!table_rekey(table, &old_id, &new_id)) abort();
+}
+
+enum window_identity_replace_error
+window_manager_replace_window_identity(struct space_manager *sm, struct window_manager *wm,
+                                       struct mouse_state *ms, uint32_t old_id, uint32_t new_id,
+                                       AXUIElementRef new_ax_ref)
+{
+    if (!sm || !wm || !ms || !new_ax_ref || !old_id || !new_id) {
+        if (new_ax_ref) window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_INVALID_ARGUMENT;
+    }
+    if (old_id == new_id) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_SAME_ID;
+    }
+    struct window *window = table_find(&wm->window, &old_id);
+    if (!window) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_SOURCE_NOT_FOUND;
+    }
+    if (table_find(&wm->window, &new_id)) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT;
+    }
+    if (window_manager_ax_window_id(new_ax_ref) != new_id) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_AX_ID_MISMATCH;
+    }
+    pid_t candidate_pid = 0;
+    if (window_manager_identity_ax_pid(new_ax_ref, &candidate_pid) != kAXErrorSuccess ||
+        !window->application || candidate_pid != window->application->pid) {
+        window_manager_identity_release(new_ax_ref);
+        return WINDOW_IDENTITY_REPLACE_AX_PID_MISMATCH;
+    }
+
+    struct window *candidate = window_manager_identity_create_candidate(
+        window->application, new_ax_ref, new_id);
+    if (!candidate) return WINDOW_IDENTITY_REPLACE_PREPARE_FAILED;
+
+    struct window_identity_tree_scan scan = {0};
+    struct view *managed_view = NULL;
+    bool lost_focus = false;
+    enum window_identity_replace_error error = window_manager_identity_preflight(
+        sm, wm, ms, window, candidate, old_id, new_id, &scan, &managed_view, &lost_focus);
+    if (error != WINDOW_IDENTITY_REPLACE_SUCCESS) {
+        window_manager_identity_release_candidate(candidate);
+        return error;
+    }
+
+    if (managed_view) window_manager_identity_rekey_or_abort(&wm->managed_window, old_id, new_id);
+    if (lost_focus) window_manager_identity_rekey_or_abort(&wm->window_lost_focused_event, old_id, new_id);
+    if (scan.list_slot) *scan.list_slot = new_id;
+    if (scan.order_slot) *scan.order_slot = new_id;
+    if (scan.insertion_slot) *scan.insertion_slot = new_id;
+    if (wm->focused_window_id == old_id) wm->focused_window_id = new_id;
+    if (wm->last_window_id == old_id) wm->last_window_id = new_id;
+    if (window->application->adopt_attempted_window_id == old_id) {
+        window->application->adopt_attempted_window_id = new_id;
+    }
+    if (ms->ffm_window_id == old_id) ms->ffm_window_id = new_id;
+    for (int i = 0; i < buf_len(wm->rules); ++i) {
+        if (wm->rules[i].one_shot_window_id == old_id) wm->rules[i].one_shot_window_id = new_id;
+    }
+    window_manager_identity_rekey_or_abort(&wm->window, old_id, new_id);
+
+    AXUIElementRef retired_ref = window->ref;
+    CFStringRef retired_role = window->role;
+    CFStringRef retired_subrole = window->subrole;
+    CFStringRef retired_title = window->title;
+    uint16_t logical_flags = window->flags & WINDOW_FLOAT;
+    window->id = new_id;
+    window->ref = candidate->ref; candidate->ref = NULL;
+    window->role = candidate->role; candidate->role = NULL;
+    window->subrole = candidate->subrole; candidate->subrole = NULL;
+    window->title = candidate->title; candidate->title = NULL;
+    window->frame = candidate->frame;
+    window->windowed_frame = CGRectZero;
+    window->is_root = candidate->is_root;
+    window->flags = logical_flags | (candidate->flags & (WINDOW_SHADOW | WINDOW_STICKY |
+                                                         WINDOW_MOVABLE | WINDOW_RESIZABLE));
+    window_constraints_invalidate(&window->constraints);
+    window->frame_correction_pending = false;
+    window->frame_correction_retry_active = false;
+    window->frame_correction_retry_index = 0;
+    window->frame_correction_hint_rearms = 0;
+    window->frame_correction_source = WINDOW_FRAME_CORRECTION_INITIAL;
+    window->frame_correction_started_at = 0;
+    window->frame_correction_retry_at = 0;
+
+    window_manager_identity_release_candidate(candidate);
+    if (retired_ref) window_manager_identity_release(retired_ref);
+    if (retired_role) window_manager_identity_release(retired_role);
+    if (retired_subrole) window_manager_identity_release(retired_subrole);
+    if (retired_title) window_manager_identity_release(retired_title);
+    return WINDOW_IDENTITY_REPLACE_SUCCESS;
+}
+
 bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window, AXUIElementRef window_ref)
 {
     if (!wm || !window || !window_ref) {
@@ -2440,6 +2606,7 @@ bool window_manager_replace_window_ref(struct window_manager *wm, struct window 
 #endif
     if (window->ref) CFRelease(window->ref);
     window->ref = window_ref;
+    window_constraints_invalidate(&window->constraints);
 
     bool retry = false;
 #ifdef TESTS
@@ -2460,6 +2627,14 @@ bool window_manager_replace_window_ref(struct window_manager *wm, struct window 
     struct view *view = window_manager_find_managed_window(wm, window);
     if (view) space_manager_flush_tiled_window(view, window);
     return true;
+}
+
+void window_manager_invalidate_window_constraints(struct window_manager *wm)
+{
+    if (!wm) return;
+    table_for (struct window *window, wm->window, {
+        if (window) window_constraints_invalidate(&window->constraints);
+    });
 }
 
 bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window)
@@ -2549,7 +2724,11 @@ bool window_manager_window_created_retry_uses_one_shots(struct application *appl
     return retry->one_shot_owner_pid ? window_manager_window_created_retry_owner(application, retry) != 0 : retry->one_shot_rules;
 }
 
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry)
+static struct window *window_manager_create_and_add_window_with_server_record(
+    struct space_manager *sm, struct window_manager *wm, struct application *application,
+    AXUIElementRef window_ref, uint32_t window_id,
+    const struct window_server_window_record *server_record,
+    bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry)
 {
     if (retry) *retry = false;
     if (one_shot_rules && !rule_retry_pending_one_shots()) {
@@ -2567,7 +2746,8 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
 #ifdef TESTS
     bool test_rule_window = window_manager_test_rule_window != NULL;
     struct window *window = test_rule_window ? window_manager_test_rule_window
-                                             : window_create(application, window_ref, window_id);
+                                             : window_create_with_server_record(application, window_ref,
+                                                                                window_id, server_record);
     if (!window) return NULL;
     if (test_rule_window) {
         window->application = application;
@@ -2580,7 +2760,8 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
     char *window_role = test_rule_window ? "AXWindow" : window_role_ts(window);
     char *window_subrole = test_rule_window ? "AXStandardWindow" : window_subrole_ts(window);
 #else
-    struct window *window = window_create(application, window_ref, window_id);
+    struct window *window = window_create_with_server_record(application, window_ref,
+                                                             window_id, server_record);
     if (!window) return NULL;
     char *window_title = window_title_ts(window);
     char *window_role = window_role_ts(window);
@@ -2735,6 +2916,16 @@ out:
     return window;
 }
 
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm,
+                                                    struct application *application, AXUIElementRef window_ref,
+                                                    uint32_t window_id, bool one_shot_rules,
+                                                    pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry)
+{
+    return window_manager_create_and_add_window_with_server_record(
+        sm, wm, application, window_ref, window_id, NULL,
+        one_shot_rules, one_shot_owner_pid, suppress_rule_follow, retry);
+}
+
 static void window_manager_enqueue_application_refresh(struct window_manager *wm,
                                                        struct application *application);
 
@@ -2781,51 +2972,90 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
 }
 
 #ifdef TESTS
-static bool (*window_manager_test_existing_application_window_list)(struct application *, uint32_t **, int *);
+static bool (*window_manager_test_existing_application_window_list)(
+    struct application *, uint32_t **, int *, struct window_server_snapshot **);
 static AXUIElementRef (*window_manager_test_remote_token)(CFDataRef);
 static AXError (*window_manager_test_copy_role)(AXUIElementRef, CFTypeRef *);
 static bool (*window_manager_test_role_is_window)(CFTypeRef);
 static uint32_t (*window_manager_test_ax_window_id)(AXUIElementRef);
 static void (*window_manager_test_cf_release)(CFTypeRef);
-static struct window *(*window_manager_test_create_window)(struct space_manager *, struct window_manager *, struct application *, AXUIElementRef, uint32_t, bool, pid_t);
+static struct window *(*window_manager_test_create_window)(
+    struct space_manager *, struct window_manager *, struct application *, AXUIElementRef,
+    uint32_t, const struct window_server_window_record *, bool, pid_t);
 #endif
 
-static bool window_manager_existing_application_window_list_with_status(struct application *application, uint32_t **window_list, int *window_count)
+static bool window_manager_existing_application_window_list_with_snapshot(
+    struct application *application, uint32_t **window_list, int *window_count,
+    struct window_server_snapshot **snapshot_out)
 {
-#ifdef TESTS
-    if (window_manager_test_existing_application_window_list) {
-        return window_manager_test_existing_application_window_list(application, window_list, window_count);
-    }
-#endif
     *window_list = NULL;
     *window_count = 0;
-    int display_count;
-    uint32_t *display_list = display_manager_active_display_list(&display_count);
-    if (!display_list) return false;
+    if (snapshot_out) *snapshot_out = NULL;
 
-    int space_count = 0;
-    uint64_t *space_list = NULL;
+    bool inventory_succeeded = false;
+    struct window_server_snapshot *snapshot = NULL;
+#ifdef TESTS
+    if (window_manager_test_existing_application_window_list) {
+        inventory_succeeded = window_manager_test_existing_application_window_list(
+            application, window_list, window_count, &snapshot);
+    } else
+#endif
+    {
+        int display_count;
+        uint32_t *display_list = display_manager_active_display_list(&display_count);
+        if (!display_list) return false;
 
-    for (int i = 0; i < display_count; ++i) {
-        int count;
-        uint64_t *list = display_space_list(display_list[i], &count);
-        if (!list) return false;
+        int space_count = 0;
+        uint64_t *space_list = NULL;
 
-        //
-        // NOTE(asmvik): display_space_list(..) uses a linear allocator,
-        // and so we only need to track the beginning of the first list along
-        // with the total number of windows that have been allocated.
-        //
+        for (int i = 0; i < display_count; ++i) {
+            int count;
+            uint64_t *list = display_space_list(display_list[i], &count);
+            if (!list) return false;
 
-        if (!space_list) space_list = list;
-        space_count += count;
+            //
+            // NOTE(asmvik): display_space_list(..) uses a linear allocator,
+            // and so we only need to track the beginning of the first list along
+            // with the total number of windows that have been allocated.
+            //
+
+            if (!space_list) space_list = list;
+            space_count += count;
+        }
+
+        if (!space_list) return display_count == 0;
+        *window_list = space_window_list_for_connection_with_snapshot(
+            space_list, space_count, application ? application->connection : 0,
+            window_count, true, &inventory_succeeded, &snapshot);
     }
 
-    if (!space_list) return display_count == 0;
-    bool inventory_succeeded = false;
-    *window_list = space_window_list_for_connection_with_status(space_list, space_count, application ? application->connection : 0,
-                                                                 window_count, true, &inventory_succeeded);
-    return inventory_succeeded;
+    if (!inventory_succeeded || *window_count < 0 || (*window_count > 0 && !*window_list)) goto fail;
+    if (*window_count > 0) {
+        if (!snapshot) goto fail;
+        for (int i = 0; i < *window_count; ++i) {
+            if (!window_server_snapshot_find(snapshot, (*window_list)[i])) goto fail;
+        }
+    }
+
+    if (snapshot_out) {
+        *snapshot_out = snapshot;
+    } else {
+        window_server_snapshot_destroy(snapshot);
+    }
+    return true;
+
+fail:
+    window_server_snapshot_destroy(snapshot);
+    *window_list = NULL;
+    *window_count = 0;
+    return false;
+}
+
+static bool window_manager_existing_application_window_list_with_status(
+    struct application *application, uint32_t **window_list, int *window_count)
+{
+    return window_manager_existing_application_window_list_with_snapshot(
+        application, window_list, window_count, NULL);
 }
 
 static bool window_manager_window_list_is_resolved(struct window_manager *wm, uint32_t *window_list, int window_count)
@@ -2893,7 +3123,9 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 
     int global_window_count;
     uint32_t *global_window_list;
-    if (!window_manager_existing_application_window_list_with_status(application, &global_window_list, &global_window_count)) {
+    struct window_server_snapshot *window_server_snapshot = NULL;
+    if (!window_manager_existing_application_window_list_with_snapshot(
+            application, &global_window_list, &global_window_count, &window_server_snapshot)) {
         window_manager_enqueue_application_refresh(wm, application);
         return false;
     }
@@ -2921,9 +3153,11 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
         if (!window_id) continue;
 
         if (!window_manager_find_window(wm, window_id)) {
-            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id,
-                                                                          one_shot_rules, one_shot_owner_pid,
-                                                                          application->initial_window_inventory, NULL);
+            const struct window_server_window_record *server_record =
+                window_server_snapshot_find(window_server_snapshot, window_id);
+            struct window *window = window_manager_create_and_add_window_with_server_record(
+                sm, wm, application, CFRetain(window_ref), window_id, server_record,
+                one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
             if (window && created_windows) buf_push(*created_windows, window);
         }
     }
@@ -3022,15 +3256,20 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                             if (matched) {
                                 element_consumed = true;
 #ifdef TESTS
+                                const struct window_server_window_record *server_record =
+                                    window_server_snapshot_find(window_server_snapshot, element_wid);
                                 struct window *window = window_manager_test_create_window ?
-                                    window_manager_test_create_window(sm, wm, application, element_ref, element_wid, one_shot_rules, one_shot_owner_pid) :
-                                    window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid,
-                                                                         one_shot_rules, one_shot_owner_pid,
-                                                                         application->initial_window_inventory, NULL);
+                                    window_manager_test_create_window(sm, wm, application, element_ref, element_wid,
+                                                                      server_record, one_shot_rules, one_shot_owner_pid) :
+                                    window_manager_create_and_add_window_with_server_record(
+                                        sm, wm, application, element_ref, element_wid, server_record,
+                                        one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
 #else
-                                struct window *window = window_manager_create_and_add_window(sm, wm, application, element_ref, element_wid,
-                                                                                             one_shot_rules, one_shot_owner_pid,
-                                                                                             application->initial_window_inventory, NULL);
+                                const struct window_server_window_record *server_record =
+                                    window_server_snapshot_find(window_server_snapshot, element_wid);
+                                struct window *window = window_manager_create_and_add_window_with_server_record(
+                                    sm, wm, application, element_ref, element_wid, server_record,
+                                    one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
 #endif
                                 if (window) {
                                     if (created_windows) buf_push(*created_windows, window);
@@ -3081,6 +3320,7 @@ probe_complete:
     }
 
     if (window_list_ref) CFRelease(window_list_ref);
+    window_server_snapshot_destroy(window_server_snapshot);
     if (created_count && created_windows) *created_count = buf_len(*created_windows);
     if (fully_resolved && finalization_ok) {
         application->inactive_probe_cursor = 0;
@@ -3745,11 +3985,7 @@ bool window_manager_wait_for_native_fullscreen_transition(struct window *window,
 {
     TIME_FUNCTION;
 
-    if (workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura() ||
-        workspace_is_macos_sonoma() ||
-        workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_monterey_or_newer()) {
         for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
             uint64_t sid = window_space(window->id);
             if (sid && space_is_user(sid) != fullscreen) return true;
@@ -4304,6 +4540,10 @@ void window_manager_init(struct window_manager *wm)
     wm->window_opacity_duration = 0.0f;
     wm->window_animation_duration = 0.0f;
     wm->window_animation_easing = ease_out_circ_type;
+    wm->enable_active_window_highlight = false;
+    wm->active_window_highlight_color = rgba_color_from_hex(ACTIVE_WINDOW_HIGHLIGHT_COLOR_DEFAULT);
+    wm->active_window_highlight_radius = ACTIVE_WINDOW_HIGHLIGHT_RADIUS_DEFAULT;
+    wm->active_window_highlight_width = ACTIVE_WINDOW_HIGHLIGHT_WIDTH_DEFAULT;
     wm->insert_feedback_color = rgba_color_from_hex(0xffd75f5f);
     wm->insert_feedback_radius = INSERT_FEEDBACK_RADIUS_DEFAULT;
     wm->insert_feedback_width = INSERT_FEEDBACK_WIDTH_DEFAULT;
@@ -4379,4 +4619,6 @@ void window_manager_begin(struct space_manager *sm, struct window_manager *wm)
         wm->focused_window_psn = window->application->psn;
         window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
     }
+    window_manager_refresh_active_window_highlight(wm);
+    event_loop_active_window_highlight_target_did_change();
 }

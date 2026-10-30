@@ -1,6 +1,8 @@
 #ifndef WINDOW_H
 #define WINDOW_H
 
+struct window_server_window_record;
+
 const CFStringRef kAXFullscreenAttribute = CFSTR("AXFullScreen");
 
 #define AX_WINDOW_MINIMIZED_INDEX      0
@@ -95,8 +97,49 @@ struct window_serialization_context
 {
     CFArrayRef managed_display_spaces;
     CFArrayRef ordered_display_uuids;
+    const struct window_server_window_record *window_server_record;
     bool has_managed_display_spaces_snapshot;
     bool has_ordered_display_uuids_snapshot;
+};
+
+enum window_ax_snapshot_slot
+{
+    WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN_SLOT,
+    WINDOW_AX_SNAPSHOT_SLOT_COUNT
+};
+
+enum window_ax_snapshot_field
+{
+    WINDOW_AX_POSITION   = 1u << WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE       = 1u << WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE       = 1u << WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE    = 1u << WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE      = 1u << WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT     = 1u << WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED  = 1u << WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN = 1u << WINDOW_AX_FULLSCREEN_SLOT
+};
+
+struct window_ax_snapshot
+{
+    uint32_t requested;
+    uint32_t valid;
+    AXError slot_error[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    CGPoint position;
+    CGSize size;
+    CFStringRef role;
+    CFStringRef subrole;
+    CFStringRef title;
+    AXUIElementRef parent;
+    bool minimized;
+    bool fullscreen;
 };
 
 struct window
@@ -110,6 +153,7 @@ struct window
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
+    struct window_constraints constraints;
     bool is_root;
     bool is_eligible;
     bool frame_correction_pending;
@@ -189,7 +233,13 @@ uint64_t window_tags(uint32_t wid);
 bool window_is_ordered_in(uint32_t wid, bool *known);
 bool window_is_on_screen(uint32_t wid, bool *known);
 bool window_is_sticky(uint32_t wid);
+/* The output must be zero-initialized or previously destroyed. It owns its
+ * retained object fields until window_ax_snapshot_destroy is called. */
+bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct window_ax_snapshot *snapshot);
+void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot);
+bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame);
 CGPoint window_ax_origin(struct window *window);
+bool window_ax_frame_with_status(struct window *window, CGRect *frame);
 CGRect window_ax_frame(struct window *window);
 CFStringRef window_ax_role(struct window *window);
 CFStringRef window_role(struct window *window);
@@ -211,7 +261,10 @@ bool window_is_unknown(struct window *window);
 bool window_observe(struct window *window, bool *retry);
 void window_unobserve(struct window *window);
 /* Consumes the caller's retained window_ref on both success and failure.
- * Application remains caller-owned. Returns an owned window or NULL. */
+ * Application and server_record remain caller-owned. Returns an owned window or NULL. */
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+                                                uint32_t window_id,
+                                                const struct window_server_window_record *server_record);
 struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id);
 void window_destroy(struct window *window);
 

@@ -75,7 +75,14 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     struct window window = {
         .application = &application,
         .ref = stale_ref_test_old,
-        .id = stale_ref_test_window_id
+        .id = stale_ref_test_window_id,
+        .constraints = {
+            .generation = 7,
+            .observed_at = 9,
+            .validity = WINDOW_CONSTRAINT_MINIMUM_VALID | WINDOW_CONSTRAINT_MAXIMUM_VALID |
+                        WINDOW_CONSTRAINT_LIMITS_ORDERED,
+            .source = WINDOW_CONSTRAINT_SOURCE_ITERATOR
+        }
     };
 
     window_manager_test_application_window_list = stale_ref_test_window_list;
@@ -89,6 +96,9 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     TEST_CHECK(stale_ref_test_unobserve_calls, 1);
     TEST_CHECK(stale_ref_test_observe_calls, 1);
     TEST_CHECK(window.ref == stale_ref_test_fresh, true);
+    TEST_CHECK(window.constraints.validity, 0);
+    TEST_CHECK(window.constraints.observed_at, 0ULL);
+    TEST_CHECK(window.constraints.generation > 7, true);
     TEST_CHECK(window_manager_refresh_window_ref(&g_window_manager, &window), false);
 
     CFRelease(window.ref);
@@ -103,6 +113,473 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     table_free(&g_window_manager.managed_window);
     g_window_manager.managed_window = saved_managed;
 });
+
+TEST_FUNC(window_manager_invalidates_all_constraint_caches,
+{
+    struct window_manager wm = {0};
+    table_init(&wm.window, 4, hash_wm, compare_wm);
+    struct window first = { .id = 1, .constraints = { .generation = 1, .validity = WINDOW_CONSTRAINT_CURRENT_VALID } };
+    struct window second = { .id = 2, .constraints = { .generation = 2, .validity = WINDOW_CONSTRAINT_CURRENT_VALID } };
+    table_add(&wm.window, &first.id, &first);
+    table_add(&wm.window, &second.id, &second);
+    window_manager_invalidate_window_constraints(&wm);
+    TEST_CHECK(first.constraints.validity, 0);
+    TEST_CHECK(second.constraints.validity, 0);
+    TEST_CHECK(first.constraints.generation > 1, true);
+    TEST_CHECK(second.constraints.generation > 2, true);
+    table_free(&wm.window);
+});
+
+static uint32_t window_identity_test_ax_id;
+static pid_t window_identity_test_pid;
+static uint16_t window_identity_test_candidate_flags;
+static bool window_identity_test_candidate_root;
+static CGRect window_identity_test_candidate_frame;
+static int window_identity_test_release_count;
+static int window_identity_test_candidate_count;
+
+static AXError window_identity_test_ax_pid(AXUIElementRef ref, pid_t *pid)
+{
+    (void) ref;
+    *pid = window_identity_test_pid;
+    return kAXErrorSuccess;
+}
+
+static struct window *window_identity_test_candidate(
+    struct application *application, AXUIElementRef ref, uint32_t window_id)
+{
+    ++window_identity_test_candidate_count;
+    struct window *candidate = legacy_allocation_calloc(1, sizeof(*candidate));
+    if (!candidate) { CFRelease(ref); return NULL; }
+    candidate->application = application;
+    candidate->ref = ref;
+    candidate->id = window_id;
+    candidate->id_ptr = &candidate->id;
+    candidate->role = CFStringCreateMutableCopy(NULL, 0, CFSTR("old-role"));
+    candidate->subrole = CFStringCreateMutableCopy(NULL, 0, CFSTR("old-subrole"));
+    candidate->title = CFStringCreateMutableCopy(NULL, 0, CFSTR("candidate-title"));
+    candidate->frame = window_identity_test_candidate_frame;
+    candidate->flags = window_identity_test_candidate_flags;
+    candidate->is_root = window_identity_test_candidate_root;
+    return candidate;
+}
+
+static uint32_t window_identity_test_ax_window_id(AXUIElementRef ref)
+{
+    (void) ref;
+    return window_identity_test_ax_id;
+}
+
+static void window_identity_test_release(CFTypeRef value)
+{
+    ++window_identity_test_release_count;
+    CFRelease(value);
+}
+
+struct window_identity_test_fixture
+{
+    struct space_manager sm;
+    struct window_manager wm;
+    struct mouse_state ms;
+    struct application application;
+    struct window window;
+    struct view view;
+    struct window_node node;
+    char *scratchpad_label;
+    uint32_t old_id;
+    uint32_t new_id;
+};
+
+static void window_identity_test_begin(struct window_identity_test_fixture *fixture, bool managed)
+{
+    memset(fixture, 0, sizeof(*fixture));
+    fixture->old_id = 4101;
+    fixture->new_id = 4202;
+    table_init(&fixture->wm.window, 4, hash_wm, compare_wm);
+    table_init(&fixture->wm.managed_window, 4, hash_wm, compare_wm);
+    table_init(&fixture->wm.window_lost_focused_event, 4, hash_wm, compare_wm);
+    table_init(&fixture->wm.window_animations_table, 4, hash_wm, compare_wm);
+    table_init(&fixture->wm.insert_feedback, 4, hash_wm, compare_wm);
+    table_init(&fixture->sm.view, 4, hash_view, compare_view);
+    fixture->application = (struct application) {
+        .pid = 91, .name = "identity-fixture", .adopt_attempted_window_id = fixture->old_id
+    };
+    fixture->window = (struct window) {
+        .application = &fixture->application,
+        .ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("old-ref")),
+        .id = fixture->old_id,
+        .role = CFStringCreateCopy(NULL, CFSTR("old-role")),
+        .subrole = CFStringCreateCopy(NULL, CFSTR("old-subrole")),
+        .title = CFStringCreateCopy(NULL, CFSTR("old-title")),
+        .frame = CGRectMake(1, 2, 300, 200),
+        .windowed_frame = CGRectMake(9, 9, 9, 9),
+        .constraints = { .generation = 7, .validity = WINDOW_CONSTRAINT_CURRENT_VALID },
+        .is_root = true,
+        .is_eligible = true,
+        .rule_flags = WINDOW_RULE_MANAGED | WINDOW_RULE_MFF,
+        .flags = WINDOW_SHADOW | WINDOW_MOVABLE | WINDOW_RESIZABLE,
+        .opacity = 0.75f,
+        .layer = 3
+    };
+    fixture->window.id_ptr = &fixture->window.id;
+    table_add(&fixture->wm.window, &fixture->window.id, &fixture->window);
+    fixture->wm.focused_window_id = fixture->old_id;
+    fixture->wm.focused_window_psn = (ProcessSerialNumber) { .highLongOfPSN = 7, .lowLongOfPSN = 8 };
+    fixture->wm.last_window_id = fixture->old_id;
+    fixture->ms.ffm_window_id = fixture->old_id;
+    window_manager_add_lost_focused_event(&fixture->wm, fixture->old_id);
+    buf_push(fixture->wm.rules, ((struct rule) {
+        .one_shot_window_id = fixture->old_id, .one_shot_owner_pid = 91,
+        .one_shot_owner_psn_high = 7, .one_shot_owner_psn_low = 8,
+        .flags = RULE_ONE_SHOT, .generation = 33
+    }));
+    buf_push(fixture->wm.rules, ((struct rule) {
+        .one_shot_window_id = fixture->old_id, .one_shot_owner_pid = 91,
+        .flags = RULE_ONE_SHOT_REMOVE, .generation = 34
+    }));
+    if (managed) {
+        fixture->node.window_count = 1;
+        fixture->node.window_list[0] = fixture->old_id;
+        fixture->node.window_order[0] = fixture->old_id;
+        fixture->node.window_area[0] = (struct area) { 11, 12, 13, 14 };
+        fixture->node.has_window_areas = true;
+        fixture->view = (struct view) {
+            .sid = 77, .layout = VIEW_BSP, .root = &fixture->node,
+            .insertion_point = fixture->old_id
+        };
+        table_add(&fixture->sm.view, &fixture->view.sid, &fixture->view);
+        table_add(&fixture->wm.managed_window, &fixture->window.id, &fixture->view);
+    }
+    window_identity_test_ax_id = fixture->new_id;
+    window_identity_test_pid = fixture->application.pid;
+    window_identity_test_candidate_flags = WINDOW_SHADOW | WINDOW_MOVABLE | WINDOW_RESIZABLE;
+    window_identity_test_candidate_root = true;
+    window_identity_test_candidate_frame = CGRectMake(20, 30, 640, 480);
+    window_identity_test_release_count = 0;
+    window_identity_test_candidate_count = 0;
+}
+
+static void window_identity_test_end(struct window_identity_test_fixture *fixture)
+{
+    if (fixture->window.ref) CFRelease(fixture->window.ref);
+    if (fixture->window.role) CFRelease(fixture->window.role);
+    if (fixture->window.subrole) CFRelease(fixture->window.subrole);
+    if (fixture->window.title) CFRelease(fixture->window.title);
+    if (fixture->scratchpad_label) free(fixture->scratchpad_label);
+    buf_free(fixture->wm.scratchpad_window);
+    buf_free(fixture->wm.rules);
+    table_free(&fixture->wm.window);
+    table_free(&fixture->wm.managed_window);
+    table_free(&fixture->wm.window_lost_focused_event);
+    table_free(&fixture->wm.window_animations_table);
+    table_free(&fixture->wm.insert_feedback);
+    table_free(&fixture->sm.view);
+}
+
+static AXUIElementRef window_identity_test_new_ref(void)
+{
+    return (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("new-ref"));
+}
+
+TEST_FUNC(hashtable_rekey_is_allocation_free_and_preserves_value,
+{
+    struct table table = {0};
+    table_init(&table, 4, hash_wm, compare_wm);
+    uint32_t old_id = 1, same_bucket = 5, other_bucket = 6, occupied = 2;
+    int first = 11, second = 22;
+    table_add(&table, &old_id, &first);
+    table_add(&table, &occupied, &second);
+    table_test_fail_allocation_after(0);
+    TEST_CHECK(table_rekey(&table, &old_id, &same_bucket), true);
+    TEST_CHECK(table_find(&table, &old_id) == NULL, true);
+    TEST_CHECK(table_find(&table, &same_bucket), &first);
+    TEST_CHECK(table.count, 2);
+    TEST_CHECK(table_rekey(&table, &same_bucket, &other_bucket), true);
+    TEST_CHECK(table_find(&table, &other_bucket), &first);
+    TEST_CHECK(table_rekey(&table, &other_bucket, &occupied), false);
+    TEST_CHECK(table_rekey(&table, &old_id, &same_bucket), false);
+    TEST_CHECK(table_rekey(&table, &other_bucket, &other_bucket), false);
+    table_test_fail_allocation_after(-1);
+    table_free(&table);
+})
+
+TEST_FUNC(window_identity_transaction_migrates_unmanaged_state_atomically,
+{
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_pid = window_manager_identity_ax_pid;
+    __auto_type saved_create = window_manager_identity_create_candidate;
+    __auto_type saved_release = window_manager_identity_release;
+    __auto_type saved_window_release = window_test_ref_release;
+    window_manager_test_ax_window_id = window_identity_test_ax_window_id;
+    window_manager_identity_ax_pid = window_identity_test_ax_pid;
+    window_manager_identity_create_candidate = window_identity_test_candidate;
+    window_manager_identity_release = window_identity_test_release;
+    window_test_ref_release = window_identity_test_release;
+
+    struct window_identity_test_fixture fixture;
+    window_identity_test_begin(&fixture, false);
+    fixture.scratchpad_label = strdup("identity-scratchpad");
+    fixture.window.scratchpad = fixture.scratchpad_label;
+    buf_push(fixture.wm.scratchpad_window, ((struct scratchpad) {
+        .label = fixture.scratchpad_label, .window = &fixture.window
+    }));
+    struct window *original = &fixture.window;
+    ProcessSerialNumber focused_psn = fixture.wm.focused_window_psn;
+    uint8_t rule_flags = fixture.window.rule_flags;
+    float opacity = fixture.window.opacity;
+    int layer = fixture.window.layer;
+    char *scratchpad = fixture.window.scratchpad;
+    CFStringRef old_role = fixture.window.role;
+    AXUIElementRef old_ref = fixture.window.ref;
+
+    TEST_CHECK(window_manager_replace_window_identity(
+        &fixture.sm, &fixture.wm, &fixture.ms, fixture.old_id, fixture.new_id,
+        window_identity_test_new_ref()), WINDOW_IDENTITY_REPLACE_SUCCESS);
+    TEST_CHECK(window_manager_find_window(&fixture.wm, fixture.old_id) == NULL, true);
+    TEST_CHECK(window_manager_find_window(&fixture.wm, fixture.new_id), original);
+    TEST_CHECK(fixture.window.id, fixture.new_id);
+    TEST_CHECK(fixture.window.id_ptr, &fixture.window.id);
+    TEST_CHECK(__sync_bool_compare_and_swap(&fixture.window.id_ptr, &fixture.window.id, &fixture.window.id), true);
+    TEST_CHECK(fixture.wm.focused_window_id, fixture.new_id);
+    TEST_CHECK(fixture.wm.last_window_id, fixture.new_id);
+    TEST_CHECK(memcmp(&fixture.wm.focused_window_psn, &focused_psn, sizeof(focused_psn)), 0);
+    TEST_CHECK(window_manager_find_lost_focused_event(&fixture.wm, fixture.old_id), false);
+    TEST_CHECK(window_manager_find_lost_focused_event(&fixture.wm, fixture.new_id), true);
+    TEST_CHECK(fixture.application.adopt_attempted_window_id, fixture.new_id);
+    TEST_CHECK(fixture.ms.ffm_window_id, fixture.new_id);
+    TEST_CHECK(fixture.wm.rules[0].one_shot_window_id, fixture.new_id);
+    TEST_CHECK(fixture.wm.rules[1].one_shot_window_id, fixture.new_id);
+    TEST_CHECK(fixture.wm.rules[0].one_shot_owner_pid, 91);
+    TEST_CHECK(fixture.wm.rules[0].generation, 33ULL);
+    TEST_CHECK(fixture.window.rule_flags, rule_flags);
+    TEST_CHECK(fixture.window.opacity, opacity);
+    TEST_CHECK(fixture.window.layer, layer);
+    TEST_CHECK(fixture.window.scratchpad, scratchpad);
+    TEST_CHECK(fixture.wm.scratchpad_window[0].window, &fixture.window);
+    TEST_CHECK(fixture.wm.scratchpad_window[0].label, scratchpad);
+    TEST_CHECK(fixture.window.ref != old_ref, true);
+    TEST_CHECK(fixture.window.role != old_role, true);
+    TEST_CHECK(CGRectEqualToRect(fixture.window.frame, window_identity_test_candidate_frame), true);
+    TEST_CHECK(CGRectEqualToRect(fixture.window.windowed_frame, CGRectZero), true);
+    TEST_CHECK(strcmp([(NSString *) fixture.window.title UTF8String], "candidate-title"), 0);
+    TEST_CHECK(fixture.window.constraints.validity, 0);
+    TEST_CHECK(fixture.window.constraints.generation > 7, true);
+    TEST_CHECK(fixture.window.frame_correction_source, WINDOW_FRAME_CORRECTION_INITIAL);
+    TEST_CHECK(window_identity_test_candidate_count, 1);
+    TEST_CHECK(window_identity_test_release_count, 4);
+
+    window_identity_test_end(&fixture);
+    window_manager_test_ax_window_id = saved_id;
+    window_manager_identity_ax_pid = saved_pid;
+    window_manager_identity_create_candidate = saved_create;
+    window_manager_identity_release = saved_release;
+    window_test_ref_release = saved_window_release;
+})
+
+TEST_FUNC(window_identity_transaction_migrates_managed_tree_without_geometry_changes,
+{
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_pid = window_manager_identity_ax_pid;
+    __auto_type saved_create = window_manager_identity_create_candidate;
+    __auto_type saved_release = window_manager_identity_release;
+    __auto_type saved_window_release = window_test_ref_release;
+    window_manager_test_ax_window_id = window_identity_test_ax_window_id;
+    window_manager_identity_ax_pid = window_identity_test_ax_pid;
+    window_manager_identity_create_candidate = window_identity_test_candidate;
+    window_manager_identity_release = window_identity_test_release;
+    window_test_ref_release = window_identity_test_release;
+
+    struct window_identity_test_fixture fixture;
+    window_identity_test_begin(&fixture, true);
+    struct area window_area = fixture.node.window_area[0];
+    TEST_CHECK(window_manager_replace_window_identity(
+        &fixture.sm, &fixture.wm, &fixture.ms, fixture.old_id, fixture.new_id,
+        window_identity_test_new_ref()), WINDOW_IDENTITY_REPLACE_SUCCESS);
+    TEST_CHECK(table_find(&fixture.wm.managed_window, &fixture.old_id) == NULL, true);
+    TEST_CHECK(table_find(&fixture.wm.managed_window, &fixture.new_id), &fixture.view);
+    TEST_CHECK(fixture.node.window_list[0], fixture.new_id);
+    TEST_CHECK(fixture.node.window_order[0], fixture.new_id);
+    TEST_CHECK(fixture.view.insertion_point, fixture.new_id);
+    TEST_CHECK(memcmp(&fixture.node.window_area[0], &window_area, sizeof(window_area)), 0);
+    TEST_CHECK(fixture.node.window_count, 1);
+    TEST_CHECK(window_identity_test_release_count, 4);
+
+    window_identity_test_end(&fixture);
+    window_manager_test_ax_window_id = saved_id;
+    window_manager_identity_ax_pid = saved_pid;
+    window_manager_identity_create_candidate = saved_create;
+    window_manager_identity_release = saved_release;
+    window_test_ref_release = saved_window_release;
+})
+
+static enum window_identity_replace_error window_identity_test_attempt(
+    struct window_identity_test_fixture *fixture)
+{
+    return window_manager_replace_window_identity(
+        &fixture->sm, &fixture->wm, &fixture->ms, fixture->old_id, fixture->new_id,
+        window_identity_test_new_ref());
+}
+
+enum window_identity_test_rejection_case
+{
+    WINDOW_IDENTITY_TEST_OBSERVATION,
+    WINDOW_IDENTITY_TEST_MOUSE,
+    WINDOW_IDENTITY_TEST_CORRECTION,
+    WINDOW_IDENTITY_TEST_FEEDBACK,
+    WINDOW_IDENTITY_TEST_ANIMATION,
+    WINDOW_IDENTITY_TEST_INCOMPATIBLE,
+    WINDOW_IDENTITY_TEST_NEW_TREE_ID,
+    WINDOW_IDENTITY_TEST_DUPLICATE_OLD_ID,
+    WINDOW_IDENTITY_TEST_SCRATCHPAD,
+    WINDOW_IDENTITY_TEST_RULE_DESTINATION
+};
+
+static bool window_identity_test_rejection(
+    enum window_identity_test_rejection_case rejection,
+    enum window_identity_replace_error expected)
+{
+    struct window_identity_test_fixture fixture;
+    window_identity_test_begin(&fixture, true);
+    switch (rejection) {
+    case WINDOW_IDENTITY_TEST_OBSERVATION:
+        fixture.window.notification = 1;
+        break;
+    case WINDOW_IDENTITY_TEST_MOUSE:
+        fixture.ms.current_action = MOUSE_MODE_MOVE;
+        break;
+    case WINDOW_IDENTITY_TEST_CORRECTION:
+        fixture.window.frame_correction_pending = true;
+        break;
+    case WINDOW_IDENTITY_TEST_FEEDBACK: {
+        uint32_t key = 1;
+        table_add(&fixture.wm.insert_feedback, &key, &fixture.node);
+    } break;
+    case WINDOW_IDENTITY_TEST_ANIMATION: {
+        uint32_t key = 1;
+        table_add(&fixture.wm.window_animations_table, &key, &fixture.window);
+    } break;
+    case WINDOW_IDENTITY_TEST_INCOMPATIBLE:
+        window_identity_test_candidate_flags |= WINDOW_FULLSCREEN;
+        break;
+    case WINDOW_IDENTITY_TEST_NEW_TREE_ID:
+        fixture.node.window_count = 2;
+        fixture.node.window_list[1] = fixture.new_id;
+        fixture.node.window_order[1] = fixture.new_id;
+        break;
+    case WINDOW_IDENTITY_TEST_DUPLICATE_OLD_ID:
+        fixture.node.window_count = 2;
+        fixture.node.window_list[1] = fixture.old_id;
+        fixture.node.window_order[1] = fixture.old_id;
+        break;
+    case WINDOW_IDENTITY_TEST_SCRATCHPAD:
+        fixture.scratchpad_label = strdup("bad");
+        fixture.window.scratchpad = fixture.scratchpad_label;
+        break;
+    case WINDOW_IDENTITY_TEST_RULE_DESTINATION:
+        fixture.wm.rules[0].one_shot_window_id = fixture.new_id;
+        break;
+    }
+    uint32_t before_id = fixture.window.id;
+    struct window *before_lookup = window_manager_find_window(&fixture.wm, fixture.old_id);
+    enum window_identity_replace_error actual = window_identity_test_attempt(&fixture);
+    bool unchanged = actual == expected && fixture.window.id == before_id &&
+                     window_manager_find_window(&fixture.wm, fixture.old_id) == before_lookup &&
+                     window_manager_find_window(&fixture.wm, fixture.new_id) == NULL &&
+                     fixture.node.window_list[0] == fixture.old_id &&
+                     fixture.node.window_order[0] == fixture.old_id;
+    window_identity_test_end(&fixture);
+    return unchanged;
+}
+
+TEST_FUNC(window_identity_transaction_rejects_collisions_busy_state_and_invariants_without_mutation,
+{
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_pid = window_manager_identity_ax_pid;
+    __auto_type saved_create = window_manager_identity_create_candidate;
+    __auto_type saved_release = window_manager_identity_release;
+    __auto_type saved_window_release = window_test_ref_release;
+    window_manager_test_ax_window_id = window_identity_test_ax_window_id;
+    window_manager_identity_ax_pid = window_identity_test_ax_pid;
+    window_manager_identity_create_candidate = window_identity_test_candidate;
+    window_manager_identity_release = window_identity_test_release;
+    window_test_ref_release = window_identity_test_release;
+
+    const struct {
+        enum window_identity_test_rejection_case rejection;
+        enum window_identity_replace_error expected;
+    } cases[] = {
+        { WINDOW_IDENTITY_TEST_OBSERVATION, WINDOW_IDENTITY_REPLACE_OBSERVATION_ACTIVE },
+        { WINDOW_IDENTITY_TEST_MOUSE, WINDOW_IDENTITY_REPLACE_BUSY_MOUSE },
+        { WINDOW_IDENTITY_TEST_CORRECTION, WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION },
+        { WINDOW_IDENTITY_TEST_FEEDBACK, WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK },
+        { WINDOW_IDENTITY_TEST_ANIMATION, WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION },
+        { WINDOW_IDENTITY_TEST_INCOMPATIBLE, WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW },
+        { WINDOW_IDENTITY_TEST_NEW_TREE_ID, WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT },
+        { WINDOW_IDENTITY_TEST_DUPLICATE_OLD_ID, WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION },
+        { WINDOW_IDENTITY_TEST_SCRATCHPAD, WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION },
+        { WINDOW_IDENTITY_TEST_RULE_DESTINATION, WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT }
+    };
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        TEST_CHECK(window_identity_test_rejection(cases[i].rejection, cases[i].expected), true);
+    }
+
+    struct window_identity_test_fixture fixture;
+    window_identity_test_begin(&fixture, false);
+    window_identity_test_ax_id = fixture.new_id + 1;
+    TEST_CHECK(window_identity_test_attempt(&fixture), WINDOW_IDENTITY_REPLACE_AX_ID_MISMATCH);
+    window_identity_test_ax_id = fixture.new_id;
+    window_identity_test_pid = fixture.application.pid + 1;
+    TEST_CHECK(window_identity_test_attempt(&fixture), WINDOW_IDENTITY_REPLACE_AX_PID_MISMATCH);
+    window_identity_test_end(&fixture);
+
+    window_manager_test_ax_window_id = saved_id;
+    window_manager_identity_ax_pid = saved_pid;
+    window_manager_identity_create_candidate = saved_create;
+    window_manager_identity_release = saved_release;
+    window_test_ref_release = saved_window_release;
+})
+
+TEST_FUNC(window_identity_transaction_consumes_refs_on_early_rejection,
+{
+    __auto_type saved_id = window_manager_test_ax_window_id;
+    __auto_type saved_pid = window_manager_identity_ax_pid;
+    __auto_type saved_create = window_manager_identity_create_candidate;
+    __auto_type saved_release = window_manager_identity_release;
+    __auto_type saved_window_release = window_test_ref_release;
+    window_manager_test_ax_window_id = window_identity_test_ax_window_id;
+    window_manager_identity_ax_pid = window_identity_test_ax_pid;
+    window_manager_identity_create_candidate = window_identity_test_candidate;
+    window_manager_identity_release = window_identity_test_release;
+    window_test_ref_release = window_identity_test_release;
+
+    struct window_identity_test_fixture fixture;
+    window_identity_test_begin(&fixture, false);
+    TEST_CHECK(window_manager_replace_window_identity(
+        NULL, &fixture.wm, &fixture.ms, fixture.old_id, fixture.new_id,
+        window_identity_test_new_ref()), WINDOW_IDENTITY_REPLACE_INVALID_ARGUMENT);
+    TEST_CHECK(window_identity_test_release_count, 1);
+    TEST_CHECK(window_manager_replace_window_identity(
+        &fixture.sm, &fixture.wm, &fixture.ms, fixture.old_id, fixture.old_id,
+        window_identity_test_new_ref()), WINDOW_IDENTITY_REPLACE_SAME_ID);
+    TEST_CHECK(window_identity_test_release_count, 2);
+    TEST_CHECK(window_manager_replace_window_identity(
+        &fixture.sm, &fixture.wm, &fixture.ms, fixture.old_id + 9, fixture.new_id,
+        window_identity_test_new_ref()), WINDOW_IDENTITY_REPLACE_SOURCE_NOT_FOUND);
+    TEST_CHECK(window_identity_test_release_count, 3);
+    struct window collision = { .id = fixture.new_id };
+    table_add(&fixture.wm.window, &collision.id, &collision);
+    TEST_CHECK(window_identity_test_attempt(&fixture), WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT);
+    TEST_CHECK(window_identity_test_release_count, 4);
+    TEST_CHECK(window_manager_find_window(&fixture.wm, fixture.old_id), &fixture.window);
+    TEST_CHECK(window_manager_find_window(&fixture.wm, fixture.new_id), &collision);
+    window_identity_test_end(&fixture);
+
+    window_manager_test_ax_window_id = saved_id;
+    window_manager_identity_ax_pid = saved_pid;
+    window_manager_identity_create_candidate = saved_create;
+    window_manager_identity_release = saved_release;
+    window_test_ref_release = saved_window_release;
+})
 
 TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
 {
@@ -646,11 +1123,6 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
     view_test_set_platform_ops(&ops);
     space_manager_test_swap_window_list = space_swap_test_inventory;
 
-    TEST_CHECK(space_window_inventory_is_complete(0, 0, 0), true);
-    TEST_CHECK(space_window_inventory_is_complete(2, 1, 1), false);
-    TEST_CHECK(space_window_inventory_is_complete(2, 2, 1), false);
-    TEST_CHECK(space_window_inventory_is_complete(2, 2, 2), true);
-
     for (int failed_inventory = 1; failed_inventory <= 2; ++failed_inventory) {
         memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
         table_init(&g_space_manager.view, 4, hash_view, compare_view);
@@ -703,6 +1175,161 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
     view_test_set_platform_ops(NULL);
     g_space_manager.view = saved_views;
     g_window_manager.window_animation_duration = saved_animation_duration;
+});
+
+static bool window_manager_animation_test_reduce_motion;
+static int window_manager_animation_test_async_calls;
+static int window_manager_animation_test_async_windows;
+static int window_manager_animation_test_direct_calls;
+static int window_manager_animation_test_highlight_refresh_calls;
+static uint32_t window_manager_animation_test_highlight_target_wid;
+static CGRect window_manager_animation_test_highlight_frame;
+static bool window_manager_animation_test_highlight_has_frame;
+
+static struct accessibility_display_preferences window_manager_animation_test_preferences(void)
+{
+    return (struct accessibility_display_preferences) {
+        .reduce_motion = window_manager_animation_test_reduce_motion
+    };
+}
+
+static void window_manager_animation_test_async(struct window_capture *captures, int count)
+{
+    if (captures && count > 0) {
+        ++window_manager_animation_test_async_calls;
+        window_manager_animation_test_async_windows += count;
+    }
+}
+
+static void window_manager_animation_test_direct(struct window *window, float x, float y,
+                                                 float width, float height)
+{
+    (void) window;
+    (void) x;
+    (void) y;
+    (void) width;
+    (void) height;
+    ++window_manager_animation_test_direct_calls;
+}
+
+static void window_manager_animation_test_highlight_refresh(struct window_manager *wm,
+                                                            uint32_t target_wid,
+                                                            const CGRect *target_frame)
+{
+    (void) wm;
+    ++window_manager_animation_test_highlight_refresh_calls;
+    window_manager_animation_test_highlight_target_wid = target_wid;
+    window_manager_animation_test_highlight_has_frame = target_frame != NULL;
+    if (target_frame) window_manager_animation_test_highlight_frame = *target_frame;
+}
+
+TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configuration,
+{
+    __auto_type saved_preferences = window_manager_animation_preferences;
+    __auto_type saved_async = window_manager_animation_async_route;
+    __auto_type saved_direct = window_manager_animation_direct_route;
+    float saved_duration = g_window_manager.window_animation_duration;
+    window_manager_animation_preferences = window_manager_animation_test_preferences;
+    window_manager_animation_async_route = window_manager_animation_test_async;
+    window_manager_animation_direct_route = window_manager_animation_test_direct;
+
+    struct window first = { .id = 1 };
+    struct window second = { .id = 2 };
+    struct window_capture captures[] = {
+        { .window = &first, .x = 1, .y = 2, .w = 3, .h = 4 },
+        { .window = &second, .x = 5, .y = 6, .w = 7, .h = 8 }
+    };
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animation_test_async_calls = 0;
+    window_manager_animation_test_async_windows = 0;
+    window_manager_animation_test_direct_calls = 0;
+    g_window_manager.window_animation_duration = 0.0f;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 0);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+
+    window_manager_animation_test_direct_calls = 0;
+    g_window_manager.window_animation_duration = 0.25f;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 1);
+    TEST_CHECK(window_manager_animation_test_async_windows, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 0);
+
+    window_manager_animation_test_reduce_motion = true;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_async_calls, 1);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_async_calls, 2);
+    TEST_CHECK(window_manager_animation_test_async_windows, 3);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+
+    window_manager_animation_test_reduce_motion = true;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_async_calls, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 3);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
+
+    g_window_manager.window_animation_duration = saved_duration;
+    window_manager_animation_preferences = saved_preferences;
+    window_manager_animation_async_route = saved_async;
+    window_manager_animation_direct_route = saved_direct;
+});
+
+TEST_FUNC(window_animation_direct_refresh_uses_capture_geometry,
+{
+    __auto_type saved_preferences = window_manager_animation_preferences;
+    __auto_type saved_direct = window_manager_animation_direct_route;
+    __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
+    float saved_duration = g_window_manager.window_animation_duration;
+    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    window_manager_animation_preferences = window_manager_animation_test_preferences;
+    window_manager_animation_direct_route = window_manager_animation_test_direct;
+    window_manager_test_active_window_highlight_refresh_observer = window_manager_animation_test_highlight_refresh;
+
+    struct window first = { .id = 1 };
+    struct window second = { .id = 2 };
+    struct window_capture captures[] = {
+        { .window = &first, .x = 1, .y = 2, .w = 3, .h = 4 },
+        { .window = &second, .x = 5, .y = 6, .w = 7, .h = 8 }
+    };
+
+    window_manager_animation_test_reduce_motion = false;
+    window_manager_animation_test_direct_calls = 0;
+    window_manager_animation_test_highlight_refresh_calls = 0;
+    g_window_manager.window_animation_duration = 0.0f;
+    g_window_manager.focused_window_id = second.id;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_direct_calls, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 1);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, second.id);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, true);
+    TEST_CHECK(CGRectEqualToRect(window_manager_animation_test_highlight_frame,
+                                 CGRectMake(5, 6, 7, 8)), true);
+
+    g_window_manager.focused_window_id = 99;
+    window_manager_animate_window_list(captures, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 2);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, 0U);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, false);
+
+    g_window_manager.focused_window_id = first.id;
+    window_manager_animate_window(captures[0]);
+    TEST_CHECK(window_manager_animation_test_highlight_refresh_calls, 3);
+    TEST_CHECK(window_manager_animation_test_highlight_target_wid, first.id);
+    TEST_CHECK(window_manager_animation_test_highlight_has_frame, true);
+    TEST_CHECK(CGRectEqualToRect(window_manager_animation_test_highlight_frame,
+                                 CGRectMake(1, 2, 3, 4)), true);
+
+    g_window_manager.focused_window_id = saved_focused_window_id;
+    g_window_manager.window_animation_duration = saved_duration;
+    window_manager_animation_preferences = saved_preferences;
+    window_manager_animation_direct_route = saved_direct;
+    window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
 });
 
 TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,

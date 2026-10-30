@@ -24,6 +24,25 @@ enum window_op_error
     WINDOW_OP_ERROR_SPACE_MOVE_FAILED,
 };
 
+enum window_identity_replace_error
+{
+    WINDOW_IDENTITY_REPLACE_SUCCESS = 0,
+    WINDOW_IDENTITY_REPLACE_INVALID_ARGUMENT,
+    WINDOW_IDENTITY_REPLACE_SAME_ID,
+    WINDOW_IDENTITY_REPLACE_SOURCE_NOT_FOUND,
+    WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT,
+    WINDOW_IDENTITY_REPLACE_AX_ID_MISMATCH,
+    WINDOW_IDENTITY_REPLACE_AX_PID_MISMATCH,
+    WINDOW_IDENTITY_REPLACE_PREPARE_FAILED,
+    WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION,
+    WINDOW_IDENTITY_REPLACE_OBSERVATION_ACTIVE,
+    WINDOW_IDENTITY_REPLACE_BUSY_MOUSE,
+    WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK,
+    WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION,
+    WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION,
+    WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW
+};
+
 enum managed_window_result
 {
     MANAGED_WINDOW_FAILED,
@@ -88,6 +107,9 @@ static const char *window_focus_fallback_str[] =
     "recent"
 };
 
+struct mouse_state;
+struct space_manager;
+
 struct scratchpad
 {
     char *label;
@@ -129,6 +151,11 @@ struct window_manager
     float window_opacity_duration;
     float window_animation_duration;
     int window_animation_easing;
+    bool enable_active_window_highlight;
+    struct rgba_color active_window_highlight_color;
+    float active_window_highlight_radius;
+    float active_window_highlight_width;
+    struct active_window_highlight active_window_highlight;
     struct rgba_color insert_feedback_color;
     float insert_feedback_radius;
     float insert_feedback_width;
@@ -204,6 +231,13 @@ void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t w
 uint32_t window_manager_ax_window_id(AXUIElementRef window_ref);
 AXUIElementRef window_manager_copy_application_window_ref(struct application *application, uint32_t window_id);
 bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window, AXUIElementRef window_ref);
+/* Structural primitive only: consumes new_ax_ref, emits no events/signals, performs no
+ * observer/subscription work, and creates no old-ID alias. */
+enum window_identity_replace_error
+window_manager_replace_window_identity(struct space_manager *sm, struct window_manager *wm,
+                                       struct mouse_state *ms, uint32_t old_id, uint32_t new_id,
+                                       AXUIElementRef new_ax_ref);
+void window_manager_invalidate_window_constraints(struct window_manager *wm);
 bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window);
 struct window *window_manager_find_window(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_window(struct window_manager *wm, uint32_t window_id);
@@ -219,6 +253,11 @@ void window_manager_set_purify_mode(struct window_manager *wm, enum purify_mode 
 void window_manager_set_menubar_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_active_window_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_normal_window_opacity(struct window_manager *wm, float opacity);
+void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled);
+void window_manager_refresh_active_window_highlight(struct window_manager *wm);
+void window_manager_refresh_active_window_highlight_for_frame(struct window_manager *wm, uint32_t window_id, CGRect frame);
+void window_manager_reorder_active_window_highlight(struct window_manager *wm);
+void window_manager_hide_active_window_highlight(struct window_manager *wm);
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled);
 bool window_manager_set_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_window_opacity(struct window_manager *wm, struct window *window, float opacity);

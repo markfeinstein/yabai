@@ -95,7 +95,7 @@ void insert_feedback_show(struct window_node *node)
         SLSReenableUpdate(g_connection);
         SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
         table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
         }
     }
@@ -187,7 +187,7 @@ void insert_feedback_destroy(struct window_node *node)
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
 
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
         }
 
@@ -204,7 +204,7 @@ void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id)
         table_remove(&g_window_manager.insert_feedback, &prev_window_id);
         table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
 
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
         }
     }
@@ -218,7 +218,7 @@ static void insert_feedback_adopt(struct window_node *parent, struct window_node
         memset(&child->feedback_window, 0, sizeof(struct feedback_window));
         table_add(&g_window_manager.insert_feedback, &parent->window_order[0], parent);
 
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
         }
     }
@@ -629,7 +629,7 @@ void window_node_swap_window_list(struct window_node *a_node, struct window_node
         if (a_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &a_node->window_order[0], a_node);
         if (b_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &b_node->window_order[0], b_node);
 
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
         }
     }

@@ -41,6 +41,14 @@
     "window_opacity_duration": 0.0,
     "active_window_opacity": 1.0,
     "normal_window_opacity": 0.9,
+
+    // Active-window highlighting uses a click-through WindowServer overlay and
+    // does not require the scripting addition.
+    "active_window_highlight": false,
+    "active_window_highlight_color": 4294953984, // 0xffffcc00
+    "active_window_highlight_radius": 9,
+    "active_window_highlight_width": 4,
+
     "insert_feedback_radius": 9,
     "insert_feedback_width": 2,
     "window_animation_duration": 0.0,

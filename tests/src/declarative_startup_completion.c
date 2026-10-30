@@ -1,35 +1,20 @@
 struct declarative_startup_completion_workspace_version
 {
-    bool tahoe;
-    bool sequoia;
-    bool sonoma;
-    bool ventura;
-    bool monterey;
-    bool bigsur;
+    long major;
 };
 
 static struct declarative_startup_completion_workspace_version
     declarative_startup_completion_test_capture_workspace_version(void)
 {
     return (struct declarative_startup_completion_workspace_version) {
-        .tahoe = _workspace_is_macos_version_tahoe,
-        .sequoia = _workspace_is_macos_version_sequoia,
-        .sonoma = _workspace_is_macos_version_sonoma,
-        .ventura = _workspace_is_macos_version_ventura,
-        .monterey = _workspace_is_macos_version_monterey,
-        .bigsur = _workspace_is_macos_version_bigsur
+        .major = workspace_macos_major_version()
     };
 }
 
 static void declarative_startup_completion_test_restore_workspace_version(
     struct declarative_startup_completion_workspace_version version)
 {
-    _workspace_is_macos_version_tahoe = version.tahoe;
-    _workspace_is_macos_version_sequoia = version.sequoia;
-    _workspace_is_macos_version_sonoma = version.sonoma;
-    _workspace_is_macos_version_ventura = version.ventura;
-    _workspace_is_macos_version_monterey = version.monterey;
-    _workspace_is_macos_version_bigsur = version.bigsur;
+    workspace_set_macos_version(version.major);
 }
 
 struct declarative_startup_completion_test_context

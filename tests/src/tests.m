@@ -97,7 +97,21 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "area.c"
 #include "display.c"
 #include "window.c"
+#include "window_constraints.c"
+#include "accessibility_preferences.c"
+#include "window_management_bridge.c"
+#include "native_tile_diagnostic.c"
+#include "../../scripts/display_cadence_diagnostic_core.c"
+#include "window_corner_geometry.c"
+#include "window_server_snapshot.c"
+#include "window_server_tags.c"
+#include "window_server_classifier.c"
+#include "window_server_hit_test.c"
+#include "window_server_tag_corpus.c"
+#include "native_tab_event_recorder.c"
+#include "space_window_inventory.c"
 #include "view.c"
+#include "active_window_highlight.c"
 #include "accordion.c"
 #include "window_manager.c"
 #include "process_manager.c"
@@ -108,6 +122,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "event_queue.c"
 #include "menu_bar_model.c"
 #include "menu_bar_manager.c"
+#include "snapshot_reuse.c"
 #include "message.c"
 #include "declarative_config.c"
 #include "declarative_modes.c"
@@ -137,6 +152,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "daemon_identity.c"
 #include "sa_message.c"
 #include "deferred_convergence.c"
+#include "animation_clock.c"
 #include "animation_failure.c"
 #include "doctor.c"
 #undef TEST_ENTRY
@@ -1531,23 +1547,6 @@ static bool g_native_resize_live_frame_override;
 static CGRect g_native_resize_live_frame;
 static int g_native_resize_restore_count;
 
-enum native_resize_ax_frame_case
-{
-    NATIVE_RESIZE_AX_FRAME_VALID,
-    NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL,
-    NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL,
-    NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE,
-    NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE,
-    NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL,
-    NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL,
-    NATIVE_RESIZE_AX_FRAME_NONFINITE,
-    NATIVE_RESIZE_AX_FRAME_NONPOSITIVE
-};
-
-static enum native_resize_ax_frame_case g_native_resize_ax_frame_case;
-static CGRect g_native_resize_ax_frame;
-static int g_native_resize_ax_release_count;
-
 static bool test_native_resize_space_visible(uint64_t sid)
 {
     (void) sid;
@@ -1567,53 +1566,6 @@ static bool test_native_resize_live_frame(struct window *window, CGRect *frame)
     *frame = g_native_resize_live_frame_override ? g_native_resize_live_frame
                                                   : g_mouse_state.native_resize.latest_frame;
     return true;
-}
-
-static AXError test_native_resize_ax_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
-{
-    (void) element;
-    bool position = CFEqual(attribute, kAXPositionAttribute);
-    *value = NULL;
-    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL) {
-        return kAXErrorCannotComplete;
-    }
-    if (!position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL) {
-        return kAXErrorCannotComplete;
-    }
-    if (position && g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE) {
-        *value = CFRetain(CFSTR("not-an-ax-value"));
-        return kAXErrorSuccess;
-    }
-    if (position) {
-        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE) {
-            CGSize size = g_native_resize_ax_frame.size;
-            *value = AXValueCreate(kAXValueTypeCGSize, &size);
-        } else {
-            CGPoint point = g_native_resize_ax_frame.origin;
-            if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONFINITE) point.x = NAN;
-            *value = AXValueCreate(kAXValueTypeCGPoint, &point);
-        }
-    } else {
-        CGSize size = g_native_resize_ax_frame.size;
-        if (g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_NONPOSITIVE) size.width = 0.0;
-        *value = AXValueCreate(kAXValueTypeCGSize, &size);
-    }
-    return *value ? kAXErrorSuccess : kAXErrorFailure;
-}
-
-static Boolean test_native_resize_ax_get(AXValueRef value, AXValueType type, void *result)
-{
-    if (type == kAXValueTypeCGPoint &&
-        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL) return false;
-    if (type == kAXValueTypeCGSize &&
-        g_native_resize_ax_frame_case == NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL) return false;
-    return AXValueGetValue(value, type, result);
-}
-
-static void test_native_resize_ax_release(CFTypeRef value)
-{
-    ++g_native_resize_ax_release_count;
-    CFRelease(value);
 }
 
 static void test_native_resize_schedule(uint32_t generation, uint64_t delay)
@@ -1662,9 +1614,6 @@ struct native_resize_test_fixture
     void (*schedule_hook)(uint32_t, uint64_t);
     void (*restore_hook)(uint32_t);
     bool (*live_frame_hook)(struct window *, CGRect *);
-    AXError (*ax_copy_hook)(AXUIElementRef, CFStringRef, CFTypeRef *);
-    Boolean (*ax_get_hook)(AXValueRef, AXValueType, void *);
-    void (*ax_release_hook)(CFTypeRef);
     void (*drop_hook)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *);
     struct window window;
     struct window_node node;
@@ -1683,9 +1632,6 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->schedule_hook = event_loop_test_native_resize_schedule;
     fixture->restore_hook = event_loop_test_native_resize_restore;
     fixture->live_frame_hook = event_loop_test_native_resize_live_frame;
-    fixture->ax_copy_hook = event_loop_test_native_resize_ax_copy;
-    fixture->ax_get_hook = event_loop_test_native_resize_ax_get;
-    fixture->ax_release_hook = event_loop_test_native_resize_ax_release;
     fixture->drop_hook = event_loop_test_mouse_drop_try_adjust_bsp_grid;
 
     table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
@@ -1698,6 +1644,7 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->window = (struct window) {
         .id = wid, .frame = { { 20.0f, 30.0f }, { 400.0f, 300.0f } }, .flags = WINDOW_RESIZABLE
     };
+    fixture->window.ref = AXUIElementCreateApplication(getpid());
     fixture->window.id_ptr = &fixture->window.id;
     table_add(&g_window_manager.window, &fixture->window.id, &fixture->window);
     table_add(&g_window_manager.managed_window, &fixture->window.id, &fixture->view);
@@ -1710,9 +1657,6 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     g_native_resize_live_frame_override = false;
     g_native_resize_live_frame = CGRectZero;
     g_native_resize_restore_count = 0;
-    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
-    g_native_resize_ax_frame = CGRectZero;
-    g_native_resize_ax_release_count = 0;
     g_mouse_drop_adjust_call_count = 0;
     event_loop_test_native_resize_space_visible = test_native_resize_space_visible;
     event_loop_test_native_resize_schedule = test_native_resize_schedule;
@@ -1727,11 +1671,9 @@ static void native_resize_test_end(struct native_resize_test_fixture *fixture)
     event_loop_test_native_resize_schedule = fixture->schedule_hook;
     event_loop_test_native_resize_restore = fixture->restore_hook;
     event_loop_test_native_resize_live_frame = fixture->live_frame_hook;
-    event_loop_test_native_resize_ax_copy = fixture->ax_copy_hook;
-    event_loop_test_native_resize_ax_get = fixture->ax_get_hook;
-    event_loop_test_native_resize_ax_release = fixture->ax_release_hook;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = fixture->drop_hook;
     g_mouse_state = fixture->mouse_state;
+    if (fixture->window.ref) CFRelease(fixture->window.ref);
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.managed_window);
     g_window_manager.window = fixture->windows;
@@ -1949,55 +1891,57 @@ TEST_FUNC(native_edge_resize_strict_live_ax_frame_validation_restores_failures,
     struct native_resize_test_fixture fixture;
     native_resize_test_begin(&fixture, 998);
     event_loop_test_native_resize_live_frame = NULL;
-    event_loop_test_native_resize_ax_copy = test_native_resize_ax_copy;
-    event_loop_test_native_resize_ax_get = test_native_resize_ax_get;
-    event_loop_test_native_resize_ax_release = test_native_resize_ax_release;
-    g_native_resize_ax_frame = CGRectMake(20.0f, 30.0f, 410.0f, 300.0f);
+    CGRect target = CGRectMake(20.0f, 30.0f, 410.0f, 300.0f);
 
-    struct {
-        enum native_resize_ax_frame_case test_case;
-        int released;
-    } failures[] = {
-        { NATIVE_RESIZE_AX_FRAME_POSITION_COPY_FAIL, 0 },
-        { NATIVE_RESIZE_AX_FRAME_SIZE_COPY_FAIL, 1 },
-        { NATIVE_RESIZE_AX_FRAME_WRONG_CF_TYPE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_WRONG_AX_TYPE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_POINT_GET_FAIL, 2 },
-        { NATIVE_RESIZE_AX_FRAME_SIZE_GET_FAIL, 2 },
-        { NATIVE_RESIZE_AX_FRAME_NONFINITE, 2 },
-        { NATIVE_RESIZE_AX_FRAME_NONPOSITIVE, 2 }
+    enum window_ax_snapshot_test_mode failures[] = {
+        WINDOW_AX_SNAPSHOT_TEST_NONFINITE,
+        WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE
     };
     for (size_t i = 0; i < array_count(failures); ++i) {
+        window_ax_snapshot_test_begin(failures[i]);
+        window_ax_snapshot_test_frame_value = target;
         native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
-        TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
-                                         g_native_resize_ax_frame, true), true);
+        TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
         native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
-        g_native_resize_ax_frame_case = failures[i].test_case;
-        g_native_resize_ax_release_count = 0;
         int restore_before = g_native_resize_restore_count;
         int adjust_before = g_mouse_drop_adjust_call_count;
         EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
             (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
-        TEST_CHECK(g_native_resize_ax_release_count, failures[i].released);
         TEST_CHECK(g_native_resize_restore_count, restore_before + 1);
         TEST_CHECK(g_mouse_drop_adjust_call_count, adjust_before);
         TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+        window_ax_snapshot_test_end();
     }
 
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
+    window_ax_snapshot_test_frame_value = target;
+    window_ax_snapshot_test_fallback_frame_value = target;
+    window_ax_snapshot_test_size_fallback_failure = true;
     native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
-    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
-                                     g_native_resize_ax_frame, true), true);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
     native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
-    g_native_resize_ax_frame_case = NATIVE_RESIZE_AX_FRAME_VALID;
-    g_native_resize_ax_release_count = 0;
     int restore_before = g_native_resize_restore_count;
     EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
         (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
-    TEST_CHECK(g_native_resize_ax_release_count, 2);
+    TEST_CHECK(g_native_resize_restore_count, restore_before + 1);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    window_ax_snapshot_test_end();
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    window_ax_snapshot_test_fallback_frame_value = target;
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node, target, true), true);
+    native_resize_test_mouse_up(CGPointMake(430.0f, 150.0f));
+    restore_before = g_native_resize_restore_count;
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
     TEST_CHECK(g_native_resize_restore_count, restore_before);
     TEST_CHECK(g_mouse_drop_adjust_call_count, 1);
     TEST_CHECK(g_mouse_drop_adjust_info.dw, 10.0f);
     TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 2);
+    window_ax_snapshot_test_end();
 
     native_resize_test_end(&fixture);
 });
@@ -2619,12 +2563,7 @@ TEST_FUNC(insert_feedback_invalid_direction_and_no_action_cleanup,
 
 TEST_FUNC(insert_feedback_rekeys_on_stack_order_mutations,
 {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     workspace_set_macos_version(15);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
@@ -2690,22 +2629,12 @@ TEST_FUNC(insert_feedback_rekeys_on_stack_order_mutations,
     table_free(&g_window_manager.insert_feedback);
     memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
 
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
 });
 
 TEST_FUNC(insert_feedback_rekeys_collapsed_child_before_free,
 {
-    bool saved_tahoe = _workspace_is_macos_version_tahoe;
-    bool saved_sequoia = _workspace_is_macos_version_sequoia;
-    bool saved_sonoma = _workspace_is_macos_version_sonoma;
-    bool saved_ventura = _workspace_is_macos_version_ventura;
-    bool saved_monterey = _workspace_is_macos_version_monterey;
-    bool saved_bigsur = _workspace_is_macos_version_bigsur;
+    long saved_macos_version = workspace_macos_major_version();
 
     workspace_set_macos_version(15);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
@@ -2742,12 +2671,7 @@ TEST_FUNC(insert_feedback_rekeys_collapsed_child_before_free,
     table_free(&g_window_manager.insert_feedback);
     memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
 
-    _workspace_is_macos_version_tahoe = saved_tahoe;
-    _workspace_is_macos_version_sequoia = saved_sequoia;
-    _workspace_is_macos_version_sonoma = saved_sonoma;
-    _workspace_is_macos_version_ventura = saved_ventura;
-    _workspace_is_macos_version_monterey = saved_monterey;
-    _workspace_is_macos_version_bigsur = saved_bigsur;
+    workspace_set_macos_version(saved_macos_version);
 });
 
 TEST_FUNC(view_remove_window_node_sibling_collapse_requires_destination_reresolve,
@@ -2894,14 +2818,134 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     }
 });
 
+TEST_FUNC(display_cadence_core_stats_are_deterministic,
+{
+    const struct display_cadence_sample samples[] = {
+        { 10.0, 20.0 }, { 11.0, 21.0 }, { 13.0, 24.0 },
+        { 16.0, 28.0 }, { 20.0, 33.0 }
+    };
+    struct display_cadence_delta_stats stats = {0};
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(samples, 5), true);
+    TEST_CHECK(display_cadence_delta_stats(samples, 5, true, &stats), true);
+    TEST_CHECK(stats.count, 4U);
+    TEST_CHECK(stats.p50, 2.0);
+    TEST_CHECK(stats.p95, 4.0);
+    TEST_CHECK(stats.min, 1.0);
+    TEST_CHECK(stats.max, 4.0);
+    TEST_CHECK(display_cadence_delta_stats(samples, 5, false, &stats), true);
+    TEST_CHECK(stats.p50, 3.0);
+    TEST_CHECK(stats.p95, 5.0);
+});
+
+TEST_FUNC(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite,
+{
+    const struct display_cadence_sample regression[] = { { 1.0, 1.0 }, { 0.5, 2.0 } };
+    const struct display_cadence_sample duplicate[] = { { 1.0, 1.0 }, { 1.0, 2.0 } };
+    const struct display_cadence_sample zero_wall_delta[] = { { 1.0, 2.0 }, { 2.0, 2.0 } };
+    const struct display_cadence_sample nan_value[] = { { NAN, 1.0 } };
+    struct display_cadence_delta_stats stats = {0};
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(regression, 2), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(duplicate, 2), false);
+    TEST_CHECK(display_cadence_delta_stats(zero_wall_delta, 2, false, &stats), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(nan_value, 1), false);
+    TEST_CHECK(display_cadence_target_timestamps_are_monotonic(NULL, 0), true);
+});
+
+TEST_FUNC(display_cadence_stress_json_is_bounded_and_redacted,
+{
+    struct display_cadence_stress_lane lane = {
+        .facts = { .nominal_refresh_available = true, .nominal_refresh_hz = 120.0,
+                   .backing_scale_available = true, .backing_scale = 2.0 },
+        .cycles_seen = 4, .cycles_with_callback = 4,
+        .callback_count = 24, .callbacks_after_invalidate = 0
+    };
+    struct display_cadence_stress_metadata metadata = {
+        .source_revision = "stress-commit", .fixture_revision = "stress-fixture-v1",
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .cycles_requested = 4, .cycles_completed = 4, .reinventory_interval = 2,
+        .reinventory_count = 1, .screen_count = 1, .links_created = 4,
+        .cycles_with_all_lanes_callback = 4, .callbacks_before_invalidate = 24,
+        .active_cycle_seconds = 0.08, .invalidation_wait_seconds = 0.025,
+        .main_thread_load_ms = 5.0, .lane_completion_skew_max_seconds = 0.001,
+        .production_backend_unchanged = true
+    };
+    char output[4096] = {0};
+    FILE *stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_stress_write_json(stream, &metadata, &lane), true);
+        TEST_CHECK(strstr(output, "yabai.display-cadence-stress/v1") != NULL, true);
+        TEST_CHECK(strstr(output, "callbacks_after_invalidate\":0") != NULL, true);
+        TEST_CHECK(strstr(output, "production_backend_unchanged\":true") != NULL, true);
+        TEST_CHECK(strstr(output, "display-id") == NULL, true);
+        TEST_CHECK(strstr(output, "NSScreenNumber") == NULL, true);
+        TEST_CHECK(strstr(output, "Sensitive Display Name") == NULL, true);
+        TEST_CHECK(fclose(stream), 0);
+    }
+    metadata.cycles_requested = DISPLAY_CADENCE_DIAGNOSTIC_MAX_STRESS_CYCLES + 1;
+    stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_stress_write_json(stream, &metadata, &lane), false);
+        TEST_CHECK(fclose(stream), 0);
+    }
+});
+
+TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
+{
+    const struct display_cadence_sample samples[] = { { 1.0, 2.0 }, { 1.01, 2.02 } };
+    const struct display_cadence_screen screen = {
+        .nominal_refresh_available = true, .nominal_refresh_hz = 120.0,
+        .current_mode_refresh_available = true, .current_mode_refresh_hz = 119.88,
+        .backing_scale_available = true, .backing_scale = 2.0,
+        .series = { samples, 2, 2 }
+    };
+    const struct display_cadence_metadata metadata = {
+        .source_revision = "f699bc5f", .fixture_revision = "cadence-fixture-v1",
+        .os_version = "27.0.1", .os_build = "26A434", .architecture = "arm64",
+        .requested_duration_seconds = 1.0, .requested_max_samples = 100,
+        .screen_count = 1, .links_created = 1, .callbacks_before_invalidate = 2,
+        .callbacks_after_invalidate = 0, .invalidation_wait_seconds = 0.25,
+        .invalidation_wait_bounded = true, .production_backend_unchanged = true
+    };
+    char output[4096] = {0};
+    FILE *stream = fmemopen(output, sizeof(output), "w");
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(display_cadence_diagnostic_write_json(stream, &metadata, &screen), true);
+        TEST_CHECK(strstr(output, "display-cadence-diagnostic") != NULL, true);
+        TEST_CHECK(strstr(output, "strict-v1") != NULL, true);
+        TEST_CHECK(strstr(output, "production_backend_unchanged\":true") != NULL, true);
+        TEST_CHECK(strstr(output, "display-id") == NULL, true);
+        TEST_CHECK(strstr(output, "NSScreenNumber") == NULL, true);
+        TEST_CHECK(strstr(output, "absolute-origin") == NULL, true);
+        TEST_CHECK(strstr(output, "Sensitive Display Name") == NULL, true);
+        TEST_CHECK(fclose(stream), 0);
+    }
+});
+
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
+    TEST_ENTRY(window_management_bridge_exact_abi_runs_only_allowlisted_read) \
+    TEST_ENTRY(window_management_bridge_missing_and_mismatched_abi_fails_closed) \
+    TEST_ENTRY(window_management_bridge_tile_membership_is_aggregate_read_only_and_fail_closed) \
+    TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
+    TEST_ENTRY(native_tile_diagnostic_json_is_stable_aggregate_and_redacted) \
+    TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
+    TEST_ENTRY(display_cadence_core_stats_are_deterministic) \
+    TEST_ENTRY(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite) \
+    TEST_ENTRY(display_cadence_stress_json_is_bounded_and_redacted) \
+    TEST_ENTRY(display_cadence_core_json_is_redacted_and_machine_readable) \
     TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
     TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
     TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
     TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
+    TEST_ENTRY(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered) \
+    TEST_ENTRY(doctor_window_management_rows_are_advisory_and_redacted) \
     TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
     TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
+    TEST_ENTRY(doctor_screen_capture_requirement_uses_static_config_precedence_without_prompting) \
+    TEST_ENTRY(doctor_screen_capture_native_snapshot_failures_are_unknown) \
     TEST_ENTRY(doctor_service_requires_canonical_fields_mode_and_executable) \
     TEST_ENTRY(doctor_root_permission_checks_use_resolved_supplementary_groups) \
     TEST_ENTRY(doctor_root_permission_checks_use_effective_target_access) \
@@ -2935,8 +2979,57 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
     TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
     TEST_ENTRY(display_animation_query_excludes_bigsur_and_modern_releases) \
+    TEST_ENTRY(window_sub_level_message_id_tracks_tahoe_protocol) \
+    TEST_ENTRY(window_ax_snapshot_reads_and_owns_valid_batch_values) \
+    TEST_ENTRY(window_ax_snapshot_validates_slots_and_couples_frame_fallback) \
+    TEST_ENTRY(window_ax_snapshot_rejects_malformed_batch_shapes_and_types) \
+    TEST_ENTRY(window_ax_frame_status_uses_complete_validated_snapshots) \
+    TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
+    TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
+    TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
+    TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
+    TEST_ENTRY(window_constraints_normalize_validity_and_decoration_without_policy) \
+    TEST_ENTRY(window_constraints_reject_invalid_contradictory_and_out_of_range_fields) \
+    TEST_ENTRY(window_constraints_tolerance_and_absent_ax_are_explicit) \
+    TEST_ENTRY(accessibility_preferences_publish_all_combinations_and_missing_readers) \
+    TEST_ENTRY(accessibility_preferences_live_updates_are_coherent_and_teardown_is_final) \
+    TEST_ENTRY(accessibility_preferences_observer_failure_preserves_initial_snapshot) \
+    TEST_ENTRY(window_corner_geometry_rejects_nonarrays_counts_and_nonnumbers) \
+    TEST_ENTRY(window_corner_geometry_rejects_negative_nan_and_infinity) \
+    TEST_ENTRY(window_corner_geometry_preserves_zero_equal_and_asymmetric_source_order) \
+    TEST_ENTRY(window_corner_geometry_capability_is_resolved_but_production_paths_are_disabled) \
+    TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
+    TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
+    TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
+    TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
+    TEST_ENTRY(window_server_snapshot_corner_geometry_is_optional_owned_pod) \
+    TEST_ENTRY(window_server_snapshot_constraints_are_optional_owned_pod) \
+    TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
+    TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
+    TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
+    TEST_ENTRY(window_server_classifier_attribute_and_bit58_are_diagnostic_only) \
+    TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
+    TEST_ENTRY(window_server_hit_test_relation_classification_is_conservative) \
+    TEST_ENTRY(window_server_hit_test_comparison_is_optional_and_legacy_authoritative) \
+    TEST_ENTRY(window_manager_hit_test_skips_multiple_owned_cosmetic_windows) \
+    TEST_ENTRY(window_server_hit_test_concurrent_comparison_is_race_free) \
+    TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
+    TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
+    TEST_ENTRY(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files) \
+    TEST_ENTRY(native_tab_event_recorder_pairs_both_switch_event_orders_without_identity_decision) \
+    TEST_ENTRY(native_tab_event_recorder_separates_quiescent_inventory_episodes_and_tracks_reappearance) \
+    TEST_ENTRY(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle_explanations) \
+    TEST_ENTRY(native_tab_event_recorder_correlates_observed_lifecycle_with_control_marker) \
+    TEST_ENTRY(native_tab_event_recorder_enforces_deadlines_stale_events_capacity_and_stop) \
+    TEST_ENTRY(native_tab_event_recorder_marks_incomplete_inventory_and_secures_output) \
+    TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
+    TEST_ENTRY(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle) \
+    TEST_ENTRY(space_window_inventory_preserves_duplicates_empty_success_and_independent_output) \
+    TEST_ENTRY(space_window_inventory_fails_closed_for_candidates_snapshots_and_required_fields) \
+    TEST_ENTRY(space_window_inventory_fixed_seed_matches_frozen_legacy_filter) \
     TEST_ENTRY(window_observe_retries_only_transient_failures) \
     TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
+    TEST_ENTRY(window_serialization_prefers_snapshot_fields_and_falls_back_independently) \
     TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
     TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
     TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
@@ -2957,6 +3050,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
+    TEST_ENTRY(inactive_space_launch_invalid_snapshot_is_atomic_and_retried) \
     TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
     TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
     TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \
@@ -2984,9 +3078,11 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_loop_sync_submission_concurrent_with_shutdown_completes) \
     TEST_ENTRY(event_loop_bootstrap_failure_drains_queued_daemon_messages) \
     TEST_ENTRY(managed_window_correction_bounds_retries_and_rearms_from_signals) \
+    TEST_ENTRY(managed_window_correction_failed_reads_preserve_cache_and_advance_lease) \
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
+    TEST_ENTRY(duplicate_display_change_does_not_reserve_topology_recovery) \
     TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
     TEST_ENTRY(window_resize_debounce_preserves_fullscreen_state_transitions) \
@@ -3004,6 +3100,9 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(single_window_auto_split_uses_ordinary_root_geometry) \
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
+    TEST_ENTRY(active_window_highlight_geometry_is_bounded_and_outset) \
+    TEST_ENTRY(active_window_highlight_pending_geometry_rejects_stale_server_frame) \
+    TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
     TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
@@ -3015,6 +3114,12 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(startup_inventory_moves_rule_targets_without_following_space) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
+    TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
+    TEST_ENTRY(hashtable_rekey_is_allocation_free_and_preserves_value) \
+    TEST_ENTRY(window_identity_transaction_migrates_unmanaged_state_atomically) \
+    TEST_ENTRY(window_identity_transaction_migrates_managed_tree_without_geometry_changes) \
+    TEST_ENTRY(window_identity_transaction_rejects_collisions_busy_state_and_invariants_without_mutation) \
+    TEST_ENTRY(window_identity_transaction_consumes_refs_on_early_rejection) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
     TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
@@ -3022,6 +3127,8 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_space_move_prefers_observable_sa_then_verified_fallbacks) \
     TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
     TEST_ENTRY(cross_display_space_swap_is_transactional) \
+    TEST_ENTRY(window_animation_policy_honors_reduce_motion_without_mutating_configuration) \
+    TEST_ENTRY(window_animation_direct_refresh_uses_capture_geometry) \
     TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
     TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
     TEST_ENTRY(window_reconciliation_preserves_transient_fullscreen_exit_membership) \
@@ -3093,7 +3200,10 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(space_gesture_invalid_request)                   \
     TEST_ENTRY(view_padding_sum_widens_before_addition)         \
     TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
+    TEST_ENTRY(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks) \
+    TEST_ENTRY(window_visibility_handlers_query_order_before_snapshot_diagnostics) \
     TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
+    TEST_ENTRY(imperative_layout_transaction_synthesizes_identity_for_empty_uuid) \
     TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
     TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
@@ -3108,7 +3218,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(window_ordered_in_keeps_float)                   \
     TEST_ENTRY(window_reordered_stays_tiled)                    \
     TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
-    TEST_ENTRY(macos_version_newer_than_listed)                 \
+    TEST_ENTRY(macos_version_classifies_named_and_future_releases) \
     TEST_ENTRY(managed_space_topology_parsing_is_type_safe_and_ordered) \
     TEST_ENTRY(managed_space_ids_require_positive_signed_64_bit_values) \
     TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
@@ -3141,16 +3251,19 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(event_queue_binary_wake_converges_after_merges)   \
     TEST_ENTRY(focus_pending_accounting_is_saturating_and_owned) \
     TEST_ENTRY(producer_pending_state_rolls_back_and_retries_after_rejection) \
-    TEST_ENTRY(mach_send_uses_bounded_timeout) \
     TEST_ENTRY(animation_payload_packers_bound_batches_and_preserve_order) \
-    TEST_ENTRY(jankyborders_generations_supersede_stale_retries) \
+    TEST_ENTRY(animation_clock_cv_setup_stop_and_destroy_states_are_exact) \
+    TEST_ENTRY(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread) \
+    TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \
     TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
     TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
+    TEST_ENTRY(animation_replacement_proxy_preserves_corner_geometry) \
     TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
     TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
     TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
     TEST_ENTRY(animation_context_setup_allocation_and_connection_failures_cleanup) \
     TEST_ENTRY(animation_teardown_has_single_non_callback_owner) \
+    TEST_ENTRY(animation_teardown_order_stops_before_updates_and_releases_clock_before_connection) \
     TEST_ENTRY(animation_out_failure_retains_resources_until_confirmed) \
     TEST_ENTRY(animation_teardown_skips_replaced_ownership) \
     TEST_ENTRY(daemon_message_admission_bounds_and_reuses_slots) \
@@ -3189,6 +3302,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
     TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
+    TEST_ENTRY(message_window_query_reuses_inventory_snapshot_for_serialization) \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
     TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
@@ -3228,7 +3342,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_numeric_field_matrix)                           \
     TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
     TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
-    TEST_ENTRY(declarative_command_matrix_covers_all_43_query_invalid_and_mutation_paths) \
+    TEST_ENTRY(declarative_command_matrix_covers_all_settings_query_invalid_and_mutation_paths) \
     TEST_ENTRY(focus_follows_mouse_query_is_canonical_and_round_trips)       \
     TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
     TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
@@ -3238,7 +3352,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
     TEST_ENTRY(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects) \
     TEST_ENTRY(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation) \
-    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_43_typed_setters)   \
+    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_typed_setters)   \
     TEST_ENTRY(imperative_numeric_domain_table_matches_documented_contract)  \
     TEST_ENTRY(documented_numeric_domains_match_runtime_boundaries)           \
     TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
@@ -3336,6 +3450,7 @@ TEST_FUNC(mouse_drop_action_rollback_failstop_exits,
     TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
     TEST_ENTRY(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile) \
     TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \
+    TEST_ENTRY(declarative_reload_teardown_joins_reconcile_before_clearing_test_state) \
     TEST_ENTRY(declarative_modes_runtime_second_topology_gate_and_recovery) \
     TEST_ENTRY(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact) \
     TEST_ENTRY(declarative_reconcile_second_topology_gate_and_recovery) \
@@ -3457,8 +3572,39 @@ static struct {
 
 int main(int argc, char **argv)
 {
-    (void) argc;
-    (void) argv;
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-ax-frame") == 0) {
+        return window_ax_frame_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-snapshot") == 0) {
+        return window_server_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-space-window-inventory") == 0) {
+        return space_window_inventory_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-query-snapshot") == 0) {
+        return window_query_snapshot_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-snapshot-reuse") == 0) {
+        return snapshot_reuse_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-animation-clock") == 0) {
+        return animation_clock_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-tag-corpus") == 0) {
+        return window_server_tag_corpus_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-classifier") == 0) {
+        bool classifier = window_server_classifier_benchmark_run();
+        bool comparison = window_server_classifier_comparison_benchmark_run();
+        return classifier && comparison ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-constraints") == 0) {
+        return window_constraints_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && strcmp(argv[1], "--benchmark-window-server-hit-test") == 0) {
+        return window_server_hit_test_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize animation test mutex\n");
         return EXIT_FAILURE;

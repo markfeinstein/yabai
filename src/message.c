@@ -1708,6 +1708,20 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
+        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_INTERFACE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", menu_bar_manager_interface_string(menu_bar_manager_interface()));
+            } else {
+                enum menu_bar_interface interface;
+                if (menu_bar_manager_parse_interface(value.text, value.length, &interface)) {
+                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_INTERFACE,
+                        &(struct declarative_value) { .present = true, .enumeration = interface }, 0);
+                } else {
+                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                                value.length, value.text, command.length, command.text, domain.length, domain.text);
+                }
+            }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_STYLE)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
@@ -1759,6 +1773,46 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 fprintf(rsp, "%.4f\n", g_window_manager.normal_window_opacity);
             } else if (token_value_to_float(value, &real) && in_range_ei(real, 0.0f, 1.0f)) {
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_active_window_highlight]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, &(struct declarative_value) { .present = true, .boolean = false }, 0);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, &(struct declarative_value) { .present = true, .boolean = true }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR)) {
+            struct token_value value = token_to_value(get_token(&message));
+            if (value.type == TOKEN_TYPE_INVALID) {
+                fprintf(rsp, "0x%x\n", g_window_manager.active_window_highlight_color.p);
+            } else if (value.type == TOKEN_TYPE_U32 && value.u32_value) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR, &(struct declarative_value) { .present = true, .u32 = value.u32_value }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS)) {
+            struct token_value value = token_to_value(get_token(&message));
+            float real;
+            if (value.type == TOKEN_TYPE_INVALID) {
+                fprintf(rsp, "%.9g\n", g_window_manager.active_window_highlight_radius);
+            } else if (token_value_to_float(value, &real) && real >= 0.0f && isfinite(real)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &(struct declarative_value) { .present = true, .real = real }, 0);
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH)) {
+            struct token_value value = token_to_value(get_token(&message));
+            float real;
+            if (value.type == TOKEN_TYPE_INVALID) {
+                fprintf(rsp, "%.9g\n", g_window_manager.active_window_highlight_width);
+            } else if (token_value_to_float(value, &real) && real > 0.0f && isfinite(real)) {
+                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
