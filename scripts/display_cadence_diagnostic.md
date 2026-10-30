@@ -30,9 +30,43 @@ screen. The invalidation wait is fixed at 250 ms and is reported in the
 lifecycle object. The process does not open a window or request protected
 permissions.
 
+### Bounded lifecycle stress mode
+
+The opt-in stress mode rapidly creates, runs, invalidates, and releases a fresh
+link/target for each current screen on every cycle. It is separate from the
+ordinary sampling mode and does not change production code paths:
+
+```sh
+bin/debug/display-cadence-diagnostic \
+  --source-revision REVISION \
+  --fixture-revision cadence-stress-v1 \
+  --stress --stress-cycles 20 \
+  --reinventory-interval 5 \
+  --main-thread-load-ms 2 \
+  >"${TMPDIR:-/tmp}/yabai-display-cadence-stress.json"
+```
+
+Stress mode is bounded to 100 cycles and at most 64 screens. Each cycle has a
+fixed 80 ms active interval followed by a 25 ms post-invalidation run-loop
+observation. The optional main-thread load is a bounded busy slice (0–10 ms)
+after each run-loop iteration, not a system-wide load generator. Screen inventory
+is refreshed at the requested interval; if display identities/count change,
+lanes and links are rebuilt, while evidence for retained display identities is
+carried forward. Screen facts are refreshed even when the topology is stable.
+Only redacted ordinals are emitted. `cycles_with_all_lanes_callback`, per-lane
+`cycles_seen`/`cycles_with_callback`, the maximum last-callback wall-time skew,
+link creation failures, and callbacks observed during the bounded invalidation
+wait are diagnostics, not rollout criteria.
+
+`topology_changes_observed: 0` means that this run did not exercise the rebuild
+path. Proving physical attach/detach, mixed-scale, or mixed-refresh behavior
+still requires an appropriate multi-display fixture; the tool does not simulate
+or change display topology.
+
 ## Schema and redaction
 
-The output is one JSON object with schema `yabai.display-cadence/v1`. It records
+Ordinary sampling emits one JSON object with schema `yabai.display-cadence/v1`;
+stress mode emits `yabai.display-cadence-stress/v1`. The ordinary schema records
 source and fixture revisions, OS/build/architecture provenance, requested
 bounds, aggregate per-screen ordinals, nominal refresh (`maximumFramesPerSecond`),
 current public Core Graphics mode refresh, backing scale, callback count,
@@ -48,9 +82,10 @@ the screen's public AppKit device description internally; that identifier is
 never written to evidence.
 
 The pure core has deterministic tests for nearest-rank p50/p95 statistics,
-timestamp monotonicity, finite-value rejection, stable JSON output, and
-redaction. The percentile convention is nearest-rank: p50 and p95 select the
-smallest rank whose cumulative count reaches the requested percentile.
+timestamp monotonicity, finite-value rejection, stable JSON output, bounded
+stress metadata, and redaction. The percentile convention is nearest-rank: p50
+and p95 select the smallest rank whose cumulative count reaches the requested
+percentile.
 
 ## Interpretation and environment limits
 
@@ -69,3 +104,13 @@ timestamps remained strictly monotonic, 301 callbacks were observed before
 invalidation, and zero callbacks arrived during the bounded post-invalidate
 wait. This is useful blocking evidence, not a production pacing pass. No display
 was attached and no preferences were changed.
+
+A live stress-mode run on the same arm64 macOS 27.0.1 host used 20 cycles,
+5-cycle reinventory, and a 2 ms main-thread load. It observed one 2× 120 Hz
+screen, completed 20/20 cycles, created 20 links without failures, and recorded
+200 active callbacks with zero callbacks during invalidation waits. All 20
+cycles received a callback on the only lane; maximum lane skew was therefore
+0.0 seconds and does not establish multi-lane synchronization. Three reinventory
+passes found no topology changes, so the physical topology-rebuild path was not
+exercised. The maximum observed invalidation wait was 25.637 ms. Evidence was
+written outside the repository and contained no display identifiers or names.
