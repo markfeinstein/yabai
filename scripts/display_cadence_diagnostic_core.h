@@ -8,6 +8,7 @@
 
 #define DISPLAY_CADENCE_DIAGNOSTIC_SCHEMA "yabai.display-cadence/v1"
 #define DISPLAY_CADENCE_DIAGNOSTIC_MAX_SAMPLES 10000U
+#define DISPLAY_CADENCE_DIAGNOSTIC_MAX_STRESS_CYCLES 100U
 
 struct display_cadence_sample
 {
@@ -42,6 +43,40 @@ struct display_cadence_delta_stats
     double max;
 };
 
+struct display_cadence_stress_lane
+{
+    struct display_cadence_screen facts;
+    size_t cycles_seen;
+    size_t cycles_with_callback;
+    uint64_t callback_count;
+    uint64_t callbacks_after_invalidate;
+};
+
+struct display_cadence_stress_metadata
+{
+    const char *source_revision;
+    const char *fixture_revision;
+    const char *os_version;
+    const char *os_build;
+    const char *architecture;
+    size_t cycles_requested;
+    size_t cycles_completed;
+    size_t reinventory_interval;
+    size_t reinventory_count;
+    size_t topology_changes_observed;
+    size_t screen_count;
+    size_t links_created;
+    size_t link_creation_failures;
+    size_t cycles_with_all_lanes_callback;
+    uint64_t callbacks_before_invalidate;
+    uint64_t callbacks_after_invalidate;
+    double active_cycle_seconds;
+    double invalidation_wait_seconds;
+    double main_thread_load_ms;
+    double lane_completion_skew_max_seconds;
+    bool production_backend_unchanged;
+};
+
 struct display_cadence_metadata
 {
     const char *source_revision;
@@ -68,5 +103,8 @@ bool display_cadence_delta_stats(const struct display_cadence_sample *samples,
 bool display_cadence_diagnostic_write_json(
     FILE *stream, const struct display_cadence_metadata *metadata,
     const struct display_cadence_screen *screens);
+bool display_cadence_stress_write_json(
+    FILE *stream, const struct display_cadence_stress_metadata *metadata,
+    const struct display_cadence_stress_lane *lanes);
 
 #endif
