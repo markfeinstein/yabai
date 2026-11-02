@@ -3105,6 +3105,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
     TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
+    TEST_ENTRY(display_topology_refresh_recomputes_centered_singleton_on_existing_display) \
     TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
     TEST_ENTRY(view_remove_promotes_internal_sibling_geometry)             \
     TEST_ENTRY(view_insertion_preparation_enforces_single_root_capacity_and_layout) \

@@ -4517,7 +4517,14 @@ bool window_manager_handle_display_add_and_remove(struct space_manager *sm, stru
             view_clear_flag(view, VIEW_IS_VALID);
         }
     }
-    return sid != 0;
+    if (!sid) return false;
+
+    // Adding or removing one display can move the menu bar or Dock on another
+    // display without changing that display's CoreGraphics bounds. Recompute
+    // visible Spaces on the other displays, and invalidate their inactive
+    // Spaces so constrained singleton widths follow the new usable frames.
+    space_manager_mark_other_display_spaces_invalid(sm, did);
+    return true;
 }
 
 void window_manager_init(struct window_manager *wm)

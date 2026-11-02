@@ -616,6 +616,123 @@ TEST_FUNC(space_manager_begin_reports_and_cleans_initialization_failures,
     view_test_set_platform_ops(NULL);
 });
 
+struct display_topology_refresh_fixture
+{
+    struct area active_frames[2];
+    int update_count[2];
+    int flush_count[2];
+};
+
+static uint32_t *display_topology_refresh_active_displays(int *count)
+{
+    static uint32_t displays[] = { 1, 2 };
+    *count = 2;
+    return displays;
+}
+
+static uint64_t *display_topology_refresh_spaces(uint32_t did, int *count)
+{
+    static uint64_t first[] = { 101, 102 };
+    static uint64_t second[] = { 201, 202 };
+    *count = 2;
+    return did == 1 ? first : did == 2 ? second : NULL;
+}
+
+static uint64_t display_topology_refresh_active_space(uint32_t did)
+{
+    return did == 1 ? 101 : did == 2 ? 201 : 0;
+}
+
+static int display_topology_refresh_index(uint64_t sid)
+{
+    return sid == 101 ? 0 : sid == 201 ? 1 : -1;
+}
+
+static void display_topology_refresh_update(struct view *view, void *context)
+{
+    struct display_topology_refresh_fixture *fixture = context;
+    int index = display_topology_refresh_index(view->sid);
+    if (index < 0) return;
+    ++fixture->update_count[index];
+    view->root->area = fixture->active_frames[index];
+    view_apply_single_window_width(view);
+}
+
+static bool display_topology_refresh_visible(uint64_t sid, void *context)
+{
+    (void) context;
+    return display_topology_refresh_index(sid) >= 0;
+}
+
+static void display_topology_refresh_flush(struct window_node *root, void *context)
+{
+    struct display_topology_refresh_fixture *fixture = context;
+    if (root->window_list[0] == 101) ++fixture->flush_count[0];
+    if (root->window_list[0] == 201) ++fixture->flush_count[1];
+}
+
+TEST_FUNC(display_topology_refresh_recomputes_centered_singleton_on_existing_display,
+{
+    __auto_type saved_active_display_list = space_manager_test_active_display_list;
+    __auto_type saved_display_space_list = space_manager_test_display_space_list;
+    __auto_type saved_display_space_id = space_manager_test_display_space_id;
+    struct view_test_platform_ops saved_view_ops = view_test_platform_ops;
+
+    struct window_node roots[4] = {
+        { .area = { 100, 20, 800, 600 }, .window_list = { 101 }, .window_order = { 101 }, .window_count = 1 },
+        { .window_list = { 102 }, .window_order = { 102 }, .window_count = 1 },
+        { .area = { 1700, 20, 1600, 1000 }, .window_list = { 201 }, .window_order = { 201 }, .window_count = 1 },
+        { .window_list = { 202 }, .window_order = { 202 }, .window_count = 1 }
+    };
+    struct view views[4] = {
+        { .sid = 101, .root = &roots[0], .layout = VIEW_BSP, .single_window_width_ratio = 0.8f, .flags = VIEW_IS_VALID },
+        { .sid = 102, .root = &roots[1], .layout = VIEW_BSP, .single_window_width_ratio = 0.8f, .flags = VIEW_IS_VALID },
+        { .sid = 201, .root = &roots[2], .layout = VIEW_BSP, .single_window_width_ratio = 0.8f, .flags = VIEW_IS_VALID },
+        { .sid = 202, .root = &roots[3], .layout = VIEW_BSP, .single_window_width_ratio = 0.8f, .flags = VIEW_IS_VALID }
+    };
+    struct space_manager manager = {0};
+    table_init(&manager.view, 8, hash_view, compare_view);
+    for (size_t i = 0; i < array_count(views); ++i) table_add(&manager.view, &views[i].sid, &views[i]);
+
+    struct display_topology_refresh_fixture fixture = {
+        .active_frames = {
+            { .x = 0, .y = 20, .w = 1600, .h = 900 },
+            { .x = 1600, .y = 20, .w = 3000, .h = 1200 }
+        }
+    };
+    struct view_test_platform_ops view_ops = {
+        .space_is_visible = display_topology_refresh_visible,
+        .update_windows = display_topology_refresh_update,
+        .flush_windows = display_topology_refresh_flush,
+        .context = &fixture
+    };
+    space_manager_test_active_display_list = display_topology_refresh_active_displays;
+    space_manager_test_display_space_list = display_topology_refresh_spaces;
+    space_manager_test_display_space_id = display_topology_refresh_active_space;
+    view_test_set_platform_ops(&view_ops);
+
+    space_manager_mark_other_display_spaces_invalid(&manager, 2);
+
+    TEST_CHECK(fixture.update_count[0], 1);
+    TEST_CHECK(fixture.update_count[1], 0);
+    TEST_CHECK(fixture.flush_count[0], 1);
+    TEST_CHECK(fixture.flush_count[1], 0);
+    TEST_CHECK(fabsf(roots[0].area.x - 160.0f) < 0.001f, true);
+    TEST_CHECK(roots[0].area.w, 1280.0f);
+    TEST_CHECK(roots[2].area.x, 1700.0f);
+    TEST_CHECK(roots[2].area.w, 1600.0f);
+    TEST_CHECK(view_is_invalid(&views[0]), false);
+    TEST_CHECK(view_is_invalid(&views[1]), true);
+    TEST_CHECK(view_is_invalid(&views[2]), false);
+    TEST_CHECK(view_is_invalid(&views[3]), false);
+
+    view_test_set_platform_ops(&saved_view_ops);
+    space_manager_test_active_display_list = saved_active_display_list;
+    space_manager_test_display_space_list = saved_display_space_list;
+    space_manager_test_display_space_id = saved_display_space_id;
+    table_free(&manager.view);
+});
+
 TEST_FUNC(view_find_min_depth_leaf_node_handles_complete_tree_boundary,
 {
     struct window_node nodes[257] = {0};

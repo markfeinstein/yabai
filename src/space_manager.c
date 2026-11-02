@@ -4,6 +4,7 @@ extern int g_connection;
 #ifdef TESTS
 static uint32_t *(*space_manager_test_active_display_list)(int *count);
 static uint64_t *(*space_manager_test_display_space_list)(uint32_t did, int *count);
+static uint64_t (*space_manager_test_display_space_id)(uint32_t did);
 static uint64_t *(*space_manager_test_query_window_space_list)(uint32_t wid, int *count, bool *success) =
     window_space_list_with_status;
 static uint32_t *(*space_manager_test_layout_window_list)(uint64_t *, int, int, int *, bool, bool *);
@@ -1571,10 +1572,22 @@ bool space_manager_is_window_on_space(uint64_t sid, struct window *window)
 void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uint32_t did)
 {
     int space_count;
+#ifdef TESTS
+    uint64_t *space_list = space_manager_test_display_space_list
+                         ? space_manager_test_display_space_list(did, &space_count)
+                         : display_space_list(did, &space_count);
+#else
     uint64_t *space_list = display_space_list(did, &space_count);
+#endif
     if (!space_list) return;
 
+#ifdef TESTS
+    uint64_t sid = space_manager_test_display_space_id
+                 ? space_manager_test_display_space_id(did)
+                 : display_space_id(did);
+#else
     uint64_t sid = display_space_id(did);
+#endif
     for (int i = 0; i < space_count; ++i) {
         if (space_list[i] == sid) {
             space_manager_refresh_view(sm, sid);
@@ -1584,15 +1597,33 @@ void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uin
     }
 }
 
-void space_manager_mark_spaces_invalid(struct space_manager *sm)
+static void space_manager_mark_spaces_invalid_excluding_display(struct space_manager *sm, uint32_t excluded_did)
 {
     int display_count;
+#ifdef TESTS
+    uint32_t *display_list = space_manager_test_active_display_list
+                           ? space_manager_test_active_display_list(&display_count)
+                           : display_manager_active_display_list(&display_count);
+#else
     uint32_t *display_list = display_manager_active_display_list(&display_count);
+#endif
     if (!display_list) return;
 
     for (int i = 0; i < display_count; ++i) {
-        space_manager_mark_spaces_invalid_for_display(sm, display_list[i]);
+        if (display_list[i] != excluded_did) {
+            space_manager_mark_spaces_invalid_for_display(sm, display_list[i]);
+        }
     }
+}
+
+void space_manager_mark_other_display_spaces_invalid(struct space_manager *sm, uint32_t did)
+{
+    space_manager_mark_spaces_invalid_excluding_display(sm, did);
+}
+
+void space_manager_mark_spaces_invalid(struct space_manager *sm)
+{
+    space_manager_mark_spaces_invalid_excluding_display(sm, 0);
 }
 
 bool space_manager_refresh_application_windows(struct space_manager *sm)
