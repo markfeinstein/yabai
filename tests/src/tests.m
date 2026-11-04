@@ -157,6 +157,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "animation_clock.c"
 #include "animation_failure.c"
 #include "doctor.c"
+#include "config_file.c"
 #undef TEST_ENTRY
 
 static bool test_temp_storage_ensure(uint64_t size)
@@ -3593,6 +3594,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
     TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
     TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
+    TEST_ENTRY(config_file_discovery_rejects_truncated_paths) \
     TEST_ENTRY(config_file_execution_preserves_literal_path)     \
     TEST_ENTRY(safe_exec_reports_child_outcomes)                 \
     TEST_ENTRY(socket_open_sets_cloexec)                         \

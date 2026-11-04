@@ -567,22 +567,29 @@ static inline bool file_can_execute(char *filename)
     return S_ISREG(buffer.st_mode) && access(filename, X_OK) == 0;
 }
 
-static bool get_config_file(char *restrict filename, char *restrict buffer, int buffer_size)
+static bool get_config_file(const char *restrict filename, char *restrict buffer, int buffer_size)
 {
+    if (!buffer || buffer_size <= 0) return false;
+    buffer[0] = '\0';
+    if (!filename) return false;
+
     char *xdg_home = getenv("XDG_CONFIG_HOME");
     if (xdg_home && *xdg_home) {
-        snprintf(buffer, buffer_size, "%s/yabai/%s", xdg_home, filename);
-        if (file_exists(buffer)) return true;
+        int length = snprintf(buffer, buffer_size, "%s/yabai/%s", xdg_home, filename);
+        if (length >= 0 && length < buffer_size && file_exists(buffer)) return true;
     }
 
     char *home = getenv("HOME");
-    if (!home) return false;
+    if (home) {
+        int length = snprintf(buffer, buffer_size, "%s/.config/yabai/%s", home, filename);
+        if (length >= 0 && length < buffer_size && file_exists(buffer)) return true;
 
-    snprintf(buffer, buffer_size, "%s/.config/yabai/%s", home, filename);
-    if (file_exists(buffer)) return true;
+        length = snprintf(buffer, buffer_size, "%s/.%s", home, filename);
+        if (length >= 0 && length < buffer_size && file_exists(buffer)) return true;
+    }
 
-    snprintf(buffer, buffer_size, "%s/.%s", home, filename);
-    return file_exists(buffer);
+    buffer[0] = '\0';
+    return false;
 }
 
 static void config_file_exec_argv(char *config_file, bool executable, char **argv)
