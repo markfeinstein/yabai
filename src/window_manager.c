@@ -3895,18 +3895,31 @@ enum window_op_error window_manager_deminimize_window(struct window *window)
     return result == kAXErrorSuccess ? WINDOW_OP_ERROR_SUCCESS : WINDOW_OP_ERROR_DEMINIMIZE_FAILED;
 }
 
+#ifdef TESTS
+static AXError (*window_manager_close_copy_attribute)(AXUIElementRef, CFStringRef, CFTypeRef *) =
+    AXUIElementCopyAttributeValue;
+static AXError (*window_manager_close_perform_action)(AXUIElementRef, CFStringRef) = AXUIElementPerformAction;
+static void (*window_manager_close_release)(CFTypeRef) = CFRelease;
+#else
+#define window_manager_close_copy_attribute AXUIElementCopyAttributeValue
+#define window_manager_close_perform_action AXUIElementPerformAction
+#define window_manager_close_release CFRelease
+#endif
+
 bool window_manager_close_window(struct window *window)
 {
     TIME_FUNCTION;
 
     CFTypeRef button = NULL;
-    AXUIElementCopyAttributeValue(window->ref, kAXCloseButtonAttribute, &button);
+    AXError result = window_manager_close_copy_attribute(window->ref, kAXCloseButtonAttribute, &button);
     if (!button) return false;
 
-    AXUIElementPerformAction(button, kAXPressAction);
-    CFRelease(button);
+    if (result == kAXErrorSuccess) {
+        result = window_manager_close_perform_action(button, kAXPressAction);
+    }
+    window_manager_close_release(button);
 
-    return true;
+    return result == kAXErrorSuccess;
 }
 
 bool window_manager_send_window_to_space(struct space_manager *sm, struct window_manager *wm, struct window *window, uint64_t dst_sid, bool moved_by_rule)

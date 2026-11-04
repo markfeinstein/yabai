@@ -3526,6 +3526,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
     TEST_ENTRY(startup_inventory_moves_rule_targets_without_following_space) \
     TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
+    TEST_ENTRY(window_close_propagates_ax_failures_and_releases_button) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
     TEST_ENTRY(hashtable_rekey_is_allocation_free_and_preserves_value) \

@@ -1,3 +1,78 @@
+static struct {
+    AXError copy_result;
+    AXError press_result;
+    bool provide_button;
+    int copy_calls;
+    int press_calls;
+    int release_calls;
+    bool arguments_valid;
+} window_close_test;
+
+static AXError window_close_test_copy(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value)
+{
+    ++window_close_test.copy_calls;
+    window_close_test.arguments_valid &= element == (AXUIElementRef) CFSTR("close-test-window") &&
+                                         CFEqual(attribute, kAXCloseButtonAttribute);
+    *value = window_close_test.provide_button ? CFRetain(CFSTR("close-test-button")) : NULL;
+    return window_close_test.copy_result;
+}
+
+static AXError window_close_test_press(AXUIElementRef element, CFStringRef action)
+{
+    ++window_close_test.press_calls;
+    window_close_test.arguments_valid &= element == (AXUIElementRef) CFSTR("close-test-button") &&
+                                         CFEqual(action, kAXPressAction);
+    return window_close_test.press_result;
+}
+
+static void window_close_test_release(CFTypeRef value)
+{
+    ++window_close_test.release_calls;
+    window_close_test.arguments_valid &= value == CFSTR("close-test-button");
+    CFRelease(value);
+}
+
+TEST_FUNC(window_close_propagates_ax_failures_and_releases_button,
+{
+    __auto_type saved_copy = window_manager_close_copy_attribute;
+    __auto_type saved_press = window_manager_close_perform_action;
+    __auto_type saved_release = window_manager_close_release;
+    window_manager_close_copy_attribute = window_close_test_copy;
+    window_manager_close_perform_action = window_close_test_press;
+    window_manager_close_release = window_close_test_release;
+    struct window window = { .id = 4242, .ref = (AXUIElementRef) CFSTR("close-test-window") };
+    const struct {
+        AXError copy_result;
+        AXError press_result;
+        bool provide_button;
+        bool expected;
+        int press_calls;
+    } cases[] = {
+        { kAXErrorSuccess, kAXErrorSuccess, true, true, 1 },
+        { kAXErrorSuccess, kAXErrorCannotComplete, true, false, 1 },
+        { kAXErrorSuccess, kAXErrorActionUnsupported, true, false, 1 },
+        { kAXErrorSuccess, kAXErrorInvalidUIElement, true, false, 1 },
+        { kAXErrorSuccess, kAXErrorSuccess, false, false, 0 },
+        { kAXErrorCannotComplete, kAXErrorSuccess, false, false, 0 },
+        { kAXErrorInvalidUIElement, kAXErrorSuccess, true, false, 0 }
+    };
+    for (int i = 0; i < array_count(cases); ++i) {
+        memset(&window_close_test, 0, sizeof(window_close_test));
+        window_close_test.copy_result = cases[i].copy_result;
+        window_close_test.press_result = cases[i].press_result;
+        window_close_test.provide_button = cases[i].provide_button;
+        window_close_test.arguments_valid = true;
+        TEST_CHECK(window_manager_close_window(&window), cases[i].expected);
+        TEST_CHECK(window_close_test.copy_calls, 1);
+        TEST_CHECK(window_close_test.press_calls, cases[i].press_calls);
+        TEST_CHECK(window_close_test.release_calls, cases[i].provide_button ? 1 : 0);
+        TEST_CHECK(window_close_test.arguments_valid, true);
+    }
+    window_manager_close_copy_attribute = saved_copy;
+    window_manager_close_perform_action = saved_press;
+    window_manager_close_release = saved_release;
+});
+
 static CGError window_manager_test_ordered_result;
 static uint8_t window_manager_test_ordered_value;
 static int window_manager_test_ordered_calls;
