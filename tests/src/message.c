@@ -540,7 +540,7 @@ TEST_FUNC(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors,
              "[ -e /dev/fd/1 ] && [ -e /dev/fd/2 ] && [ ! -e /dev/fd/%d ]",
              descriptor);
     pid_t child = -1;
-    TEST_CHECK(event_signal_spawn_command(command, &event, &child), true);
+    TEST_CHECK(event_signal_spawn_command(command, &event, &child), 0);
     if (child > 0) {
         int status = 0;
         while (waitpid(child, &status, 0) == -1 && errno == EINTR) {}
@@ -550,6 +550,168 @@ TEST_FUNC(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors,
     TEST_CHECK(strcmp(getenv("YABAI_TEST_SIGNAL_VALUE"), "parent"), 0);
     unsetenv("YABAI_TEST_SIGNAL_VALUE");
     close(descriptor);
+});
+
+enum signal_spawn_test_stage {
+    SIGNAL_SPAWN_TEST_ACTIONS,
+    SIGNAL_SPAWN_TEST_ATTRIBUTES,
+    SIGNAL_SPAWN_TEST_DUP_STDIN,
+    SIGNAL_SPAWN_TEST_DUP_STDOUT,
+    SIGNAL_SPAWN_TEST_DUP_STDERR,
+    SIGNAL_SPAWN_TEST_FLAGS,
+    SIGNAL_SPAWN_TEST_SPAWN
+};
+static enum signal_spawn_test_stage signal_spawn_test_stage;
+static int signal_spawn_test_error;
+static int signal_spawn_test_calls;
+
+static int signal_spawn_test_actions_init(posix_spawn_file_actions_t *actions)
+{
+    return signal_spawn_test_stage == SIGNAL_SPAWN_TEST_ACTIONS ? signal_spawn_test_error :
+           posix_spawn_file_actions_init(actions);
+}
+
+static int signal_spawn_test_attributes_init(posix_spawnattr_t *attributes)
+{
+    return signal_spawn_test_stage == SIGNAL_SPAWN_TEST_ATTRIBUTES ? signal_spawn_test_error :
+           posix_spawnattr_init(attributes);
+}
+
+static int signal_spawn_test_adddup2(posix_spawn_file_actions_t *actions, int source, int destination)
+{
+    return (int) signal_spawn_test_stage == SIGNAL_SPAWN_TEST_DUP_STDIN + source ? signal_spawn_test_error :
+           posix_spawn_file_actions_adddup2(actions, source, destination);
+}
+
+static int signal_spawn_test_setflags(posix_spawnattr_t *attributes, short flags)
+{
+    return signal_spawn_test_stage == SIGNAL_SPAWN_TEST_FLAGS ? signal_spawn_test_error :
+           posix_spawnattr_setflags(attributes, flags);
+}
+
+static int signal_spawn_test_spawn(pid_t *child, const char *path, const posix_spawn_file_actions_t *actions,
+                                   const posix_spawnattr_t *attributes, char *const *arguments, char *const *environment)
+{
+    (void) child; (void) path; (void) actions; (void) attributes; (void) arguments; (void) environment;
+    ++signal_spawn_test_calls;
+    errno = EIO; // POSIX spawn errors are returned directly, not through errno.
+    return signal_spawn_test_error;
+}
+
+TEST_FUNC(event_signal_spawn_reports_validation_setup_and_spawn_errors,
+{
+    __auto_type saved_actions_init = event_signal_actions_init;
+    __auto_type saved_attributes_init = event_signal_attributes_init;
+    __auto_type saved_adddup2 = event_signal_actions_adddup2;
+    __auto_type saved_setflags = event_signal_attributes_setflags;
+    __auto_type saved_spawn = event_signal_spawn;
+    event_signal_actions_init = signal_spawn_test_actions_init;
+    event_signal_attributes_init = signal_spawn_test_attributes_init;
+    event_signal_actions_adddup2 = signal_spawn_test_adddup2;
+    event_signal_attributes_setflags = signal_spawn_test_setflags;
+    event_signal_spawn = signal_spawn_test_spawn;
+
+    const int errors[] = { ENOMEM, ENOMEM, EBADF, EBADF, EBADF, EINVAL, EAGAIN };
+    for (int i = 0; i < array_count(errors); ++i) {
+        signal_spawn_test_stage = (enum signal_spawn_test_stage) i;
+        signal_spawn_test_error = errors[i];
+        signal_spawn_test_calls = 0;
+        pid_t child = 999;
+        TEST_CHECK(event_signal_spawn_command("private-command", NULL, &child), errors[i]);
+        TEST_CHECK(child, -1);
+        TEST_CHECK(signal_spawn_test_calls, i == SIGNAL_SPAWN_TEST_SPAWN ? 1 : 0);
+    }
+
+    signal_spawn_test_calls = 0;
+    pid_t child = 999;
+    TEST_CHECK(event_signal_spawn_command(NULL, NULL, &child), EINVAL);
+    TEST_CHECK(child, -1);
+    struct event_signal event = { .arg_name = { "PRIVATE_ENV" } };
+    TEST_CHECK(event_signal_spawn_command("private-command", &event, &child), EINVAL);
+    char oversized[256];
+    memset(oversized, 's', sizeof(oversized) - 1);
+    oversized[sizeof(oversized) - 1] = '\0';
+    event.arg_value[0] = oversized;
+    TEST_CHECK(event_signal_spawn_command("private-command", &event, &child), E2BIG);
+    TEST_CHECK(child, -1);
+    TEST_CHECK(signal_spawn_test_calls, 0);
+
+    event_signal_actions_init = saved_actions_init;
+    event_signal_attributes_init = saved_attributes_init;
+    event_signal_actions_adddup2 = saved_adddup2;
+    event_signal_attributes_setflags = saved_setflags;
+    event_signal_spawn = saved_spawn;
+});
+
+static int signal_dispatch_test_spawn(pid_t *child, const char *path, const posix_spawn_file_actions_t *actions,
+                                      const posix_spawnattr_t *attributes, char *const *arguments, char *const *environment)
+{
+    (void) path; (void) actions; (void) attributes; (void) arguments; (void) environment;
+    int attempt = signal_spawn_test_calls++;
+    errno = EIO;
+    if (attempt == 0) return EAGAIN;
+    if (attempt == 2) return ENOENT;
+    *child = 42;
+    return 0;
+}
+
+TEST_FUNC(event_signal_flush_warns_without_private_data_and_continues,
+{
+    FILE *diagnostic = tmpfile();
+    TEST_CHECK(diagnostic != NULL, true);
+    if (!diagnostic) return result;
+    fflush(stderr);
+    int saved_stderr = dup(STDERR_FILENO);
+    TEST_CHECK(saved_stderr >= 0, true);
+    if (saved_stderr < 0) { fclose(diagnostic); return result; }
+    int redirected = dup2(fileno(diagnostic), STDERR_FILENO);
+    TEST_CHECK(redirected, STDERR_FILENO);
+    if (redirected < 0) { close(saved_stderr); fclose(diagnostic); return result; }
+
+    enum signal_type type = SIGNAL_DOCK_DID_RESTART;
+    struct memory_pool saved_storage = g_signal_storage;
+    struct signal *saved_signals = g_signal_event[type];
+    __auto_type saved_spawn = event_signal_spawn;
+    bool saved_verbose = g_verbose;
+    struct event_signal event = {
+        .type = type,
+        .arg_name = { "PRIVATE_ENV" },
+        .arg_value = { "private-value" }
+    };
+    g_signal_storage = (struct memory_pool) { .memory = &event, .size = sizeof(event), .used = sizeof(event) };
+    g_signal_event[type] = NULL;
+    for (int i = 0; i < 3; ++i) {
+        buf_push(g_signal_event[type], ((struct signal) { .command = "private-command", .label = "private-label" }));
+    }
+    event_signal_spawn = signal_dispatch_test_spawn;
+    signal_spawn_test_calls = 0;
+    g_verbose = false;
+    event_signal_flush();
+    TEST_CHECK(signal_spawn_test_calls, 3);
+    TEST_CHECK(g_signal_storage.used, 0ULL);
+    event_signal_flush();
+    TEST_CHECK(signal_spawn_test_calls, 3);
+
+    fflush(stderr);
+    TEST_CHECK(dup2(saved_stderr, STDERR_FILENO), STDERR_FILENO);
+    close(saved_stderr);
+    rewind(diagnostic);
+    char output[1024] = {0};
+    fread(output, 1, sizeof(output) - 1, diagnostic);
+    fclose(diagnostic);
+    char expected[1024];
+    snprintf(expected, sizeof(expected),
+             "event_signal_flush: could not spawn dock_did_restart subscriber 0: %s (%d)\n"
+             "event_signal_flush: could not spawn dock_did_restart subscriber 2: %s (%d)\n",
+             strerror(EAGAIN), EAGAIN, strerror(ENOENT), ENOENT);
+    TEST_CHECK(strcmp(output, expected), 0);
+    TEST_CHECK(strstr(output, "private-") == NULL, true);
+    TEST_CHECK(strstr(output, "PRIVATE_ENV") == NULL, true);
+    buf_free(g_signal_event[type]);
+    g_signal_event[type] = saved_signals;
+    g_signal_storage = saved_storage;
+    event_signal_spawn = saved_spawn;
+    g_verbose = saved_verbose;
 });
 
 TEST_FUNC(message_hexadecimal_token_boundaries,

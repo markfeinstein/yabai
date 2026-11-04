@@ -3918,6 +3918,8 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(message_numeric_token_boundaries)                          \
     TEST_ENTRY(event_signal_pool_drops_records_when_full_without_overwriting) \
     TEST_ENTRY(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors) \
+    TEST_ENTRY(event_signal_spawn_reports_validation_setup_and_spawn_errors) \
+    TEST_ENTRY(event_signal_flush_warns_without_private_data_and_continues) \
     TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
     TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
     TEST_ENTRY(message_window_grid_numeric_validation)                    \

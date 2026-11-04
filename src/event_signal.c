@@ -57,17 +57,35 @@ static bool event_signal_filter(struct event_signal *es, struct signal *signal)
     }
 }
 
-static bool event_signal_spawn_command(const char *command, const struct event_signal *event, pid_t *child)
+#ifdef TESTS
+static int (*event_signal_actions_init)(posix_spawn_file_actions_t *) = posix_spawn_file_actions_init;
+static int (*event_signal_attributes_init)(posix_spawnattr_t *) = posix_spawnattr_init;
+static int (*event_signal_actions_adddup2)(posix_spawn_file_actions_t *, int, int) = posix_spawn_file_actions_adddup2;
+static int (*event_signal_attributes_setflags)(posix_spawnattr_t *, short) = posix_spawnattr_setflags;
+static int (*event_signal_spawn)(pid_t *, const char *, const posix_spawn_file_actions_t *,
+                                  const posix_spawnattr_t *, char *const *, char *const *) = posix_spawn;
+#else
+#define event_signal_actions_init posix_spawn_file_actions_init
+#define event_signal_attributes_init posix_spawnattr_init
+#define event_signal_actions_adddup2 posix_spawn_file_actions_adddup2
+#define event_signal_attributes_setflags posix_spawnattr_setflags
+#define event_signal_spawn posix_spawn
+#endif
+
+// Like posix_spawn, return an error number directly, not through errno.
+static int event_signal_spawn_command(const char *command, const struct event_signal *event, pid_t *child)
 {
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attributes;
     bool actions_initialized = false;
     bool attributes_initialized = false;
-    bool result = false;
+    int result = EINVAL;
     char assignments[4][256];
     char *arguments[9];
     int argument_count = 0;
 
+    *child = -1;
+    if (!command) return EINVAL;
     arguments[argument_count++] = "/usr/bin/env";
     if (event) {
         for (int i = 0; i < 4; ++i) {
@@ -75,7 +93,10 @@ static bool event_signal_spawn_command(const char *command, const struct event_s
             if (!event->arg_value[i]) goto out;
             int length = snprintf(assignments[i], sizeof(assignments[i]), "%s=%s",
                                   event->arg_name[i], event->arg_value[i]);
-            if (length < 0 || length >= (int) sizeof(assignments[i])) goto out;
+            if (length < 0 || length >= (int) sizeof(assignments[i])) {
+                result = length < 0 ? EILSEQ : E2BIG;
+                goto out;
+            }
             arguments[argument_count++] = assignments[i];
         }
     }
@@ -84,17 +105,17 @@ static bool event_signal_spawn_command(const char *command, const struct event_s
     arguments[argument_count++] = (char *) command;
     arguments[argument_count] = NULL;
 
-    if (posix_spawn_file_actions_init(&actions) != 0) goto out;
+    if ((result = event_signal_actions_init(&actions)) != 0) goto out;
     actions_initialized = true;
-    if (posix_spawnattr_init(&attributes) != 0) goto out;
+    if ((result = event_signal_attributes_init(&attributes)) != 0) goto out;
     attributes_initialized = true;
-    if (posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDIN_FILENO) != 0 ||
-        posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDOUT_FILENO) != 0 ||
-        posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDERR_FILENO) != 0 ||
-        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT) != 0) goto out;
+    if ((result = event_signal_actions_adddup2(&actions, STDIN_FILENO, STDIN_FILENO)) != 0 ||
+        (result = event_signal_actions_adddup2(&actions, STDOUT_FILENO, STDOUT_FILENO)) != 0 ||
+        (result = event_signal_actions_adddup2(&actions, STDERR_FILENO, STDERR_FILENO)) != 0 ||
+        (result = event_signal_attributes_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT)) != 0) goto out;
 
     extern char **environ;
-    result = posix_spawn(child, arguments[0], &actions, &attributes, arguments, environ) == 0;
+    result = event_signal_spawn(child, arguments[0], &actions, &attributes, arguments, environ);
 
 out:
     if (attributes_initialized) posix_spawnattr_destroy(&attributes);
@@ -120,7 +141,12 @@ void event_signal_flush(void)
             if (event_signal_filter(es, signal)) continue;
 
             pid_t command_pid;
-            event_signal_spawn_command(signal->command, es, &command_pid);
+            int result = event_signal_spawn_command(signal->command, es, &command_pid);
+            if (result != 0) {
+                // Commands, labels, and environment values can contain private data.
+                warn("%s: could not spawn %s subscriber %d: %s (%d)\n",
+                     __FUNCTION__, signal_type_str[es->type], j, strerror(result), result);
+            }
         }
     }
 
