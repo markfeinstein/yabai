@@ -3950,6 +3950,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(ffm_config_query_reports_configured_mode_while_effective_is_suspended) \
     TEST_ENTRY(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change) \
     TEST_ENTRY(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves) \
+    TEST_ENTRY(ffm_autoraise_occlusion_queries_target_levels_once) \
     TEST_ENTRY(ffm_menu_bar_tracking_transitions_count_once_without_derived_events) \
     TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
     TEST_ENTRY(message_numeric_token_boundaries)                          \

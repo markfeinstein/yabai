@@ -3835,6 +3835,49 @@ static EVENT_HANDLER(DIRECT_SPACE_SWIPE)
     if (target_sid) (void) space_manager_focus_space(target_sid);
 }
 
+#ifdef TESTS
+static int (*ffm_autoraise_window_level)(uint32_t) = window_level;
+static int (*ffm_autoraise_window_sub_level)(uint32_t) = window_sub_level;
+#else
+#define ffm_autoraise_window_level window_level
+#define ffm_autoraise_window_sub_level window_sub_level
+#endif
+
+// Returns whether raising `window` would fully cover a floating window that is
+// above it in `window_list` (front-to-back) on the same level and sub-level.
+// Level queries are WindowServer round trips, so test the cheap local frame
+// first and query the target's levels at most once.
+static bool ffm_autoraise_occludes_floating_window(struct window *window, uint32_t *window_list, int window_count)
+{
+    bool have_levels = false;
+    int level = 0;
+    int sub_level = 0;
+
+    for (int i = 0; i < window_count; ++i) {
+        uint32_t wid = window_list[i];
+        if (wid == window->id) break;
+
+        struct window *sub_window = window_manager_find_window(&g_window_manager, wid);
+        if (!sub_window) continue;
+
+        if (!window_check_flag(sub_window, WINDOW_FLOAT))            continue;
+        if (!CGRectContainsRect(window->frame, sub_window->frame))  continue;
+
+        if (!have_levels) {
+            level = ffm_autoraise_window_level(window->id);
+            sub_level = ffm_autoraise_window_sub_level(window->id);
+            have_levels = true;
+        }
+
+        if (level != ffm_autoraise_window_level(sub_window->id))         continue;
+        if (sub_level != ffm_autoraise_window_sub_level(sub_window->id)) continue;
+
+        return true;
+    }
+
+    return false;
+}
+
 static EVENT_HANDLER(MOUSE_MOVED)
 {
     enum ffm_mode ffm_mode = window_manager_effective_ffm_mode(&g_window_manager);
@@ -3896,29 +3939,9 @@ static EVENT_HANDLER(MOUSE_MOVED)
             // smaller window that sits on top of the window we would otherwise raise.
             //
 
-            bool occludes_window = false;
-
             int window_count;
             uint32_t *window_list = space_window_list(g_space_manager.current_space_id, &window_count, false);
-
-            if (window_list) {
-                for (int i = 0; i < window_count; ++i) {
-                    uint32_t wid = window_list[i];
-                    if (wid == window->id) break;
-
-                    struct window *sub_window = window_manager_find_window(&g_window_manager, wid);
-                    if (!sub_window) continue;
-
-                    if (!window_check_flag(sub_window, WINDOW_FLOAT))                     continue;
-                    if (window_level(window->id) != window_level(sub_window->id))         continue;
-                    if (window_sub_level(window->id) != window_sub_level(sub_window->id)) continue;
-
-                    if (CGRectContainsRect(window->frame, sub_window->frame)) {
-                        occludes_window = true;
-                        break;
-                    }
-                }
-            }
+            bool occludes_window = window_list && ffm_autoraise_occludes_floating_window(window, window_list, window_count);
 
             if (!occludes_window) {
                 window_manager_focus_window_with_raise(&window->application->psn, window->id, window->ref);

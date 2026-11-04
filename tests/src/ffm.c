@@ -349,3 +349,72 @@ TEST_FUNC(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_o
     g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
+
+static int ffm_autoraise_test_level_calls;
+static int ffm_autoraise_test_sub_level_calls;
+static int ffm_autoraise_test_levels[8];
+static int ffm_autoraise_test_level(uint32_t wid)
+{
+    ++ffm_autoraise_test_level_calls;
+    return wid < 8 ? ffm_autoraise_test_levels[wid] : 0;
+}
+
+static int ffm_autoraise_test_sub_level(uint32_t wid)
+{
+    (void) wid;
+    ++ffm_autoraise_test_sub_level_calls;
+    return 0;
+}
+
+TEST_FUNC(ffm_autoraise_occlusion_queries_target_levels_once,
+    bool initialized_window = false;
+    if (!g_window_manager.window.buckets) {
+        table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+        initialized_window = true;
+    }
+    struct application application = { 0 };
+    struct window target = { .id = 1, .application = &application, .frame = { { 0, 0 }, { 1000, 1000 } } };
+    struct window outside = { .id = 2, .application = &application, .frame = { { 900, 900 }, { 200, 200 } } };
+    struct window tiled = { .id = 3, .application = &application, .frame = { { 10, 10 }, { 100, 100 } } };
+    struct window other_level = { .id = 4, .application = &application, .frame = { { 20, 20 }, { 100, 100 } } };
+    struct window covered = { .id = 5, .application = &application, .frame = { { 30, 30 }, { 100, 100 } } };
+    window_set_flag(&outside, WINDOW_FLOAT);
+    window_set_flag(&other_level, WINDOW_FLOAT);
+    window_set_flag(&covered, WINDOW_FLOAT);
+    struct window *windows[] = { &target, &outside, &tiled, &other_level, &covered };
+    for (size_t i = 0; i < array_count(windows); ++i) {
+        table_add(&g_window_manager.window, &windows[i]->id, windows[i]);
+    }
+    memset(ffm_autoraise_test_levels, 0, sizeof(ffm_autoraise_test_levels));
+    ffm_autoraise_test_levels[4] = 3;
+    ffm_autoraise_window_level = ffm_autoraise_test_level;
+    ffm_autoraise_window_sub_level = ffm_autoraise_test_sub_level;
+
+    // Unknown, non-contained, tiled, and other-level windows do not block.
+    // The target is queried once, and non-contained or tiled windows not at all.
+    uint32_t blocked[] = { 9, 2, 3, 4, 5, 1 };
+    ffm_autoraise_test_level_calls = 0;
+    ffm_autoraise_test_sub_level_calls = 0;
+    TEST_CHECK(ffm_autoraise_occludes_floating_window(&target, blocked, array_count(blocked)), true);
+    TEST_CHECK(ffm_autoraise_test_level_calls, 3);
+    TEST_CHECK(ffm_autoraise_test_sub_level_calls, 2);
+
+    // Windows behind the target never block, and no candidate means no query.
+    uint32_t behind[] = { 2, 3, 1, 5 };
+    ffm_autoraise_test_level_calls = 0;
+    ffm_autoraise_test_sub_level_calls = 0;
+    TEST_CHECK(ffm_autoraise_occludes_floating_window(&target, behind, array_count(behind)), false);
+    TEST_CHECK(ffm_autoraise_test_level_calls, 0);
+    TEST_CHECK(ffm_autoraise_test_sub_level_calls, 0);
+
+    // A different-level candidate alone does not block.
+    uint32_t level_only[] = { 4, 1 };
+    TEST_CHECK(ffm_autoraise_occludes_floating_window(&target, level_only, array_count(level_only)), false);
+
+    ffm_autoraise_window_level = window_level;
+    ffm_autoraise_window_sub_level = window_sub_level;
+    for (size_t i = 0; i < array_count(windows); ++i) {
+        table_remove(&g_window_manager.window, &windows[i]->id);
+    }
+    if (initialized_window) { table_free(&g_window_manager.window); memset(&g_window_manager.window, 0, sizeof(g_window_manager.window)); }
+)
