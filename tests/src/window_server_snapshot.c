@@ -273,6 +273,83 @@ static CFArrayRef window_server_snapshot_fake_window_ids(int count)
     return cfarray_of_cfnumbers(ids, sizeof(ids[0]), count, kCFNumberSInt32Type);
 }
 
+static size_t window_server_snapshot_fake_expected_peak(int count)
+{
+    return sizeof(struct window_server_snapshot_owner) + (size_t) count *
+        (sizeof(struct window_server_window_record) +
+         (count >= 128 ? sizeof(struct window_server_snapshot_index_entry) : 0));
+}
+
+TEST_FUNC(window_server_snapshot_index_preserves_order_and_linear_lookup_semantics,
+{
+    const int counts[] = { 1, 50, 127, 128, 200 };
+    for (int c = 0; c < array_count(counts); ++c) {
+        int count = counts[c];
+        window_server_snapshot_fake_begin(count);
+        for (int i = 0; i < count; ++i) {
+            window_server_snapshot_fake.records[i].id = (uint32_t) ((i * 37) % count) * 2 + 2;
+        }
+        window_server_snapshot_fake.records[0].id = UINT32_MAX;
+        if (count > 1) {
+            window_server_snapshot_fake.records[1].id = UINT32_MAX;
+            window_server_snapshot_fake.records[2].id = 0;
+            window_server_snapshot_fake.records[count - 1].id = 0;
+        }
+        CFArrayRef ids = window_server_snapshot_fake_window_ids(count);
+        struct window_server_snapshot *snapshot = window_server_snapshot_create(1, ids, count);
+        TEST_CHECK(snapshot != NULL, true);
+        if (snapshot) {
+            TEST_CHECK(snapshot->index != NULL, count >= 128);
+            struct window_server_snapshot linear = *snapshot;
+            linear.index = NULL;
+            for (int i = 0; i < count; ++i) {
+                uint32_t id = window_server_snapshot_fake.records[i].id;
+                TEST_CHECK(snapshot->records[i].id, id);
+                TEST_CHECK(window_server_snapshot_find(snapshot, id) ==
+                           window_server_snapshot_find(&linear, id), true);
+            }
+            TEST_CHECK(window_server_snapshot_find(snapshot, 1) == NULL, true);
+            TEST_CHECK(window_server_snapshot_find(snapshot, UINT32_MAX - 1) == NULL, true);
+        }
+        TEST_CHECK(window_server_snapshot_allocator.peak_bytes,
+                   window_server_snapshot_fake_expected_peak(count));
+        window_server_snapshot_destroy(snapshot);
+        TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+        TEST_CHECK(window_server_snapshot_allocator.deallocation_calls, 2UL);
+        CFRelease(ids);
+        window_server_snapshot_fake_end();
+    }
+
+    struct window_server_window_record records[] = {
+        { .id = UINT32_MAX },
+        { .id = UINT32_MAX, .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID },
+        { .id = 0, .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID },
+        { .id = 0 },
+        { .id = 0, .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID }
+    };
+    struct window_server_snapshot snapshot = { .records = records, .count = array_count(records) };
+    struct window_server_snapshot_index_entry index[array_count(records)];
+    window_server_snapshot_build_index(&snapshot, index);
+    TEST_CHECK(window_server_snapshot_find(&snapshot, UINT32_MAX) == records + 1, true);
+    TEST_CHECK(window_server_snapshot_find(&snapshot, 0) == records + 2, true);
+    TEST_CHECK(window_server_snapshot_find(&snapshot, 42) == NULL, true);
+
+    // Missing ID metadata must not turn the index's sentinel into a real ID.
+    window_server_snapshot_fake_begin(128);
+    struct window_server_snapshot_backend without_ids = window_server_snapshot_fake_backend;
+    without_ids.iterator_window_id = NULL;
+    window_server_snapshot_test_backend = &without_ids;
+    CFArrayRef ids = window_server_snapshot_fake_window_ids(128);
+    struct window_server_snapshot *missing_ids = window_server_snapshot_create(1, ids, 128);
+    TEST_CHECK(missing_ids != NULL, true);
+    TEST_CHECK(window_server_snapshot_find(missing_ids, 0) == NULL, true);
+    TEST_CHECK(window_server_snapshot_find(missing_ids, UINT32_MAX) == NULL, true);
+    window_server_snapshot_destroy(missing_ids);
+    TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+});
+
 TEST_FUNC(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory,
 {
     window_server_snapshot_fake_begin(3);
@@ -438,18 +515,21 @@ TEST_FUNC(window_server_snapshot_rejects_invalid_inputs_and_backend_failures,
 
 TEST_FUNC(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned,
 {
-    for (size_t fail_ordinal = 1; fail_ordinal <= 2; ++fail_ordinal) {
-        window_server_snapshot_fake_begin(2);
-        window_server_snapshot_allocator.fail_ordinal = fail_ordinal;
-        CFArrayRef ids = window_server_snapshot_fake_window_ids(2);
-        TEST_CHECK(window_server_snapshot_create(1, ids, 2) == NULL, true);
-        TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
-        TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
-        TEST_CHECK(window_server_snapshot_fake.query_calls, fail_ordinal == 1 ? 0 : 1);
-        TEST_CHECK(window_server_snapshot_fake.query_releases, fail_ordinal == 1 ? 0 : 1);
-        TEST_CHECK(window_server_snapshot_fake.iterator_releases, fail_ordinal == 1 ? 0 : 1);
-        CFRelease(ids);
-        window_server_snapshot_fake_end();
+    const int counts[] = { 2, 128 };
+    for (int c = 0; c < array_count(counts); ++c) {
+        for (size_t fail_ordinal = 1; fail_ordinal <= 2; ++fail_ordinal) {
+            window_server_snapshot_fake_begin(counts[c]);
+            window_server_snapshot_allocator.fail_ordinal = fail_ordinal;
+            CFArrayRef ids = window_server_snapshot_fake_window_ids(counts[c]);
+            TEST_CHECK(window_server_snapshot_create(1, ids, counts[c]) == NULL, true);
+            TEST_CHECK(window_server_snapshot_allocator.outstanding_allocations, 0UL);
+            TEST_CHECK(window_server_snapshot_allocator.current_bytes, 0UL);
+            TEST_CHECK(window_server_snapshot_fake.query_calls, fail_ordinal == 1 ? 0 : 1);
+            TEST_CHECK(window_server_snapshot_fake.query_releases, fail_ordinal == 1 ? 0 : 1);
+            TEST_CHECK(window_server_snapshot_fake.iterator_releases, fail_ordinal == 1 ? 0 : 1);
+            CFRelease(ids);
+            window_server_snapshot_fake_end();
+        }
     }
 
     window_server_snapshot_fake_begin(1);
@@ -619,8 +699,7 @@ static bool window_server_snapshot_benchmark_case(int window_count, bool constra
            window_server_snapshot_allocator.current_bytes,
            (unsigned long long) checksum);
 
-    size_t expected_peak = sizeof(struct window_server_snapshot_owner) +
-                           (size_t) window_count * sizeof(struct window_server_window_record);
+    size_t expected_peak = window_server_snapshot_fake_expected_peak(window_count);
     bool valid = successes == total &&
                  window_server_snapshot_fake.query_calls == total &&
                  window_server_snapshot_fake.iterator_copy_calls == total &&

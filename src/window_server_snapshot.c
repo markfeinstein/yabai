@@ -133,6 +133,45 @@ struct window_server_snapshot_owner
     struct window_server_snapshot snapshot;
 };
 
+// Small snapshots are cheaper to scan. Larger ones are repeatedly searched by
+// startup reconciliation and menu collection; index IDs without moving records.
+#define WINDOW_SERVER_SNAPSHOT_INDEX_MIN_COUNT 128
+
+struct window_server_snapshot_index_entry
+{
+    uint32_t id;
+    uint32_t record_index;
+};
+
+_Static_assert(sizeof(struct window_server_window_record) %
+               _Alignof(struct window_server_snapshot_index_entry) == 0,
+               "snapshot records must align the trailing index");
+
+static int window_server_snapshot_index_compare(const void *left, const void *right)
+{
+    const struct window_server_snapshot_index_entry *a = left;
+    const struct window_server_snapshot_index_entry *b = right;
+    if (a->id != b->id) return (a->id > b->id) - (a->id < b->id);
+    // Match the linear scan's first-record behavior, including duplicate IDs.
+    return (a->record_index > b->record_index) - (a->record_index < b->record_index);
+}
+
+static void window_server_snapshot_build_index(struct window_server_snapshot *snapshot,
+                                               struct window_server_snapshot_index_entry *index)
+{
+    for (size_t i = 0; i < snapshot->count; ++i) {
+        bool valid = snapshot->records[i].valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID;
+        // Invalid records sort after every real ID, including UINT32_MAX.
+        // Real ordinals fit in uint32_t because creation accepts an int count.
+        index[i] = (struct window_server_snapshot_index_entry) {
+            .id = valid ? snapshot->records[i].id : UINT32_MAX,
+            .record_index = valid ? (uint32_t) i : UINT32_MAX
+        };
+    }
+    qsort(index, snapshot->count, sizeof(*index), window_server_snapshot_index_compare);
+    snapshot->index = index;
+}
+
 static uint64_t window_server_snapshot_generation;
 
 struct window_server_snapshot *window_server_snapshot_create(int connection,
@@ -168,7 +207,11 @@ struct window_server_snapshot *window_server_snapshot_create(int connection,
 
     if (backend->iterator_count(iterator) != expected_count) goto fail_iterator;
 
-    struct window_server_window_record *records = backend->allocate((size_t) expected_count, sizeof(*records));
+    bool indexed = expected_count >= WINDOW_SERVER_SNAPSHOT_INDEX_MIN_COUNT;
+    size_t entry_size = sizeof(struct window_server_window_record) +
+                        (indexed ? sizeof(struct window_server_snapshot_index_entry) : 0);
+    // The optional index shares the records' allocation and lifetime.
+    struct window_server_window_record *records = backend->allocate((size_t) expected_count, entry_size);
     if (!records) goto fail_iterator;
 
     int advanced_count = 0;
@@ -184,6 +227,9 @@ struct window_server_snapshot *window_server_snapshot_create(int connection,
     snapshot->generation = __atomic_add_fetch(&window_server_snapshot_generation, 1, __ATOMIC_RELAXED);
     snapshot->records = records;
     snapshot->count = (size_t) expected_count;
+    if (indexed) {
+        window_server_snapshot_build_index(snapshot, (void *) (records + expected_count));
+    }
     return snapshot;
 
 fail_records:
@@ -201,6 +247,17 @@ const struct window_server_window_record *window_server_snapshot_find(const stru
                                                                       uint32_t window_id)
 {
     if (!snapshot || !snapshot->records) return NULL;
+    if (snapshot->index) {
+        size_t low = 0, high = snapshot->count;
+        while (low < high) {
+            size_t middle = low + (high - low) / 2;
+            if (snapshot->index[middle].id < window_id) low = middle + 1;
+            else high = middle;
+        }
+        if (low == snapshot->count || snapshot->index[low].id != window_id ||
+            snapshot->index[low].record_index == UINT32_MAX) return NULL;
+        return snapshot->records + snapshot->index[low].record_index;
+    }
     for (size_t i = 0; i < snapshot->count; ++i) {
         const struct window_server_window_record *record = snapshot->records + i;
         if ((record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ID) && record->id == window_id) return record;

@@ -3440,6 +3440,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_corner_geometry_rejects_negative_nan_and_infinity) \
     TEST_ENTRY(window_corner_geometry_preserves_zero_equal_and_asymmetric_source_order) \
     TEST_ENTRY(window_corner_geometry_capability_is_resolved_but_production_paths_are_disabled) \
+    TEST_ENTRY(window_server_snapshot_index_preserves_order_and_linear_lookup_semantics) \
     TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
     TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
     TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \

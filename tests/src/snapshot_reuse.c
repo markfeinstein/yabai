@@ -43,8 +43,7 @@ static bool snapshot_reuse_startup_benchmark_case(int window_count)
     qsort(elapsed, sample_count, sizeof(elapsed[0]), window_server_snapshot_benchmark_compare_u64);
     int p95_index = (sample_count * 95 + 99) / 100 - 1;
     long long avoided_targeted_calls = (long long) total_iterations * window_count * 2;
-    size_t expected_peak = sizeof(struct window_server_snapshot_owner) +
-                           (size_t) window_count * sizeof(struct window_server_window_record);
+    size_t expected_peak = window_server_snapshot_fake_expected_peak(window_count);
     printf("{\"case\":\"startup-snapshot-reuse\",\"windows\":%d,\"iterations\":%d,"
            "\"p50_ns\":%llu,\"p95_ns\":%llu,\"inventory_calls\":%d,"
            "\"snapshot_destroys\":%zu,\"parent_fallback_calls\":%d,"
@@ -176,8 +175,7 @@ static bool snapshot_reuse_menu_benchmark_case(int display_count, int total_spac
     qsort(elapsed, sample_count, sizeof(elapsed[0]), window_server_snapshot_benchmark_compare_u64);
     int p95_index = (sample_count * 95 + 99) / 100 - 1;
     int expected_calls = total_iterations * total_space_count;
-    size_t expected_peak = sizeof(struct window_server_snapshot_owner) +
-                           (size_t) window_count * sizeof(struct window_server_window_record);
+    size_t expected_peak = window_server_snapshot_fake_expected_peak(window_count);
     printf("{\"case\":\"menu-snapshot-reuse\",\"displays\":%d,\"spaces\":%d,"
            "\"windows\":%d,\"iterations\":%d,\"p50_ns\":%llu,\"p95_ns\":%llu,"
            "\"inventory_calls\":%d,\"snapshot_destroys\":%zu,\"call_delta\":0,"

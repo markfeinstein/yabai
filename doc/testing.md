@@ -53,6 +53,17 @@ These are incremental boundary extractions, not a wholesale rewrite of the
 manifest. Existing constraint/classifier behavior and public interfaces are
 unchanged; classifier tests exercise the separately linked implementation.
 
+## Snapshot lookup performance
+
+`make test-benchmark-ws-snapshot test-benchmark-snapshot-reuse` measures snapshot
+capture and its startup/menu/visibility consumers with synthetic backends, not
+live WindowServer performance. Snapshots with at least 128 records build a sorted,
+immutable ID index in the same allocation as the records. This adds eight bytes
+per record and O(n log n) capture work, but changes repeated lookups from O(n)
+to O(log n), without reordering records or adding allocation calls. Small and
+borrowed snapshots retain linear lookup. Tests cover the threshold, shuffled and
+duplicate IDs, zero/maximum IDs, unavailable metadata, and allocation failures.
+
 ## Read-only native private-API smoke
 
 `make private-api-smoke` builds and runs a **live**, read-only probe with a

@@ -36,11 +36,15 @@ struct window_server_window_record
     uint64_t valid_fields;
 };
 
+struct window_server_snapshot_index_entry;
+
 struct window_server_snapshot
 {
     uint64_t generation;
     const struct window_server_window_record *records;
     size_t count;
+    /* Private immutable lookup storage; leave NULL for borrowed snapshots. */
+    const struct window_server_snapshot_index_entry *index;
 };
 
 /* Creates an immutable, owned snapshot in iterator order. The returned snapshot
