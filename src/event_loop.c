@@ -896,8 +896,10 @@ static void (*event_loop_test_window_reconcile_schedule)(uint64_t, uint64_t, uin
 static bool (*event_loop_test_window_reconcile_visible)(uint64_t);
 static bool (*event_loop_test_window_reconcile_user)(uint64_t);
 static CGError (*event_loop_test_window_reconcile_ordered_query)(int, uint32_t, uint8_t *);
+static bool (*event_loop_test_window_reconcile_minimized_query)(struct window *, bool *);
 static bool (*event_loop_test_window_reconcile_window_on_space)(uint64_t, struct window *);
-static void (*event_loop_test_window_reconcile_restore_ordered)(struct window_manager *, struct window *, uint64_t);
+static void (*event_loop_test_window_reconcile_refresh_deminimized)(struct window *);
+static void (*event_loop_test_window_reconcile_restore_window)(struct window_manager *, struct window *, uint64_t);
 static void (*event_loop_test_window_reconcile_validate)(uint64_t);
 static void (*event_loop_test_window_reconcile_refresh_highlight)(struct window_manager *);
 #endif
@@ -996,22 +998,76 @@ static void window_reconcile_schedule(struct window *window)
     });
 }
 
+static bool window_reconcile_window_needs_schedule(struct window *window)
+{
+    return window_check_flag(window, WINDOW_ORDERED_OUT) ||
+           window_check_flag(window, WINDOW_MINIMIZE);
+}
+
 static void window_reconcile_schedule_application(struct application *application)
 {
     int window_count = 0;
     struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
     for (int i = 0; i < window_count; ++i) {
-        if (window_check_flag(window_list[i], WINDOW_ORDERED_OUT)) {
+        if (window_reconcile_window_needs_schedule(window_list[i])) {
             window_reconcile_schedule(window_list[i]);
         }
     }
 }
 
-static int window_reconcile_restore_ordered_windows(uint64_t sid)
+static bool window_reconcile_window_is_minimized(struct window *window, bool *minimized)
+{
+#ifdef TESTS
+    if (event_loop_test_window_reconcile_minimized_query) {
+        return event_loop_test_window_reconcile_minimized_query(window, minimized);
+    }
+#endif
+    struct window_ax_snapshot snapshot = {0};
+    bool result = window_ax_snapshot_read(window->ref, WINDOW_AX_MINIMIZED, &snapshot);
+    if (result) *minimized = snapshot.minimized;
+    window_ax_snapshot_destroy(&snapshot);
+    return result;
+}
+
+static void window_refresh_deminimized_state(struct window *window)
+{
+    window_clear_flag(window, WINDOW_MINIMIZE);
+    window_constraints_invalidate(&window->constraints);
+
+    if (window_ax_can_move(window)) {
+        window_set_flag(window, WINDOW_MOVABLE);
+    } else {
+        window_clear_flag(window, WINDOW_MOVABLE);
+    }
+
+    if (window_ax_can_resize(window)) {
+        window_set_flag(window, WINDOW_RESIZABLE);
+    } else {
+        window_clear_flag(window, WINDOW_RESIZABLE);
+    }
+
+    if (window->role) CFRelease(window->role);
+    window->role = window_ax_role(window);
+
+    if (window->subrole) CFRelease(window->subrole);
+    window->subrole = window_ax_subrole(window);
+}
+
+static int window_reconcile_restore_windows(uint64_t sid)
 {
     int restored = 0;
     table_for (struct window *window, g_window_manager.window, {
-        if (!window_check_flag(window, WINDOW_ORDERED_OUT)) continue;
+        // Wake restoration can omit the AX deminiaturized notification just as it can omit
+        // WindowServer's ordered-in notification. Confirm both live states before clearing either flag.
+        bool stale_minimized = false;
+        if (window_check_flag(window, WINDOW_MINIMIZE)) {
+            bool minimized = true;
+            if (!window_reconcile_window_is_minimized(window, &minimized) || minimized) continue;
+            stale_minimized = true;
+        } else if (!window_check_flag(window, WINDOW_ORDERED_OUT)) {
+            continue;
+        }
+
         uint8_t ordered_in = 0;
 #ifdef TESTS
         CGError ordered_result = event_loop_test_window_reconcile_ordered_query
@@ -1029,9 +1085,20 @@ static int window_reconcile_restore_ordered_windows(uint64_t sid)
         bool on_space = space_manager_is_window_on_space(sid, window);
 #endif
         if (!on_space) continue;
+        if (stale_minimized) {
 #ifdef TESTS
-        if (event_loop_test_window_reconcile_restore_ordered) {
-            event_loop_test_window_reconcile_restore_ordered(&g_window_manager, window, sid);
+            if (event_loop_test_window_reconcile_refresh_deminimized) {
+                event_loop_test_window_reconcile_refresh_deminimized(window);
+            } else {
+                window_refresh_deminimized_state(window);
+            }
+#else
+            window_refresh_deminimized_state(window);
+#endif
+        }
+#ifdef TESTS
+        if (event_loop_test_window_reconcile_restore_window) {
+            event_loop_test_window_reconcile_restore_window(&g_window_manager, window, sid);
         } else {
             window_manager_window_did_order_in(&g_window_manager, window, sid);
         }
@@ -1064,7 +1131,7 @@ static EVENT_HANDLER(WINDOW_RECONCILE)
 
     struct view *view = table_find(&g_space_manager.view, &event.sid);
     if (!view || view->layout == VIEW_FLOAT) return;
-    int restored = window_reconcile_restore_ordered_windows(event.sid);
+    int restored = window_reconcile_restore_windows(event.sid);
 #ifdef TESTS
     if (event_loop_test_window_reconcile_validate) {
         event_loop_test_window_reconcile_validate(event.sid);
@@ -1117,7 +1184,7 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     if (focus_changed) event_loop_active_window_highlight_target_did_change();
 
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-    if (focus_changed && (view || window_check_flag(window, WINDOW_ORDERED_OUT))) {
+    if (focus_changed && (view || window_reconcile_window_needs_schedule(window))) {
         window_reconcile_schedule(window);
     }
     if (focus_changed && previous_view && previous_view != view && view_layout_is_accordion(previous_view->layout)) {
@@ -1919,7 +1986,7 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
 
     event_loop_flush_batched_views(view_list, view_count);
     managed_window_correction_schedule_application(application);
-    // WindowServer can omit the ordered-in notification while restoring an application after wake.
+    // Wake restoration can omit ordered-in and deminiaturized notifications.
     window_reconcile_schedule_application(application);
 
     window_manager_refresh_active_window_highlight(&g_window_manager);
@@ -2765,29 +2832,10 @@ static EVENT_HANDLER(WINDOW_DEMINIMIZED)
         return;
     }
 
-    window_clear_flag(window, WINDOW_MINIMIZE);
-    window_constraints_invalidate(&window->constraints);
+    window_refresh_deminimized_state(window);
     if (window->id == g_window_manager.focused_window_id) {
         window_manager_refresh_active_window_highlight(&g_window_manager);
     }
-
-    if (window_ax_can_move(window)) {
-        window_set_flag(window, WINDOW_MOVABLE);
-    } else {
-        window_clear_flag(window, WINDOW_MOVABLE);
-    }
-
-    if (window_ax_can_resize(window)) {
-        window_set_flag(window, WINDOW_RESIZABLE);
-    } else {
-        window_clear_flag(window, WINDOW_RESIZABLE);
-    }
-
-    if (window->role) CFRelease(window->role);
-    window->role = window_ax_role(window);
-
-    if (window->subrole) CFRelease(window->subrole);
-    window->subrole = window_ax_subrole(window);
 
     uint64_t sid = space_manager_active_space();
     if (space_manager_is_window_on_space(sid, window)) {

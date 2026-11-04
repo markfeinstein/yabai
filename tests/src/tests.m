@@ -3463,7 +3463,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_created_event_ax_ownership_matrix_is_exact) \
     TEST_ENTRY(window_created_identity_retry_preserves_origin_and_falls_back_to_refresh) \
     TEST_ENTRY(window_focus_reconciliation_is_per_space_coalesced_and_bounded) \
-    TEST_ENTRY(application_visibility_schedules_ordered_window_reconciliation) \
+    TEST_ENTRY(application_visibility_schedules_stale_window_reconciliation) \
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
