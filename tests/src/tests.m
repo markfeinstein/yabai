@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include "../runner.h"
 
 unsigned char __src_osax_payload[1];
 unsigned int __src_osax_payload_len;
@@ -94,6 +95,7 @@ typedef TEST_SIG(function);
 
 static bool test_temp_storage_ensure(uint64_t size);
 
+#include "test_runner.c"
 #include "area.c"
 #include "display.c"
 #include "window.c"
@@ -3340,6 +3342,10 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
     TEST_ENTRY(native_tile_diagnostic_json_is_stable_aggregate_and_redacted) \
     TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
+    TEST_ENTRY(test_runner_defaults_and_help_are_explicit) \
+    TEST_ENTRY(test_runner_list_and_filter_compose_in_either_order) \
+    TEST_ENTRY(test_runner_rejects_malformed_unknown_and_repeated_arguments) \
+    TEST_ENTRY(test_runner_matches_case_sensitive_literal_substrings) \
     TEST_ENTRY(display_cadence_core_stats_are_deterministic) \
     TEST_ENTRY(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite) \
     TEST_ENTRY(display_cadence_stress_json_is_bounded_and_redacted) \
@@ -4034,7 +4040,42 @@ int main(int argc, char **argv)
         return window_server_hit_test_benchmark_run() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
+    struct test_runner_options options;
+    const char *argument_error;
+    enum test_runner_parse_result parsed = test_runner_parse(argc, argv, &options, &argument_error);
+    if (parsed != TEST_RUNNER_PARSE_OK) {
+        FILE *stream = parsed == TEST_RUNNER_PARSE_HELP ? stdout : stderr;
+        if (argument_error) fprintf(stream, "%s\n", argument_error);
+        fprintf(stream, "usage: %s [--list] [--filter SUBSTRING]\n"
+                        "       %s --help | --benchmark-<name>\n", argv[0], argv[0]);
+        return parsed == TEST_RUNNER_PARSE_HELP ? EXIT_SUCCESS : 2;
+    }
+    int total = 0;
+    for (int i = 0; i < array_count(tests); ++i) {
+        if (test_runner_matches(&options, tests[i].name)) ++total;
+    }
+    if (!total) {
+        fprintf(stderr, "no tests match filter '%s'\n", options.filter ? options.filter : "");
+        return EXIT_FAILURE;
+    }
+    if (options.list) {
+        for (int i = 0; i < array_count(tests); ++i) {
+            if (test_runner_matches(&options, tests[i].name)) puts(tests[i].name);
+        }
+        return EXIT_SUCCESS;
+    }
+
+    // Some legacy tests use read-only private getters with the default
+    // connection. Initialize the client library explicitly, not via earlier tests.
+    (void) SLSMainConnectionID();
+    // Legacy tests share this arena; selecting a subset must not depend on an
+    // earlier test allocating it incidentally. Listing/help never allocate it.
+    if (!test_temp_storage_ensure(KILOBYTES(64))) {
+        fprintf(stderr, "failed to initialize shared test temporary storage\n");
+        return EXIT_FAILURE;
+    }
     if (pthread_mutex_init(&g_window_manager.window_animations_lock, NULL) != 0) {
+        test_suite_teardown();
         fprintf(stderr, "failed to initialize animation test mutex\n");
         return EXIT_FAILURE;
     }
@@ -4042,13 +4083,13 @@ int main(int argc, char **argv)
 
     int succeeded = 0;
     int failed = 0;
-    int total = array_count(tests);
     printf("\e[1;34m -- Running %d tests\e[m\n\n", total);
 
     uint64_t cpu_freq  = read_cpu_freq();
     uint64_t begin_tsc = read_cpu_timer();
 
-    for (int i = 0; i < total; ++i) {
+    for (int i = 0; i < array_count(tests); ++i) {
+        if (!test_runner_matches(&options, tests[i].name)) continue;
         uint64_t tsc = read_cpu_timer();
         bool result;
         @autoreleasepool {

@@ -15,6 +15,7 @@ FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Co
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
+RUNNER = $(OUT)/runner.o
 CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h ../scripts/native_tab_event_recorder_core.c ../scripts/native_tab_event_recorder_core.h ../scripts/native_tile_diagnostic_core.c ../scripts/native_tile_diagnostic_core.h ../scripts/display_cadence_diagnostic_core.c ../scripts/display_cadence_diagnostic_core.h
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
@@ -30,8 +31,11 @@ $(OUT):
 $(MODEL): ../src/menu_bar_model.c ../src/menu_bar_model.h | $(OUT)
 	$(CC) -c ../src/menu_bar_model.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
 
-$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) | $(OUT)
-	$(CC) ./src/tests.m $(MODEL) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
+$(RUNNER): runner.c runner.h makefile | $(OUT)
+	$(CC) -c runner.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
+
+$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) $(RUNNER) makefile | $(OUT)
+	$(CC) ./src/tests.m $(MODEL) $(RUNNER) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
 
 core-build: $(CORE)
 
@@ -59,6 +63,7 @@ shell-fixtures:
 	./man_check_fixture.sh
 
 run: build repository-build shell-fixtures
+	python3 -B ./runner_cli_test.py '$(CORE)'
 	$(CORE)
 	$(OUT)/runtime_paths
 	$(OUT)/menu_bar_ui
@@ -126,6 +131,7 @@ macho-parser: build
 	$(OUT)/macho_parser
 
 syntax:
+	$(CC) -fsyntax-only runner.c -std=c11 -Wall -Wextra -Werror
 	python3 -c 'compile(open("integration/private_api_smoke.py", encoding="utf-8").read(), "private_api_smoke.py", "exec")'
 	$(CC) -fsyntax-only ../src/menu_bar_model.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
@@ -161,4 +167,4 @@ integration-hide-on-close:
 
 test-all: run run-asan run-tsan arch-arm64 arch-x86_64 syntax
 
--include $(MODEL:.o=.d) $(OUT)/macho_parser_production.d
+-include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(OUT)/macho_parser_production.d

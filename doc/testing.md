@@ -1,5 +1,38 @@
 # Development testing
 
+## Discover and select core tests
+
+```sh
+make -C tests core-build
+./tests/bin/ordinary/tests --list
+./tests/bin/ordinary/tests --filter window_constraints_
+./tests/bin/ordinary/tests --list --filter window_close_
+./tests/bin/ordinary/tests --help
+```
+
+`--filter` is one nonempty, case-sensitive **literal substring**, not a glob or
+regular expression. It composes with `--list` in either order. Listing prints
+only the selected test names and exits before suite initialization or test
+execution. A run reports the selected count and preserves source registration
+order. No match exits 1 (including list mode); unknown, repeated, or malformed
+arguments exit 2 without running tests. `--help` exits 0. Existing individual
+`--benchmark-<name>` modes are unchanged and cannot be combined with filtering.
+With no arguments the executable still runs the full core suite. The runner
+initializes the shared temporary arena and read-only WindowServer client library
+before execution so filtered tests do not rely on incidental setup by earlier
+tests. As with the full suite, these legacy core tests require macOS and its
+private frameworks; they are not a platform-independent unit-test executable.
+
+These options select only tests in the core executable, not the separate runtime,
+UI-model, installer, or shell-fixture executables. `make test` continues to run
+all ordinary offline gates; its CLI regression check exercises the real entry
+point. The standalone `tests/runner.c` module is compiled and linked separately
+for ordinary, sanitizer, and thin-architecture configurations, and its parser
+unit tests run in every core suite. For another configuration, build with
+`make -C tests CONFIG=asan core-build` (or `CONFIG=tsan`) and use the corresponding
+`tests/bin/<configuration>/tests` executable; retain the sanitizer environment
+settings from `tests/makefile` when running it directly.
+
 ## Read-only native private-API smoke
 
 `make private-api-smoke` builds and runs a **live**, read-only probe with a

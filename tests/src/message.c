@@ -358,6 +358,12 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
         TEST_CHECK(declarative_installed_generation(), saved_generation);
     }
 
+    // Own the lookup fixture instead of relying on a previous test's table.
+    struct table saved_label_views = g_space_manager.view;
+    struct space_label *saved_labels = g_space_manager.labels;
+    g_space_manager.view = (struct table) {0};
+    table_init(&g_space_manager.view, 4, hash_view, compare_view);
+    g_space_manager.labels = NULL;
     uint64_t reload_label_sid = UINT64_MAX - 109;
     struct view reload_label_view = { .sid = reload_label_sid, .split_type = SPLIT_AUTO };
     table_add(&g_space_manager.view, &reload_label_sid, &reload_label_view);
@@ -378,6 +384,10 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
     TEST_CHECK(reload_label_view.split_type, SPLIT_X);
     space_manager_remove_label_for_space(&g_space_manager, reload_label_sid);
     table_remove(&g_space_manager.view, &reload_label_sid);
+    table_free(&g_space_manager.view);
+    g_space_manager.view = saved_label_views;
+    buf_free(g_space_manager.labels);
+    g_space_manager.labels = saved_labels;
 
     struct event_loop saved_event_loop = g_event_loop;
     g_event_loop = (struct event_loop) {0};
