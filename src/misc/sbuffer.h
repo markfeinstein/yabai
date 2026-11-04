@@ -9,7 +9,7 @@ struct buf_hdr
 };
 
 #define buf__hdr(b) ((struct buf_hdr *)((char *)(b) - offsetof(struct buf_hdr, buf)))
-#define buf__should_grow(b, n) (buf_len(b) + (n) >= buf_cap(b))
+#define buf__should_grow(b, n) (buf_len(b) + (n) > buf_cap(b))
 #define buf__fit(b, n) (buf__should_grow(b, n) ? ((b) = buf__grow_f(b, buf_len(b) + (n), sizeof(*(b)))) : 0)
 
 #define buf_len(b) ((b) ? buf__hdr(b)->len : 0)
@@ -39,7 +39,7 @@ struct ts_buf_hdr
 };
 
 #define ts_buf__hdr(b) ((struct ts_buf_hdr *)((char *)(b) - offsetof(struct ts_buf_hdr, buf)))
-#define ts_buf__should_grow(b, n) (ts_buf_len(b) + (n) >= ts_buf_cap(b))
+#define ts_buf__should_grow(b, n) (ts_buf_len(b) + (n) > ts_buf_cap(b))
 #define ts_buf__fit(b, n) (ts_buf__should_grow(b, n) ? ((b) = ts_buf__grow_f(b, ts_buf_len(b) + (n), sizeof(*(b)))) : 0)
 
 #define ts_buf_len(b) ((b) ? ts_buf__hdr(b)->len : 0)

@@ -461,6 +461,33 @@ TEST_FUNC(temporary_storage_checked_allocation_is_fallible_and_atomic,
     if (aligned) TEST_CHECK((uintptr_t) aligned % __alignof__(uint64_t), 0ULL);
 });
 
+TEST_FUNC(stretch_buffers_use_full_capacity_before_growth,
+{
+    uint32_t *heap_values = NULL;
+    buf_push(heap_values, 1);
+    buf_push(heap_values, 2);
+    int heap_capacity = buf_cap(heap_values);
+    buf_push(heap_values, 3);
+    TEST_CHECK(buf_cap(heap_values), heap_capacity);
+    TEST_CHECK(buf_len(heap_values), 3);
+    buf_free(heap_values);
+
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    uint32_t *temporary_values = NULL;
+    ts_buf_push(temporary_values, 1);
+    ts_buf_push(temporary_values, 2);
+    int temporary_capacity = ts_buf_cap(temporary_values);
+    uint64_t temporary_used = g_temp_storage.used;
+    ts_buf_push(temporary_values, 3);
+    TEST_CHECK(ts_buf_cap(temporary_values), temporary_capacity);
+    TEST_CHECK(g_temp_storage.used, temporary_used);
+    TEST_CHECK(ts_buf_len(temporary_values), 3);
+});
+
 TEST_FUNC(temporary_stretch_buffer_growth_charges_only_capacity,
 {
     bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
@@ -3656,6 +3683,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
     TEST_ENTRY(active_display_enumeration_rejects_errors_and_unstable_samples) \
     TEST_ENTRY(temporary_storage_checked_allocation_is_fallible_and_atomic) \
+    TEST_ENTRY(stretch_buffers_use_full_capacity_before_growth)             \
     TEST_ENTRY(temporary_stretch_buffer_growth_charges_only_capacity)       \
     TEST_ENTRY(core_foundation_constructors_fail_conservatively) \
     TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
