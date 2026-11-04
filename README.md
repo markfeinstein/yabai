@@ -6,20 +6,20 @@
   <b>Tiling window management for the Mac.</b>
 </p>
 <p align="center">
-  <a href="https://github.com/asmvik/yabai/blob/master/LICENSE.txt">
+  <a href="LICENSE.txt">
     <img src="https://img.shields.io/github/license/asmvik/yabai.svg?color=green" alt="License Badge">
   </a>
-  <a href="https://github.com/asmvik/yabai/blob/master/doc/yabai.asciidoc">
+  <a href="doc/yabai.asciidoc">
     <img src="https://img.shields.io/badge/view-documentation-green.svg" alt="Documentation Badge">
   </a>
   <a href="https://github.com/asmvik/yabai/wiki">
-    <img src="https://img.shields.io/badge/view-wiki-green.svg" alt="Wiki Badge">
+    <img src="https://img.shields.io/badge/view-upstream_wiki-green.svg" alt="Upstream Wiki Badge">
   </a>
-  <a href="https://github.com/asmvik/yabai/blob/master/CHANGELOG.md">
+  <a href="CHANGELOG.md">
     <img src="https://img.shields.io/badge/view-changelog-green.svg" alt="Changelog Badge">
   </a>
   <a href="https://github.com/asmvik/yabai/releases">
-    <img src="https://img.shields.io/github/commits-since/asmvik/yabai/latest.svg?color=green" alt="Version Badge">
+    <img src="https://img.shields.io/github/commits-since/asmvik/yabai/latest.svg?color=green" alt="Upstream Version Badge">
   </a>
 </p>
 
@@ -47,7 +47,7 @@ The live `make integration-hide-on-close` target is deliberately excluded from o
 
 ## Installation and Configuration
 
-- The [&nearr;&nbsp;yabai&nbsp;wiki][yabai-wiki] has both brief and detailed installation instructions for multiple installation methods, and also explains how to uninstall yabai completely.
+- The [&nearr;&nbsp;upstream&nbsp;yabai&nbsp;wiki][yabai-wiki] covers general installation and uninstallation. For this fork’s configuration and added features, use the [local documentation][yabai-docs] and [examples][yabai-examples]; upstream documentation and releases may differ.
 - Native settings, per-Space policy, named layout modes, and persistent rules can be written in `~/.config/yabai/yabai.jsonc`. This includes the typed `window_focus_fallback` policy for focusing the recent managed window after destruction, minimization, or application hiding without shell-backed signals. Version 2 modes can be selected with `yabai -m mode --activate <name>` and inspected with `yabai -m mode --query` or `--list`. Validate the file without starting the daemon with `yabai --check-config ~/.config/yabai/yabai.jsonc`.
 - Run `yabai --doctor` for bounded, read-only `PASS`/`WARN`/`FAIL`/`UNKNOWN` checks of the yabai binary, permissions, SIP requirements, launch agent, configuration readability, and optional scripting addition. It never changes services or system state and returns nonzero only when a check fails.
 - Native JSONC loads before `yabairc`. Keep `yabairc` for runtime overrides, signals, startup actions, and shell logic. Sample files are in the [&nearr;&nbsp;examples][yabai-examples] directory; the complete JSONC schema and reload behavior are in the [&nearr;&nbsp;documentation][yabai-docs].
@@ -95,9 +95,8 @@ You acknowledge that you understand the potential risk that may come from disabl
 
 <!-- Project internal links -->
 [yabai-license]: LICENSE.txt
-[yabai-examples]: https://github.com/asmvik/yabai/tree/master/examples
-[yabai-wiki]: https://github.com/asmvik/yabai/wiki
-[yabai-docs]: https://github.com/asmvik/yabai/blob/master/doc/yabai.asciidoc
+[yabai-examples]: examples
+[yabai-docs]: doc/yabai.asciidoc
 
 <!-- Links to other GitHub projects/users -->
 [gh-skhd]: https://github.com/asmvik/skhd
@@ -105,4 +104,5 @@ You acknowledge that you understand the potential risk that may come from disabl
 [gh-dominiklohmann]: https://github.com/dominiklohmann
 
 <!-- External links -->
+[yabai-wiki]: https://github.com/asmvik/yabai/wiki
 [external-about-sip]: https://support.apple.com/en-us/HT204899
