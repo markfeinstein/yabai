@@ -335,8 +335,11 @@ static bool declarative_install_apply_space_policy(struct declarative_startup_st
 {
     struct declarative_space_topology_entry *entries = NULL;
     size_t count = 0;
-    if (!declarative_topology_space_snapshot(&startup->topology, &entries, &count) ||
-        count != startup->detached_views.count) return false;
+    if (!declarative_topology_space_snapshot(&startup->topology, &entries, &count)) return false;
+    if (count != startup->detached_views.count) {
+        declarative_topology_space_snapshot_destroy(entries);
+        return false;
+    }
     struct declarative_runtime_state empty_runtime = {0};
     struct declarative_space_defaults defaults = declarative_startup_view_defaults(startup->model);
     for (size_t i = 0; i < count; ++i) {

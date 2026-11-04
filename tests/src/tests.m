@@ -3898,6 +3898,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(declarative_view_adoption_is_atomic_at_every_registry_allocation) \
     TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
     TEST_ENTRY(declarative_startup_install_retains_unavailable_rules_and_dormant_policy) \
+    TEST_ENTRY(declarative_startup_space_policy_count_mismatch_releases_snapshot) \
     TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
     TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
     TEST_ENTRY(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable) \

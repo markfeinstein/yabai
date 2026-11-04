@@ -326,6 +326,28 @@ TEST_FUNC(declarative_startup_install_retains_unavailable_rules_and_dormant_poli
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
 
+TEST_FUNC(declarative_startup_space_policy_count_mismatch_releases_snapshot,
+{
+    declarative_topology_test_reset_allocator();
+    struct declarative_topology_fixture fixture;
+    declarative_topology_test_fixture_init(&fixture, false);
+    struct declarative_topology_capture_ops ops = declarative_topology_test_ops(&fixture);
+    struct declarative_startup_state startup = { .present = true };
+    TEST_CHECK(declarative_topology_capture(&ops, &startup.topology), true);
+    TEST_CHECK(startup.topology.space_count, 3U);
+
+    size_t outstanding = declarative_topology_test_outstanding_allocations();
+    startup.detached_views.count = startup.topology.space_count - 1;
+    struct declarative_space_composition composition = {0};
+    TEST_CHECK(declarative_install_apply_space_policy(&startup, &composition), false);
+    TEST_CHECK(declarative_topology_test_outstanding_allocations(), outstanding);
+
+    startup.detached_views.count = 0;
+    declarative_topology_destroy(&startup.topology);
+    declarative_topology_test_fixture_destroy(&fixture);
+    TEST_CHECK(declarative_topology_test_outstanding_allocations(), 0U);
+});
+
 TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
 {
     struct event_loop saved_event_loop = g_event_loop;
