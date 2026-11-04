@@ -337,6 +337,14 @@ struct window_node *view_add_window_node(struct view *view, struct window *windo
 struct window_node *view_remove_window_node(struct view *view, struct window *window);
 uint32_t *view_find_window_list(struct view *view, int *window_count);
 
+struct view_serialization_context
+{
+    CFArrayRef managed_display_spaces;
+    CFArrayRef ordered_display_uuids;
+};
+
+void view_serialize_with_context(FILE *rsp, struct view *view, uint64_t flags,
+                                 const struct view_serialization_context *context);
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags);
 bool view_is_invalid(struct view *view);
 bool view_is_dirty(struct view *view);

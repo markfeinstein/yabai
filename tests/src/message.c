@@ -1205,6 +1205,109 @@ TEST_FUNC(message_query_backend_failures_are_reported,
     space_manager_test_query_window_space_list = saved_window_space_list;
 });
 
+static int message_space_query_topology_call_count;
+static int message_space_query_ordered_display_call_count;
+static int message_space_query_display_space_list_call_count;
+
+static CFArrayRef message_space_query_managed_display_spaces(int cid)
+{
+    (void) cid;
+    ++message_space_query_topology_call_count;
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"display-one", @"Spaces": @[ @{ @"id64": @41 } ] },
+        @{ @"Display Identifier": @"display-two", @"Spaces": @[ @{ @"id64": @42 } ] }
+    ];
+    return CFRetain((CFArrayRef) topology);
+}
+
+static CFArrayRef message_space_query_ordered_display_uuids(void)
+{
+    ++message_space_query_ordered_display_call_count;
+    const void *values[] = { CFSTR("display-two"), CFSTR("display-one") };
+    return CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
+}
+
+static uint64_t *message_space_query_display_spaces(uint32_t did, CFArrayRef topology, int *count)
+{
+    ++message_space_query_display_space_list_call_count;
+    *count = 0;
+    if (!topology) return NULL;
+    uint64_t *spaces = ts_alloc_list(uint64_t, 1);
+    if (!spaces) return NULL;
+    spaces[0] = did == 1 ? 41 : 42;
+    *count = 1;
+    return spaces;
+}
+
+TEST_FUNC(message_space_query_reuses_topology_across_serialization,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    __auto_type saved_topology = space_manager_query_managed_display_spaces;
+    __auto_type saved_ordered_displays = space_manager_query_ordered_display_uuids;
+    __auto_type saved_display_spaces = space_manager_query_display_space_list;
+    struct table saved_views = g_space_manager.view;
+    g_space_manager.view = (struct table) {0};
+    table_init(&g_space_manager.view, 8, hash_view, compare_view);
+    struct window_node root_a = {0};
+    struct window_node root_b = {0};
+    struct view view_a = { .sid = 41, .root = &root_a, .layout = VIEW_BSP };
+    struct view view_b = { .sid = 42, .root = &root_b, .layout = VIEW_BSP };
+    table_add(&g_space_manager.view, &view_a.sid, &view_a);
+    table_add(&g_space_manager.view, &view_b.sid, &view_b);
+    space_manager_query_managed_display_spaces = message_space_query_managed_display_spaces;
+    space_manager_query_ordered_display_uuids = message_space_query_ordered_display_uuids;
+    space_manager_query_display_space_list = message_space_query_display_spaces;
+    display_manager_test_set_active_display_list_fn(message_query_active_displays);
+
+    uint64_t flags = SPACE_PROPERTY_ID | SPACE_PROPERTY_INDEX | SPACE_PROPERTY_DISPLAY;
+    message_space_query_topology_call_count = 0;
+    message_space_query_ordered_display_call_count = 0;
+    message_space_query_display_space_list_call_count = 0;
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(space_manager_query_spaces_for_displays(response, flags), true);
+        TEST_CHECK(message_space_query_topology_call_count, 1);
+        TEST_CHECK(message_space_query_ordered_display_call_count, 1);
+        TEST_CHECK(message_space_query_display_space_list_call_count, 2);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "\"id\":41,\n\t\"index\":1,\n\t\"display\":2") != NULL, true);
+        TEST_CHECK(strstr(output, "\"id\":42,\n\t\"index\":2,\n\t\"display\":1") != NULL, true);
+        fclose(response);
+    }
+
+    message_space_query_topology_call_count = 0;
+    message_space_query_ordered_display_call_count = 0;
+    message_space_query_display_space_list_call_count = 0;
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        TEST_CHECK(space_manager_query_spaces_for_display(response, 2, SPACE_PROPERTY_INDEX), true);
+        TEST_CHECK(message_space_query_topology_call_count, 1);
+        TEST_CHECK(message_space_query_ordered_display_call_count, 0);
+        TEST_CHECK(message_space_query_display_space_list_call_count, 1);
+        rewind(response);
+        char output[64] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strcmp(output, "[{\n\t\"index\":2\n}]\n"), 0);
+        fclose(response);
+    }
+
+    display_manager_test_set_active_display_list_fn(NULL);
+    space_manager_query_managed_display_spaces = saved_topology;
+    space_manager_query_ordered_display_uuids = saved_ordered_displays;
+    space_manager_query_display_space_list = saved_display_spaces;
+    table_free(&g_space_manager.view);
+    g_space_manager.view = saved_views;
+    ts_reset();
+});
+
 TEST_FUNC(message_window_query_reuses_topology_across_serialization,
 {
     bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));

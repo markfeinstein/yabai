@@ -1219,7 +1219,32 @@ void view_flush_direct(struct view *view)
     }
 }
 
+static int view_serialization_index(const struct view_serialization_context *context, uint64_t sid)
+{
+    if (context && cf_is_type(context->managed_display_spaces, CFArrayGetTypeID())) {
+        return managed_space_index(context->managed_display_spaces, sid);
+    }
+    return space_manager_mission_control_index(sid);
+}
+
+static int view_serialization_display(const struct view_serialization_context *context, uint64_t sid)
+{
+    if (context && cf_is_type(context->managed_display_spaces, CFArrayGetTypeID()) &&
+        cf_is_type(context->ordered_display_uuids, CFArrayGetTypeID())) {
+        CFStringRef uuid = managed_space_display_identifier_for_space(context->managed_display_spaces, sid);
+        int arrangement = display_manager_display_uuid_arrangement(context->ordered_display_uuids, uuid);
+        if (arrangement) return arrangement;
+    }
+    return display_manager_display_id_arrangement(space_display_id(sid));
+}
+
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
+{
+    view_serialize_with_context(rsp, view, flags, NULL);
+}
+
+void view_serialize_with_context(FILE *rsp, struct view *view, uint64_t flags,
+                                 const struct view_serialization_context *context)
 {
     TIME_FUNCTION;
 
@@ -1244,7 +1269,7 @@ void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
     if (flags & SPACE_PROPERTY_INDEX) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"index\":%d", space_manager_mission_control_index(view->sid));
+        fprintf(rsp, "\t\"index\":%d", view_serialization_index(context, view->sid));
         did_output = true;
     }
 
@@ -1268,7 +1293,7 @@ void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
     if (flags & SPACE_PROPERTY_DISPLAY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"display\":%d", display_manager_display_id_arrangement(space_display_id(view->sid)));
+        fprintf(rsp, "\t\"display\":%d", view_serialization_display(context, view->sid));
         did_output = true;
     }
 

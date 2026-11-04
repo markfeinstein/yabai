@@ -3766,6 +3766,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(message_regex_compilation_is_bounded)                       \
     TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
+    TEST_ENTRY(message_space_query_reuses_topology_across_serialization)  \
     TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
     TEST_ENTRY(message_window_query_reuses_inventory_snapshot_for_serialization) \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \

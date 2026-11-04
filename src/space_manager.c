@@ -58,6 +58,71 @@ static TABLE_COMPARE_FUNC(compare_view)
     return *(uint64_t *) key_a == *(uint64_t *) key_b;
 }
 
+#ifdef TESTS
+static CFArrayRef (*space_manager_query_managed_display_spaces)(int) = SLSCopyManagedDisplaySpaces;
+static CFArrayRef (*space_manager_query_ordered_display_uuids)(void) = display_manager_copy_ordered_display_uuids;
+static uint64_t *(*space_manager_query_display_space_list)(uint32_t, CFArrayRef, int *) =
+    display_space_list_with_topology;
+#else
+#define space_manager_query_managed_display_spaces SLSCopyManagedDisplaySpaces
+#define space_manager_query_ordered_display_uuids display_manager_copy_ordered_display_uuids
+#define space_manager_query_display_space_list display_space_list_with_topology
+#endif
+
+static bool space_manager_query_serializes_index(uint64_t flags)
+{
+    return !flags || (flags & SPACE_PROPERTY_INDEX);
+}
+
+static bool space_manager_query_serializes_display(uint64_t flags)
+{
+    return !flags || (flags & SPACE_PROPERTY_DISPLAY);
+}
+
+static void space_manager_query_context_begin(struct view_serialization_context *context, uint64_t flags,
+                                              CFArrayRef topology)
+{
+    *context = (struct view_serialization_context) {0};
+    bool needs_display = space_manager_query_serializes_display(flags);
+    if (!topology && (space_manager_query_serializes_index(flags) || needs_display)) {
+        topology = space_manager_query_managed_display_spaces(g_connection);
+    } else if (topology) {
+        CFRetain(topology);
+    }
+    context->managed_display_spaces = topology;
+    if (topology && needs_display) {
+        context->ordered_display_uuids = space_manager_query_ordered_display_uuids();
+    }
+}
+
+static void space_manager_query_context_end(struct view_serialization_context *context)
+{
+    if (context->ordered_display_uuids) CFRelease(context->ordered_display_uuids);
+    if (context->managed_display_spaces) CFRelease(context->managed_display_spaces);
+    *context = (struct view_serialization_context) {0};
+}
+
+static void space_manager_query_serialize_space_list(FILE *rsp, uint64_t *space_list, int space_count,
+                                                     uint64_t flags, CFArrayRef topology)
+{
+    struct view_serialization_context context = {0};
+    if (space_count > 0) space_manager_query_context_begin(&context, flags, topology);
+
+    fprintf(rsp, "[");
+    bool first = true;
+    for (int i = 0; i < space_count; ++i) {
+        struct view *view = space_manager_query_view(&g_space_manager, space_list[i]);
+        if (!view) continue;
+
+        if (!first) fprintf(rsp, ",");
+        view_serialize_with_context(rsp, view, flags, &context);
+        first = false;
+    }
+    fprintf(rsp, "]\n");
+
+    space_manager_query_context_end(&context);
+}
+
 bool space_manager_query_space(FILE *rsp, uint64_t sid, uint64_t flags)
 {
     TIME_FUNCTION;
@@ -83,18 +148,7 @@ bool space_manager_query_spaces_for_window(FILE *rsp, struct window *window, uin
 #endif
     if (!query_succeeded) return false;
 
-    fprintf(rsp, "[");
-    bool first = true;
-    for (int i = 0; i < space_count; ++i) {
-        struct view *view = space_manager_query_view(&g_space_manager, space_list[i]);
-        if (!view) continue;
-
-        if (!first) fprintf(rsp, ",");
-        view_serialize(rsp, view, flags);
-        first = false;
-    }
-    fprintf(rsp, "]\n");
-
+    space_manager_query_serialize_space_list(rsp, space_list, space_count, flags, NULL);
     return true;
 }
 
@@ -102,23 +156,14 @@ bool space_manager_query_spaces_for_display(FILE *rsp, uint32_t did, uint64_t fl
 {
     TIME_FUNCTION;
 
+    CFArrayRef topology = space_manager_query_managed_display_spaces(g_connection);
+    if (!topology) return false;
+
     int space_count;
-    uint64_t *space_list = display_space_list(did, &space_count);
-    if (!space_list) return false;
-
-    fprintf(rsp, "[");
-    bool first = true;
-    for (int i = 0; i < space_count; ++i) {
-        struct view *view = space_manager_query_view(&g_space_manager, space_list[i]);
-        if (!view) continue;
-
-        if (!first) fprintf(rsp, ",");
-        view_serialize(rsp, view, flags);
-        first = false;
-    }
-    fprintf(rsp, "]\n");
-
-    return true;
+    uint64_t *space_list = space_manager_query_display_space_list(did, topology, &space_count);
+    if (space_list) space_manager_query_serialize_space_list(rsp, space_list, space_count, flags, topology);
+    CFRelease(topology);
+    return space_list != NULL;
 }
 
 bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
@@ -129,28 +174,30 @@ bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags)
     uint32_t *display_list = display_manager_active_display_list(&display_count);
     if (!display_list) return false;
 
+    CFArrayRef topology = space_manager_query_managed_display_spaces(g_connection);
+    if (!topology) return false;
+
     int total_space_count = 0;
     uint64_t *all_spaces = NULL;
     for (int i = 0; i < display_count; ++i) {
         int space_count;
-        uint64_t *space_list = display_space_list(display_list[i], &space_count);
-        if (!space_list) return false;
+        uint64_t *space_list = space_manager_query_display_space_list(display_list[i], topology, &space_count);
+        if (!space_list) {
+            CFRelease(topology);
+            return false;
+        }
+
+        //
+        // NOTE: display_space_list_with_topology(..) uses the linear temporary
+        // allocator, so consecutive lists are contiguous.
+        //
+
         if (!all_spaces) all_spaces = space_list;
         total_space_count += space_count;
     }
 
-    fprintf(rsp, "[");
-    bool first = true;
-    for (int i = 0; i < total_space_count; ++i) {
-        struct view *view = space_manager_query_view(&g_space_manager, all_spaces[i]);
-        if (!view) continue;
-
-        if (!first) fprintf(rsp, ",");
-        view_serialize(rsp, view, flags);
-        first = false;
-    }
-    fprintf(rsp, "]\n");
-
+    space_manager_query_serialize_space_list(rsp, all_spaces, total_space_count, flags, topology);
+    CFRelease(topology);
     return true;
 }
 

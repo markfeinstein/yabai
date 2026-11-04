@@ -85,6 +85,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   layout that expands within a 260-point budget before falling back to compact mode.
 - Reuse managed-Space topology and ordered-display metadata across each window-query
   request, avoiding repeated IPC for Space enumeration and serialized Space/display indices.
+- Apply the same per-request topology reuse to `query --spaces`, which previously
+  re-fetched the full managed-Space topology for every serialized index and display.
 - Add non-mutating window diagnostics for raw parent id, WindowServer tags,
   ordered-in state, and CoreGraphics on-screen presence, plus verbose visibility-event
   and Space-focus-path tracing for cross-Space compositor investigations.
