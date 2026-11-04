@@ -24,8 +24,9 @@ static int process_caller_test_destroy_count;
 static int process_caller_test_next_count;
 static int process_caller_test_launch_retry_count;
 
-static struct process *process_caller_test_create(ProcessSerialNumber psn, pid_t pid)
+static struct process *process_caller_test_create(ProcessSerialNumber psn, pid_t pid, bool *ignored)
 {
+    if (ignored) *ignored = false;
     ++process_caller_test_create_count;
     struct process *process = legacy_allocation_calloc(1, sizeof(*process));
     if (!process) return NULL;
@@ -33,6 +34,15 @@ static struct process *process_caller_test_create(ProcessSerialNumber psn, pid_t
     process->pid = pid;
     process->name = strdup("process-caller");
     return process;
+}
+
+static struct process *process_caller_test_create_ignored(ProcessSerialNumber psn, pid_t pid, bool *ignored)
+{
+    (void) psn;
+    (void) pid;
+    ++process_caller_test_create_count;
+    if (ignored) *ignored = true;
+    return NULL;
 }
 
 static void process_caller_test_destroy(struct process *process)
@@ -174,6 +184,70 @@ TEST_FUNC(process_table_failures_recover_through_launch_and_startup_callers,
     process_manager_test_destroy_observer = saved_destroy;
     process_manager_test_schedule_discovery_callback = saved_schedule;
     event_loop_test_application_retry_scheduler = saved_launch_retry;
+});
+
+TEST_FUNC(process_ignored_processes_do_not_schedule_discovery_retries,
+{
+    __auto_type saved_create = process_manager_test_create_process;
+    __auto_type saved_pid = process_manager_test_pid_for_psn;
+    __auto_type saved_debugged = process_manager_test_is_debugged;
+    __auto_type saved_event_psn = process_manager_test_event_psn;
+    __auto_type saved_event_kind = process_manager_test_event_kind;
+    __auto_type saved_next = process_manager_test_next_process;
+    __auto_type saved_schedule = process_manager_test_schedule_discovery_callback;
+    process_manager_test_create_process = process_caller_test_create_ignored;
+    process_manager_test_pid_for_psn = process_caller_test_pid;
+    process_manager_test_is_debugged = process_caller_test_not_debugged;
+    process_manager_test_event_psn = process_caller_test_event_psn;
+    process_manager_test_event_kind = process_caller_test_event_kind;
+    process_manager_test_next_process = process_caller_test_next;
+    process_manager_test_schedule_discovery_callback = process_discovery_test_schedule;
+    process_discovery_test_queue_accept = true;
+
+    for (int caller = 0; caller < 2; ++caller) {
+        memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
+        struct process_manager manager = {0};
+        table_init(&manager.process, 4, hash_psn, compare_psn);
+        process_caller_test_psn = (ProcessSerialNumber) { .highLongOfPSN = 500, .lowLongOfPSN = (UInt32) (600 + caller) };
+        process_caller_test_create_count = process_caller_test_next_count = 0;
+        process_discovery_test_queue_calls = 0;
+        if (caller == 0) {
+            TEST_CHECK(process_handler(NULL, (EventRef) (uintptr_t) 1, &manager), noErr);
+        } else {
+            process_manager_add_running_processes(&manager);
+        }
+        TEST_CHECK(process_caller_test_create_count, 1);
+        TEST_CHECK(process_discovery_test_queue_calls, 0U);
+        TEST_CHECK(process_discovery_test_active_count(), 0U);
+        table_free(&manager.process);
+    }
+
+    // A retry that was already pending (e.g. scheduled by a front switch)
+    // stops as soon as the process is classified as ignored.
+    memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
+    struct process_manager manager = {0};
+    table_init(&manager.process, 4, hash_psn, compare_psn);
+    process_caller_test_psn = (ProcessSerialNumber) { .highLongOfPSN = 501, .lowLongOfPSN = 602 };
+    process_discovery_test_queue_calls = 0;
+    process_manager_schedule_discovery_retry(&manager, process_caller_test_psn, process_caller_test_pid(process_caller_test_psn), 0);
+    TEST_CHECK(process_discovery_test_queue_calls, 1U);
+    int retry_index = process_caller_test_retry_index();
+    TEST_CHECK(retry_index >= 0, true);
+    if (retry_index >= 0) {
+        process_manager_run_discovery_retry((unsigned) retry_index, process_discovery_retries[retry_index].token);
+    }
+    TEST_CHECK(process_discovery_test_queue_calls, 1U);
+    TEST_CHECK(process_discovery_test_active_count(), 0U);
+    table_free(&manager.process);
+
+    memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
+    process_manager_test_create_process = saved_create;
+    process_manager_test_pid_for_psn = saved_pid;
+    process_manager_test_is_debugged = saved_debugged;
+    process_manager_test_event_psn = saved_event_psn;
+    process_manager_test_event_kind = saved_event_kind;
+    process_manager_test_next_process = saved_next;
+    process_manager_test_schedule_discovery_callback = saved_schedule;
 });
 
 TEST_FUNC(process_front_switch_observation_publishes_identity_before_missing_process_discovery,

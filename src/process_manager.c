@@ -74,8 +74,12 @@ static inline pid_t process_pid_for_psn(ProcessSerialNumber psn)
     return pid;
 }
 
-static struct process *process_create(ProcessSerialNumber psn, pid_t pid)
+// Returns NULL with *ignored set when the process is permanently excluded
+// (XPC service or blacklisted name). Other NULL results are transient and
+// may be retried by process discovery.
+static struct process *process_create(ProcessSerialNumber psn, pid_t pid, bool *ignored)
 {
+    if (ignored) *ignored = false;
     ProcessInfoRec process_info = { .processInfoLength = sizeof(ProcessInfoRec) };
     GetProcessInformation(&psn, &process_info);
 
@@ -96,6 +100,7 @@ static struct process *process_create(ProcessSerialNumber psn, pid_t pid)
 
     if (process_info.processType == 'XPC!') {
         debug("%s: xpc service '%s' detected! ignoring..\n", __FUNCTION__, process_name);
+        if (ignored) *ignored = true;
         free(process_name);
         return NULL;
     }
@@ -103,6 +108,7 @@ static struct process *process_create(ProcessSerialNumber psn, pid_t pid)
     for (int i = 0; i < array_count(process_name_blacklist); ++i) {
         if (string_equals(process_name, process_name_blacklist[i])) {
             debug("%s: %s is blacklisted! ignoring..\n", __FUNCTION__, process_name);
+            if (ignored) *ignored = true;
             free(process_name);
             return NULL;
         }
@@ -140,7 +146,7 @@ static struct process_discovery_retry process_discovery_retries[PROCESS_DISCOVER
 
 #ifdef TESTS
 static bool (*process_manager_test_schedule_discovery_callback)(unsigned, uint64_t);
-static struct process *(*process_manager_test_create_process)(ProcessSerialNumber, pid_t) = process_create;
+static struct process *(*process_manager_test_create_process)(ProcessSerialNumber, pid_t, bool *) = process_create;
 static pid_t (*process_manager_test_pid_for_psn)(ProcessSerialNumber) = process_pid_for_psn;
 static bool (*process_manager_test_is_debugged)(pid_t) = process_is_being_debugged;
 static OSStatus (*process_manager_test_event_psn)(EventRef, ProcessSerialNumber *);
@@ -191,11 +197,16 @@ static void process_manager_run_discovery_retry(unsigned index, uint64_t token)
         return;
     }
 
+    bool ignored = false;
 #ifdef TESTS
-    struct process *process = process_manager_test_create_process(psn, retry->pid);
+    struct process *process = process_manager_test_create_process(psn, retry->pid, &ignored);
 #else
-    struct process *process = process_create(psn, retry->pid);
+    struct process *process = process_create(psn, retry->pid, &ignored);
 #endif
+    if (!process && ignored) {
+        process_manager_cancel_discovery_retry(retry);
+        return;
+    }
     if (process && table_try_add(&retry->manager->process, &process->psn, process)) {
         process_manager_cancel_discovery_retry(retry);
         pthread_mutex_lock(&g_process_manager_front_switch_lock);
@@ -304,13 +315,14 @@ static PROCESS_EVENT_HANDLER(process_handler)
             return noErr;
         }
 
+        bool ignored = false;
 #ifdef TESTS
-        struct process *process = process_manager_test_create_process(psn, pid);
+        struct process *process = process_manager_test_create_process(psn, pid, &ignored);
 #else
-        struct process *process = process_create(psn, pid);
+        struct process *process = process_create(psn, pid, &ignored);
 #endif
         if (!process) {
-            process_manager_schedule_discovery_retry(pm, psn, pid, 0);
+            if (!ignored) process_manager_schedule_discovery_retry(pm, psn, pid, 0);
             return noErr;
         }
 
@@ -381,13 +393,14 @@ static void process_manager_add_running_processes(struct process_manager *pm)
             continue;
         }
 
+        bool ignored = false;
 #ifdef TESTS
-        struct process *process = process_manager_test_create_process(psn, pid);
+        struct process *process = process_manager_test_create_process(psn, pid, &ignored);
 #else
-        struct process *process = process_create(psn, pid);
+        struct process *process = process_create(psn, pid, &ignored);
 #endif
         if (!process) {
-            process_manager_schedule_discovery_retry(pm, psn, pid, 0);
+            if (!ignored) process_manager_schedule_discovery_retry(pm, psn, pid, 0);
             continue;
         }
 

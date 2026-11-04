@@ -1461,13 +1461,15 @@ TEST_FUNC(process_create_allocation_failure_does_not_publish_owned_state,
     ProcessSerialNumber psn = {0};
     TEST_CHECK(GetCurrentProcess(&psn), noErr);
     legacy_allocation_test_fail_at(1);
-    TEST_CHECK(process_create(psn, getpid()) == NULL, true);
+    TEST_CHECK(process_create(psn, getpid(), NULL) == NULL, true);
     legacy_allocation_test_reset();
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 
     __auto_type saved_copy = process_create_cfstring_copy;
     process_create_cfstring_copy = lifecycle_test_cfstring_copy_failure;
-    TEST_CHECK(process_create(psn, getpid()) == NULL, true);
+    bool ignored = true;
+    TEST_CHECK(process_create(psn, getpid(), &ignored) == NULL, true);
+    TEST_CHECK(ignored, false);
     process_create_cfstring_copy = saved_copy;
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 });

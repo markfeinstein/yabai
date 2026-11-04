@@ -3591,6 +3591,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
     TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
     TEST_ENTRY(process_table_failures_recover_through_launch_and_startup_callers) \
+    TEST_ENTRY(process_ignored_processes_do_not_schedule_discovery_retries) \
     TEST_ENTRY(process_front_switch_observation_publishes_identity_before_missing_process_discovery) \
     TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
     TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
