@@ -54,6 +54,7 @@ repository-build: ./repository_build_fixture.sh ./repository_build.sh
 	/bin/sh ./repository_build_fixture.sh
 
 shell-fixtures:
+	python3 -B ./private_api_smoke_test.py
 	./integration_hide_on_close_fixture.sh
 	./man_check_fixture.sh
 
@@ -125,6 +126,7 @@ macho-parser: build
 	$(OUT)/macho_parser
 
 syntax:
+	python3 -c 'compile(open("integration/private_api_smoke.py", encoding="utf-8").read(), "private_api_smoke.py", "exec")'
 	$(CC) -fsyntax-only ../src/menu_bar_model.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror

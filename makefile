@@ -33,6 +33,7 @@ CORNER_GEOMETRY_PROBE_BIN = $(BUILD_PATH)/debug/window-corner-geometry-probe
 WINDOW_CONSTRAINTS_PROBE_BIN = $(BUILD_PATH)/debug/window-constraints-probe
 DISPLAY_CADENCE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/display-cadence-diagnostic
 NATIVE_RESIZE_PIPELINE_PROBE_BIN = $(BUILD_PATH)/debug/native-resize-pipeline-probe
+PRIVATE_API_SMOKE_BIN = $(BUILD_PATH)/debug/private-api-smoke
 YABAI_COMMON   = ./src/manifest.m
 YABAI_DEPS     = $(filter-out ./src/menu_bar_model.c ./src/menu_bar_model.h,$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
 DEBUG_MODEL    = $(BUILD_PATH)/debug/menu_bar_model.o
@@ -49,6 +50,7 @@ CORNER_GEOMETRY_PROBE_DEPS = scripts/window_corner_geometry_probe.m src/window_c
 WINDOW_CONSTRAINTS_PROBE_DEPS = scripts/window_constraints_probe.m src/window_constraints.c src/window_constraints.h src/misc/extern.h makefile
 DISPLAY_CADENCE_DIAGNOSTIC_DEPS = scripts/display_cadence_diagnostic.m scripts/display_cadence_diagnostic_core.c scripts/display_cadence_diagnostic_core.h makefile
 NATIVE_RESIZE_PIPELINE_PROBE_DEPS = scripts/native_resize_pipeline_probe.m src/misc/extern.h makefile
+PRIVATE_API_SMOKE_DEPS = scripts/private_api_smoke.m src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_constraints.h src/managed_space.h src/misc/extern.h makefile
 OSAX_FRAMEWORK = $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon -framework ColorSync
 XCRUN          ?= xcrun
 XXD            ?= xxd
@@ -72,7 +74,7 @@ DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
         test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
-        integration-hide-on-close integration \
+        integration-hide-on-close integration private-api-smoke-build private-api-smoke \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
 
@@ -156,6 +158,16 @@ integration-hide-on-close: debug
 	$(MAKE) -C tests integration-hide-on-close
 
 integration: integration-hide-on-close
+
+# Read-only live validation is always explicit, never part of offline/PR gates.
+private-api-smoke-build: $(PRIVATE_API_SMOKE_BIN)
+
+private-api-smoke: private-api-smoke-build
+	$(PYTHON) -B tests/integration/private_api_smoke.py --probe '$(PRIVATE_API_SMOKE_BIN)'
+
+$(PRIVATE_API_SMOKE_BIN): $(PRIVATE_API_SMOKE_DEPS)
+	@mkdir -p '$(dir $@)'
+	$(XCRUN) clang scripts/private_api_smoke.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework Carbon -framework SkyLight
 
 $(TAG_CORPUS_BIN): $(TAG_CORPUS_DEPS)
 	@mkdir -p '$(dir $@)'

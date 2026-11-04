@@ -2,7 +2,9 @@
 
 This ledger records available environments and exact external blockers. It is not a production compatibility claim.
 
-## Current physical host
+## Earlier physical-host research snapshot
+
+The following 27.0.1/SDK 27.0 inventory is historical, not the current OS/SDK inventory. See the dated native smoke evidence below for the newer host run.
 
 - macOS 27.0.1, build 26A434
 - arm64, Mac17,8, Apple M5 Pro, 64 GiB
@@ -13,7 +15,7 @@ This ledger records available environments and exact external blockers. It is no
 - scripting addition absent; core SIP remains enabled
 - doctor: zero failures
 
-## Current display topology
+## Earlier display-topology research snapshot
 
 Two active, online, non-mirrored 2× displays are currently available:
 
@@ -26,7 +28,7 @@ This closes a real dual-display, same-scale, mixed-60/120-Hz evidence row. It do
 
 The deployed active highlight passed one focused existing-window check on each display. The geometry v3 corpus changed from all same-window on the single-display arrangement to six same-window and four stable different-owner disagreements after the second display was connected.
 
-## Existing virtual environments
+## Earlier virtual-environment inventory
 
 No suitable macOS VM bundle or virtualization application is installed. The only discovered VM is an aarch64 Linux Lima guest, which is not suitable for macOS private-API validation. No self-hosted live-integration runner is registered.
 
@@ -38,8 +40,24 @@ Do not create or download a VM merely to fill this matrix.
 |---|---|---|
 | macOS 26.6 arm64 | BLOCKED-ENV | no existing suitable host/VM |
 | macOS 27.0.x arm64 | PARTIAL-PASS | current 27.0.1 physical host; source-safe diagnostics completed |
-| macOS 27.2 arm64 | BLOCKED-ENV | no existing suitable host/VM and no 27.2 SDK |
+| macOS 27.2 arm64 | PARTIAL-PASS | 2026-11-04 native query smoke passed on 27.2 build 26B123; UI/animation acceptance not run |
 | live Intel/x86_64 | BLOCKED-ENV | cross-build only; no supported live Intel host |
+
+## Native private-API smoke evidence (2026-11-04)
+
+The new read-only smoke probe passed locally on macOS **27.2.0**, build **26B123**, loaded **arm64**, not translated: two managed displays, two current Spaces, and 15 queried/sampled windows. All eleven checks passed, including real managed-display/Space queries, the production snapshot iterator path, bounds, and ordered-state queries. Initial native execution exposed a JSON boolean encoding mismatch; after correcting it, the strict driver passed. No running daemon, permissions, windows, services, or scripting addition were changed.
+
+This is local working-tree evidence for the new probe, not a dispatched self-hosted CI run. The final verification report supplies its exact tested source revision. It does not supersede earlier feature-specific evidence or fill any UI/animation acceptance row.
+
+| Native smoke row | Evidence |
+|---|---|
+| macOS 14 arm64 / x86_64 | NOT-RUN; existing offline CI/cross-builds do not satisfy this row |
+| macOS 15 arm64 / x86_64 | NOT-RUN; prepared native hosts required |
+| macOS 26 arm64 / x86_64 | NOT-RUN; prepared native hosts required |
+| macOS 27 arm64 | PASS on 27.2.0 / 26B123; local query smoke only |
+| macOS 27 x86_64 | NOT-RUN; prepared native Intel host required |
+
+Use the [manual native smoke workflow and setup instructions](../doc/testing.md) to add attributable per-host results. No suitable additional hosts or runner registration are implied by the workflow definition.
 
 ## CADisplayLink/per-display animation gate
 
@@ -50,6 +68,6 @@ Per-display CADisplayLink work remains blocked even though mixed 60/120-Hz physi
 - Reduce Motion was not disabled for an animation experiment;
 - scripting-addition prerequisites were not authorized;
 - no mixed-scale fixture exists;
-- no macOS 26.6 or 27.2 environment exists.
+- no macOS 26.6 environment has been validated; the available 27.2 host has only query-smoke evidence, not animation acceptance.
 
 Synthetic 60/120/144-Hz tests and offline macOS 14 CI remain source evidence only. They do not satisfy physical cadence, cross-display handoff, UI-stall, or proxy-cleanup acceptance.
