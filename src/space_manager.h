@@ -1,6 +1,8 @@
 #ifndef SPACE_MANAGER
 #define SPACE_MANAGER
 
+struct window_manager;
+
 struct space_label
 {
     uint64_t sid;
@@ -19,6 +21,10 @@ struct space_manager
     int left_padding;
     int right_padding;
     int window_gap;
+    int accordion_padding;
+    int single_window_max_width;
+    int single_window_min_width;
+    float single_window_width_ratio;
     float split_ratio;
     enum window_node_split split_type;
     enum window_node_child window_placement;
@@ -26,6 +32,7 @@ struct space_manager
     bool window_zoom_persist;
     uint32_t auto_balance;
     struct space_label *labels;
+    bool direct_space_switch;
     bool skip_window_focus_animation;
 };
 
@@ -42,13 +49,20 @@ enum space_op_error
     SPACE_OP_ERROR_DISPLAY_IS_ANIMATING = 8,
     SPACE_OP_ERROR_IN_MISSION_CONTROL   = 9,
     SPACE_OP_ERROR_SCRIPTING_ADDITION   = 10,
+    SPACE_OP_ERROR_GESTURE              = 11,
+    SPACE_OP_ERROR_WINDOW_SERVER        = 12,
+    SPACE_OP_ERROR_PARTIAL_COMMIT       = 13,
 };
 
 bool space_manager_query_space(FILE *rsp, uint64_t sid, uint64_t flags);
 bool space_manager_query_spaces_for_window(FILE *rsp, struct window *window, uint64_t flags);
 bool space_manager_query_spaces_for_display(FILE *rsp, uint32_t did, uint64_t flags);
 bool space_manager_query_spaces_for_displays(FILE *rsp, uint64_t flags);
+/* Direct table lookup only; never allocates, creates, or publishes a view. */
+struct view *space_manager_lookup_view(struct space_manager *sm, uint64_t sid);
+/* Query lookup only; never allocates, creates, or publishes a view. */
 struct view *space_manager_query_view(struct space_manager *sm, uint64_t sid);
+/* Finds or creates an owned table entry; returns NULL without publication on failure. */
 struct view *space_manager_find_view(struct space_manager *sm, uint64_t sid);
 void space_manager_refresh_view(struct space_manager *sm, uint64_t sid);
 void space_manager_mark_view_invalid(struct space_manager *sm,  uint64_t sid);
@@ -56,6 +70,7 @@ void space_manager_mark_view_dirty(struct space_manager *sm,  uint64_t sid);
 void space_manager_untile_window(struct view *view, struct window *window);
 struct view *space_manager_tile_window_on_space_with_insertion_point(struct space_manager *sm, struct window *window, uint64_t sid, uint32_t insertion_point);
 struct view *space_manager_tile_window_on_space(struct space_manager *sm, struct window *window, uint64_t sid);
+void space_manager_flush_tiled_window(struct view *view, struct window *window);
 bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 void space_manager_toggle_window_split(struct space_manager *sm, struct window *window);
@@ -71,25 +86,32 @@ struct space_label *space_manager_get_label_for_space(struct space_manager *sm, 
 struct space_label *space_manager_get_space_for_label(struct space_manager *sm, char *label);
 bool space_manager_remove_label_for_space(struct space_manager *sm, uint64_t sid);
 void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, char *label);
-void space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type type);
+bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded);
+bool space_manager_set_layout_for_view(struct space_manager *sm, struct view *view, enum view_type type);
+bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type type);
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap);
 bool space_manager_toggle_gap_for_space(struct space_manager *sm, uint64_t sid);
 void space_manager_toggle_mission_control(uint64_t sid);
 void space_manager_toggle_show_desktop(uint64_t sid);
-void space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view_type layout);
+bool space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view_type layout);
 void space_manager_set_window_gap_for_all_spaces(struct space_manager *sm, int window_gap);
+void space_manager_set_accordion_padding_for_all_spaces(struct space_manager *sm, int accordion_padding);
+void space_manager_set_single_window_max_width_for_all_spaces(struct space_manager *sm, int single_window_max_width);
+void space_manager_set_single_window_min_width_for_all_spaces(struct space_manager *sm, int single_window_min_width);
+void space_manager_set_single_window_width_ratio_for_all_spaces(struct space_manager *sm, float single_window_width_ratio);
 void space_manager_set_top_padding_for_all_spaces(struct space_manager *sm, int top_padding);
 void space_manager_set_bottom_padding_for_all_spaces(struct space_manager *sm, int bottom_padding);
 void space_manager_set_left_padding_for_all_spaces(struct space_manager *sm, int left_padding);
 void space_manager_set_right_padding_for_all_spaces(struct space_manager *sm, int right_padding);
+void space_manager_set_split_ratio_for_all_spaces(struct space_manager *sm, float split_ratio);
 void space_manager_set_split_type_for_all_spaces(struct space_manager *sm, enum window_node_split split_type);
 void space_manager_set_auto_balance_for_all_spaces(struct space_manager *sm, uint32_t auto_balance);
 bool space_manager_set_padding_for_space(struct space_manager *sm, uint64_t sid, int type, int top, int bottom, int left, int right);
 bool space_manager_toggle_padding_for_space(struct space_manager *sm, uint64_t sid);
 bool space_manager_rotate_space(struct space_manager *sm, uint64_t sid, int degrees);
 bool space_manager_mirror_space(struct space_manager *sm, uint64_t sid, enum window_node_split axis);
-void space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list, int window_count);
-void space_manager_move_window_to_space(uint64_t sid, struct window *window);
+bool space_manager_move_window_list_to_space(uint64_t sid, uint32_t *window_list, int window_count);
+bool space_manager_move_window_to_space(uint64_t sid, struct window *window);
 bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid);
 enum space_op_error space_manager_focus_space(uint64_t sid);
 enum space_op_error space_manager_switch_space(uint64_t sid);
@@ -103,9 +125,10 @@ void space_manager_assign_process_to_all_spaces(pid_t pid);
 bool space_manager_is_window_on_active_space(struct window *window);
 bool space_manager_is_window_on_space(uint64_t sid, struct window *window);
 void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uint32_t did);
+void space_manager_mark_other_display_spaces_invalid(struct space_manager *sm, uint32_t did);
 void space_manager_mark_spaces_invalid(struct space_manager *sm);
 bool space_manager_refresh_application_windows(struct space_manager *sm);
-void space_manager_handle_display_add(struct space_manager *sm, uint32_t did);
-void space_manager_begin(struct space_manager *sm);
+bool space_manager_handle_display_add(struct space_manager *sm, uint32_t did);
+bool space_manager_begin(struct space_manager *sm);
 
 #endif

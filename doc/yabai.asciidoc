@@ -10,6 +10,7 @@ endif::[]
 
 yabai(1)
 ========
+:revdate: 2026-10-07
 
 ifdef::env-github[]
 toc::[]
@@ -23,7 +24,7 @@ yabai - window manager
 Synopsis
 --------
 
-*yabai* [*--load-sa*|*--uninstall-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
+*yabai* [*--load-sa*|*--uninstall-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--doctor*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--config-jsonc* 'config_file'|*--check-config* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
 
 Description
 -----------
@@ -64,10 +65,31 @@ Options
 *--message*, *-m* '<msg>'::
     Send message to a running instance of yabai.
 
+Yabai stores its daemon socket, scripting-addition socket, and their lifecycle
+locks in `~/Library/Caches/yabai/runtime`. The directory is private mode 0700 and
+socket and lock entries are mode 0600. Startup and client operations fail closed
+if the home/cache path has unsafe ownership, permissions, ACLs, symlinks, or
+conflicting entries; legacy shared `/tmp` entries are not used. These checks and
+locks protect against other UIDs and coordinate cooperating instances of the
+same UID. A malicious process running as the same UID can still mutate pathname
+entries between non-atomic Unix-domain socket unlink and bind operations and is
+outside this isolation boundary.
+
 *--config*, *-c* '<config_file>'::
-    Use the specified configuration file. +
-    Executes using `/usr/bin/env sh -c <config_file>` if the exec-bit is set. +
-    Interpreted using `/usr/bin/env sh <config_file>` if the exec-bit is unset.
+    Use the specified legacy *yabairc* file. +
+    Executes the file directly if it is a regular file executable by the current user. +
+    If direct execution rejects the file format, or the file is not executable, interprets it using `/usr/bin/env sh <config_file>`.
+
+*--config-jsonc* '<config_file>'::
+    Use the specified native JSONC configuration file. A relative path is captured as an absolute lexical path before startup. +
+    This option does not disable *yabairc* discovery or an explicit *--config* path.
+
+*--check-config* '<config_file>'::
+    Validate one native JSONC file and exit. This exact three-argument invocation cannot be combined with any other option or trailing argument. +
+    Success prints `configuration is valid; runtime preparation was not checked`. It checks file input, JSONC syntax, schema, limits and regular expressions, but not display or Space targets, permissions, event resources, runtime labels or other runtime preparation.
+
+*--doctor*::
+    Run bounded, read-only installation diagnostics and exit. Each diagnostic is classified as `PASS`, `WARN`, `FAIL`, or `UNKNOWN`, names the inspection mechanism, and gives a next action. The checks cover the running binary, version, native slices and translation; Accessibility trust; core and optional scripting-addition SIP requirements; the Apple Silicon arm64e boot argument, including when the x86_64 slice runs under Rosetta (omitted only on native Intel); canonical launch agent plist fields read from one no-follow descriptor snapshot, CFBoolean types, safe type, ownership and mode, and a program that resolves to the running yabai executable (a matching path-component symlink warns rather than passes, after both lexical and canonical parent chains are checked and the original path is re-resolved with final identity, owner, group, mode and execute permission revalidated); the known `com.koekeishiya.yabai.plist` and `homebrew.mxcl.yabai.plist` collisions; selected native and legacy configuration readability; and descriptor-snapshot running-binary and scripting-addition bundle/socket metadata. After socket ownership, mode, ACL, and type validation succeeds, doctor performs one bounded read-only payload handshake to classify the live scripting-addition version and required capabilities. Scripting-addition absence is determined from the top-level `yabai.osax` bundle; once that bundle is observed, missing or raced nested metadata is `UNKNOWN`, not absent. User paths and the socket name are derived from the real uid, or from a valid nonroot `SUDO_UID` when invoked as root, using the passwd database rather than `HOME` or `USER`. During an elevated inspection, permissions are evaluated by forking a bounded probe, initializing the target user's supplementary groups, dropping to the target uid/gid, and calling `access(2)`, so effective ACL and mode-bit policy is honored. If that target-identity probe is unavailable, a conservative owner/group/other mode-bit fallback uses the target uid plus primary and resolved supplementary groups; unavailable or unrepresentable group membership remains `UNKNOWN` rather than using root's own access result. Legacy configuration directories, including symlinks to directories, are skipped according to runtime precedence, while a selected non-regular file fails. launchd loaded/running state and scripting-addition responsiveness remain `UNKNOWN` because doctor does not contact either service. It does not prompt for permissions, contact or load the scripting addition, invoke `sudo`, change launchd services, or inspect skhd. Unavailable privileged information and transient inspection errors are `UNKNOWN`; only permission denial or a contractually absent/invalid state is definitive. Optional prerequisites are warnings. The exit status is zero when there are no `FAIL` results and nonzero otherwise. Output is deliberately limited and does not dump paths, the environment, plist contents, or configuration contents.
 
 *--verbose*, *-V*::
     Output debug information to stdout.
@@ -77,6 +99,288 @@ Options
 
 *--help*, *-h*::
     Print options to stdout and exit.
+
+Native JSONC configuration
+--------------------------
+
+Startup and validation
+~~~~~~~~~~~~~~~~~~~~~~
+
+The native configuration file is named `yabai.jsonc`. Without *--config-jsonc*, yabai checks an absolute `$XDG_CONFIG_HOME/yabai/yabai.jsonc` first, then `$HOME/.config/yabai/yabai.jsonc`. A relative `XDG_CONFIG_HOME` is ignored. A missing discovered file is allowed; a missing explicit file is an error. Ordinary symlinks are followed. An explicit relative path is captured as an absolute lexical path without resolving its final symlink, and reload reopens that same path. If no native file was installed, reload repeats default discovery.
+
+Native JSONC and *yabairc* are independent. At daemon startup yabai parses and prepares JSONC, installs native settings and rules, inventories existing windows, publishes the initial menu state, starts the message socket, and then executes *yabairc*. Native rules therefore apply to the initial window inventory. Settings in *yabairc* override native settings, and rules added there follow the native rule prefix and normally affect later windows only.
+
+Use the exact offline check before starting the daemon:
+
+----
+yabai --check-config ~/.config/yabai/yabai.jsonc
+----
+
+This command validates the authored file and schema only. It does not resolve display or Space indices, check current topology, check runtime label collisions, test SIP or Screen Recording requirements, or acquire daemon resources. Startup and reload can still reject a file that passes this check.
+
+File and JSONC rules
+~~~~~~~~~~~~~~~~~~~~
+
+The file must be a regular UTF-8 file no larger than 1 MiB. One UTF-8 BOM is accepted only at byte zero. `//` line comments and `/* ... */` block comments are accepted outside strings. Block comments do not nest. Trailing commas, single-quoted strings, unquoted keys, JSON5 numbers and other JSON5 syntax are rejected.
+
+The reader opens the selected path once with `O_RDONLY | O_CLOEXEC`, follows ordinary symlinks, and compares descriptor metadata before and after reading. A changed device, inode, file type, size, high-resolution modification time or change time rejects the candidate. Premature EOF and detected growth also reject it. Unlocked POSIX reads cannot detect a same-metadata overwrite, so this check promises detection of observable metadata changes rather than every concurrent write.
+
+Raw NUL bytes, malformed UTF-8, a BOM away from byte zero, UTF-16 or UTF-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and `null` are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
+
+Version 1 remains compatible and accepts exactly `version`, `config`, `spaces` and `rules`. Version 2 accepts those fields plus `modes` and `active_mode`. `version` is required and must have the mathematical integer value 1 or 2; `modes` and `active_mode` are rejected in version 1. All other fields shown here are optional:
+
+[source,json]
+----
+{
+  "version": 2,
+  "config": {},
+  "spaces": [],
+  "modes": [
+    { "name": "work", "spaces": [] }
+  ],
+  "active_mode": "work",
+  "rules": []
+}
+----
+
+Numbers and limits
+~~~~~~~~~~~~~~~~~~
+
+Integer fields use mathematical value semantics: `1`, `1.0` and `1e0` are equivalent when the value is integral and in range. JSON booleans are not numbers. Signed setting integers use `INT_MIN...INT_MAX`; unsigned fields use the ranges stated below.
+
+A float starts as a finite `double`. Except for an allowed zero, its absolute value must be between `FLT_MIN` and `FLT_MAX`. Yabai casts it once to `float`, requires the result to remain finite and nonzero when the input was nonzero, then applies the field range. Rounding inside that destination range is accepted.
+
+Parser and copied-model limits are:
+
+* authored file: 1 MiB, including comments and a BOM;
+* nesting depth: 64 containers;
+* members in one object: 256;
+* base and mode Space policies: 1,024 total;
+* named modes: 64;
+* native rules: 1,024;
+* decoded key: 128 UTF-8 bytes;
+* Space UUID, rule label or scratchpad: 1,024 UTF-8 bytes;
+* regular expression: 4,096 UTF-8 bytes;
+* path: `PATH_MAX - 1` UTF-8 bytes;
+* copied native model: 8 MiB. This budget does not include Foundation parser overhead;
+* display and Space target index: `1...INT_MAX`.
+
+Global settings
+~~~~~~~~~~~~~~~
+
+`config` accepts every current `config` setting. Omitting a field leaves the built-in value at startup; a successful reload restores the built-in value before applying the new native fields.
+
+Boolean fields are `debug_output`, `mouse_follows_focus`, `manage`, `window_sublayer_auto`, `window_zoom_persist`, `direct_space_switch`, `skip_window_focus_animation`, `window_opacity`, `native_edge_resize` and `mouse_bsp_live_resize`.
+
+Enum fields are:
+
+* `focus_follows_mouse`: `off`, `autofocus`, `autoraise`;
+* `display_arrangement_order`: `default`, `horizontal`, `vertical`;
+* `window_origin_display`: `default`, `focused`, `cursor`;
+* `window_focus_fallback`: `off`, `recent`;
+* `window_placement`: `first_child`, `second_child`;
+* `window_insertion_point`: `focused`, `first`, `last`;
+* `window_shadow`: `off`, `float`, `on`;
+* `menubar`: `off`, `on`;
+* `menubar_interface`: `menu`, `panel`, `auto`;
+* `menubar_style`: `automatic`, `compact`, `expanded`;
+* `menubar_space_filter`: `occupied`, `all`;
+* `layout`: `bsp`, `stack`, `float`, `accordion_horizontal`, `accordion_vertical`;
+* `split_type`: `vertical`, `horizontal`, `auto`;
+* `auto_balance`: `off`, `on`, `x-axis`, `y-axis`;
+* `mouse_modifier`: `alt`, `shift`, `cmd`, `ctrl`, `fn`;
+* `mouse_action1`, `mouse_action2`: `move`, `resize`;
+* `mouse_drop_action`: `swap`, `stack`;
+* `window_animation_easing`: `ease_in_sine`, `ease_out_sine`, `ease_in_out_sine`, `ease_in_quad`, `ease_out_quad`, `ease_in_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_out_cubic`, `ease_in_quart`, `ease_out_quart`, `ease_in_out_quart`, `ease_in_quint`, `ease_out_quint`, `ease_in_out_quint`, `ease_in_expo`, `ease_out_expo`, `ease_in_out_expo`, `ease_in_circ`, `ease_out_circ`, `ease_in_out_circ`.
+
+Numeric fields are:
+
+* `window_opacity_duration`: finite seconds in `0...INT_MAX/1000`, also subject to the scripting-addition duration conversion;
+* `window_animation_duration`: finite seconds greater than or equal to zero. A nonzero value requires nonprompting SIP and Screen Recording preflight during runtime preparation;
+* `menubar_opacity`: `0...1`;
+* `active_window_opacity`, `normal_window_opacity`: greater than zero and at most 1;
+* `active_window_highlight_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `active_window_highlight_radius`: finite display points greater than or equal to zero, default 9;
+* `active_window_highlight_width`: finite display points greater than zero, default 4; rendering clamps it to half the focused window's shorter dimension;
+* `insert_feedback_color`: unsigned mathematical integer `1...UINT32_MAX`;
+* `insert_feedback_radius`: finite display points greater than or equal to zero, default 9;
+* `insert_feedback_width`: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame's shorter dimension;
+* `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`: mathematical integer `INT_MIN...INT_MAX`;
+* `accordion_padding`: mathematical integer `0...INT_MAX`, default 30 display points;
+* `single_window_max_width`: mathematical integer `0...INT_MAX`, default 0 (no ceiling);
+* `single_window_min_width`: mathematical integer `0...INT_MAX`, default 0 (no floor);
+* `single_window_width_ratio`: finite float greater than zero and at most 1, default 1;
+* `split_ratio`: `0.1...0.9`.
+
+`external_bar` is an exact object. All three fields are required: `mode` is `off`, `main` or `all`, while `top_padding` and `bottom_padding` are mathematical integers in `INT_MIN...INT_MAX`.
+
+The native `window_shadow`, `window_opacity`, `window_opacity_duration`, `active_window_opacity` and `normal_window_opacity` settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; `window_animation_duration` has the separate Screen Recording and SIP preflight described above.
+
+Space policy
+~~~~~~~~~~~~
+
+Each `spaces` entry is an exact object with required `match` and at least one of `settings` or `scaffold`. `match` contains exactly one selector: a positive global one-based Mission Control `index`, or a nonempty exact `uuid`. When present, `settings` must contain at least one of `layout`, `top_padding`, `bottom_padding`, `left_padding`, `right_padding`, `window_gap`, `accordion_padding`, `single_window_width_ratio`, `single_window_min_width`, `single_window_max_width`, `split_ratio`, `split_type` and `auto_balance`, using the types and ranges above. A Space `split_ratio` uses the existing `0.1...0.9` range and controls the default ratio for new BSP splits on that Space.
+
+Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. A positive index that is not present in the current valid topology is accepted and its policy remains dormant. An index follows its Mission Control slot, so reconciliation automatically applies that policy if the slot later appears; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native-fullscreen Spaces remain floating.
+
+Effective precedence is:
+
+----
+built-in < native global < native Space < runtime global < runtime Space
+----
+
+A successful imperative `config` command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When an installed policy has a scaffold, successful imperative global or scoped layout changes request coalesced reconciliation so a BSP scaffold is restored after a stack-to-BSP transition without changing inventory or runtime ownership. `space --layout` uses runtime Space ownership. For `window_focus_fallback`, this means `yabai -m config window_focus_fallback recent` overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built-in `off` value. Imperative `space --padding`, `space --gap` and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+
+Named modes
+~~~~~~~~~~~
+
+Version 2 may declare up to 64 uniquely named modes in source order. A mode is an exact object containing `name` (a nonempty UTF-8 string of at most 1,024 bytes) and `spaces` (an array using the version 2 Space-policy form). Base `spaces` are evaluated first, then the selected mode's policies overlay them in declaration order. Thus later matching mode fields override native base fields while runtime global and runtime Space ownership still have higher precedence.
+
+Every base or mode Space policy requires `match` and at least one of `settings` or `scaffold`. For scaffold specifically, omission from a policy that has `settings` means inherit the last matching base or earlier mode scaffold, while `"scaffold": []` explicitly clears it. A nonempty mode scaffold replaces the earlier scaffold. Missing applications simply leave their scaffold primary slots vacant; mode selection never launches applications.
+
+`active_mode`, when present, must exactly name a declared mode and selects it during startup and every successful reload. At runtime, `yabai -m mode --activate <name>` selects an overlay and `--deactivate` selects base policies only; deactivation does not restore the file's `active_mode` and does not clear imperative runtime overrides. Reload selects the newly authored `active_mode` (or no mode when omitted) and, like every successful reload, clears runtime setting ownership under the normal reload contract.
+
+Runtime selection is transactional and errors are typed through topology capture/snapshot and Space preparation/commit. An unknown explicit name, malformed internal state, or invariant/admission/commit failure is terminal; an unavailable error means no installed native mode runtime; allocation/resource exhaustion and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve runtime-owned reconciliation and are retried after it settles. A successful command reports selection publication, not completion of the follow-up asynchronous reconciliation, and the client performs exactly one activation/deactivation operation with no retry loop. Failed selection produces no query/list JSON and preserves the installed selection, rules, runtime ownership and Space state.
+
+`--query` returns the active mode as one escaped JSON string, or JSON `null`. `--list` returns stable JSON with declared names in source order and `active` set to that same string or `null`. Snapshot creation is worker-only and requires a fresh-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
+
+Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored-file, mode-count, aggregate-policy, string, model-memory and topology limits above all continue to apply.
+
+Managed scaffold
+~~~~~~~~~~~~~~~~
+
+An optional Space `scaffold` is an array of one to three app matchers. Each entry is an exact object with required nonempty `pattern` and optional boolean `exclude`, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is `bsp`; changing the Space to another layout suspends it until BSP becomes effective again.
+
+The first matching scaffold entry owns a window, so overlapping expressions resolve in array order. The lowest nonzero window ID matching each present entry is its primary window. Other windows from that application and windows matching no entry remain ordinary BSP overflow windows.
+
+Present primaries compact in declaration order. One fills the Space. With two primaries, the first occupies the effective Space `split_ratio` on the left and the second gets the remainder. With three primaries, the first occupies that ratio on the left; the right branch keeps an equal `0.5` split, placing the second upper-right and the third lower-right. The default remains `0.5`. Opening order does not affect that primary topology. A primary membership change, successful scaffold generation change, or effective ratio change rebuilds the detached BSP root transactionally; overflow-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
+
+[source,jsonc]
+----
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 2 },
+      "scaffold": [
+        { "pattern": "^Mail$" },
+        { "pattern": "^Calendar$" },
+        { "pattern": "^Messages$" }
+      ]
+    }
+  ]
+}
+----
+
+Single-window geometry
+~~~~~~~~~~~~~~~~~~~~~~
+
+`single_window_width_ratio`, `single_window_min_width` and `single_window_max_width` form an opt-in managed-layout policy for wide displays. After display, menu bar, Dock, external-bar and ordinary Space padding constraints are applied, the ratio selects a percentage of the usable root width when the Space contains exactly one managed window. Yabai preserves the full usable height and centers the narrower root horizontally. The ratio is a finite value greater than zero and at most 1; its default of 1 selects 100% width.
+
+Let `A` be the usable width, `r` the effective `single_window_width_ratio`, `n` the effective `single_window_min_width`, and `m` the effective `single_window_max_width`. Start with `A * r`, apply `m` as a ceiling when it is positive, apply `n` as a floor when it is positive, then clamp the result to `A`. Thus a display narrower than the configured floor uses its complete usable width instead of overflowing. If an effective floor exceeds a positive ceiling, the usability floor takes precedence before the final available-width clamp; configurations should normally keep `n <= m`. Zero means no floor or ceiling. The default values (`r = 1`, `n = 0`, `m = 0`) preserve ordinary full-width behavior. Because each side margin is `(A - selected width) / 2`, one ratio produces smaller absolute margins on a laptop and larger absolute margins on an ultrawide.
+
+The trigger counts managed windows, not applications or occupied leaves. A BSP stack, `stack` layout or accordion containing two or more managed windows therefore uses ordinary full-width geometry even though windows may overlap. Floating, unmanaged, system and native-fullscreen windows do not participate. `float` Spaces are unchanged.
+
+Opening a second managed window restores the ordinary root before its final frames are flushed; closing, minimizing, hiding or moving windows so that exactly one remains reapplies the ratio, floor and ceiling. Display and Space changes, startup, reload, mode activation and topology reconciliation recompute the same geometry without rebuilding or reordering an otherwise unchanged tree. All three settings follow normal global and per-Space precedence and runtime ownership.
+
+For an eligible single managed BSP window, `window --toggle zoom-fullscreen` bypasses the responsive singleton width and uses the complete ordinary root. Toggling it again restores the ratio, floor and ceiling. Adding another managed window, removing or moving the singleton, or changing away from BSP clears this singleton-only zoom state. Ordinary multi-window `zoom-fullscreen` behavior is unchanged.
+
+Accordion geometry
+~~~~~~~~~~~~~~~~~~
+
+`accordion_horizontal` and `accordion_vertical` are managed layouts. Every managed window remains in the Space forest and managed-window table; rules with `manage=false`, native-fullscreen Spaces and system Spaces remain outside that forest. Accordion does not require the scripting addition.
+
+The layout keeps one stable membership order. Every window retains the same-size overlapping frame; changing focus raises that window above its peers without changing geometry or moving it in the membership order. Insertion, removal, minimization, restoration, a cross-Space move or an explicit swap may change membership order.
+
+After display, menu bar, Dock, external-bar and Space padding constraints, let `L` be the finite nonnegative length on the accordion axis, `n` the managed-window count and `p` the nonnegative `accordion_padding` request. With no windows, yabai emits no frames. One window receives the complete effective root area, including any singleton width ratio, floor or ceiling. For two or more windows, the effective exposed strip is `s = min(p, L / n)` and every window receives axis length `W = L - (n - 1) * s`. Window `i` in stable zero-based order starts at `i * s` from the usable-area origin. In ideal real-number geometry, the equal frames overlap, remain inside the usable area, fill the cross axis and place their first and last edges on the constrained boundaries. Stored origins are deterministically rounded and clamped to representable in-bounds coordinates, while every stored frame uses the same rounded axis length; at extreme coordinate magnitudes, adjacent origins may therefore coincide. Over-capacity requests give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid and makes all frames coincide.
+
+Focus, inventory, delayed create, destroy, minimize, restore, Space move, display change, topology reconciliation and Mission Control exit paths recompute the same geometry. A successful JSONC reload may add, change or remove the layout and `accordion_padding` under the normal transaction and precedence rules. Preparation failure preserves the installed generation, roots, managed-window table, ownership and effective layout.
+
+To assign Mission Control Space 9 to the horizontal accordion layout with the default strip request:
+
+[source,jsonc]
+----
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 9 },
+      "settings": {
+        "layout": "accordion_horizontal",
+        "accordion_padding": 30
+      }
+    }
+  ]
+}
+----
+
+Native rules
+~~~~~~~~~~~~
+
+Each `rules` entry accepts exactly `label`, `one_shot`, `match` and `effects`. `match` is required and nonempty. `label` is optional, nonempty, unique within the file and at most 1,024 UTF-8 bytes. `one_shot` is an optional boolean, defaulting to `false`. `effects` is optional and may be empty, so an effectless persistent rule is valid.
+
+`match` accepts `app`, `title`, `role` and `subrole`. Each matcher is an exact object with required nonempty `pattern` and optional boolean `exclude`, which defaults to `false`. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role or subrole without app or title.
+
+`effects` accepts:
+
+* `display`: exact object `{ "index": n }`, where `n` is `1...INT_MAX`;
+* `space`: exact object `{ "index": n }`, where `n` is `1...INT_MAX`;
+* `follow`: boolean shared by the selected display or Space target. It is invalid without either target;
+* `grid`: exactly `[rows, columns, x, y, width, height]`. Each value is a mathematical integer in `0...UINT_MAX`; rows and columns must be greater than zero;
+* `opacity`: finite float in `0...1`;
+* `manage`, `sticky`, `mouse_follows_focus`, `native_fullscreen`: boolean;
+* `sub_layer`: `below`, `normal`, `above`, `auto`;
+* `scratchpad`: nonempty string of at most 1,024 UTF-8 bytes. The reserved identifiers `float`, `sticky`, `shadow`, `split`, `zoom-parent`, `zoom-fullscreen`, `windowed-fullscreen`, `native-fullscreen`, `expose`, `pip` and `recover` are rejected.
+
+A rule cannot specify both `scratchpad` and `manage`. If both display and Space are present, Space wins and the shared `follow` applies to it.
+
+During daemon startup, target moves still apply while each pre-existing application's initial window inventory converges, but `follow` is suppressed so restarting yabai does not change the active Space. Window-created retries retain that startup context. Later windows and explicit `rule --apply` operations use normal follow behavior; native fullscreen continues to focus its target.
+
+The native `sticky`, `sub_layer` and `opacity` effects call the scripting addition and require partial SIP disablement. Assigning a `scratchpad` label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
+
+Native display and Space targets use one-based indices only. Display indices resolve using the candidate `display_arrangement_order`; equal coordinates use the captured managed-display ordinal as the final tie-break. Space indices use the captured global Mission Control order. A positive authored index absent from the current valid topology is accepted, and the native rule remains installed with its source order and label. Runtime preparation still strictly rejects malformed, incomplete, duplicate, zero-ID or ambiguous display/Space topology instead of filtering it.
+
+When both display and Space are authored, Space is the selected target. An unavailable Space never falls back to display, and an unavailable lower-priority display does not invalidate a valid Space. Until the selected target is bound, matching suppresses only move and follow; grid, opacity, management, sticky, mouse-follows-focus, layer, fullscreen and scratchpad effects remain independent. The unavailable-or-stale warning is emitted at most once per rule and generation, and only after a root window first matches the rule; a rule with no matching root window emits no warning.
+
+Some macOS topologies expose a user Space whose public UUID is the empty string. Yabai preserves that empty value in query output and it cannot match a declarative UUID selector. Internally, index policy and native index rules use a private fallback identity containing the parent display UUID, display ID and managed ordinal, Space ID and kind, and global Mission Control ordinal. The fallback is never serialized as a public UUID. If any tuple field changes, the installed target becomes stale; yabai does not transfer a UUID-less view, tree or runtime ownership to another Space ID. A coincidentally reused complete tuple cannot be distinguished because macOS supplied no durable UUID.
+
+Topology reconciliation publishes a fully prepared current-topology rule context even when fallback-identity drift prevents safe Space-policy or forest publication. Native rule targets therefore become stale immediately, while the existing Space roots, managed-window table and runtime ownership remain unchanged. Yabai does not guess or transfer that state. A coherent Space lifecycle event, configuration reload or daemon restart may be required to construct fresh UUID-less view state.
+
+Targets bind once per successful explicit configuration load to an internal ID and an identity fingerprint. An unavailable native rule requires a successful explicit reload after its target appears before it can bind. Topology reconciliation alone does not bind or retarget it, and a rule already bound in that generation remains fixed and may become stale rather than following an index to a new identity. When the ID disappears, changes kind, maps to another UUID, or changes a UUID-less fallback tuple, that rule contributes no move or follow effect, still contributes its independent effects, and emits at most one warning for that rule and generation after a match. A stale Space target does not fall back to a display target in the same rule. A later valid runtime target may still win during rule folding.
+
+Native rules remain before runtime rules. Runtime `rule --add` cannot claim a native label, even after a native one-shot has been consumed, and `rule --remove` cannot remove a native rule. A successful reload recreates native one-shots and retains runtime rules in their existing order. Direct reapply and delayed window-created retries fold against the currently installed generation context. Reload changes registrations for future windows; it does not undo or reapply effects on existing windows. Use `rule --apply` for an explicit reapplication where supported.
+
+Reload, topology and atomicity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The reload grammar is exactly:
+
+----
+yabai -m config reload
+----
+
+A scoped form, trailing token or mixed lifecycle/setting message is rejected before mutation. Reload uses the installed absolute lexical path. When generation is 0 because startup found no native file, it repeats default discovery. A successful first installation uses generation 1; each later successful reload increments once, including a byte-identical reload. Reload at `UINT64_MAX` is rejected.
+
+Reload parses and prepares the entire candidate before changing installed state. Preparation includes regular expressions, strict topology, target fingerprints, runtime-label collision checks, permission preflight, detached Space trees, and a complete managed-window table. Strict topology validation and target availability are distinct: malformed or internally inconsistent topology remains fatal, while a positive native rule or Space-policy index absent from a valid current topology is accepted. Native rules bind unavailable targets only at a later successful explicit reload; reconciliation does not retarget them. Space policies instead continue to follow their current index or identity and automatically apply when reconciliation finds the target. Any preparation failure preserves the installed model, path, generation, settings, runtime ownership, native rules, views, forest and managed-window table.
+
+The event-loop worker publishes prepared settings, views, forest, managed-window table, native rule prefix, native label index, model, path, fold context and generation through a no-allocation, no-post boundary. Allocation-capable refreshes, tree flushes, animations, notifications and logging run afterward as best-effort reconciliation. A failure after publication does not roll back the committed generation.
+
+Topology lifecycle work uses one active reservation token spanning the queued event and its retry/backoff lifecycle. Intervening triggers coalesce into that reservation; each retry reconciles the latest live topology and runtime state. SkyLight can expose a new window before its Accessibility discovery event reaches yabai. Reconciliation excludes that unowned ID from the candidate snapshot; the later window-discovery event applies normal management without weakening validation for already-owned windows. Other transient failures retry seven times at 50, 100, 200, 400, 800, 1,600 and 3,200 milliseconds before reporting exhaustion. The token clears only after success, terminal failure, retry exhaustion, rejected retry scheduling, explicit cancellation or shutdown. Queue admission owns event context and daemon response/socket cleanup on both acceptance and rejection.
+
+Focus follows mouse uses one daemon-lifetime event tap with the superset event mask. `configured_ffm_mode` holds the configured value. Nested menu tracking forces the atomic effective mode to `off`; closing the final menu derives the effective mode from the latest configured value rather than restoring a saved stale value.
+
+Diagnostics
+~~~~~~~~~~~
+
+Startup and offline-check errors go to stderr; reload errors go to the daemon client. Configuration errors and stale native targets also request a best-effort Notification Center notification and write an error to the macOS unified log with subsystem `com.asmvik.yabai` and category `configuration`. Configuration notifications use one stable identifier, so Notification Center replaces the previous yabai configuration alert instead of accumulating repeated copies.
+
+A complete stderr or notification diagnostic is capped at 2,048 UTF-8 bytes. A failing daemon response has the same 2,048-byte wire cap, including its one-byte failure marker, so its diagnostic text is at most 2,047 bytes. The dynamic unified-log payload is capped at 1,024 UTF-8 bytes. Truncation preserves valid UTF-8. Paths escape control characters, JSON paths are sanitized, and diagnostics omit source text, candidate values, regular-expression text, shell commands and unknown key text. Notification and log sink failures do not replace the primary error. Notification presentation and unified-log persistence remain subject to macOS settings and policy.
+
+Inspect recent configuration log records with:
+
+----
+log show --predicate 'subsystem == "com.asmvik.yabai" && category == "configuration"' --last 5m
+----
 
 Definitions
 -----------
@@ -91,7 +395,15 @@ LAYER       := below | normal | above | auto
 
 BOOL_SEL    := on | off
 
-FLOAT_SEL   := 0 < <value> <= 1.0
+UNIT_SEL             := 0.0 <= <value> <= 1.0
+
+POSITIVE_UNIT_SEL    := 0.0 < <value> <= 1.0
+
+SPLIT_RATIO_SEL      := 0.1 <= <value> <= 0.9
+
+DURATION_SEL         := finite <value> >= 0.0
+
+OPACITY_DURATION_SEL := finite 0.0 <= <value> <= INT_MAX / 1000 seconds
 
 RULE_SEL    := <index> | LABEL
 
@@ -119,6 +431,21 @@ EASING      := ease_in_sine  | ease_out_sine  | ease_in_out_sine  |
 Domains
 -------
 
+Mode
+~~~~
+
+yabai -m mode --activate '<name>'::
+    Select exactly one declared version 2 mode. The command accepts one name and no trailing token. Unknown names are terminal; other activation failures advise retry only after asynchronous reconciliation settles.
+
+yabai -m mode --deactivate::
+    Select base Space policies only while preserving imperative runtime overrides. No argument or trailing token is accepted.
+
+yabai -m mode --query::
+    Print the selected mode as an escaped JSON string or `null`. No argument or trailing token is accepted.
+
+yabai -m mode --list::
+    Print `{\"modes\":[...],\"active\":...}` as valid JSON, preserving declaration order. No argument or trailing token is accepted.
+
 Config
 ~~~~~~
 
@@ -130,6 +457,9 @@ yabai -m config <global setting>::
 
 yabai -m config [--space '<SPACE_SEL>'] <space setting>::
     Get or set the value of <space setting>.
+
+yabai -m config reload::
+    Reload the native JSONC configuration. The command must be unscoped and contain no trailing token or additional config mutation.
 
 Global Settings
 ^^^^^^^^^^^^^^^
@@ -143,13 +473,46 @@ Global Settings
     'all':  Apply the given padding to all spaces regardless of their display. +
     'off':  Do not apply any special padding.
 
-*menubar_opacity* ['<FLOAT_SEL>']::
+*menubar* ['<BOOL_SEL>']::
+    Show yabai Spaces as a native macOS menu bar status item. Default is 'off'. +
+    Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right-click, or press and hold to open the menu. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
+
+*menubar_interface* ['menu|panel|auto']::
+    Select the read-only menu bar item's expanded interface. Default is 'menu'. +
+    'menu': Use the existing native informational menu. +
+    'panel': On macOS 27 or newer, use a transient keyboard-accessible read-only panel; fall back to the native menu when unavailable. +
+    'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
+    The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It does not expose window content and does not require Screen Recording permission.
+
+*menubar_style* ['automatic|compact|expanded']::
+    Set the menu bar status item layout. Default is 'expanded'. +
+    'automatic': Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout. +
+    'compact': Show one screen outline for the keyboard-focused display's visible space. +
+    'expanded': Show a bounded display-grouped interval of filtered spaces around the focused space in the menu bar. When every outline does not fit within the 520-point strip, `←+N` and `+N→` controls separately report spaces omitted before and after the visible interval.
+
+*menubar_space_filter* ['occupied|all']::
+    Select which spaces are shown by the menu bar item and its menu. Default is 'occupied'. +
+    'occupied': Show spaces with user-facing application windows, spaces that are currently visible on a display, and spaces with unresolved occupancy. Floating, unmanaged, minimized, hidden and native-fullscreen application windows count. Sticky-only, system and transient windows do not make a space occupied. +
+    'all': Show all user-navigation spaces reported by macOS, including native-fullscreen spaces. Virtual spaces are not created or shown. +
+    The automatic, compact and expanded layouts share the same flat menu. Each display appears as a labeled section header with its Space rows directly below it, and a checkmark marks that display's visible space. Choosing a Space row dismisses the menu without animation and focuses that Space, including Spaces on another display; choosing the already focused Space is a no-op. The focused display is the display with keyboard focus and is tracked separately from visible spaces. Overflow controls open the menu. Accessibility exposes the visible Space summary for every display through the status button and labeled display sections. Layout and filter choices change the running configuration only; set these options in *yabairc* to persist them.
+
+*menubar_opacity* ['<UNIT_SEL>']::
     Changes the transparency of the macOS menubar. +
     If the value is 0.0, the menubar will no longer respond to mouse-events, effectively hiding the menubar permanently. +
     The menubar will automatically become fully opaque upon entering a native-fullscreen space, and adjusted down afterwards.
 
 *mouse_follows_focus* ['<BOOL_SEL>']::
     When focusing a window, put the mouse at its center.
+
+*manage* ['<BOOL_SEL>']::
+    Automatically tile eligible windows. Default is 'on'. +
+    'off': New and currently auto-managed windows float unless a rule explicitly sets 'manage=on' or the window is manually tiled with *window --toggle float*. Windows manually floated by the user and windows matched by 'manage=off' rules remain floating when automatic management is turned back on. +
+    Changing this setting at runtime or through a native configuration reload re-evaluates existing windows. Manual overrides last for the lifetime of the window; use rules for persistent policy.
+
+*window_sublayer_auto* ['<BOOL_SEL>']::
+    Automatically place managed windows in the 'below' sub-layer while windows using the automatic layer float in the normal sub-layer. Default is 'on'. +
+    'off': Automatic 'below' requests resolve to the normal sub-layer, so tiled and floating windows retain normal macOS ordering. Explicit *window --sub-layer* values and rule sub-layers remain authoritative. +
+    Changing this setting re-applies every window whose configured sub-layer is 'auto'. Applying sub-layers requires the scripting addition.
 
 *focus_follows_mouse* ['autofocus|autoraise|off']::
     Automatically focus the window under the mouse.
@@ -166,6 +529,11 @@ Global Settings
     'focused': The display that has focus when the window is created. +
     'cursor': The display that currently holds the mouse cursor.
 
+*window_focus_fallback* ['off|recent']::
+    Select the native policy used after `WINDOW_DESTROYED`, `WINDOW_MINIMIZED` and `APPLICATION_HIDDEN`. The default is 'off'. +
+    'recent': After the triggering handler finishes mutating manager state, queue one event-loop follow-up. When that follow-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as `window --focus recent` and focuses it through the normal focus path only when that window is sticky or belongs to the active Space. Destroyed, minimized, hidden, ineligible, invalid, unavailable and inactive-Space recent windows are ignored; no candidate is a no-op. Duplicate triggers coalesce while one follow-up is pending. +
+    This is a typed focus policy. It does not execute generic signals, invoke a shell, spawn a process, or route a synthetic command through the daemon socket. Existing user-configured signals keep their normal behavior and order.
+
 *window_placement* ['first_child|second_child']::
     Specify whether managed windows should become the first or second leaf-node.
 
@@ -175,10 +543,15 @@ Global Settings
 *window_zoom_persist* ['<BOOL_SEL>']::
     Windows will keep their zoom-state through layout changes.
 
+*direct_space_switch* ['<BOOL_SEL>']::
+    Switch explicitly focused native Spaces through the validated WindowManagement bridge without invoking Dock's gesture animation. +
+    The bridge sets the target Space and hides the origin as one fail-closed operation pair. Horizontal trackpad Space swipes are intercepted after reaching a small progress threshold, or on a committed terminal flick, and dispatched through the same direct path; vertical Mission Control and App Exposé gestures pass through unchanged. +
+    If the private ABI is unavailable, yabai retains its existing scripting-addition and gesture fallback paths and does not intercept trackpad swipes.
+
 *skip_window_focus_animation* ['<BOOL_SEL>']::
-    Bypass macOS space animation when an application or window on an inactive space is focused. +
-    You should only enable this if you do NOT use the scripting addition. +
-    The scripting addition implements the same functionality in a more robust way.
+    Deprecated compatibility setting with no effect. +
+    Ordinary application activation, Dock activation, Cmd-Tab, link opening and Accessibility focus notifications use native macOS space transitions without an automatic synthetic animation-skip transition. +
+    Explicit space focus commands and explicitly configured Space-follow or fullscreen rules may still perform Space operations and use a synthetic gesture fallback when the scripting addition is unavailable; those operations are not controlled by this setting.
 
 *window_shadow* ['<BOOL_SEL>|float']::
     Draw shadow for windows. +
@@ -188,23 +561,36 @@ Global Settings
     Enable opacity for windows. +
     System Integrity Protection must be partially disabled.
 
-*window_opacity_duration* ['<FLOAT_SEL>']::
+*window_opacity_duration* ['<OPACITY_DURATION_SEL>']::
     Duration of transition between active / normal opacity. +
     System Integrity Protection must be partially disabled.
 
-*active_window_opacity* ['<FLOAT_SEL>']::
+*active_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of the focused window. +
     System Integrity Protection must be partially disabled.
 
-*normal_window_opacity* ['<FLOAT_SEL>']::
+*normal_window_opacity* ['<POSITIVE_UNIT_SEL>']::
     Opacity of an unfocused window. +
     System Integrity Protection must be partially disabled.
 
-*window_animation_duration* ['<FLOAT_SEL>']::
+*active_window_highlight* ['<BOOL_SEL>']::
+    Draw a click-through outline around the focused eligible window using a private WindowServer overlay; the scripting addition is not required. +
+    The highlight is hidden while the window is minimized, ordered out, in native fullscreen, represented by a yabai animation proxy, or while Mission Control is active. (default: off)
+
+*active_window_highlight_color* ['0xAARRGGBB']::
+    Color of the focused-window highlight. (default: 0xffd75f5f)
+
+*active_window_highlight_radius* ['float']::
+    Target corner radius in display points for the focused-window highlight. Must be finite and greater than or equal to zero. (default: 9)
+
+*active_window_highlight_width* ['float']::
+    Stroke width in display points for the focused-window highlight. Must be finite and greater than zero. +
+    Rendering clamps the width to half the focused window's shorter dimension. (default: 4)
+
+*window_animation_duration* ['<DURATION_SEL>']::
     Duration of window frame animation. +
-    If 0.0, the change in dimension is not animated. +
-    Requires Screen Recording permissions. +
-    System Integrity Protection must be partially disabled.
+    If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection. +
+    A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.
 
 *window_animation_easing* ['<EASING>']::
     Easing function to use for window animations. +
@@ -214,8 +600,30 @@ Global Settings
     Color of the *window --insert* message and mouse_drag selection. +
     The purpose is to provide a visual preview of the new window frame.
 
-*split_ratio* ['<FLOAT_SEL>']::
-    Specify the size distribution when a window is split.
+*insert_feedback_radius* ['float']::
+    Corner radius in display points for insert feedback. Must be finite and greater than or equal to zero. (default: 9)
+
+*insert_feedback_width* ['float']::
+    Stroke width in display points for insert feedback. Must be finite and greater than zero. +
+    Rendering clamps the width to half the shorter feedback-frame dimension. (default: 2)
+
+*split_ratio* ['<SPLIT_RATIO_SEL>']::
+    Set the default size distribution for new BSP splits on Spaces without a higher-precedence scoped value.
+
+*single_window_max_width* ['<nonnegative integer number>']::
+    Optional absolute ceiling in display points for a Space containing exactly one managed window. Zero disables the ceiling. The proportional setting still applies. (default: 0)
+
+*single_window_min_width* ['<nonnegative integer number>']::
+    Absolute usability floor in display points for a Space containing exactly one managed window. Zero disables the floor. A narrower display uses its complete usable width. (default: 0)
+
+*single_window_width_ratio* ['<POSITIVE_UNIT_SEL>']::
+    Proportion of usable width assigned to a Space containing exactly one managed window. The window keeps the full usable height and is centered horizontally. A value of 1 preserves full width unless an absolute ceiling is configured. (default: 1)
+
+*native_edge_resize* ['<BOOL_SEL>']::
+    Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application's mouse events. Only a focused, visible, resizable, unzoomed single-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse-up. Auto-balance and managed-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
+
+*mouse_bsp_live_resize* ['<BOOL_SEL>']::
+    Reflow sibling BSP windows during *mouse_modifier* resizing. Updates are limited to 30 Hz and require a two-point cursor delta. This setting does not alter ordinary macOS edge or corner resizing, which remains release-only under *native_edge_resize*. Zoomed, floating and non-BSP windows retain the ordinary resize path. The setting is latched when a modifier-assisted gesture begins, so a runtime change applies to the next gesture. (default: off)
 
 *mouse_modifier* ['cmd|alt|shift|ctrl|fn']::
     Keyboard modifier used for moving and resizing windows.
@@ -232,8 +640,8 @@ Global Settings
 Space Settings
 ^^^^^^^^^^^^^^
 
-*layout* ['bsp|stack|float']::
-    Set the layout of the selected space.
+*layout* ['bsp|stack|float|accordion_horizontal|accordion_vertical']::
+    Set the layout of the selected space. `accordion_horizontal` arranges the strips along the x-axis; `accordion_vertical` arranges them along the y-axis.
 
 *split_type* ['vertical|horizontal|auto']::
     Specify how a window should be split. +
@@ -255,6 +663,21 @@ Space Settings
 
 *window_gap* ['<integer number>']::
     Size of the gap that separates windows for the selected space.
+
+*accordion_padding* ['<nonnegative integer number>']::
+    Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on `bsp`, `stack` or `float` geometry.
+
+*single_window_max_width* ['<nonnegative integer number>']::
+    Optional absolute ceiling in display points when the selected Space contains exactly one managed window. Zero disables the ceiling. Multiple managed windows retain ordinary layout geometry.
+
+*single_window_min_width* ['<nonnegative integer number>']::
+    Absolute usability floor in display points when the selected Space contains exactly one managed window. Zero disables the floor. The result never exceeds the usable display width.
+
+*single_window_width_ratio* ['<POSITIVE_UNIT_SEL>']::
+    Proportion of usable width assigned when the selected Space contains exactly one managed window. The result is centered horizontally and then limited by `single_window_max_width` when that ceiling is positive. A value of 1 preserves full proportional width.
+
+*split_ratio* ['<SPLIT_RATIO_SEL>']::
+    Set the default ratio for new BSP splits on the selected Space. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.
 
 *auto_balance* ['<BOOL_SEL>|x-axis|y-axis']::
     Balance the window tree upon change, so that all windows occupy an equally sized area.
@@ -351,7 +774,7 @@ COMMAND
 *--toggle* 'padding|gap|mission-control|show-desktop'::
     Toggle space setting on or off for the selected space.
 
-*--layout* 'bsp|stack|float'::
+*--layout* 'bsp|stack|float|accordion_horizontal|accordion_vertical'::
     Set the layout of the selected space.
 
 *--label* ['<LABEL>']::
@@ -425,6 +848,7 @@ COMMAND
 
 *--toggle* 'float|sticky|pip|shadow|split|zoom-parent|zoom-fullscreen|windowed-fullscreen|native-fullscreen|expose|<LABEL>'::
     Toggle the given property of the selected window. +
+    For a single managed BSP window constrained by responsive singleton width settings, `zoom-fullscreen` toggles between the constrained width and the complete ordinary root. +
     The following properties require System Integrity Protection to be partially disabled: sticky, pip, shadow, LABEL (scratchpad identifier) .
 
 *--sub-layer* '<LAYER>'::
@@ -433,7 +857,7 @@ COMMAND
     Specify the value 'auto' to reset back to normal and make it become automatically managed. +
     System Integrity Protection must be partially disabled.
 
-*--opacity* '<FLOAT_SEL>'::
+*--opacity* '<UNIT_SEL>'::
     Set the opacity of the selected window. +
     The window will no longer be eligible for automatic change in opacity upon focus change. +
     Specify the value '0.0' to reset back to full opacity and make it become automatically managed. +
@@ -478,6 +902,11 @@ COMMAND
 *--windows*::
     Retrieve information about windows.
 
+*--daemon-identity*::
+    Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments. +
+    The JSON object contains `pid` (the daemon process identifier), `architecture` (`arm64` or `x86_64`), and `uuid` (the Mach-O UUID of the running architecture slice). +
+    Field names and JSON types are stable for diagnostics and integration checks; values identify only the current daemon process and binary, and are not persistent identifiers.
+
 ARGUMENT
 ^^^^^^^^
 
@@ -513,10 +942,18 @@ DISPLAY
         "w": number,
         "h": number
     },
+    "visible-frame": object {
+        "x": number,
+        "y": number,
+        "w": number,
+        "h": number
+    },
     "spaces": array of number,
     "has-focus": bool
 }
 ----
+
+The display `frame` is the full display bounds. The `visible-frame` excludes the system menu bar or notch and the Dock, matching `NSScreen.visibleFrame`; it does not exclude yabai's configured external bar.
 
 SPACE
 [subs=+macros]
@@ -555,12 +992,14 @@ WINDOW
     "role": string,
     "subrole": string,
     "root-window": bool,
+    "parent": number or null,
     "display": number,
     "space": number,
     "level": number,
     "sub-level": number,
     "layer": string,
     "sub-layer": string,
+    "tags": string or null,
     "opacity": number,
     "split-type": string,
     "split-child": string,
@@ -573,6 +1012,8 @@ WINDOW
     "has-fullscreen-zoom": bool,
     "has-ax-reference": bool,
     "is-native-fullscreen": bool,
+    "is-ordered-in": bool or null,
+    "is-on-screen": bool or null,
     "is-visible": bool,
     "is-minimized": bool,
     "is-hidden": bool,
@@ -581,6 +1022,8 @@ WINDOW
     "is-grabbed": bool
 }
 ----
+
+`parent` is the raw WindowServer parent window id (`0` when no parent is reported), and `tags` is the raw 64-bit WindowServer tag mask encoded as a hexadecimal string; either is `null` when its native query fails. `is-ordered-in` reports WindowServer ordering state, while `is-on-screen` reports CoreGraphics compositor presence; either is also `null` when its native query fails. These non-mutating diagnostic fields are omitted from the default window query to avoid extra WindowServer calls; request them explicitly through `PROPERTIES`. +
 
 Some window properties are only accessible when yabai has a valid AX-reference for that window. +
 This AX-reference can only be retrieved when the space that the window is visible on, is active. +
@@ -676,7 +1119,7 @@ ARGUMENT
     Specify the value 'auto' to reset back to normal and make it become automatically managed. +
     System Integrity Protection must be partially disabled.
 
-*opacity='<FLOAT_SEL>'*::
+*opacity='<UNIT_SEL>'*::
     Set window opacity. +
     The window will no longer be eligible for automatic change in opacity upon focus change. +
     Specify the value '0.0' to reset back to full opacity and make it become automatically managed. +

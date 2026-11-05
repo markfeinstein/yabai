@@ -12,10 +12,10 @@ bool display_manager_query_displays(FILE *rsp, uint64_t flags)
 
     fprintf(rsp, "[");
     for (int i = 0; i < count; ++i) {
+        if (i) fprintf(rsp, ",");
         display_serialize(rsp, display_list[i], flags);
-        fprintf(rsp, "%c", i < count - 1 ? ',' : ']');
     }
-    fprintf(rsp, "\n");
+    fprintf(rsp, "]\n");
 
     return true;
 }
@@ -93,14 +93,17 @@ CFStringRef display_manager_active_display_uuid(void)
     return SLSCopyActiveMenuBarDisplayIdentifier(g_connection);
 }
 
+static uint32_t display_manager_display_id_for_uuid(CFStringRef uuid)
+{
+    return uuid && cf_is_type(uuid, CFStringGetTypeID()) ? display_id(uuid) : 0;
+}
+
 uint32_t display_manager_active_display_id(void)
 {
     CFStringRef uuid = display_manager_active_display_uuid();
-    assert(uuid);
-
-    uint32_t result = display_id(uuid);
+    if (!uuid) return 0;
+    uint32_t result = display_manager_display_id_for_uuid(uuid);
     CFRelease(uuid);
-
     return result;
 }
 
@@ -162,58 +165,74 @@ static CFComparisonResult display_manager_coordinate_comparator(CFTypeRef a, CFT
     return kCFCompareEqualTo;
 }
 
-int display_manager_display_id_arrangement(uint32_t did)
+static CFMutableArrayRef display_manager_copy_valid_display_uuids(CFTypeRef value, enum display_arrangement_order order)
 {
-    int result = 0;
+    if (!cf_is_type(value, CFArrayGetTypeID())) return NULL;
 
-    CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    CFArrayRef displays = (CFArrayRef) value;
+    CFMutableArrayRef result = YABAI_CFARRAY_CREATE_MUTABLE(NULL, CFArrayGetCount(displays),
+                                                            &kCFTypeArrayCallBacks);
+    if (!result) return NULL;
 
-    CFArrayRef displays = SLSCopyManagedDisplays(g_connection);
-    if (!displays) goto err;
-
-    int count = CFArrayGetCount(displays);
-    if (!count) goto empty;
-
-    if (g_display_manager.order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT) {
-        CFMutableArrayRef mut_displays = CFArrayCreateMutableCopy(NULL, count, displays);
-        CFArraySortValues(mut_displays, CFRangeMake(0, count), &display_manager_coordinate_comparator, (void *)(uintptr_t) g_display_manager.order);
-        CFRelease(displays); displays = mut_displays;
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
+        CFTypeRef uuid = CFArrayGetValueAtIndex(displays, i);
+        if (cf_is_type(uuid, CFStringGetTypeID())) CFArrayAppendValue(result, uuid);
     }
 
-    for (int i = 0; i < count; ++i) {
+    if (order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT && CFArrayGetCount(result)) {
+        CFArraySortValues(result, CFRangeMake(0, CFArrayGetCount(result)), &display_manager_coordinate_comparator, (void *)(uintptr_t) order);
+    }
+    return result;
+}
+
+CFArrayRef display_manager_copy_ordered_display_uuids(void)
+{
+    CFTypeRef native_displays = SLSCopyManagedDisplays(g_connection);
+    CFArrayRef displays = display_manager_copy_valid_display_uuids(native_displays, g_display_manager.order);
+    if (native_displays) CFRelease(native_displays);
+    return displays;
+}
+
+int display_manager_display_uuid_arrangement(CFArrayRef displays, CFStringRef uuid)
+{
+    if (!cf_is_type(displays, CFArrayGetTypeID()) || !cf_is_type(uuid, CFStringGetTypeID())) return 0;
+
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
         if (CFEqual(CFArrayGetValueAtIndex(displays, i), uuid)) {
-            result = i + 1;
-            break;
+            return i < INT_MAX ? (int) i + 1 : 0;
         }
     }
+    return 0;
+}
 
-empty:
-    CFRelease(displays);
-err:
+int display_manager_display_id_arrangement(uint32_t did)
+{
+    CFStringRef uuid = display_uuid(did);
+    if (!uuid) return 0;
+
+    CFArrayRef displays = display_manager_copy_ordered_display_uuids();
+    int result = display_manager_display_uuid_arrangement(displays, uuid);
+    if (displays) CFRelease(displays);
     CFRelease(uuid);
-out:
     return result;
+}
+
+static CFStringRef display_manager_uuid_at_index(CFArrayRef displays, int index)
+{
+    if (!cf_is_type(displays, CFArrayGetTypeID()) || index < 0 || index >= CFArrayGetCount(displays)) return NULL;
+    CFTypeRef uuid = CFArrayGetValueAtIndex(displays, index);
+    return cf_is_type(uuid, CFStringGetTypeID()) ? CFRetain(uuid) : NULL;
 }
 
 CFStringRef display_manager_arrangement_display_uuid(int arrangement)
 {
-    CFStringRef result = NULL;
-    CFArrayRef displays = SLSCopyManagedDisplays(g_connection);
+    if (arrangement < 1) return NULL;
+    CFTypeRef native_displays = SLSCopyManagedDisplays(g_connection);
+    CFMutableArrayRef displays = display_manager_copy_valid_display_uuids(native_displays, g_display_manager.order);
+    if (native_displays) CFRelease(native_displays);
+    if (!displays) return NULL;
 
-    int count = CFArrayGetCount(displays);
-    int index = arrangement - 1;
-
-    if (in_range_ie(index, 0, count)) {
-        if (g_display_manager.order != DISPLAY_ARRANGEMENT_ORDER_DEFAULT) {
-            CFMutableArrayRef mut_displays = CFArrayCreateMutableCopy(NULL, count, displays);
-            CFArraySortValues(mut_displays, CFRangeMake(0, count), &display_manager_coordinate_comparator, (void *)(uintptr_t) g_display_manager.order);
-            CFRelease(displays); displays = mut_displays;
-        }
-
-        result = CFRetain(CFArrayGetValueAtIndex(displays, index));
-    }
-
+    CFStringRef result = display_manager_uuid_at_index(displays, arrangement - 1);
     CFRelease(displays);
     return result;
 }
@@ -352,14 +371,24 @@ CGRect display_manager_dock_rect(void)
     return bounds;
 }
 
+static bool display_manager_animation_query_is_supported(void)
+{
+    // Big Sur can leave this bit latched after an application-driven Space
+    // transition. Newer releases are already excluded because the query is not
+    // reliable there; retain the established Monterey and Ventura behavior.
+    return workspace_is_macos_monterey() || workspace_is_macos_ventura();
+}
+
 bool display_manager_active_display_is_animating(void)
 {
-    if (workspace_is_macos_bigsur()   ||
-        workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura())
+    if (display_manager_animation_query_is_supported())
     {
         CFStringRef uuid = display_manager_active_display_uuid();
-        assert(uuid);
+        if (!uuid) return false;
+        if (!cf_is_type(uuid, CFStringGetTypeID())) {
+            CFRelease(uuid);
+            return false;
+        }
 
         bool result = SLSManagedDisplayIsAnimating(g_connection, uuid);
         CFRelease(uuid);
@@ -372,9 +401,7 @@ bool display_manager_active_display_is_animating(void)
 
 bool display_manager_display_is_animating(uint32_t did)
 {
-    if (workspace_is_macos_bigsur()   ||
-        workspace_is_macos_monterey() ||
-        workspace_is_macos_ventura())
+    if (display_manager_animation_query_is_supported())
     {
         CFStringRef uuid = display_uuid(did);
         if (!uuid) return false;
@@ -388,18 +415,47 @@ bool display_manager_display_is_animating(uint32_t did)
     return false; // This does not return a correct result on modern macOS versions.
 }
 
+#ifdef TESTS
+static display_manager_active_display_list_fn display_manager_active_display_list_call = CGGetActiveDisplayList;
+
+void display_manager_test_set_active_display_list_fn(display_manager_active_display_list_fn fn)
+{
+    display_manager_active_display_list_call = fn ? fn : CGGetActiveDisplayList;
+}
+#else
+#define display_manager_active_display_list_call CGGetActiveDisplayList
+#endif
+
 int display_manager_active_display_count(void)
 {
-    uint32_t count;
-    CGGetActiveDisplayList(0, NULL, &count);
-    return (int)count;
+    uint32_t count = 0;
+    if (display_manager_active_display_list_call(0, NULL, &count) != kCGErrorSuccess || count > INT_MAX) return 0;
+    return (int) count;
 }
 
 uint32_t *display_manager_active_display_list(int *count)
 {
-    int display_count = display_manager_active_display_count();
-    uint32_t *result = ts_alloc_list(uint32_t, display_count);
-    CGGetActiveDisplayList(display_count, result, (uint32_t*)count);
+    if (count) *count = 0;
+    if (!count) return NULL;
+
+    uint32_t capacity = 0;
+    if (display_manager_active_display_list_call(0, NULL, &capacity) != kCGErrorSuccess ||
+        capacity == 0 || capacity > INT_MAX) {
+        return NULL;
+    }
+
+    uint32_t expected_count = capacity;
+    uint32_t fill_capacity = expected_count + 1;
+    uint32_t *result = ts_alloc_list_checked(uint32_t, fill_capacity);
+    if (!result) return NULL;
+
+    uint32_t observed_count = 0;
+    if (display_manager_active_display_list_call(fill_capacity, result, &observed_count) != kCGErrorSuccess ||
+        observed_count != expected_count) {
+        return NULL;
+    }
+
+    *count = (int) observed_count;
     return result;
 }
 
@@ -411,7 +467,10 @@ static AXUIElementRef display_manager_find_element_at_point(CGPoint point)
 
     CFTypeRef role = NULL;
     AXUIElementCopyAttributeValue(element_ref, kAXRoleAttribute, &role);
-    if (!role) return NULL;
+    if (!role) {
+        CFRelease(element_ref);
+        return NULL;
+    }
 
     if (CFEqual(role, kAXWindowRole)) {
         CFRelease(role);
@@ -429,8 +488,8 @@ static AXUIElementRef display_manager_find_element_at_point(CGPoint point)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 uint32_t display_manager_focus_display_with_window_at_point(CGPoint point)
 {
-    int element_connection;
-    ProcessSerialNumber element_psn;
+    int element_connection = 0;
+    ProcessSerialNumber element_psn = {0};
 
     AXUIElementRef element_ref = display_manager_find_element_at_point(point);
     if (!element_ref) goto out;
@@ -438,8 +497,8 @@ uint32_t display_manager_focus_display_with_window_at_point(CGPoint point)
     uint32_t element_id = ax_window_id(element_ref);
     if (!element_id) goto err_ref;
 
-    SLSGetWindowOwner(g_connection, element_id, &element_connection);
-    SLSGetConnectionPSN(element_connection, &element_psn);
+    if (SLSGetWindowOwner(g_connection, element_id, &element_connection) != kCGErrorSuccess ||
+        SLSGetConnectionPSN(element_connection, &element_psn) != kCGErrorSuccess) goto err_ref;
     window_manager_focus_window_with_raise(&element_psn, element_id, element_ref);
     CFRelease(element_ref);
     return element_id;
@@ -454,6 +513,7 @@ out:
 void display_manager_set_active_display_id(uint32_t did)
 {
     CFStringRef uuid = display_uuid(did);
+    if (!uuid) return;
     SLSSetActiveMenuBarDisplayIdentifier(g_connection, uuid, uuid);
     CFRelease(uuid);
 }
@@ -494,6 +554,11 @@ enum space_op_error display_manager_focus_space(uint32_t did, uint64_t sid)
     return scripting_addition_focus_space(sid) ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
+bool display_manager_observe(void)
+{
+    return CGDisplayRegisterReconfigurationCallback(display_handler, NULL) == kCGErrorSuccess;
+}
+
 bool display_manager_begin(struct display_manager *dm)
 {
     dm->current_display_id = display_manager_active_display_id();
@@ -502,5 +567,5 @@ bool display_manager_begin(struct display_manager *dm)
     dm->mode = EXTERNAL_BAR_OFF;
     dm->top_padding = 0;
     dm->bottom_padding = 0;
-    return CGDisplayRegisterReconfigurationCallback(display_handler, NULL) == kCGErrorSuccess;
+    return display_manager_observe();
 }

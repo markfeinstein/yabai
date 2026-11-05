@@ -67,6 +67,8 @@ uint32_t display_manager_dock_display_id(void);
 CFStringRef display_manager_point_display_uuid(CGPoint point);
 uint32_t display_manager_point_display_id(CGPoint point);
 uint32_t display_manager_cursor_display_id(void);
+CFArrayRef display_manager_copy_ordered_display_uuids(void);
+int display_manager_display_uuid_arrangement(CFArrayRef displays, CFStringRef uuid);
 int display_manager_display_id_arrangement(uint32_t did);
 CFStringRef display_manager_arrangement_display_uuid(int arrangement);
 uint32_t display_manager_arrangement_display_id(int arrangement);
@@ -84,10 +86,15 @@ bool display_manager_active_display_is_animating(void);
 bool display_manager_display_is_animating(uint32_t did);
 int display_manager_active_display_count(void);
 uint32_t *display_manager_active_display_list(int *count);
+#ifdef TESTS
+typedef CGError (*display_manager_active_display_list_fn)(uint32_t capacity, CGDirectDisplayID *displays, uint32_t *count);
+void display_manager_test_set_active_display_list_fn(display_manager_active_display_list_fn fn);
+#endif
 uint32_t display_manager_focus_display_with_window_at_point(CGPoint point);
 void display_manager_set_active_display_id(uint32_t did);
 void display_manager_focus_display(uint32_t did, uint64_t sid);
 enum space_op_error display_manager_focus_space(uint32_t did, uint64_t sid);
 bool display_manager_begin(struct display_manager *dm);
+bool display_manager_observe(void);
 
 #endif

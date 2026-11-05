@@ -6,6 +6,111 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Require meaningful horizontal progress or terminal velocity before committing a direct trackpad Space switch, so small or cancelled swipes do not change Spaces.
+- Add opt-in direct native Space switching through the validated WindowManagement set-and-hide bridge, including animation-free explicit focus and horizontal trackpad swipe interception with native fallback when the private ABI is unavailable.
+- Add a `manage` policy that can float windows by default while preserving rule-managed and manually tiled windows across runtime changes and native configuration reloads.
+- Add `window_sublayer_auto` control for keeping automatically layered tiled and floating windows in the normal sub-layer while preserving explicit layer choices.
+- Add opt-in live BSP sibling reflow during modifier-assisted resizing. Ordinary macOS edge and corner drags remain pass-through and reconcile the real BSP layout once on release; remove the rejected divider and captured-proxy presentation paths.
+- Restore capability-gated scripting-addition Space creation, destruction,
+  reordering, display movement, focus, and animation lookup support on macOS 27,
+  including the macOS 27.2 Dock Swift move-report handler and both arm64e slices.
+- Bound Dock byte-pattern searches to executable code and encode the Intel
+  zero-duration animation patch in the correct little-endian instruction order.
+- Reject rule and signal regular expressions whose compiled automata would grow
+  far beyond their input, while retaining the full literal request capacity.
+- Retry temporarily unavailable AX window identities with bounded backoff,
+  preserve the configured origin captured when a window opened, and keep later
+  inventory recovery on the window's existing Space.
+- Re-tile reordered-in windows on their own visible display, recover a drag
+  whose mouse-up event was lost, and coalesce delayed per-Space reconciliation
+  for applications that silently destroy windows.
+- Add an opt-in, click-through `active_window_highlight` outline for the focused
+  eligible window, with configurable color, radius, and width; fail closed during
+  Mission Control, native fullscreen, visibility transitions, and yabai animations.
+- Add opt-in proportional `single_window_width_ratio` geometry, with an
+  absolute `single_window_min_width` floor and an optional
+  `single_window_max_width` ceiling, that centers one managed window while
+  preserving ordinary multi-window layouts; `zoom-fullscreen` temporarily
+  bypasses responsive singleton sizing.
+- Choose the first automatic BSP split from the ordinary full root when a
+  responsive singleton opens a second managed window.
+- Compile the core test translation unit with warnings treated as errors while
+  retaining narrow exceptions for deliberate fixtures and legacy APIs.
+- Parse the injected process's main-image Mach-O load commands directly instead
+  of using deprecated segment lookup APIs.
+- Pass the embedded Info.plist section flag only when linking daemon binaries,
+  not when compiling the standalone menu-bar model object.
+- Recover windows whose accessibility reference is replaced, and adopt focused
+  windows when applications omit `kAXCreatedNotification` [#2836](https://github.com/asmvik/yabai/issues/2836) [#2837](https://github.com/asmvik/yabai/issues/2837).
+- Preserve BSP membership and complete-tree geometry across native-fullscreen
+  and zoom transitions.
+- Move cross-Space swap participants before mutating their layout trees, with
+  bounded postcondition checks and rollback when a transport fails.
+- Prefer the observable scripting-addition window-move operation, then verify
+  bridged and compatibility fallbacks instead of accepting silent asynchronous
+  failure [#2789](https://github.com/asmvik/yabai/issues/2789).
+- Add exact Intel Sonoma 14.8.5 and 14.8.9 scripting-addition scan windows and
+  build-specific desktop-picture handling [#2839](https://github.com/asmvik/yabai/issues/2839) [#2827](https://github.com/asmvik/yabai/issues/2827).
+- Have `yabai --doctor` perform a bounded, read-only live scripting-addition
+  handshake after validating socket ownership and permissions.
+- Report WindowServer notification-subscription failures and avoid cursor warps
+  for focus transitions involving ineligible auxiliary windows.
+- Restore *focus follows mouse* when an application terminates while one of its
+  menus is open, without consuming menu-bar-owned suspension state [#2834](https://github.com/asmvik/yabai/issues/2834).
+- Avoid permanently blocking Space operations on Big Sur when its private
+  display-animation query remains latched after application activation [#2841](https://github.com/asmvik/yabai/issues/2841).
+- Keep drag insertion feedback consistent for source stacks and stack-layout
+  destinations [#2840](https://github.com/asmvik/yabai/issues/2840).
+- Refresh complete BSP geometry after window removal so surviving windows use
+  current display bounds without changing configured split ratios.
+- Leave actively dragged cross-display windows under mouse-up ownership instead
+  of reconciling them into the destination Space early [#2843](https://github.com/asmvik/yabai/issues/2843).
+- Preserve the active Space during daemon startup by applying persistent rule
+  target moves without following them until each pre-existing application's
+  initial window inventory converges.
+- Ignore zero-area helper windows unless an explicit rule manages them.
+- Use modern Objective-C ivar accessors for scripting-addition compatibility
+  with current Apple Silicon SDKs.
+- Fail conservatively when Core Foundation allocation fails during display ordering,
+  accessibility checks, shadow configuration, or window/Space list construction.
+- Reuse one WindowServer Space-membership result when window queries serialize both
+  Space-dependent fields and sticky state, avoiding a duplicate native request per window.
+- Deduplicate large application-lifecycle view batches in linear time while preserving
+  first-seen flush order and the allocation-free path for ordinary small batches.
+- Reuse window, Space and managed-display topology metadata within each integrated
+  menu-bar snapshot, avoiding redundant synchronous WindowServer queries per window,
+  Space and display.
+- Improve the native Spaces indicator with per-display submenus and section headers,
+  directional overflow counts, structured accessibility summaries, and an automatic
+  layout that expands within a 260-point budget before falling back to compact mode.
+- Reuse managed-Space topology and ordered-display metadata across each window-query
+  request, avoiding repeated IPC for Space enumeration and serialized Space/display indices.
+- Add non-mutating window diagnostics for raw parent id, WindowServer tags,
+  ordered-in state, and CoreGraphics on-screen presence, plus verbose visibility-event
+  and Space-focus-path tracing for cross-Space compositor investigations.
+- Remove the automatic synthetic Space transition from ordinary passive application
+  and window activation. Explicit Space commands and explicitly configured
+  Space-follow or fullscreen rules retain their intentional Space operations.
+- Accept native rule and Space-policy targets that are not yet present in an
+  otherwise valid topology; native rules bind on explicit reload while Space
+  policies remain dormant until topology reconciliation finds their target.
+- Add ordered managed-window scaffolds to native per-Space policy, with
+  opening-order-independent one-, two-, and three-primary BSP geometry.
+- Add native managed `accordion_horizontal` and `accordion_vertical` layouts
+  with stable focus order, configurable `accordion_padding`, bounded overlapping
+  geometry and transactional JSONC startup, reload and topology integration.
+- Add native JSONC configuration for settings, per-Space policy and persistent
+  rules, with offline validation and transactional runtime reload.
+- Add the typed `window_focus_fallback` policy for event-loop-native recent-window
+  focus after window destruction, minimization, or application hiding, without
+  raising a non-sticky fallback window from an inactive Space.
+- Resolve the macOS 27 Dock Spaces singleton through Objective-C runtime
+  metadata before falling back to build-specific byte patterns.
+- Return scripting-addition operation status to the client so unsupported
+  Space operations can use their existing fallback paths.
+- Add experimental macOS 27 scripting-addition support for focusing Spaces and
+  moving windows between Spaces on Apple Silicon.
+- Apply the Tahoe compatibility path to newer macOS versions by default.
 - Fixed scripting-addition *add_space* pattern for macOS 26.6 Apple Silicon arm64 [#2799](https://github.com/asmvik/yabai/issues/2799)
 - Fixed minor memory leak on space destruction, and added a few missing null checks to SkyLight API calls [#2791](https://github.com/asmvik/yabai/issues/2791)
 
@@ -258,7 +363,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 - Fixed caching issue when using focus_follows_mouse to switch focus between monitors with no windows [#2075](https://github.com/asmvik/yabai/issues/2075)
 - Attempt to resolve issue where some applications do not incorrectly pass along NSRunningApplication isObservable and isFinishedLaunching properties [#1367](https://github.com/asmvik/yabai/issues/1367)
-- Add compatibility between window animations and JankyBorders [#2087](https://github.com/asmvik/yabai/issues/2087)
 
 ### Removed
 - Config option `window_animation_frame_rate` has been removed. Animations use CVDisplayLink to match monitor refresh rate [#2087](https://github.com/asmvik/yabai/issues/2087)

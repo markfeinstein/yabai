@@ -21,6 +21,33 @@ enum window_op_error
     WINDOW_OP_ERROR_DEMINIMIZE_FAILED,
     WINDOW_OP_ERROR_MAX_STACK,
     WINDOW_OP_ERROR_SAME_STACK,
+    WINDOW_OP_ERROR_SPACE_MOVE_FAILED,
+};
+
+enum window_identity_replace_error
+{
+    WINDOW_IDENTITY_REPLACE_SUCCESS = 0,
+    WINDOW_IDENTITY_REPLACE_INVALID_ARGUMENT,
+    WINDOW_IDENTITY_REPLACE_SAME_ID,
+    WINDOW_IDENTITY_REPLACE_SOURCE_NOT_FOUND,
+    WINDOW_IDENTITY_REPLACE_DESTINATION_CONFLICT,
+    WINDOW_IDENTITY_REPLACE_AX_ID_MISMATCH,
+    WINDOW_IDENTITY_REPLACE_AX_PID_MISMATCH,
+    WINDOW_IDENTITY_REPLACE_PREPARE_FAILED,
+    WINDOW_IDENTITY_REPLACE_INVARIANT_VIOLATION,
+    WINDOW_IDENTITY_REPLACE_OBSERVATION_ACTIVE,
+    WINDOW_IDENTITY_REPLACE_BUSY_MOUSE,
+    WINDOW_IDENTITY_REPLACE_BUSY_FEEDBACK,
+    WINDOW_IDENTITY_REPLACE_BUSY_ANIMATION,
+    WINDOW_IDENTITY_REPLACE_BUSY_CORRECTION,
+    WINDOW_IDENTITY_REPLACE_INCOMPATIBLE_WINDOW
+};
+
+enum managed_window_result
+{
+    MANAGED_WINDOW_FAILED,
+    MANAGED_WINDOW_UNMANAGED,
+    MANAGED_WINDOW_SUCCESS
 };
 
 enum purify_mode
@@ -44,9 +71,12 @@ enum ffm_mode
     FFM_AUTORAISE
 };
 
+typedef uint32_t ffm_atomic_mode;
+_Static_assert(FFM_AUTORAISE <= UINT32_MAX, "ffm mode must fit its atomic storage");
+
 static const char *ffm_mode_str[] =
 {
-    "disabled",
+    "off",
     "autofocus",
     "autoraise"
 };
@@ -65,11 +95,29 @@ static const char *window_origin_mode_str[] =
     "cursor"
 };
 
+enum window_focus_fallback
+{
+    WINDOW_FOCUS_FALLBACK_OFF,
+    WINDOW_FOCUS_FALLBACK_RECENT
+};
+
+static const char *window_focus_fallback_str[] =
+{
+    "off",
+    "recent"
+};
+
+struct mouse_state;
+struct space_manager;
+
 struct scratchpad
 {
     char *label;
     struct window *window;
 };
+
+#define INSERT_FEEDBACK_RADIUS_DEFAULT 9.0f
+#define INSERT_FEEDBACK_WIDTH_DEFAULT 2.0f
 
 struct window_manager
 {
@@ -84,13 +132,20 @@ struct window_manager
     pthread_mutex_t window_animations_lock;
     struct rule *rules;
     struct application **applications_to_refresh;
+    int application_refresh_cursor;
     uint32_t focused_window_id;
     ProcessSerialNumber focused_window_psn;
     uint32_t last_window_id;
     bool enable_mff;
-    enum ffm_mode ffm_mode;
+    bool disable_management;
+    bool disable_window_sublayer_auto;
+    enum ffm_mode configured_ffm_mode;
+    ffm_atomic_mode effective_ffm_mode;
+    uint32_t ffm_menu_suspend_count;
+    uint32_t ffm_anonymous_menu_suspend_count;
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
+    enum window_focus_fallback window_focus_fallback;
     bool enable_window_opacity;
     float menubar_opacity;
     float active_window_opacity;
@@ -98,19 +153,26 @@ struct window_manager
     float window_opacity_duration;
     float window_animation_duration;
     int window_animation_easing;
+    bool enable_active_window_highlight;
+    struct rgba_color active_window_highlight_color;
+    float active_window_highlight_radius;
+    float active_window_highlight_width;
+    struct active_window_highlight active_window_highlight;
     struct rgba_color insert_feedback_color;
+    float insert_feedback_radius;
+    float insert_feedback_width;
     struct scratchpad *scratchpad_window;
 };
 
 void window_manager_query_window_rules(FILE *rsp);
-void window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags);
-void window_manager_query_windows_for_display(FILE *rsp, uint32_t did, uint64_t flags);
-void window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags);
+bool window_manager_query_windows_for_spaces(FILE *rsp, uint64_t *space_list, int space_count, uint64_t flags);
+bool window_manager_query_windows_for_display(FILE *rsp, uint32_t did, uint64_t flags);
+bool window_manager_query_windows_for_displays(FILE *rsp, uint64_t flags);
 bool window_manager_rule_matches_window(struct rule *rule, struct window *window, char *window_title, char *window_role, char *window_subrole);
 void window_manager_apply_manage_rule_effects_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects);
 void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, struct rule_effects *effects);
-void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules);
-void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules);
+void window_manager_apply_manage_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid);
+void window_manager_apply_rules_to_window(struct space_manager *sm, struct window_manager *wm, struct window *window, char *window_title, char *window_role, char *window_subrole, bool one_shot_rules, pid_t one_shot_owner_pid);
 void window_manager_center_mouse(struct window_manager *wm, struct window *window);
 bool window_manager_is_window_eligible(struct window *window);
 bool window_manager_should_manage_window(struct window *window);
@@ -132,6 +194,7 @@ struct window *window_manager_find_next_managed_window(struct space_manager *sm,
 struct window *window_manager_find_first_managed_window(struct space_manager *sm, struct window_manager *wm);
 struct window *window_manager_find_last_managed_window(struct space_manager *sm, struct window_manager *wm);
 struct window *window_manager_find_recent_managed_window(struct window_manager *wm);
+bool window_manager_window_is_focus_fallback_eligible(struct window *window);
 struct window *window_manager_find_prev_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);
 struct window *window_manager_find_next_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);
 struct window *window_manager_find_first_window_in_stack(struct space_manager *sm, struct window_manager *wm, struct window *window);
@@ -152,19 +215,38 @@ struct window *window_manager_focused_window(struct window_manager *wm);
 struct application *window_manager_focused_application(struct window_manager *wm);
 struct view *window_manager_find_managed_window(struct window_manager *wm, struct window *window);
 void window_manager_remove_managed_window(struct window_manager *wm, uint32_t wid);
-void window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view);
-bool window_manager_find_lost_front_switched_event(struct window_manager *wm, pid_t pid);
-void window_manager_remove_lost_front_switched_event(struct window_manager *wm, pid_t pid);
-void window_manager_add_lost_front_switched_event(struct window_manager *wm, pid_t pid);
+bool window_manager_add_managed_window(struct window_manager *wm, struct window *window, struct view *view);
+bool window_manager_transfer_managed_window(struct window_manager *wm, struct window *window,
+                                            struct view *src_view, struct view *dst_view,
+                                            uint32_t insertion_point);
+enum managed_window_result window_manager_tile_window_on_space(struct space_manager *sm, struct window_manager *wm,
+                                                                struct window *window, uint64_t sid, uint32_t insertion_point,
+                                                                bool flush);
+void window_manager_window_did_order_out(struct window_manager *wm, struct window *window);
+void window_manager_window_did_order_in(struct window_manager *wm, struct window *window, uint64_t sid);
+uint64_t window_manager_find_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn);
+void window_manager_remove_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn);
+bool window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation);
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);
+uint32_t window_manager_ax_window_id(AXUIElementRef window_ref);
+AXUIElementRef window_manager_copy_application_window_ref(struct application *application, uint32_t window_id);
+bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window, AXUIElementRef window_ref);
+/* Structural primitive only: consumes new_ax_ref, emits no events/signals, performs no
+ * observer/subscription work, and creates no old-ID alias. */
+enum window_identity_replace_error
+window_manager_replace_window_identity(struct space_manager *sm, struct window_manager *wm,
+                                       struct mouse_state *ms, uint32_t old_id, uint32_t new_id,
+                                       AXUIElementRef new_ax_ref);
+void window_manager_invalidate_window_constraints(struct window_manager *wm);
+bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window);
 struct window *window_manager_find_window(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_window(struct window_manager *wm, uint32_t window_id);
-void window_manager_add_window(struct window_manager *wm, struct window *window);
+bool window_manager_add_window(struct window_manager *wm, struct window *window);
 struct application *window_manager_find_application(struct window_manager *wm, pid_t pid);
 void window_manager_remove_application(struct window_manager *wm, pid_t pid);
-void window_manager_add_application(struct window_manager *wm, struct application *application);
+bool window_manager_add_application(struct window_manager *wm, struct application *application);
 struct window **window_manager_find_application_windows(struct window_manager *wm, struct application *application, int *window_count);
 enum window_op_error window_manager_move_window_relative(struct window_manager *wm, struct window *window, int type, float dx, float dy);
 void window_manager_resize_window_relative_internal(struct window *window, CGRect frame, int direction, float dx, float dy, bool animate);
@@ -173,10 +255,25 @@ void window_manager_set_purify_mode(struct window_manager *wm, enum purify_mode 
 void window_manager_set_menubar_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_active_window_opacity(struct window_manager *wm, float opacity);
 void window_manager_set_normal_window_opacity(struct window_manager *wm, float opacity);
+void window_manager_set_active_window_highlight_enabled(struct window_manager *wm, bool enabled);
+void window_manager_refresh_active_window_highlight(struct window_manager *wm);
+void window_manager_refresh_active_window_highlight_for_frame(struct window_manager *wm, uint32_t window_id, CGRect frame);
+void window_manager_reorder_active_window_highlight(struct window_manager *wm);
+void window_manager_hide_active_window_highlight(struct window_manager *wm);
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled);
 bool window_manager_set_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_window_opacity(struct window_manager *wm, struct window *window, float opacity);
-void window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode);
+bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode);
+void window_manager_set_manage_enabled(struct space_manager *sm, struct window_manager *wm, bool enabled);
+void window_manager_reconcile_manage_policy(struct space_manager *sm, struct window_manager *wm);
+void window_manager_set_window_sublayer_auto_enabled(struct window_manager *wm, bool enabled);
+enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm);
+void window_manager_recompute_effective_ffm_mode(struct window_manager *wm);
+void window_manager_ffm_menu_opened(struct window_manager *wm);
+void window_manager_ffm_menu_closed(struct window_manager *wm);
+void window_manager_ffm_application_menu_opened(struct window_manager *wm, struct application *application);
+void window_manager_ffm_application_menu_closed(struct window_manager *wm, struct application *application);
+void window_manager_ffm_application_terminated(struct window_manager *wm, struct application *application);
 enum window_op_error window_manager_set_window_insertion(struct space_manager *sm, struct window *window, int direction);
 enum window_op_error window_manager_stack_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
 enum window_op_error window_manager_warp_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
@@ -184,13 +281,48 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
 enum window_op_error window_manager_minimize_window(struct window *window);
 enum window_op_error window_manager_deminimize_window(struct window *window);
 bool window_manager_close_window(struct window *window);
-void window_manager_send_window_to_space(struct space_manager *sm, struct window_manager *wm, struct window *window, uint64_t sid, bool moved_by_rule);
-struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules);
+bool window_manager_send_window_to_space(struct space_manager *sm, struct window_manager *wm, struct window *window, uint64_t sid, bool moved_by_rule);
+bool window_manager_move_node_windows_between_spaces(struct window_manager *wm,
+                                                      struct window_node *a_node, uint64_t a_sid,
+                                                      struct window_node *b_node, uint64_t b_sid);
+struct window_created_retry
+{
+    AXUIElementRef window_ref;
+    ProcessSerialNumber application_psn;
+    pid_t application_pid;
+    uint64_t origin_sid;
+    uint8_t identity_attempt;
+    bool origin_fixed;
+    bool one_shot_rules;
+    pid_t one_shot_owner_pid;
+    bool suppress_rule_follow;
+};
+
+struct window_created_retry *window_manager_create_window_created_retry(
+    AXUIElementRef window_ref, struct application *application,
+    uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt,
+    bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
+void window_manager_destroy_window_created_retry(struct window_created_retry *retry);
+bool window_manager_schedule_window_created_retry(
+    AXUIElementRef window_ref, struct application *application,
+    uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt, uint64_t delay_ms,
+    bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
+struct application *window_manager_resolve_window_created_retry(struct window_manager *wm, struct window_created_retry *retry);
+pid_t window_manager_window_created_retry_owner(struct application *application, struct window_created_retry *retry);
+bool window_manager_window_created_retry_uses_one_shots(struct application *application, struct window_created_retry *retry);
+AXError window_manager_ax_window_id_with_status(AXUIElementRef window_ref, uint32_t *window_id);
+struct window *window_manager_create_and_add_window(struct space_manager *sm, struct window_manager *wm, struct application *application, AXUIElementRef window_ref, uint32_t window_id, bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow, bool *retry);
 struct window **window_manager_add_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int *count);
-bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index);
+bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index, struct window ***created_windows, int *created_count);
+void window_manager_capture_window_origin(uint64_t *sid, bool *fixed);
+void window_manager_request_application_refresh(struct window_manager *wm, struct application *application);
+bool window_manager_remove_application_refresh(struct window_manager *wm, struct application *application);
+void window_manager_begin_inactive_probe_pass(int budget);
+int window_manager_inactive_probe_budget_remaining(void);
 enum window_op_error window_manager_apply_grid(struct space_manager *sm, struct window_manager *wm, struct window *window, unsigned r, unsigned c, unsigned x, unsigned y, unsigned w, unsigned h);
 void window_manager_purify_window(struct window_manager *wm, struct window *window);
 void window_manager_make_window_floating(struct space_manager *sm, struct window_manager *wm, struct window *window, bool should_float, bool force);
+void window_manager_toggle_window_floating(struct space_manager *sm, struct window_manager *wm, struct window *window);
 void window_manager_make_window_sticky(struct space_manager *sm, struct window_manager *wm, struct window *window, bool should_sticky);
 void window_manager_adjust_layer(struct window *window, int layer);
 bool window_manager_set_window_layer(struct window *window, int layer);
@@ -198,18 +330,20 @@ void window_manager_toggle_window_shadow(struct window *window);
 void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct window *window);
 void window_manager_toggle_window_zoom_fullscreen(struct window_manager *wm, struct window *window);
 void window_manager_toggle_window_windowed_fullscreen(struct window *window);
-void window_manager_toggle_window_native_fullscreen(struct window *window);
+bool window_manager_toggle_window_native_fullscreen(struct window *window);
 void window_manager_toggle_window_expose(struct window *window);
 void window_manager_toggle_window_pip(struct space_manager *sm, struct window *window);
 bool window_manager_toggle_scratchpad_window_by_label(struct window_manager *wm, char *label);
 bool window_manager_toggle_scratchpad_window(struct window_manager *wm, struct window *window, int forced_mode);
 bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct window *window, char *label);
 bool window_manager_remove_scratchpad_for_window(struct window_manager *wm, struct window *window, bool unfloat);
-void window_manager_scratchpad_recover_windows(void);
-void window_manager_wait_for_native_fullscreen_transition(struct window *window);
+bool window_manager_scratchpad_recover_windows(void);
+bool window_manager_wait_for_native_fullscreen_transition(struct window *window, bool fullscreen);
+bool window_manager_reconcile_windows_on_space_with_storage(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, bool inventory_succeeded, struct view **mutated_views, int mutated_capacity);
+bool window_manager_reconcile_windows_on_space(struct window_manager *wm, struct view *view, uint32_t *window_list, int window_count, bool inventory_succeeded);
 void window_manager_validate_and_check_for_windows_on_space(struct space_manager *sm, struct window_manager *wm, uint64_t sid);
 void window_manager_correct_for_mission_control_changes(struct space_manager *sm, struct window_manager *wm);
-void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did);
+bool window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did);
 void window_manager_begin(struct space_manager *sm, struct window_manager *wm);
 void window_manager_init(struct window_manager *wm);
 

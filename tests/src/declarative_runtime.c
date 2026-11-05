@@ -1,0 +1,1417 @@
+static bool declarative_test_permission_yes(void) { return true; }
+static bool declarative_test_permission_no(void) { return false; }
+static int declarative_test_permission_requests;
+static void declarative_test_permission_request(void) { ++declarative_test_permission_requests; }
+
+static bool declarative_test_operation_success = true;
+static int declarative_test_ffm_calls;
+static int declarative_test_global_layout_calls;
+static int declarative_test_space_layout_calls;
+static int declarative_test_space_is_user_calls;
+enum declarative_test_effect {
+    DECLARATIVE_TEST_EFFECT_FFM,
+    DECLARATIVE_TEST_EFFECT_MANAGE,
+    DECLARATIVE_TEST_EFFECT_WINDOW_SUBLAYER_AUTO,
+    DECLARATIVE_TEST_EFFECT_DISPLAY_DIRTY,
+    DECLARATIVE_TEST_EFFECT_OPACITY_ENABLE,
+    DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY,
+    DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY,
+    DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY,
+    DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH,
+    DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH,
+    DECLARATIVE_TEST_EFFECT_SHADOW,
+    DECLARATIVE_TEST_EFFECT_MENU_ENABLED,
+    DECLARATIVE_TEST_EFFECT_MENU_INTERFACE,
+    DECLARATIVE_TEST_EFFECT_MENU_STYLE,
+    DECLARATIVE_TEST_EFFECT_MENU_FILTER,
+    DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY,
+    DECLARATIVE_TEST_EFFECT_SPACE_GEOMETRY,
+    DECLARATIVE_TEST_EFFECT_LAYOUT,
+    DECLARATIVE_TEST_EFFECT_SINGLE_WINDOW_RATIO,
+    DECLARATIVE_TEST_EFFECT_SPLIT_RATIO,
+    DECLARATIVE_TEST_EFFECT_SPLIT_TYPE,
+    DECLARATIVE_TEST_EFFECT_AUTO_BALANCE,
+    DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER,
+    DECLARATIVE_TEST_EFFECT_MOUSE_ACTION1,
+    DECLARATIVE_TEST_EFFECT_MOUSE_ACTION2,
+    DECLARATIVE_TEST_EFFECT_MOUSE_DROP,
+    DECLARATIVE_TEST_EFFECT_EXTERNAL_INVALIDATE,
+    DECLARATIVE_TEST_EFFECT_COUNT
+};
+static int declarative_test_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+static int declarative_test_space_geometry_calls;
+static struct view *declarative_test_last_space_pointer;
+static bool declarative_test_user_space = true;
+static bool declarative_test_space_is_user(uint64_t sid)
+{
+    ++declarative_test_space_is_user_calls;
+    return sid != 0 && declarative_test_user_space;
+}
+static bool declarative_test_set_ffm(void *manager, int mode)
+{
+    struct window_manager *wm = manager;
+    ++declarative_test_ffm_calls;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_FFM];
+    wm->configured_ffm_mode = mode;
+    window_manager_recompute_effective_ffm_mode(wm);
+    return true;
+}
+static void declarative_test_set_manage(void *space_manager, void *window_manager, bool enabled)
+{
+    (void) space_manager;
+    ((struct window_manager *) window_manager)->disable_management = !enabled;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MANAGE];
+}
+static void declarative_test_set_window_sublayer_auto(void *window_manager, bool enabled)
+{
+    ((struct window_manager *) window_manager)->disable_window_sublayer_auto = !enabled;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_WINDOW_SUBLAYER_AUTO];
+}
+static bool declarative_test_set_global_layout(void *manager, int layout)
+{
+    struct space_manager *sm = manager;
+    ++declarative_test_global_layout_calls;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_LAYOUT];
+    if (!declarative_test_operation_success) return false;
+    sm->layout = layout;
+    return true;
+}
+static bool declarative_test_set_space_layout(void *manager, void *space, int layout)
+{
+    struct space_manager *sm = manager;
+    struct view *view = space;
+    ++declarative_test_space_layout_calls;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_LAYOUT];
+    if (!declarative_test_operation_success || !view ||
+        space_manager_lookup_view(sm, view->sid) != view) return false;
+    view->layout = layout;
+    return true;
+}
+static void declarative_test_set_split_ratio(void *manager, float value)
+{
+    ((struct space_manager *) manager)->split_ratio = value;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SPLIT_RATIO];
+}
+static void declarative_test_set_single_window_width_ratio(void *manager, float value)
+{
+    ((struct space_manager *) manager)->single_window_width_ratio = value;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SINGLE_WINDOW_RATIO];
+}
+static void declarative_test_set_split_type(void *manager, int value)
+{
+    ((struct space_manager *) manager)->split_type = value;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SPLIT_TYPE];
+}
+static void declarative_test_set_auto_balance(void *manager, uint32_t value)
+{
+    ((struct space_manager *) manager)->auto_balance = value;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_AUTO_BALANCE];
+}
+static void declarative_test_update_and_flush_space(void *space)
+{
+    declarative_test_last_space_pointer = space;
+    ++declarative_test_space_geometry_calls;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SPACE_GEOMETRY];
+}
+static void declarative_test_global_geometry(void *manager, enum declarative_config_id id, int value)
+{
+    struct space_manager *sm = manager;
+    ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY];
+    switch (id) {
+    case DECLARATIVE_CONFIG_TOP_PADDING: sm->top_padding = value; break;
+    case DECLARATIVE_CONFIG_BOTTOM_PADDING: sm->bottom_padding = value; break;
+    case DECLARATIVE_CONFIG_LEFT_PADDING: sm->left_padding = value; break;
+    case DECLARATIVE_CONFIG_RIGHT_PADDING: sm->right_padding = value; break;
+    case DECLARATIVE_CONFIG_WINDOW_GAP: sm->window_gap = value; break;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: sm->accordion_padding = value; break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: sm->single_window_max_width = value; break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH: sm->single_window_min_width = value; break;
+    default: break;
+    }
+}
+static uint32_t declarative_test_dirty_reasons;
+static void declarative_test_display_dirty(uint32_t reasons) { declarative_test_dirty_reasons |= reasons; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_DISPLAY_DIRTY]; }
+static void declarative_test_opacity_enabled(void *manager, bool value) { ((struct window_manager *) manager)->enable_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_OPACITY_ENABLE]; }
+static void declarative_test_menubar_opacity(void *manager, float value) { ((struct window_manager *) manager)->menubar_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY]; }
+static void declarative_test_active_opacity(void *manager, float value) { ((struct window_manager *) manager)->active_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY]; }
+static void declarative_test_normal_opacity(void *manager, float value) { ((struct window_manager *) manager)->normal_window_opacity = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY]; }
+static void declarative_test_active_highlight_enabled(void *manager, bool value) { ((struct window_manager *) manager)->enable_active_window_highlight = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH]; }
+static void declarative_test_refresh_active_highlight(void *manager) { (void) manager; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH]; }
+static void declarative_test_refresh_insert_feedback(void) { ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH]; }
+static void declarative_test_shadow(void *manager, int value) { ((struct window_manager *) manager)->purify_mode = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_SHADOW]; }
+static void declarative_test_menu_enabled(int value) { g_menu_bar_manager.settings.enabled = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_ENABLED]; }
+static void declarative_test_menu_interface(int value) { g_menu_bar_manager.settings.interface = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_INTERFACE]; }
+static void declarative_test_menu_style(int value) { g_menu_bar_manager.settings.style = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_STYLE]; }
+static void declarative_test_menu_filter(int value) { g_menu_bar_manager.settings.space_filter = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MENU_FILTER]; }
+static void declarative_test_mouse_modifier(void *state, int value) { ((struct mouse_state *) state)->modifier = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER]; }
+static void declarative_test_mouse_action1(void *state, int value) { ((struct mouse_state *) state)->action1 = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_ACTION1]; }
+static void declarative_test_mouse_action2(void *state, int value) { ((struct mouse_state *) state)->action2 = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_ACTION2]; }
+static void declarative_test_mouse_drop(void *state, int value) { ((struct mouse_state *) state)->drop_action = value; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_MOUSE_DROP]; }
+static void declarative_test_invalidate_spaces(void *manager) { (void) manager; ++declarative_test_effects[DECLARATIVE_TEST_EFFECT_EXTERNAL_INVALIDATE]; }
+static const struct declarative_runtime_operation_ops declarative_test_operation_ops = {
+    .space_is_user = declarative_test_space_is_user,
+    .set_focus_follows_mouse = declarative_test_set_ffm,
+    .set_manage_enabled = declarative_test_set_manage,
+    .set_window_sublayer_auto_enabled = declarative_test_set_window_sublayer_auto,
+    .set_layout_for_all_spaces = declarative_test_set_global_layout,
+    .set_layout_for_view = declarative_test_set_space_layout,
+    .set_single_window_width_ratio_for_all_spaces = declarative_test_set_single_window_width_ratio,
+    .set_split_ratio_for_all_spaces = declarative_test_set_split_ratio,
+    .set_split_type_for_all_spaces = declarative_test_set_split_type,
+    .set_auto_balance_for_all_spaces = declarative_test_set_auto_balance,
+    .update_and_flush_space = declarative_test_update_and_flush_space,
+    .set_global_space_geometry = declarative_test_global_geometry,
+    .mark_menu_bar_dirty = declarative_test_display_dirty,
+    .set_window_opacity_enabled = declarative_test_opacity_enabled,
+    .set_menubar_opacity = declarative_test_menubar_opacity,
+    .set_active_window_opacity = declarative_test_active_opacity,
+    .set_normal_window_opacity = declarative_test_normal_opacity,
+    .set_active_window_highlight_enabled = declarative_test_active_highlight_enabled,
+    .refresh_active_window_highlight = declarative_test_refresh_active_highlight,
+    .refresh_insert_feedback = declarative_test_refresh_insert_feedback,
+    .set_shadow = declarative_test_shadow,
+    .set_menu_enabled = declarative_test_menu_enabled,
+    .set_menu_interface = declarative_test_menu_interface,
+    .set_menu_style = declarative_test_menu_style,
+    .set_menu_space_filter = declarative_test_menu_filter,
+    .set_mouse_modifier = declarative_test_mouse_modifier,
+    .set_mouse_action1 = declarative_test_mouse_action1,
+    .set_mouse_action2 = declarative_test_mouse_action2,
+    .set_mouse_drop_action = declarative_test_mouse_drop,
+    .invalidate_spaces = declarative_test_invalidate_spaces
+};
+
+static union declarative_runtime_scalar declarative_test_expected_scalar(enum declarative_config_id id, const struct declarative_value *value)
+{
+    union declarative_runtime_scalar expected = {0};
+    switch (declarative_config_descriptors[id].kind) {
+    case DECLARATIVE_VALUE_BOOL: expected.boolean = value->boolean; break;
+    case DECLARATIVE_VALUE_ENUM: expected.integer = value->enumeration; break;
+    case DECLARATIVE_VALUE_INT: expected.integer = value->integer; break;
+    case DECLARATIVE_VALUE_UINT: expected.u32 = value->u32; break;
+    case DECLARATIVE_VALUE_FLOAT: expected.real = value->real; break;
+    case DECLARATIVE_VALUE_STRUCTURED:
+        expected.external_bar = (struct declarative_runtime_external_bar) { value->external_bar.mode, value->external_bar.top_padding, value->external_bar.bottom_padding };
+        break;
+    }
+    return expected;
+}
+
+struct declarative_command_case {
+    enum declarative_config_id id;
+    const char *value;
+    const char *query;
+    int effect;
+};
+
+static const struct declarative_command_case declarative_command_cases[DECLARATIVE_CONFIG_COUNT] = {
+    { DECLARATIVE_CONFIG_DEBUG_OUTPUT, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_MFF, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_MANAGE, "off", "off\n", DECLARATIVE_TEST_EFFECT_MANAGE },
+    { DECLARATIVE_CONFIG_WINDOW_SUBLAYER_AUTO, "off", "off\n", DECLARATIVE_TEST_EFFECT_WINDOW_SUBLAYER_AUTO },
+    { DECLARATIVE_CONFIG_FFM, "off", "off\n", DECLARATIVE_TEST_EFFECT_FFM },
+    { DECLARATIVE_CONFIG_DISPLAY_ORDER, "horizontal", "horizontal\n", DECLARATIVE_TEST_EFFECT_DISPLAY_DIRTY },
+    { DECLARATIVE_CONFIG_WINDOW_ORIGIN, "cursor", "cursor\n", -1 },
+    { DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, "recent", "recent\n", -1 },
+    { DECLARATIVE_CONFIG_WINDOW_PLACEMENT, "second_child", "second_child\n", -1 },
+    { DECLARATIVE_CONFIG_WINDOW_INSERT_POINT, "last", "last\n", -1 },
+    { DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_OPACITY, "on", "on\n", DECLARATIVE_TEST_EFFECT_OPACITY_ENABLE },
+    { DECLARATIVE_CONFIG_OPACITY_DURATION, "0.25", "0.250000\n", -1 },
+    { DECLARATIVE_CONFIG_ANIMATION_DURATION, "0.0", "0.000000\n", -1 },
+    { DECLARATIVE_CONFIG_ANIMATION_EASING, "ease_in_sine", "ease_in_sine\n", -1 },
+    { DECLARATIVE_CONFIG_SHADOW, "float", "float\n", DECLARATIVE_TEST_EFFECT_SHADOW },
+    { DECLARATIVE_CONFIG_MENUBAR, "on", "on\n", DECLARATIVE_TEST_EFFECT_MENU_ENABLED },
+    { DECLARATIVE_CONFIG_MENUBAR_INTERFACE, "panel", "panel\n", DECLARATIVE_TEST_EFFECT_MENU_INTERFACE },
+    { DECLARATIVE_CONFIG_MENUBAR_STYLE, "expanded", "expanded\n", DECLARATIVE_TEST_EFFECT_MENU_STYLE },
+    { DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER, "all", "all\n", DECLARATIVE_TEST_EFFECT_MENU_FILTER },
+    { DECLARATIVE_CONFIG_MENUBAR_OPACITY, "0.5", "0.5000\n", DECLARATIVE_TEST_EFFECT_MENUBAR_OPACITY },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, "0.8", "0.8000\n", DECLARATIVE_TEST_EFFECT_ACTIVE_OPACITY },
+    { DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, "0.7", "0.7000\n", DECLARATIVE_TEST_EFFECT_NORMAL_OPACITY },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, "on", "on\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR, "0xff00ff00", "0xff00ff00\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, "11.5", "11.5\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, "4.25", "4.25\n", DECLARATIVE_TEST_EFFECT_ACTIVE_HIGHLIGHT_REFRESH },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR, "0xff", "0xff\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, "12.5", "12.5\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
+    { DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, "3.25", "3.25\n", DECLARATIVE_TEST_EFFECT_INSERT_FEEDBACK_REFRESH },
+    { DECLARATIVE_CONFIG_TOP_PADDING, "11", "11\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_BOTTOM_PADDING, "12", "12\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_LEFT_PADDING, "13", "13\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_RIGHT_PADDING, "14", "14\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_LAYOUT, "bsp", "bsp\n", DECLARATIVE_TEST_EFFECT_LAYOUT },
+    { DECLARATIVE_CONFIG_WINDOW_GAP, "15", "15\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_ACCORDION_PADDING, "30", "30\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, "1600", "1600\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, "1200", "1200\n", DECLARATIVE_TEST_EFFECT_GLOBAL_GEOMETRY },
+    { DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, "0.85", "0.8500\n", DECLARATIVE_TEST_EFFECT_SINGLE_WINDOW_RATIO },
+    { DECLARATIVE_CONFIG_SPLIT_RATIO, "0.6", "0.6000\n", DECLARATIVE_TEST_EFFECT_SPLIT_RATIO },
+    { DECLARATIVE_CONFIG_SPLIT_TYPE, "auto", "auto\n", DECLARATIVE_TEST_EFFECT_SPLIT_TYPE },
+    { DECLARATIVE_CONFIG_AUTO_BALANCE, "on", "on\n", DECLARATIVE_TEST_EFFECT_AUTO_BALANCE },
+    { DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_MOUSE_BSP_LIVE_RESIZE, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_MOUSE_MOD, "alt", "alt\n", DECLARATIVE_TEST_EFFECT_MOUSE_MODIFIER },
+    { DECLARATIVE_CONFIG_MOUSE_ACTION1, "resize", "resize\n", DECLARATIVE_TEST_EFFECT_MOUSE_ACTION1 },
+    { DECLARATIVE_CONFIG_MOUSE_ACTION2, "move", "move\n", DECLARATIVE_TEST_EFFECT_MOUSE_ACTION2 },
+    { DECLARATIVE_CONFIG_MOUSE_DROP_ACTION, "stack", "stack\n", DECLARATIVE_TEST_EFFECT_MOUSE_DROP },
+    { DECLARATIVE_CONFIG_EXTERNAL_BAR, "main:2:3", "main:2:3\n", DECLARATIVE_TEST_EFFECT_EXTERNAL_INVALIDATE },
+    { DECLARATIVE_CONFIG_DIRECT_SPACE_SWITCH, "on", "on\n", -1 },
+    { DECLARATIVE_CONFIG_SKIP_SPACE_ANIMATION, "on", "on\n", -1 }
+};
+
+static char *declarative_test_config_message(const char *command, const char *value)
+{
+    size_t command_length = strlen(command);
+    size_t value_length = value ? strlen(value) : 0;
+    char *message = calloc(command_length + value_length + 3, 1);
+    memcpy(message, command, command_length);
+    if (value) memcpy(message + command_length + 1, value, value_length);
+    return message;
+}
+
+static char *declarative_test_run_config(const char *command, const char *value)
+{
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    char *message = declarative_test_config_message(command, value);
+    handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+    fclose(rsp);
+    free(message);
+    return output;
+}
+
+static char *declarative_test_run_space_layout_surface(bool config_surface)
+{
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    if (config_surface) {
+        char message[] = "--space\0recent\0layout\0bsp\0";
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+    } else {
+        char message[] = "recent\0--layout\0bsp\0";
+        handle_domain_space(rsp, (struct token) { .text = "space", .length = 5 }, message);
+    }
+    fclose(rsp);
+    return output;
+}
+
+static uint64_t declarative_test_missing_index_sid;
+static uint64_t declarative_test_space_for_index(int index)
+{
+    return index == 7 ? declarative_test_missing_index_sid : 0;
+}
+
+static char *declarative_test_run_scoped_config(const char *command, const char *value)
+{
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    if (!rsp) return NULL;
+    size_t command_length = strlen(command);
+    size_t value_length = value ? strlen(value) : 0;
+    char message[command_length + value_length + 20];
+    memset(message, 0, sizeof(message));
+    char *at = message;
+    memcpy(at, "--space", 7); at += 8;
+    memcpy(at, "recent", 6); at += 7;
+    memcpy(at, command, command_length); at += command_length + 1;
+    if (value) memcpy(at, value, value_length);
+    handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+    fclose(rsp);
+    return output;
+}
+
+static struct declarative_value declarative_test_value(enum declarative_config_id id)
+{
+    struct declarative_value value = { .present = true };
+    switch (id) {
+    case DECLARATIVE_CONFIG_FFM: value.enumeration = FFM_DISABLED; break;
+    case DECLARATIVE_CONFIG_DISPLAY_ORDER: value.enumeration = DISPLAY_ARRANGEMENT_ORDER_DEFAULT; break;
+    case DECLARATIVE_CONFIG_WINDOW_ORIGIN: value.enumeration = WINDOW_ORIGIN_DEFAULT; break;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK: value.enumeration = WINDOW_FOCUS_FALLBACK_OFF; break;
+    case DECLARATIVE_CONFIG_WINDOW_PLACEMENT: value.enumeration = CHILD_FIRST; break;
+    case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT: value.enumeration = INSERT_FOCUSED; break;
+    case DECLARATIVE_CONFIG_OPACITY_DURATION: value.real = 0.1f; break;
+    case DECLARATIVE_CONFIG_ANIMATION_DURATION: value.real = 0.1f; break;
+    case DECLARATIVE_CONFIG_ANIMATION_EASING: value.enumeration = 0; break;
+    case DECLARATIVE_CONFIG_SHADOW: value.enumeration = PURIFY_DISABLED; break;
+    case DECLARATIVE_CONFIG_MENUBAR: value.enumeration = MENU_BAR_DISABLED; break;
+    case DECLARATIVE_CONFIG_MENUBAR_INTERFACE: value.enumeration = MENU_BAR_INTERFACE_MENU; break;
+    case DECLARATIVE_CONFIG_MENUBAR_STYLE: value.enumeration = MENU_BAR_STYLE_COMPACT; break;
+    case DECLARATIVE_CONFIG_MENUBAR_SPACE_FILTER: value.enumeration = MENU_BAR_SPACE_FILTER_OCCUPIED; break;
+    case DECLARATIVE_CONFIG_MENUBAR_OPACITY: value.real = 0.5f; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
+    case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: value.real = 0.9f; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR:
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR: value.u32 = 1; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS:
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: value.real = 0.0f; break;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH:
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: value.real = 0.5f; break;
+    case DECLARATIVE_CONFIG_LAYOUT: value.enumeration = VIEW_BSP; break;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO: value.real = 0.85f; break;
+    case DECLARATIVE_CONFIG_SPLIT_RATIO: value.real = 0.5f; break;
+    case DECLARATIVE_CONFIG_SPLIT_TYPE: value.enumeration = SPLIT_AUTO; break;
+    case DECLARATIVE_CONFIG_AUTO_BALANCE: value.u32 = SPLIT_X | SPLIT_Y; break;
+    case DECLARATIVE_CONFIG_MOUSE_MOD: value.enumeration = MOUSE_MOD_ALT; break;
+    case DECLARATIVE_CONFIG_MOUSE_ACTION1:
+    case DECLARATIVE_CONFIG_MOUSE_ACTION2: value.enumeration = MOUSE_MODE_MOVE; break;
+    case DECLARATIVE_CONFIG_MOUSE_DROP_ACTION: value.enumeration = MOUSE_MODE_SWAP; break;
+    case DECLARATIVE_CONFIG_EXTERNAL_BAR:
+        value.external_bar = (struct declarative_external_bar) { .mode = EXTERNAL_BAR_OFF, .top_padding = -2, .bottom_padding = 3 };
+        break;
+    default: value.boolean = true; break;
+    }
+    return value;
+}
+
+TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutation,
+    struct declarative_prepared_settings prepared = {0};
+    struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+    struct space_manager spaces_before = g_space_manager;
+    struct window_manager windows_before = g_window_manager;
+    struct display_manager displays_before = g_display_manager;
+    struct mouse_state mouse_before = g_mouse_state;
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        struct declarative_value value = declarative_test_value(i);
+        enum declarative_apply_result apply_result = DECLARATIVE_APPLY_INVALID_VALUE;
+        TEST_CHECK(declarative_prepare_setting(&prepared, i, &value, &apply_result), true);
+        TEST_CHECK(apply_result, DECLARATIVE_APPLY_OK);
+        TEST_CHECK(prepared.values[i].present, true);
+    }
+    TEST_CHECK(memcmp(&ownership_before, &g_declarative_runtime_state, sizeof(ownership_before)), 0);
+    TEST_CHECK(memcmp(&spaces_before, &g_space_manager, sizeof(spaces_before)), 0);
+    TEST_CHECK(memcmp(&windows_before, &g_window_manager, sizeof(windows_before)), 0);
+    TEST_CHECK(memcmp(&displays_before, &g_display_manager, sizeof(displays_before)), 0);
+    TEST_CHECK(memcmp(&mouse_before, &g_mouse_state, sizeof(mouse_before)), 0);
+    for (int easing = 0; easing < EASING_TYPE_COUNT; ++easing) {
+        struct declarative_value value = { .present = true, .enumeration = easing };
+        TEST_CHECK(declarative_prepare_setting(&prepared, DECLARATIVE_CONFIG_ANIMATION_EASING, &value, NULL), true);
+    }
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(declarative_command_matrix_covers_all_settings_query_invalid_and_mutation_paths,
+    TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), DECLARATIVE_CONFIG_COUNT);
+    bool saved_disable_management = g_window_manager.disable_management;
+    bool saved_disable_window_sublayer_auto = g_window_manager.disable_window_sublayer_auto;
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_reset_ownership();
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        const struct declarative_command_case *test = &declarative_command_cases[i];
+        const char *command = declarative_config_descriptors[i].name;
+        TEST_CHECK(test->id, i);
+        char *before_query = declarative_test_run_config(command, NULL);
+        struct declarative_runtime_cell ownership_before = g_declarative_runtime_state.global[i];
+        memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+        declarative_test_dirty_reasons = 0;
+        char *invalid = declarative_test_run_config(command, "invalid");
+        char expected_error[256];
+        snprintf(expected_error, sizeof(expected_error), FAILURE_MESSAGE "unknown value 'invalid' given to command '%s' for domain 'config'\n", command);
+        if (strcmp(invalid, expected_error)) fprintf(stderr, "matrix invalid %s (%zu/%zu): [%s] expected [%s]\n", command, strlen(invalid), strlen(expected_error), invalid, expected_error);
+        TEST_CHECK(strcmp(invalid, expected_error), 0);
+        char *after_invalid_query = declarative_test_run_config(command, NULL);
+        TEST_CHECK(strcmp(before_query, after_invalid_query), 0);
+        TEST_CHECK(memcmp(&ownership_before, &g_declarative_runtime_state.global[i], sizeof(ownership_before)), 0);
+        for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) TEST_CHECK(declarative_test_effects[effect], 0);
+        free(before_query);
+        free(after_invalid_query);
+        free(invalid);
+
+        memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+        char *mutation = declarative_test_run_config(command, test->value);
+        if (strcmp(mutation, "")) fprintf(stderr, "matrix mutation %s: [%s]\n", command, mutation);
+        TEST_CHECK(strcmp(mutation, ""), 0);
+        free(mutation);
+        char *query = declarative_test_run_config(command, NULL);
+        if (strcmp(query, test->query)) fprintf(stderr, "matrix query %s: [%s] expected [%s]\n", command, query, test->query);
+        TEST_CHECK(strcmp(query, test->query), 0);
+        free(query);
+        TEST_CHECK(g_declarative_runtime_state.global[i].present, true);
+        TEST_CHECK(g_declarative_runtime_state.global[i].source, DECLARATIVE_SETTING_RUNTIME_GLOBAL);
+        for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) {
+            TEST_CHECK(declarative_test_effects[effect], effect == test->effect ? 1 : 0);
+        }
+        if (i == DECLARATIVE_CONFIG_DISPLAY_ORDER) TEST_CHECK(declarative_test_dirty_reasons, MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_DISPLAY);
+    }
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+    g_window_manager.disable_management = saved_disable_management;
+    g_window_manager.disable_window_sublayer_auto = saved_disable_window_sublayer_auto;
+)
+
+TEST_FUNC(focus_follows_mouse_query_is_canonical_and_round_trips,
+    enum ffm_mode saved_mode = g_window_manager.configured_ffm_mode;
+    struct declarative_runtime_cell saved_ownership = g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM];
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED);
+    char *query = declarative_test_run_config("focus_follows_mouse", NULL);
+    TEST_CHECK(strcmp(query, "off\n"), 0);
+    query[strcspn(query, "\n")] = '\0';
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
+    char *output = declarative_test_run_config("focus_follows_mouse", query);
+    TEST_CHECK(strcmp(output, ""), 0);
+    TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_DISABLED);
+    free(output);
+    free(query);
+    declarative_runtime_reset_operation_ops();
+    g_window_manager.configured_ffm_mode = saved_mode;
+    g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM] = saved_ownership;
+    window_manager_recompute_effective_ffm_mode(&g_window_manager);
+)
+
+TEST_FUNC(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats,
+    int saved_top_padding = g_space_manager.top_padding;
+    int saved_bottom_padding = g_space_manager.bottom_padding;
+    int saved_window_gap = g_space_manager.window_gap;
+    float saved_opacity_duration = g_window_manager.window_opacity_duration;
+    float saved_animation_duration = g_window_manager.window_animation_duration;
+    float saved_menubar_opacity = g_window_manager.menubar_opacity;
+    float saved_active_opacity = g_window_manager.active_window_opacity;
+    float saved_normal_opacity = g_window_manager.normal_window_opacity;
+    enum declarative_config_id touched_ids[] = {
+        DECLARATIVE_CONFIG_TOP_PADDING, DECLARATIVE_CONFIG_BOTTOM_PADDING,
+        DECLARATIVE_CONFIG_WINDOW_GAP, DECLARATIVE_CONFIG_OPACITY_DURATION,
+        DECLARATIVE_CONFIG_ANIMATION_DURATION, DECLARATIVE_CONFIG_MENUBAR_OPACITY,
+        DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY
+    };
+    struct declarative_runtime_cell saved_cells[array_count(touched_ids)];
+    for (int i = 0; i < array_count(touched_ids); ++i) saved_cells[i] = g_declarative_runtime_state.global[touched_ids[i]];
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_set_animation_permission_ops(&permissions);
+
+    struct { const char *command; const char *value; const char *query; } accepted[] = {
+        { "top_padding", "-2147483648", "-2147483648\n" },
+        { "bottom_padding", "2147483647", "2147483647\n" },
+        { "window_gap", "-1", "-1\n" },
+        { "window_opacity_duration", "0", "0.000000\n" },
+        { "window_animation_duration", "1", "1.000000\n" },
+        { "menubar_opacity", "0", "0.0000\n" },
+        { "active_window_opacity", "1", "1.0000\n" },
+        { "normal_window_opacity", "1", "1.0000\n" },
+    };
+    for (int i = 0; i < array_count(accepted); ++i) {
+        char *output = declarative_test_run_config(accepted[i].command, accepted[i].value);
+        TEST_CHECK(strcmp(output, ""), 0);
+        free(output);
+        output = declarative_test_run_config(accepted[i].command, NULL);
+        TEST_CHECK(strcmp(output, accepted[i].query), 0);
+        free(output);
+    }
+
+    int top_before = g_space_manager.top_padding;
+    int bottom_before = g_space_manager.bottom_padding;
+    char *output = declarative_test_run_config("top_padding", "-2147483649");
+    TEST_CHECK(strstr(output, "unknown value '-2147483649'") != NULL, true);
+    TEST_CHECK(g_space_manager.top_padding, top_before);
+    free(output);
+    output = declarative_test_run_config("bottom_padding", "2147483648");
+    TEST_CHECK(strstr(output, "unknown value '2147483648'") != NULL, true);
+    TEST_CHECK(g_space_manager.bottom_padding, bottom_before);
+    free(output);
+
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+    g_space_manager.top_padding = saved_top_padding;
+    g_space_manager.bottom_padding = saved_bottom_padding;
+    g_space_manager.window_gap = saved_window_gap;
+    g_window_manager.window_opacity_duration = saved_opacity_duration;
+    g_window_manager.window_animation_duration = saved_animation_duration;
+    g_window_manager.menubar_opacity = saved_menubar_opacity;
+    g_window_manager.active_window_opacity = saved_active_opacity;
+    g_window_manager.normal_window_opacity = saved_normal_opacity;
+    for (int i = 0; i < array_count(touched_ids); ++i) g_declarative_runtime_state.global[touched_ids[i]] = saved_cells[i];
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    TEST_CHECK(pthread_mutex_lock(&g_window_manager.window_animations_lock), 0);
+    TEST_CHECK(pthread_mutex_unlock(&g_window_manager.window_animations_lock), 0);
+)
+
+TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes,
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 60;
+    struct view view = { .sid = sid };
+    table_add(&g_space_manager.view, &sid, &view);
+    g_space_manager.last_space_id = sid;
+
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_GLOBAL) continue;
+        const char *command = declarative_config_descriptors[i].name;
+        const char *values[] = { NULL, declarative_command_cases[i].value };
+        for (int operation = 0; operation < 2; ++operation) {
+            char *value_before = declarative_test_run_config(command, NULL);
+            struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+            memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+            char *output = declarative_test_run_scoped_config(command, values[operation]);
+            char expected[256];
+            snprintf(expected, sizeof(expected), FAILURE_MESSAGE "command '%s' for domain 'config' is global-only.\n", command);
+            TEST_CHECK(output != NULL, true);
+            if (output) TEST_CHECK(strcmp(output, expected), 0);
+            char *value_after = declarative_test_run_config(command, NULL);
+            TEST_CHECK(value_before != NULL, true);
+            TEST_CHECK(value_after != NULL, true);
+            if (value_before && value_after) TEST_CHECK(strcmp(value_before, value_after), 0);
+            TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+            for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) TEST_CHECK(declarative_test_effects[effect], 0);
+            free(value_after);
+            free(value_before);
+            free(output);
+        }
+    }
+
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    g_space_manager.last_space_id = saved_last_space_id;
+)
+
+TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space,
+{
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 62;
+    struct view view = { .sid = sid, .split_ratio = 0.5f, .scaffold_fingerprint = 99 };
+    table_add(&g_space_manager.view, &sid, &view);
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+    char *output = declarative_test_run_scoped_config("split_ratio", NULL);
+    TEST_CHECK(output != NULL && strcmp(output, "0.5000\n") == 0, true);
+    free(output);
+    output = declarative_test_run_scoped_config("split_ratio", "0.6");
+    TEST_CHECK(output != NULL && strcmp(output, "") == 0, true);
+    free(output);
+    TEST_CHECK(view.split_ratio, 0.6f);
+    TEST_CHECK(view_check_flag(&view, VIEW_SPLIT_RATIO) != 0, true);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].present, true);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].source,
+               DECLARATIVE_SETTING_RUNTIME_SPACE);
+    TEST_CHECK(view.runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_RATIO].value.real, 0.6f);
+    TEST_CHECK(view.scaffold_fingerprint, 0ULL);
+
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = saved_last_space_id;
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+})
+
+TEST_FUNC(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup,
+{
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 65;
+    struct view view = { .sid = sid, .top_padding = 10, .bottom_padding = 20 };
+    table_add(&g_space_manager.view, &sid, &view);
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_test_last_space_pointer = NULL;
+    space_manager_test_lookup_count = 0;
+
+    char message[] = "--space\0recent\0top_padding\0" "41\0bottom_padding\0";
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, "20\n"), 0);
+        free(output);
+    }
+    TEST_CHECK(space_manager_test_lookup_count, 1U);
+    TEST_CHECK(declarative_test_last_space_pointer, &view);
+    TEST_CHECK(view.top_padding, 41);
+
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = saved_last_space_id;
+    table_remove(&g_space_manager.view, &sid);
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+})
+
+TEST_FUNC(space_manager_global_split_ratio_preserves_runtime_space_ownership,
+{
+    struct space_manager manager = { 0 };
+    table_init(&manager.view, 8, hash_view, compare_view);
+    struct view inherited = { .sid = 1, .split_ratio = 0.5f, .scaffold_fingerprint = 10 };
+    struct view owned = { .sid = 2, .split_ratio = 0.7f, .scaffold_fingerprint = 20, .flags = VIEW_SPLIT_RATIO };
+    table_add(&manager.view, &inherited.sid, &inherited);
+    table_add(&manager.view, &owned.sid, &owned);
+    space_manager_set_split_ratio_for_all_spaces(&manager, 0.6f);
+    TEST_CHECK(manager.split_ratio, 0.6f);
+    TEST_CHECK(inherited.split_ratio, 0.6f);
+    TEST_CHECK(inherited.scaffold_fingerprint, 0ULL);
+    TEST_CHECK(owned.split_ratio, 0.7f);
+    TEST_CHECK(owned.scaffold_fingerprint, 20ULL);
+    table_free(&manager.view);
+})
+
+TEST_FUNC(declarative_scoped_mixed_batch_preflights_before_space_mutation,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    if (g_space_manager.view.buckets) {
+        uint64_t sid = UINT64_MAX - 61;
+        struct view view = { .sid = sid, .top_padding = 17 };
+        table_add(&g_space_manager.view, &sid, &view);
+        uint64_t saved_last_space_id = g_space_manager.last_space_id;
+        bool saved_verbose = g_verbose;
+        int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+        memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+        int top_field = declarative_space_field_for_id(DECLARATIVE_CONFIG_TOP_PADDING);
+        struct declarative_runtime_cell ownership_before = view.runtime_ownership[top_field];
+        g_space_manager.last_space_id = sid;
+        memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+        declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+        char message[] = "--space\0recent\0top_padding\0" "41\0debug_output\0on\0";
+        char *output = NULL;
+        size_t output_length = 0;
+        FILE *rsp = open_memstream(&output, &output_length);
+        TEST_CHECK(rsp != NULL, true);
+        if (rsp) {
+            handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, message);
+            fclose(rsp);
+            TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'debug_output' for domain 'config' is global-only.\n"), 0);
+            free(output);
+        }
+        TEST_CHECK(view.top_padding, 17);
+        TEST_CHECK(memcmp(&view.runtime_ownership[top_field], &ownership_before, sizeof(ownership_before)), 0);
+        TEST_CHECK(g_verbose, saved_verbose);
+        for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) TEST_CHECK(declarative_test_effects[effect], 0);
+
+        declarative_runtime_reset_operation_ops();
+        memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+        g_space_manager.last_space_id = saved_last_space_id;
+        g_verbose = saved_verbose;
+        table_remove(&g_space_manager.view, &sid);
+    }
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+)
+
+TEST_FUNC(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t sid = UINT64_MAX - 63;
+    int count_before = g_space_manager.view.count;
+    size_t allocations_before = legacy_allocation_test_outstanding();
+    struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+    struct menu_bar_manager_state menu_before = g_menu_bar_manager;
+    uint64_t generation_before = declarative_installed_generation();
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+    declarative_test_space_geometry_calls = 0;
+    declarative_test_space_layout_calls = 0;
+    declarative_test_space_is_user_calls = 0;
+    declarative_test_user_space = false;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    legacy_allocation_test_fail_at(1);
+
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(space_manager_query_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(space_manager_set_layout_for_space(&g_space_manager, sid, VIEW_BSP), false);
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_SPACE) continue;
+        struct declarative_value value = declarative_test_value(i);
+        TEST_CHECK(declarative_apply_runtime_setting(i, &value, sid), DECLARATIVE_APPLY_MISSING_SPACE);
+    }
+
+    TEST_CHECK(g_space_manager.view.count, count_before);
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+    TEST_CHECK(memcmp(&g_menu_bar_manager, &menu_before, sizeof(menu_before)), 0);
+    TEST_CHECK(declarative_installed_generation(), generation_before);
+    TEST_CHECK(declarative_test_space_geometry_calls, 0);
+    TEST_CHECK(declarative_test_space_is_user_calls, 0);
+    TEST_CHECK(declarative_test_space_layout_calls, 0);
+    for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) {
+        TEST_CHECK(declarative_test_effects[effect], 0);
+    }
+    TEST_CHECK(legacy_allocation_test_outstanding(), allocations_before);
+
+    legacy_allocation_test_reset();
+    declarative_test_user_space = true;
+    declarative_runtime_reset_operation_ops();
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+)
+
+TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation,
+    bool initialized_view_table = false;
+    if (!g_space_manager.view.buckets) {
+        table_init(&g_space_manager.view, 23, hash_view, compare_view);
+        initialized_view_table = true;
+    }
+    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    uint64_t sid = UINT64_MAX - 64;
+    g_space_manager.last_space_id = sid;
+    int count_before = g_space_manager.view.count;
+    size_t allocations_before = legacy_allocation_test_outstanding();
+    struct declarative_runtime_state ownership_before = g_declarative_runtime_state;
+    struct menu_bar_manager_state menu_before = g_menu_bar_manager;
+    uint64_t generation_before = declarative_installed_generation();
+    int top_before = g_space_manager.top_padding;
+    int bottom_before = g_space_manager.bottom_padding;
+    int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
+    memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
+    memset(declarative_test_effects, 0, sizeof(declarative_test_effects));
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    legacy_allocation_test_fail_at(1);
+
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_SPACE) continue;
+        char *output = declarative_test_run_scoped_config(declarative_config_descriptors[i].name, NULL);
+        TEST_CHECK(output != NULL, true);
+        if (output) {
+            TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+            free(output);
+        }
+    }
+
+    space_manager_set_label_for_space(&g_space_manager, sid, strdup("missing-view"));
+    char label_message[] = "--space\0missing-view\0top_padding\0";
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, label_message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+    space_manager_remove_label_for_space(&g_space_manager, sid);
+
+    __auto_type saved_index_resolver = message_space_for_mission_control_index;
+    declarative_test_missing_index_sid = sid;
+    message_space_for_mission_control_index = declarative_test_space_for_index;
+    char index_message[] = "--space\0" "7\0top_padding\0";
+    output = NULL; output_length = 0;
+    rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, index_message);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+    message_space_for_mission_control_index = saved_index_resolver;
+
+    char mixed[] = "--space\0recent\0top_padding\0" "41\0bottom_padding\0" "42\0";
+    output = NULL; output_length = 0;
+    rsp = open_memstream(&output, &output_length);
+    TEST_CHECK(rsp != NULL, true);
+    if (rsp) {
+        handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, mixed);
+        fclose(rsp);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
+        free(output);
+    }
+
+    TEST_CHECK(g_space_manager.view.count, count_before);
+    TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
+    TEST_CHECK(g_space_manager.top_padding, top_before);
+    TEST_CHECK(g_space_manager.bottom_padding, bottom_before);
+    TEST_CHECK(memcmp(&g_declarative_runtime_state, &ownership_before, sizeof(ownership_before)), 0);
+    TEST_CHECK(memcmp(&g_menu_bar_manager, &menu_before, sizeof(menu_before)), 0);
+    TEST_CHECK(declarative_installed_generation(), generation_before);
+    for (int effect = 0; effect < DECLARATIVE_TEST_EFFECT_COUNT; ++effect) {
+        TEST_CHECK(declarative_test_effects[effect], 0);
+    }
+    TEST_CHECK(legacy_allocation_test_outstanding(), allocations_before);
+
+    legacy_allocation_test_reset();
+    declarative_runtime_reset_operation_ops();
+    memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
+    g_space_manager.last_space_id = saved_last_space_id;
+    if (initialized_view_table) {
+        table_free(&g_space_manager.view);
+        memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
+    }
+)
+
+TEST_FUNC(declarative_runtime_live_matrix_covers_all_typed_setters,
+    TEST_CHECK(DECLARATIVE_CONFIG_COUNT, 52);
+    bool initialized_application_table = false;
+    if (!g_window_manager.application.buckets) {
+        table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
+        initialized_application_table = true;
+    }
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 20;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid;
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_test_operation_success = true;
+    g_window_manager.focused_window_id = 0;
+    declarative_runtime_reset_ownership();
+    for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
+        struct declarative_value value;
+        memset(&value, 0xa5, sizeof(value));
+        value.present = true;
+        struct declarative_value typed = declarative_test_value(i);
+        switch (declarative_config_descriptors[i].kind) {
+        case DECLARATIVE_VALUE_BOOL: value.boolean = typed.boolean; break;
+        case DECLARATIVE_VALUE_ENUM: value.enumeration = typed.enumeration; break;
+        case DECLARATIVE_VALUE_INT: value.integer = typed.integer; break;
+        case DECLARATIVE_VALUE_UINT: value.u32 = typed.u32; break;
+        case DECLARATIVE_VALUE_FLOAT: value.real = typed.real; break;
+        case DECLARATIVE_VALUE_STRUCTURED: value.external_bar = typed.external_bar; break;
+        }
+        uint64_t target_sid = declarative_config_descriptors[i].scope == DECLARATIVE_SCOPE_SPACE ? sid : 0;
+        if (declarative_config_descriptors[i].scope == DECLARATIVE_SCOPE_GLOBAL) {
+            TEST_CHECK(declarative_apply_runtime_setting(i, &value, sid), DECLARATIVE_APPLY_INVALID_SCOPE);
+        } else {
+            TEST_CHECK(declarative_apply_runtime_setting(i, &value, 0), DECLARATIVE_APPLY_OK);
+            TEST_CHECK(g_declarative_runtime_state.global[i].present, true);
+            TEST_CHECK(g_declarative_runtime_state.global[i].source, DECLARATIVE_SETTING_RUNTIME_GLOBAL);
+            table_add(&g_space_manager.view, &sid, view);
+        }
+        TEST_CHECK(declarative_apply_runtime_setting(i, &value, target_sid), DECLARATIVE_APPLY_OK);
+        struct declarative_runtime_cell *cell;
+        if (target_sid) {
+            int field = declarative_space_field_for_id(i);
+            TEST_CHECK(field >= 0, true);
+            cell = &view->runtime_ownership[field];
+            TEST_CHECK(cell->source, DECLARATIVE_SETTING_RUNTIME_SPACE);
+        } else {
+            cell = &g_declarative_runtime_state.global[i];
+            TEST_CHECK(cell->source, DECLARATIVE_SETTING_RUNTIME_GLOBAL);
+        }
+        TEST_CHECK(cell->present, true);
+        union declarative_runtime_scalar expected = declarative_test_expected_scalar(i, &value);
+        TEST_CHECK(memcmp(&cell->value, &expected, sizeof(expected)), 0);
+        if (target_sid) table_remove(&g_space_manager.view, &sid);
+    }
+    TEST_CHECK(declarative_test_ffm_calls > 0, true);
+    TEST_CHECK(declarative_test_global_layout_calls > 0, true);
+    TEST_CHECK(declarative_test_space_layout_calls > 0, true);
+    TEST_CHECK(declarative_test_space_geometry_calls, 8);
+    for (int easing = 0; easing < EASING_TYPE_COUNT; ++easing) {
+        struct declarative_value value = { .present = true, .enumeration = easing };
+        TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_EASING, &value, 0), DECLARATIVE_APPLY_OK);
+        TEST_CHECK(g_window_manager.window_animation_easing, easing);
+    }
+    free(view);
+    if (initialized_application_table) {
+        table_free(&g_window_manager.application);
+        memset(&g_window_manager.application, 0, sizeof(g_window_manager.application));
+    }
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(imperative_numeric_domain_table_matches_documented_contract,
+{
+    struct numeric_case { const char *command; const char *value; bool valid; } cases[] = {
+        { "menubar_opacity", "0", true }, { "menubar_opacity", "1", true },
+        { "menubar_opacity", "1.01", false }, { "menubar_opacity", "nan", false },
+        { "active_window_opacity", "0", false }, { "active_window_opacity", "1", true },
+        { "active_window_opacity", "1.01", false },
+        { "normal_window_opacity", "0", false }, { "normal_window_opacity", "1", true },
+        { "normal_window_opacity", "inf", false },
+        { "active_window_highlight_radius", "0", true }, { "active_window_highlight_radius", "12.5", true },
+        { "active_window_highlight_radius", "-1", false }, { "active_window_highlight_radius", "nan", false },
+        { "active_window_highlight_width", "0.5", true }, { "active_window_highlight_width", "4", true },
+        { "active_window_highlight_width", "0", false }, { "active_window_highlight_width", "inf", false },
+        { "split_ratio", "0.1", true }, { "split_ratio", "0.9", true },
+        { "split_ratio", "0", false }, { "split_ratio", "1", false },
+        { "single_window_max_width", "0", true }, { "single_window_max_width", "1600", true },
+        { "single_window_max_width", "-1", false }, { "single_window_max_width", "1.5", false },
+        { "single_window_min_width", "0", true }, { "single_window_min_width", "1200", true },
+        { "single_window_min_width", "-1", false }, { "single_window_min_width", "1.5", false },
+        { "single_window_width_ratio", "0.1", true }, { "single_window_width_ratio", "1", true },
+        { "single_window_width_ratio", "0", false }, { "single_window_width_ratio", "1.01", false },
+        { "window_animation_duration", "0", true }, { "window_animation_duration", "2", true },
+        { "window_animation_duration", "-0.1", false }, { "window_animation_duration", "inf", false },
+        { "window_opacity_duration", "0", true }, { "window_opacity_duration", "2", true },
+        { "window_opacity_duration", "2147483.5", true },
+        { "window_opacity_duration", "2147483.75", false },
+        { "window_opacity_duration", "nan", false }
+    };
+    struct declarative_runtime_state saved_state = g_declarative_runtime_state;
+    float saved_menubar = g_window_manager.menubar_opacity;
+    float saved_active = g_window_manager.active_window_opacity;
+    float saved_normal = g_window_manager.normal_window_opacity;
+    float saved_animation = g_window_manager.window_animation_duration;
+    float saved_opacity_duration = g_window_manager.window_opacity_duration;
+    float saved_highlight_radius = g_window_manager.active_window_highlight_radius;
+    float saved_highlight_width = g_window_manager.active_window_highlight_width;
+    float saved_split_ratio = g_space_manager.split_ratio;
+    int saved_single_window_max_width = g_space_manager.single_window_max_width;
+    int saved_single_window_min_width = g_space_manager.single_window_min_width;
+    float saved_single_window_width_ratio = g_space_manager.single_window_width_ratio;
+    struct declarative_animation_permission_ops permissions = {
+        declarative_test_permission_yes, declarative_test_permission_yes,
+        declarative_test_permission_request
+    };
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        char *output = declarative_test_run_config(cases[i].command, cases[i].value);
+        TEST_CHECK(output != NULL, true);
+        if (output) {
+            TEST_CHECK((output[0] != FAILURE_MESSAGE[0]), cases[i].valid);
+            free(output);
+        }
+    }
+    g_declarative_runtime_state = saved_state;
+    g_window_manager.menubar_opacity = saved_menubar;
+    g_window_manager.active_window_opacity = saved_active;
+    g_window_manager.normal_window_opacity = saved_normal;
+    g_window_manager.window_animation_duration = saved_animation;
+    g_window_manager.window_opacity_duration = saved_opacity_duration;
+    g_window_manager.active_window_highlight_radius = saved_highlight_radius;
+    g_window_manager.active_window_highlight_width = saved_highlight_width;
+    g_space_manager.split_ratio = saved_split_ratio;
+    g_space_manager.single_window_max_width = saved_single_window_max_width;
+    g_space_manager.single_window_min_width = saved_single_window_min_width;
+    g_space_manager.single_window_width_ratio = saved_single_window_width_ratio;
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+});
+
+TEST_FUNC(documented_numeric_domains_match_runtime_boundaries,
+{
+    struct declarative_value value = { .present = true };
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), false);
+    value.real = 1.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), true);
+    value.real = 1.01f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &value), false);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &value), false);
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), false);
+    value.real = 4.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), true);
+    value.real = -1.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &value), false);
+    value.real = INFINITY;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &value), false);
+
+    value.real = 0.1f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), true);
+    value.real = 0.9f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), true);
+    value.real = 0.099f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
+    value.real = 0.901f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SPLIT_RATIO, &value), false);
+
+    value.integer = -1;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), false);
+    value.integer = 0;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), true);
+    value.integer = INT_MAX;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &value), true);
+
+    value.integer = -1;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &value), false);
+    value.integer = 0;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &value), true);
+    value.integer = INT_MAX;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &value), true);
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &value), false);
+    value.real = 0.85f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &value), true);
+    value.real = 1.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &value), true);
+    value.real = 1.01f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_SINGLE_WINDOW_WIDTH_RATIO, &value), false);
+
+    value.real = 0.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), true);
+    value.real = 2.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), true);
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), true);
+    value.real = 2147484.0f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_OPACITY_DURATION, &value), false);
+    value.real = -0.01f;
+    TEST_CHECK(declarative_value_valid(DECLARATIVE_CONFIG_ANIMATION_DURATION, &value), false);
+});
+
+TEST_FUNC(declarative_animation_preparation_never_prompts_and_preserves_candidate,
+    struct declarative_prepared_settings prepared = {0};
+    prepared.values[DECLARATIVE_CONFIG_ANIMATION_DURATION] = (struct declarative_value) { .present = true, .real = 0.25f };
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_no, declarative_test_permission_request };
+    declarative_test_permission_requests = 0;
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    struct declarative_value replacement = { .present = true, .real = 0.5f };
+    enum declarative_apply_result apply_result = DECLARATIVE_APPLY_OK;
+    TEST_CHECK(declarative_prepare_setting(&prepared, DECLARATIVE_CONFIG_ANIMATION_DURATION, &replacement, &apply_result), false);
+    TEST_CHECK(apply_result, DECLARATIVE_APPLY_SCREEN_CAPTURE_DENIED);
+    TEST_CHECK(declarative_test_permission_requests, 0);
+    TEST_CHECK(prepared.values[DECLARATIVE_CONFIG_ANIMATION_DURATION].real, 0.25f);
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(declarative_runtime_scalar_application_records_ownership_after_success,
+    declarative_runtime_reset_ownership();
+    struct declarative_value debug = { .present = true, .boolean = true };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DEBUG_OUTPUT, &debug, 0), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_verbose, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_DEBUG_OUTPUT].present, true);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_DEBUG_OUTPUT].source, DECLARATIVE_SETTING_RUNTIME_GLOBAL);
+    struct declarative_value external = { .present = true, .external_bar = { .mode = EXTERNAL_BAR_MAIN, .top_padding = -7, .bottom_padding = 9 } };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_EXTERNAL_BAR, &external, 0), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_EXTERNAL_BAR].value.external_bar.mode, EXTERNAL_BAR_MAIN);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_EXTERNAL_BAR].value.external_bar.top_padding, -7);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_EXTERNAL_BAR].value.external_bar.bottom_padding, 9);
+    struct declarative_value invalid = { .present = true, .real = -1.0f };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_ANIMATION_DURATION].present, false);
+    struct declarative_value nonfinite = { .present = true, .real = INFINITY };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    nonfinite.real = NAN;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &nonfinite, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    invalid.real = 0.0f;
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &invalid, 0), DECLARATIVE_APPLY_INVALID_VALUE);
+)
+
+TEST_FUNC(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership,
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 30;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid;
+    view->layout = VIEW_FLOAT;
+    table_add(&g_space_manager.view, &sid, view);
+    declarative_runtime_reset_ownership();
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_test_operation_success = false;
+
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED);
+    struct declarative_value ffm = { .present = true, .enumeration = FFM_AUTOFOCUS };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_FFM, &ffm, 0), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_AUTOFOCUS);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM].present, true);
+
+    g_space_manager.layout = VIEW_FLOAT;
+    struct declarative_value layout = { .present = true, .enumeration = VIEW_BSP };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &layout, 0), DECLARATIVE_APPLY_LAYOUT_FAILED);
+    TEST_CHECK(g_space_manager.layout, VIEW_FLOAT);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].present, false);
+
+    struct declarative_runtime_cell space_before = view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT];
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &layout, sid), DECLARATIVE_APPLY_LAYOUT_FAILED);
+    TEST_CHECK(view->layout, VIEW_FLOAT);
+    TEST_CHECK(memcmp(&space_before, &view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT], sizeof(space_before)), 0);
+
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_no, declarative_test_permission_request };
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    g_window_manager.window_animation_duration = 0.75f;
+    struct declarative_value animation = { .present = true, .real = 0.5f };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_DURATION, &animation, 0), DECLARATIVE_APPLY_SCREEN_CAPTURE_DENIED);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.75f);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_ANIMATION_DURATION].present, false);
+
+    table_remove(&g_space_manager.view, &sid);
+    free(view);
+    declarative_test_operation_success = true;
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(declarative_space_layout_message_surfaces_use_single_authority_and_preserve_failures,
+    bool initialized_application_table = false;
+    if (!g_window_manager.application.buckets) {
+        table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
+        initialized_application_table = true;
+    }
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 41;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid;
+    table_add(&g_space_manager.view, &sid, view);
+    uint64_t last_space_id_before = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+    for (int config_surface = 0; config_surface <= 1; ++config_surface) {
+        view->layout = VIEW_FLOAT;
+        memset(&view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT], 0, sizeof(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT]));
+        declarative_test_user_space = false;
+        declarative_test_operation_success = true;
+        declarative_test_space_is_user_calls = 0;
+        declarative_test_space_layout_calls = 0;
+        char *output = declarative_test_run_space_layout_surface(config_surface);
+        if (strcmp(output, FAILURE_MESSAGE "cannot set layout for a macOS fullscreen space!\n")) fprintf(stderr, "layout surface %d non-user: [%s]\n", config_surface, output);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "cannot set layout for a macOS fullscreen space!\n"), 0);
+        TEST_CHECK(declarative_test_space_is_user_calls, 1);
+        TEST_CHECK(declarative_test_space_layout_calls, 0);
+        TEST_CHECK(view->layout, VIEW_FLOAT);
+        TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].present, false);
+        free(output);
+
+        declarative_test_user_space = true;
+        declarative_test_operation_success = false;
+        declarative_test_space_is_user_calls = 0;
+        declarative_test_space_layout_calls = 0;
+        output = declarative_test_run_space_layout_surface(config_surface);
+        if (strcmp(output, FAILURE_MESSAGE "could not set layout.\n")) fprintf(stderr, "layout surface %d failure: [%s]\n", config_surface, output);
+        TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not set layout.\n"), 0);
+        TEST_CHECK(declarative_test_space_is_user_calls, 1);
+        TEST_CHECK(declarative_test_space_layout_calls, 1);
+        TEST_CHECK(view->layout, VIEW_FLOAT);
+        TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].present, false);
+        free(output);
+
+        declarative_test_operation_success = true;
+        declarative_test_space_is_user_calls = 0;
+        declarative_test_space_layout_calls = 0;
+        output = declarative_test_run_space_layout_surface(config_surface);
+        if (strcmp(output, "")) fprintf(stderr, "layout surface %d success: [%s]\n", config_surface, output);
+        TEST_CHECK(strcmp(output, ""), 0);
+        TEST_CHECK(declarative_test_space_is_user_calls, 1);
+        TEST_CHECK(declarative_test_space_layout_calls, 1);
+        TEST_CHECK(view->layout, VIEW_BSP);
+        TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].present, true);
+        TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].source, DECLARATIVE_SETTING_RUNTIME_SPACE);
+        free(output);
+    }
+
+    declarative_test_user_space = true;
+    declarative_test_operation_success = true;
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = last_space_id_before;
+    table_remove(&g_space_manager.view, &sid);
+    free(view);
+    if (initialized_application_table) {
+        table_free(&g_window_manager.application);
+        memset(&g_window_manager.application, 0, sizeof(g_window_manager.application));
+    }
+)
+
+TEST_FUNC(declarative_accordion_layouts_round_trip_through_imperative_surfaces,
+    bool initialized_application_table = false;
+    if (!g_window_manager.application.buckets) {
+        table_init(&g_window_manager.application, 23, hash_wm, compare_wm);
+        initialized_application_table = true;
+    }
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 42;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid; view->layout = VIEW_FLOAT;
+    table_add(&g_space_manager.view, &sid, view);
+    uint64_t last_space_id_before = g_space_manager.last_space_id;
+    g_space_manager.last_space_id = sid;
+    declarative_test_user_space = true;
+    declarative_test_operation_success = true;
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+
+    char *output = declarative_test_run_config("layout", "accordion_horizontal");
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(g_space_manager.layout, VIEW_ACCORDION_HORIZONTAL);
+    output = declarative_test_run_config("layout", NULL);
+    TEST_CHECK(strcmp(output, "accordion_horizontal\n"), 0); free(output);
+
+    char scoped[] = "--space\0recent\0layout\0accordion_vertical\0";
+    size_t output_length = 0; output = NULL;
+    FILE *rsp = open_memstream(&output, &output_length);
+    handle_domain_config(rsp, (struct token) { .text = "config", .length = 6 }, scoped);
+    fclose(rsp);
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(view->layout, VIEW_ACCORDION_VERTICAL);
+
+    char imperative[] = "recent\0--layout\0accordion_horizontal\0";
+    output = NULL; output_length = 0; rsp = open_memstream(&output, &output_length);
+    handle_domain_space(rsp, (struct token) { .text = "space", .length = 5 }, imperative);
+    fclose(rsp);
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(view->layout, VIEW_ACCORDION_HORIZONTAL);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer, VIEW_ACCORDION_HORIZONTAL);
+
+    output = declarative_test_run_config("accordion_padding", "37");
+    TEST_CHECK(strcmp(output, ""), 0); free(output);
+    TEST_CHECK(g_space_manager.accordion_padding, 37);
+    output = declarative_test_run_config("accordion_padding", NULL);
+    TEST_CHECK(strcmp(output, "37\n"), 0); free(output);
+    output = declarative_test_run_config("accordion_padding", "-1");
+    TEST_CHECK(strncmp(output, FAILURE_MESSAGE, strlen(FAILURE_MESSAGE)), 0); free(output);
+
+    declarative_runtime_reset_operation_ops();
+    g_space_manager.last_space_id = last_space_id_before;
+    table_remove(&g_space_manager.view, &sid);
+    free(view);
+    if (initialized_application_table) {
+        table_free(&g_window_manager.application);
+        memset(&g_window_manager.application, 0, sizeof(g_window_manager.application));
+    }
+)
+
+TEST_FUNC(declarative_non_user_space_layout_boundary_preserves_target_and_ownership,
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t sid = UINT64_MAX - 40;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = sid;
+    view->layout = VIEW_FLOAT;
+    table_add(&g_space_manager.view, &sid, view);
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_runtime_reset_ownership();
+    declarative_test_user_space = false;
+    int layout_calls_before = declarative_test_space_layout_calls;
+    struct declarative_value layout = { .present = true, .enumeration = VIEW_BSP };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LAYOUT, &layout, sid), DECLARATIVE_APPLY_NON_USER_SPACE);
+    TEST_CHECK(view->layout, VIEW_FLOAT);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_LAYOUT].present, false);
+    TEST_CHECK(declarative_test_space_layout_calls, layout_calls_before);
+    declarative_test_user_space = true;
+    declarative_runtime_reset_operation_ops();
+    table_remove(&g_space_manager.view, &sid);
+    free(view);
+)
+
+TEST_FUNC(declarative_imperative_failures_preserve_target_and_ownership_with_exact_errors,
+    declarative_runtime_reset_ownership();
+    declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
+    declarative_test_operation_success = false;
+    window_manager_set_focus_follows_mouse(&g_window_manager, FFM_DISABLED);
+    char *output = declarative_test_run_config("focus_follows_mouse", "autofocus");
+    TEST_CHECK(strcmp(output, ""), 0);
+    TEST_CHECK(g_window_manager.configured_ffm_mode, FFM_AUTOFOCUS);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_FFM].present, true);
+    free(output);
+    g_space_manager.layout = VIEW_FLOAT;
+    output = declarative_test_run_config("layout", "bsp");
+    TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not set layout.\n"), 0);
+    TEST_CHECK(g_space_manager.layout, VIEW_FLOAT);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_LAYOUT].present, false);
+    free(output);
+    declarative_test_operation_success = true;
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_no, declarative_test_permission_yes, declarative_test_permission_request };
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    g_window_manager.window_animation_duration = 0.75f;
+    output = declarative_test_run_config("window_animation_duration", "0.5");
+    TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'window_animation_duration' for domain 'config' requires System Integrity Protection to be partially disabled! ignoring request..\n"), 0);
+    TEST_CHECK(g_window_manager.window_animation_duration, 0.75f);
+    TEST_CHECK(g_declarative_runtime_state.global[DECLARATIVE_CONFIG_ANIMATION_DURATION].present, false);
+    free(output);
+    declarative_runtime_reset_operation_ops();
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(declarative_imperative_animation_denial_requests_permission_with_exact_error,
+    struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_no, declarative_test_permission_request };
+    declarative_test_permission_requests = 0;
+    declarative_runtime_set_animation_permission_ops(&permissions);
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *rsp = open_memstream(&output, &output_length);
+    char message[] = "window_animation_duration\0" "0.5\0";
+    struct token domain = { .text = "config", .length = 6 };
+    handle_domain_config(rsp, domain, message);
+    fclose(rsp);
+    TEST_CHECK(strcmp(output, FAILURE_MESSAGE "command 'window_animation_duration' for domain 'config' requires Screen Recording permissions! ignoring request..\n"), 0);
+    TEST_CHECK(declarative_test_permission_requests, 1);
+    free(output);
+    declarative_runtime_reset_animation_permission_ops();
+)
+
+TEST_FUNC(declarative_per_space_ownership_follows_retained_view_identity,
+    if (!g_space_manager.view.buckets) table_init(&g_space_manager.view, 23, hash_view, compare_view);
+    uint64_t first_sid = UINT64_MAX - 10;
+    uint64_t remapped_sid = UINT64_MAX - 11;
+    struct view *view = calloc(1, sizeof(*view));
+    view->sid = first_sid;
+    table_add(&g_space_manager.view, &first_sid, view);
+    struct declarative_value split = { .present = true, .enumeration = SPLIT_X };
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_TYPE, &split, first_sid), DECLARATIVE_APPLY_OK);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].present, true);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].source, DECLARATIVE_SETTING_RUNTIME_SPACE);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].present, false);
+    table_remove(&g_space_manager.view, &first_sid);
+    view->sid = remapped_sid;
+    table_add(&g_space_manager.view, &remapped_sid, view);
+    TEST_CHECK(space_manager_query_view(&g_space_manager, remapped_sid) == view, true);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_SPLIT_TYPE].present, true);
+    TEST_CHECK(view->runtime_ownership[DECLARATIVE_RUNTIME_SPACE_WINDOW_GAP].present, false);
+    table_remove(&g_space_manager.view, &remapped_sid);
+    free(view);
+)
+
+TEST_FUNC(declarative_menu_startup_staging_is_silent_and_sealed,
+    memset(&g_menu_bar_manager, 0, sizeof(g_menu_bar_manager));
+    menu_bar_manager_startup_staging_is_open = false;
+    TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), false);
+    menu_bar_manager_startup_staging_open();
+    TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_ENABLED), true);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface(MENU_BAR_INTERFACE_PANEL), true);
+    TEST_CHECK(menu_bar_manager_startup_stage_style(MENU_BAR_STYLE_AUTOMATIC), true);
+    TEST_CHECK(menu_bar_manager_startup_stage_space_filter(MENU_BAR_SPACE_FILTER_ALL), true);
+    TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
+    TEST_CHECK(g_menu_bar_manager.settings.interface, MENU_BAR_INTERFACE_PANEL);
+    TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_AUTOMATIC);
+    TEST_CHECK(g_menu_bar_manager.settings.space_filter, MENU_BAR_SPACE_FILTER_ALL);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
+    TEST_CHECK(g_menu_bar_manager.refresh_pending, false);
+    TEST_CHECK(g_menu_bar_manager.last_snapshot == NULL, true);
+    TEST_CHECK(g_menu_bar_manager.generation, 0ULL);
+    TEST_CHECK(g_menu_bar_manager.menu_tracking_depth, 0U);
+    TEST_CHECK(menu_bar_manager_startup_stage_interface((enum menu_bar_interface) 99), false);
+    TEST_CHECK(menu_bar_manager_startup_stage_style((enum menu_bar_style) 99), false);
+    menu_bar_manager_startup_staging_seal();
+    TEST_CHECK(menu_bar_manager_startup_stage_enabled(MENU_BAR_DISABLED), false);
+    TEST_CHECK(g_menu_bar_manager.settings.enabled, MENU_BAR_ENABLED);
+    TEST_CHECK(menu_bar_manager_set_style(MENU_BAR_STYLE_COMPACT), true);
+    TEST_CHECK(g_menu_bar_manager.settings.style, MENU_BAR_STYLE_COMPACT);
+)

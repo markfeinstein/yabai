@@ -1,6 +1,11 @@
 #ifndef VIEW_H
 #define VIEW_H
 
+#include <math.h>
+
+#include "declarative_space_identity.h"
+#include "window_corner_geometry.h"
+
 #define AX_ABS(a, b) (((a) - (b) < 0) ? (((a) - (b)) * -1) : ((a) - (b)))
 #define AX_DIFF(a, b) (AX_ABS(a, b) >= 1.5f)
 
@@ -62,6 +67,7 @@ struct window_proxy
     CGRect frame;
     int level;
     int sub_level;
+    struct window_corner_geometry corner_geometry;
     CGImageRef image;
 };
 
@@ -80,9 +86,12 @@ struct window_animation_context
     int animation_connection;
     int animation_easing;
     float animation_duration;
-    uint64_t animation_clock;
+    struct animation_clock *clock;
     struct window_animation *animation_list;
     int animation_count;
+    volatile bool completion_claimed;
+    bool proxies_may_be_installed;
+    uint8_t teardown_attempts;
 };
 
 struct balance_node
@@ -135,6 +144,31 @@ static const char *window_node_split_str[] =
     "auto"
 };
 
+static inline void area_split_pair(enum window_node_split split, int gap, float ratio,
+                                   const struct area *parent_area,
+                                   struct area *left_area, struct area *right_area)
+{
+    *left_area = *parent_area;
+    *right_area = *parent_area;
+
+    float parent_extent = fmaxf(0.0f, split == SPLIT_Y ? parent_area->w : parent_area->h);
+    float effective_gap = gap > 0 ? fminf((float) gap, parent_extent) : (float) gap;
+    float available_extent = fmaxf(0.0f, parent_extent - effective_gap);
+    float left_extent = available_extent * ratio;
+    float right_extent = available_extent * (1.0f - ratio);
+    float right_offset = truncf(left_extent + 0.5f) + effective_gap;
+
+    if (split == SPLIT_Y) {
+        left_area->w = truncf(left_extent);
+        right_area->w = truncf(right_extent);
+        right_area->x += right_offset;
+    } else {
+        left_area->h = truncf(left_extent);
+        right_area->h = truncf(right_extent);
+        right_area->y += right_offset;
+    }
+}
+
 static const char *auto_balance_str[] = {
     "off",
     "vertical",
@@ -164,6 +198,8 @@ struct window_node
     enum window_node_child child;
     int insert_dir;
     struct feedback_window feedback_window;
+    struct area window_area[NODE_MAX_WINDOW_COUNT];
+    bool has_window_areas;
 };
 
 enum view_type
@@ -171,7 +207,9 @@ enum view_type
     VIEW_DEFAULT,
     VIEW_BSP,
     VIEW_STACK,
-    VIEW_FLOAT
+    VIEW_FLOAT,
+    VIEW_ACCORDION_HORIZONTAL,
+    VIEW_ACCORDION_VERTICAL
 };
 
 static const char *view_type_str[] =
@@ -179,8 +217,25 @@ static const char *view_type_str[] =
     "default",
     "bsp",
     "stack",
-    "float"
+    "float",
+    "accordion_horizontal",
+    "accordion_vertical"
 };
+
+static inline double view_padding_sum(int first, int second)
+{
+    return (double) first + (double) second;
+}
+
+static inline bool view_layout_is_accordion(enum view_type layout)
+{
+    return layout == VIEW_ACCORDION_HORIZONTAL || layout == VIEW_ACCORDION_VERTICAL;
+}
+
+static inline bool view_layout_is_single_root(enum view_type layout)
+{
+    return layout == VIEW_STACK || view_layout_is_accordion(layout);
+}
 
 enum view_flag
 {
@@ -194,14 +249,21 @@ enum view_flag
     VIEW_ENABLE_PADDING = 0x080,
     VIEW_ENABLE_GAP     = 0x100,
     VIEW_IS_VALID       = 0x200,
-    VIEW_IS_DIRTY       = 0x400,
-    VIEW_SPLIT_TYPE     = 0x800,
+    VIEW_IS_DIRTY         = 0x400,
+    VIEW_SPLIT_TYPE       = 0x800,
+    VIEW_ACCORDION_PADDING = 0x1000,
+    VIEW_SPLIT_RATIO       = 0x2000,
+    VIEW_SINGLE_WINDOW_MAX_WIDTH = 0x4000,
+    VIEW_SINGLE_WINDOW_WIDTH_RATIO = 0x8000,
+    VIEW_SINGLE_WINDOW_MIN_WIDTH = 0x10000,
+    VIEW_SINGLE_WINDOW_ZOOM = 0x20000,
 };
 
 struct view
 {
     CFStringRef uuid;
     uint64_t sid;
+    struct declarative_space_identity declarative_identity;
     struct window_node *root;
     uint32_t insertion_point;
     enum view_type layout;
@@ -211,31 +273,65 @@ struct view
     int left_padding;
     int right_padding;
     int window_gap;
+    int accordion_padding;
+    int single_window_max_width;
+    int single_window_min_width;
+    float single_window_width_ratio;
+    float split_ratio;
     uint32_t auto_balance;
+    uint64_t scaffold_fingerprint;
+    uint32_t scaffold_primary[3];
     uint64_t flags;
+    struct declarative_runtime_cell runtime_ownership[DECLARATIVE_RUNTIME_SPACE_FIELD_COUNT];
 };
 
 #define view_check_flag(v, x) ((v)->flags  &  (x))
 #define view_clear_flag(v, x) ((v)->flags &= ~(x))
 #define view_set_flag(v, x)   ((v)->flags |=  (x))
 
+struct insert_feedback_geometry {
+    CGFloat stroke_width;
+    CGFloat corner_radius_x;
+    CGFloat corner_radius_y;
+    CGFloat fill_radius_x;
+    CGFloat fill_radius_y;
+    CGRect stroke_rect;
+    CGRect fill_rect;
+};
+struct insert_feedback_geometry insert_feedback_geometry_make(CGRect frame, float configured_width, float configured_radius);
+void insert_feedback_refresh_all(void);
+#ifdef TESTS
+void insert_feedback_refresh_all_with(void (*refresh)(struct window_node *));
+#endif
 void insert_feedback_show(struct window_node *node);
 void insert_feedback_destroy(struct window_node *node);
+void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id);
 
 void window_node_flush(struct window_node *node);
+void window_node_flush_direct(struct window_node *node);
 void window_node_update(struct view *view, struct window_node *node);
 bool window_node_contains_window(struct window_node *node, uint32_t window_id);
 int window_node_index_of_window(struct window_node *node, uint32_t window_id);
+bool window_node_make_window_order_head(struct window_node *node, uint32_t window_id);
 void window_node_swap_window_list(struct window_node *a_node, struct window_node *b_node);
 struct window_node *window_node_find_first_leaf(struct window_node *root);
 struct window_node *window_node_find_last_leaf(struct window_node *root);
 struct window_node *window_node_find_prev_leaf(struct window_node *node);
 struct window_node *window_node_find_next_leaf(struct window_node *node);
+struct window_node *window_node_fence(struct window_node *node, int direction);
 void window_node_capture_windows(struct window_node *node, struct window_capture **window_list);
 
 struct window_node *view_find_window_node_in_direction(struct view *view, struct window_node *source, int direction);
 struct window_node *view_find_window_node(struct view *view, uint32_t window_id);
-void view_stack_window_node(struct window_node *node, struct window *window);
+bool view_stack_window_node(struct window_node *node, struct window *window);
+struct view_insertion_plan
+{
+    struct window_node *left;
+    struct window_node *right;
+};
+bool view_prepare_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan);
+struct window_node *view_commit_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan);
+void view_abort_window_node_insertion(struct view_insertion_plan *plan);
 struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point);
 struct window_node *view_add_window_node(struct view *view, struct window *window);
 struct window_node *view_remove_window_node(struct view *view, struct window *window);
@@ -244,10 +340,34 @@ uint32_t *view_find_window_list(struct view *view, int *window_count);
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags);
 bool view_is_invalid(struct view *view);
 bool view_is_dirty(struct view *view);
+bool view_space_is_visible(uint64_t sid);
 void view_flush(struct view *view);
+void view_flush_direct(struct view *view);
 void view_update(struct view *view);
+bool view_single_window_width_is_active(struct view *view);
+bool view_toggle_single_window_zoom(struct view *view);
+void view_apply_single_window_width(struct view *view);
+#ifdef TESTS
+struct view_test_platform_ops
+{
+    bool (*space_is_visible)(uint64_t sid, void *context);
+    void (*update_windows)(struct view *view, void *context);
+    void (*flush_windows)(struct window_node *root, void *context);
+    void *context;
+    CFStringRef (*copy_space_uuid)(uint64_t sid, void *context);
+    bool (*space_is_user)(uint64_t sid, void *context);
+    void (*node_flush_observer)(struct window_node *node, void *context);
+    bool (*feedback_show_observer)(struct window_node *node, void *context);
+    bool (*feedback_destroy_observer)(struct window_node *node, void *context);
+};
+void view_test_set_platform_ops(const struct view_test_platform_ops *ops);
+#endif
+/* Returns a fully initialized owned view, or NULL. view_destroy releases owned
+ * members; the caller then frees the view storage, matching legacy callers. */
 struct view *view_create(uint64_t sid);
 void view_destroy(struct view *view);
+/* On failure, leaves node and all view/feedback state unchanged. */
+bool window_node_split(struct view *view, struct window_node *node, struct window *window);
 void view_clear(struct view *view);
 
 #endif

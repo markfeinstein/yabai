@@ -1,0 +1,170 @@
+{
+  // Native JSONC loads before yabairc. Run:
+  // yabai --check-config ~/.config/yabai/yabai.jsonc
+  "version": 2,
+
+  "config": {
+    "layout": "bsp",
+    "top_padding": 12,
+    "bottom_padding": 12,
+    "left_padding": 12,
+    "right_padding": 12,
+    "window_gap": 8,
+    // Used only by accordion layouts. Over-capacity requests clamp to one
+    // equal share per window, so focused frames never become negative.
+    "accordion_padding": 30,
+    // Give one managed window 85% of the usable width. This creates smaller
+    // absolute side margins on a laptop and larger margins on an ultrawide.
+    "single_window_width_ratio": 0.85,
+    // Keep lower-resolution windows usable, but cap very wide displays.
+    "single_window_min_width": 1200,
+    "single_window_max_width": 1800,
+    "split_ratio": 0.5,
+    "split_type": "auto",
+    "auto_balance": "off",
+
+    "mouse_follows_focus": false,
+    "focus_follows_mouse": "off",
+    "display_arrangement_order": "default",
+    "window_origin_display": "default",
+    // "recent" natively replaces shell signals that focus the recent managed
+    // window after a destroyed, minimized, or hidden focus owner.
+    "window_focus_fallback": "off",
+    "window_placement": "second_child",
+    "window_insertion_point": "focused",
+    "window_zoom_persist": true,
+
+    // Window shadow and opacity settings use the scripting addition, which
+    // requires partial SIP disablement. Leave them at defaults without it.
+    "window_shadow": "on",
+    "window_opacity": false,
+    "window_opacity_duration": 0.0,
+    "active_window_opacity": 1.0,
+    "normal_window_opacity": 0.9,
+
+    // Active-window highlighting uses a click-through WindowServer overlay and
+    // does not require the scripting addition.
+    "active_window_highlight": false,
+    "active_window_highlight_color": 4294953984, // 0xffffcc00
+    "active_window_highlight_radius": 9,
+    "active_window_highlight_width": 4,
+
+    "insert_feedback_radius": 9,
+    "insert_feedback_width": 2,
+    "window_animation_duration": 0.0,
+    "window_animation_easing": "ease_out_circ",
+
+    "menubar": "off",
+    "menubar_style": "expanded",
+    "menubar_space_filter": "occupied",
+    "menubar_opacity": 1.0,
+    "external_bar": {
+      "mode": "off",
+      "top_padding": 0,
+      "bottom_padding": 0
+    },
+
+    // Let native macOS edge and corner drags update BSP split ratios.
+    "native_edge_resize": false,
+    "mouse_modifier": "fn",
+    "mouse_action1": "move",
+    "mouse_action2": "resize",
+    "mouse_drop_action": "swap"
+  },
+
+  "spaces": [
+    {
+      // Present primaries compact by declaration order. The first gets 60%
+      // on the left; with three primaries, the right branch stays 50/50.
+      "match": { "index": 2 },
+      "settings": { "split_ratio": 0.6 },
+      "scaffold": [
+        { "pattern": "^Mail$" },
+        { "pattern": "^Calendar$" },
+        { "pattern": "^Messages$" }
+      ]
+    },
+    {
+      // This policy follows the ninth Mission Control slot. Windows overlap
+      // with exposed edges; focus raises one without changing stable order.
+      "match": { "index": 9 },
+      "settings": {
+        "layout": "accordion_horizontal",
+        "accordion_padding": 30
+      }
+    },
+    {
+      // Use an exact UUID when policy should follow one Space identity.
+      "match": { "uuid": "REPLACE-WITH-A-SPACE-UUID" },
+      "settings": {
+        "layout": "float"
+      }
+    }
+  ],
+
+  // Named modes overlay the base Space policies above. Omitted scaffold fields
+  // inherit the base scaffold; an explicit empty array clears it.
+  "modes": [
+    {
+      "name": "work",
+      "spaces": [
+        {
+          "match": { "index": 2 },
+          "settings": { "window_gap": 6 }
+        }
+      ]
+    },
+    {
+      "name": "focus",
+      "spaces": [
+        {
+          "match": { "index": 2 },
+          "settings": { "window_gap": 2 },
+          "scaffold": []
+        }
+      ]
+    }
+  ],
+  "active_mode": "work",
+
+  "rules": [
+    {
+      "label": "terminal",
+      "match": {
+        "app": { "pattern": "^Ghostty$" }
+      },
+      "effects": {
+        "manage": true,
+        // Native targets resolve once per generation. Index 1 is valid on a
+        // minimal one-display, one-Space topology; reload to resolve it again.
+        "space": { "index": 1 },
+        "follow": false
+      }
+    },
+    {
+      "label": "picture-in-picture",
+      "match": {
+        "title": { "pattern": "^Picture in Picture$" },
+        "role": { "pattern": "^AXWindow$" }
+      },
+      "effects": {
+        "manage": false,
+        // sticky and sub_layer use the scripting addition and require partial
+        // SIP disablement. Remove them when running with full SIP enabled.
+        "sticky": true,
+        "sub_layer": "above"
+      }
+    },
+    {
+      "label": "first-settings-window",
+      "one_shot": true,
+      "match": {
+        "app": { "pattern": "^System Settings$" }
+      },
+      "effects": {
+        "display": { "index": 1 },
+        "follow": false
+      }
+    }
+  ]
+}

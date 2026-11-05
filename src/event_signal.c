@@ -57,15 +57,54 @@ static bool event_signal_filter(struct event_signal *es, struct signal *signal)
     }
 }
 
+static bool event_signal_spawn_command(const char *command, const struct event_signal *event, pid_t *child)
+{
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    bool actions_initialized = false;
+    bool attributes_initialized = false;
+    bool result = false;
+    char assignments[4][256];
+    char *arguments[9];
+    int argument_count = 0;
+
+    arguments[argument_count++] = "/usr/bin/env";
+    if (event) {
+        for (int i = 0; i < 4; ++i) {
+            if (!event->arg_name[i]) continue;
+            if (!event->arg_value[i]) goto out;
+            int length = snprintf(assignments[i], sizeof(assignments[i]), "%s=%s",
+                                  event->arg_name[i], event->arg_value[i]);
+            if (length < 0 || length >= (int) sizeof(assignments[i])) goto out;
+            arguments[argument_count++] = assignments[i];
+        }
+    }
+    arguments[argument_count++] = "sh";
+    arguments[argument_count++] = "-c";
+    arguments[argument_count++] = (char *) command;
+    arguments[argument_count] = NULL;
+
+    if (posix_spawn_file_actions_init(&actions) != 0) goto out;
+    actions_initialized = true;
+    if (posix_spawnattr_init(&attributes) != 0) goto out;
+    attributes_initialized = true;
+    if (posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDIN_FILENO) != 0 ||
+        posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDOUT_FILENO) != 0 ||
+        posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDERR_FILENO) != 0 ||
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT) != 0) goto out;
+
+    extern char **environ;
+    result = posix_spawn(child, arguments[0], &actions, &attributes, arguments, environ) == 0;
+
+out:
+    if (attributes_initialized) posix_spawnattr_destroy(&attributes);
+    if (actions_initialized) posix_spawn_file_actions_destroy(&actions);
+    return result;
+}
+
 void event_signal_flush(void)
 {
     if (!g_signal_storage.used) return;
-
-    pid_t pid = fork();
-    if (pid) {
-        g_signal_storage.used = 0;
-        return;
-    }
 
     int size  = sizeof(struct event_signal);
     int count = g_signal_storage.used / size;
@@ -80,31 +119,47 @@ void event_signal_flush(void)
             struct signal *signal = &g_signal_event[es->type][j];
             if (event_signal_filter(es, signal)) continue;
 
-            int pid = fork();
-            if (pid) continue;
-
-            if (es->arg_name[0]) setenv(es->arg_name[0], es->arg_value[0], 1);
-            if (es->arg_name[1]) setenv(es->arg_name[1], es->arg_value[1], 1);
-            if (es->arg_name[2]) setenv(es->arg_name[2], es->arg_value[2], 1);
-            if (es->arg_name[3]) setenv(es->arg_name[3], es->arg_value[3], 1);
-
-            char *exec[] = { "/usr/bin/env", "sh", "-c", signal->command, NULL};
-            exit(execvp(exec[0], exec));
+            pid_t command_pid;
+            event_signal_spawn_command(signal->command, es, &command_pid);
         }
     }
 
-    exit(EXIT_SUCCESS);
+    g_signal_storage.used = 0;
 }
+
+static bool event_signal_application_is_processed_front(struct application *application, bool recent)
+{
+    if (recent) {
+        return g_process_manager.last_front_pid == application->pid &&
+               psn_equals(&g_process_manager.last_front_psn, &application->psn);
+    }
+
+    return g_process_manager.front_pid == application->pid &&
+           psn_equals(&g_process_manager.front_psn, &application->psn);
+}
+
+#ifdef TESTS
+static void (*event_signal_test_push_observer)(enum signal_type, void *);
+#endif
 
 void event_signal_push(enum signal_type type, void *context)
 {
+#ifdef TESTS
+    if (event_signal_test_push_observer) event_signal_test_push_observer(type, context);
+#endif
     int signal_count = buf_len(g_signal_event[type]);
     if (!signal_count) return;
 
     uint64_t arg_size = 128;
     uint64_t size = sizeof(struct event_signal);
+    uint64_t used;
 
-    uint64_t used = __sync_fetch_and_add(&g_signal_storage.used, size);
+    for (;;) {
+        used = __atomic_load_n(&g_signal_storage.used, __ATOMIC_RELAXED);
+        if (size > g_signal_storage.size || used > g_signal_storage.size - size) return;
+        if (__sync_bool_compare_and_swap(&g_signal_storage.used, used, used + size)) break;
+    }
+
     struct event_signal *es = g_signal_storage.memory + used;
 
     es->type         = type;
@@ -154,11 +209,7 @@ void event_signal_push(enum signal_type type, void *context)
         //
 
         EventTime dt = GetCurrentEventTime() - g_process_manager.switch_event_time;
-        if (dt >= 0.05f) {
-            es->active = g_process_manager.front_pid == application->pid;
-        } else {
-            es->active = g_process_manager.last_front_pid == application->pid;
-        }
+        es->active = event_signal_application_is_processed_front(application, dt < 0.05f);
     } break;
     case SIGNAL_APPLICATION_FRONT_SWITCHED: {
         es->arg_name[0]  = ts_alloc_unaligned(arg_size);
@@ -181,7 +232,7 @@ void event_signal_push(enum signal_type type, void *context)
         snprintf(es->arg_value[0], arg_size, "%d", application->pid);
 
         es->app = application->name;
-        es->active = g_process_manager.front_pid == application->pid;
+        es->active = event_signal_application_is_processed_front(application, false);
     } break;
     case SIGNAL_WINDOW_CREATED:
     case SIGNAL_WINDOW_FOCUSED:
@@ -401,10 +452,12 @@ static void event_signal_serialize(FILE *rsp, struct signal *signal, enum signal
 {
     TIME_FUNCTION;
 
+    char *label = signal->label;
     char *app   = signal->app;
     char *title = signal->title;
     char *cmd   = signal->command;
 
+    char *escaped_label = label ? ts_string_escape(label) : NULL;
     char *escaped_app   = app   ? ts_string_escape(app)   : NULL;
     char *escaped_title = title ? ts_string_escape(title) : NULL;
     char *escaped_cmd   = cmd   ? ts_string_escape(cmd)   : NULL;
@@ -420,7 +473,7 @@ static void event_signal_serialize(FILE *rsp, struct signal *signal, enum signal
             "\t\"action\":\"%s\"\n"
             "}",
             index,
-            signal->label ? signal->label : "",
+            escaped_label ? escaped_label : label ? label : "",
             escaped_app ? escaped_app : app ? app : "",
             escaped_title ? escaped_title : title ? title : "",
             json_optional_bool(signal->active),

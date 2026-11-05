@@ -1,0 +1,110 @@
+#ifndef DECLARATIVE_INSTALL_H
+#define DECLARATIVE_INSTALL_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+struct declarative_startup_state;
+struct declarative_topology_capture_ops;
+struct declarative_error;
+struct declarative_modes_error;
+struct declarative_topology;
+
+/* Prepares and publishes generation one on the bootstrap worker. */
+bool declarative_startup_install(struct declarative_startup_state *startup,
+                                 const struct declarative_topology_capture_ops *topology_ops);
+uint64_t declarative_installed_generation(void);
+const struct declarative_config_model *declarative_installed_model(void);
+const char *declarative_installed_path(void);
+bool declarative_installed_has_scaffold(void);
+const char *declarative_installed_selected_mode(void);
+struct declarative_mode_snapshot {
+    char **names;
+    size_t count;
+    char *active_name;
+};
+/* Worker-only. `snapshot` must be fresh-zeroed or previously destroyed. On
+ * success it owns the names array, every name, and active_name (NULL means no
+ * selection) independently of installed-model reload; destroy is required. */
+bool declarative_mode_snapshot_create(struct declarative_mode_snapshot *snapshot);
+void declarative_mode_snapshot_destroy(struct declarative_mode_snapshot *snapshot);
+/* Worker-thread helpers; message grammar is intentionally separate. */
+bool declarative_mode_activate(const char *name, struct declarative_modes_error *error);
+bool declarative_mode_deactivate(struct declarative_modes_error *error);
+bool declarative_config_reload(FILE *response);
+bool declarative_configuration_reconcile(void);
+/* Event-handler entry owns the coalesced reservation and retry lifecycle. */
+bool declarative_configuration_reconcile_event(uint64_t reservation_token);
+void declarative_configuration_reconcile_cancel(uint64_t reservation_token);
+void declarative_configuration_reconcile_shutdown(void);
+void declarative_configuration_request_reconcile(void);
+
+#ifdef TESTS
+struct declarative_topology_bounds_config;
+struct declarative_space_postcommit_ops;
+struct window;
+
+enum declarative_reload_test_stage
+{
+    DECLARATIVE_RELOAD_TEST_STAGE_NONE,
+    DECLARATIVE_RELOAD_TEST_STAGE_SELECT,
+    DECLARATIVE_RELOAD_TEST_STAGE_SETTINGS,
+    DECLARATIVE_RELOAD_TEST_STAGE_TOPOLOGY,
+    DECLARATIVE_RELOAD_TEST_STAGE_MANAGER,
+    DECLARATIVE_RELOAD_TEST_STAGE_RULE_SNAPSHOT,
+    DECLARATIVE_RELOAD_TEST_STAGE_RULE_PREPARE,
+    DECLARATIVE_RELOAD_TEST_STAGE_FOLD_CONTEXT,
+    DECLARATIVE_RELOAD_TEST_STAGE_LABEL_INDEX,
+    DECLARATIVE_RELOAD_TEST_STAGE_RULE_BUFFER,
+    DECLARATIVE_RELOAD_TEST_STAGE_PATH,
+    DECLARATIVE_RELOAD_TEST_STAGE_SPACE_SNAPSHOT,
+    DECLARATIVE_RELOAD_TEST_STAGE_TARGETS,
+    DECLARATIVE_RELOAD_TEST_STAGE_FOREST,
+    DECLARATIVE_RELOAD_TEST_STAGE_COUNT
+};
+
+struct declarative_reload_test_ops
+{
+    bool (*select)(struct declarative_startup_state *state, const char *installed_path,
+                   const char *xdg_config_home, const char *home,
+                   struct declarative_error *error, void *context);
+    bool (*capture_topology)(const struct declarative_topology_bounds_config *bounds,
+                             struct declarative_topology *topology, void *context);
+    int (*capture_topology_result)(const struct declarative_topology_bounds_config *bounds,
+                                   struct declarative_topology *topology, void *context);
+    bool (*query_sid)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
+    int (*query_sid_result)(uint64_t sid, const uint32_t **wids, size_t *count, void *context);
+    struct window *(*find_window)(uint32_t wid, void *context);
+    bool (*is_eligible)(struct window *window, void *context);
+    const struct declarative_space_postcommit_ops *postcommit_ops;
+    void (*refresh_active_window_highlight)(void *context);
+    void (*refresh_insert_feedback)(void *context);
+    void (*postcommit_probe)(bool committed, void *context);
+    void *context;
+};
+
+bool declarative_config_reload_with_test_ops(FILE *response,
+                                             const struct declarative_reload_test_ops *ops);
+bool declarative_configuration_reconcile_with_test_ops(const struct declarative_reload_test_ops *ops);
+void declarative_reload_test_set_message_ops(const struct declarative_reload_test_ops *ops);
+void declarative_reload_test_set_reconcile_entry_hook(void (*hook)(void));
+void declarative_reload_test_set_prepublication_hook(void (*hook)(void));
+void declarative_reload_test_fail_stage(enum declarative_reload_test_stage stage);
+uint32_t declarative_reload_test_reconcile_reservation(void);
+uint64_t declarative_reload_test_reconcile_token(void);
+void declarative_reload_test_clear_reconcile_reservation(void);
+uint32_t declarative_reload_test_reconcile_retry_attempt(void);
+bool declarative_reload_test_reconcile_retry_waiting(void);
+void declarative_reload_test_reconcile_diagnostic(char *output, size_t capacity);
+bool declarative_reload_test_fire_reconcile_retry(void);
+void declarative_reload_test_set_reconcile_retry_hook(bool (*hook)(uint64_t delay_ms, void *context),
+                                                       void *context);
+void declarative_install_test_fail_allocation_at(size_t ordinal);
+size_t declarative_install_test_allocation_count(void);
+size_t declarative_install_test_outstanding_allocations(void);
+void declarative_install_test_reset(void);
+void declarative_install_test_set_generation(uint64_t generation);
+#endif
+
+#endif

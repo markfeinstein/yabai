@@ -1,6 +1,8 @@
 #ifndef WINDOW_H
 #define WINDOW_H
 
+struct window_server_window_record;
+
 const CFStringRef kAXFullscreenAttribute = CFSTR("AXFullScreen");
 
 #define AX_WINDOW_MINIMIZED_INDEX      0
@@ -38,12 +40,14 @@ static CFStringRef ax_window_notification[] =
     WINDOW_PROPERTY_ENTRY("role",                 WINDOW_PROPERTY_ROLE,                0x000000040) \
     WINDOW_PROPERTY_ENTRY("subrole",              WINDOW_PROPERTY_SUBROLE,             0x000000080) \
     WINDOW_PROPERTY_ENTRY("root-window",          WINDOW_PROPERTY_ROOT_WINDOW,         0x000000100) \
+    WINDOW_PROPERTY_ENTRY("parent",               WINDOW_PROPERTY_PARENT,              0x200000000) \
     WINDOW_PROPERTY_ENTRY("display",              WINDOW_PROPERTY_DISPLAY,             0x000000200) \
     WINDOW_PROPERTY_ENTRY("space",                WINDOW_PROPERTY_SPACE,               0x000000400) \
     WINDOW_PROPERTY_ENTRY("level",                WINDOW_PROPERTY_LEVEL,               0x000000800) \
     WINDOW_PROPERTY_ENTRY("sub-level",            WINDOW_PROPERTY_SUB_LEVEL,           0x000001000) \
     WINDOW_PROPERTY_ENTRY("layer",                WINDOW_PROPERTY_LAYER,               0x000002000) \
     WINDOW_PROPERTY_ENTRY("sub-layer",            WINDOW_PROPERTY_SUB_LAYER,           0x000004000) \
+    WINDOW_PROPERTY_ENTRY("tags",                 WINDOW_PROPERTY_TAGS,                0x400000000) \
     WINDOW_PROPERTY_ENTRY("opacity",              WINDOW_PROPERTY_OPACITY,             0x000008000) \
     WINDOW_PROPERTY_ENTRY("split-type",           WINDOW_PROPERTY_SPLIT_TYPE,          0x000010000) \
     WINDOW_PROPERTY_ENTRY("split-child",          WINDOW_PROPERTY_SPLIT_CHILD,         0x000020000) \
@@ -56,6 +60,8 @@ static CFStringRef ax_window_notification[] =
     WINDOW_PROPERTY_ENTRY("has-fullscreen-zoom",  WINDOW_PROPERTY_HAS_FULLSCREEN_ZOOM, 0x001000000) \
     WINDOW_PROPERTY_ENTRY("has-ax-reference",     WINDOW_PROPERTY_HAS_AX_REFERENCE,    0x002000000) \
     WINDOW_PROPERTY_ENTRY("is-native-fullscreen", WINDOW_PROPERTY_IS_FULLSCREEN,       0x004000000) \
+    WINDOW_PROPERTY_ENTRY("is-ordered-in",        WINDOW_PROPERTY_IS_ORDERED_IN,       0x800000000) \
+    WINDOW_PROPERTY_ENTRY("is-on-screen",         WINDOW_PROPERTY_IS_ON_SCREEN,        0x1000000000) \
     WINDOW_PROPERTY_ENTRY("is-visible",           WINDOW_PROPERTY_IS_VISIBLE,          0x008000000) \
     WINDOW_PROPERTY_ENTRY("is-minimized",         WINDOW_PROPERTY_IS_MINIMIZED,        0x010000000) \
     WINDOW_PROPERTY_ENTRY("is-hidden",            WINDOW_PROPERTY_IS_HIDDEN,           0x020000000) \
@@ -69,6 +75,9 @@ enum window_property
     WINDOW_PROPERTY_LIST
 #undef WINDOW_PROPERTY_ENTRY
 };
+
+#define WINDOW_PROPERTY_DIAGNOSTIC_FLAGS (WINDOW_PROPERTY_PARENT | WINDOW_PROPERTY_TAGS | \
+                                          WINDOW_PROPERTY_IS_ORDERED_IN | WINDOW_PROPERTY_IS_ON_SCREEN)
 
 static uint64_t window_property_val[] =
 {
@@ -84,6 +93,55 @@ static char *window_property_str[] =
 #undef WINDOW_PROPERTY_ENTRY
 };
 
+struct window_serialization_context
+{
+    CFArrayRef managed_display_spaces;
+    CFArrayRef ordered_display_uuids;
+    const struct window_server_window_record *window_server_record;
+    bool has_managed_display_spaces_snapshot;
+    bool has_ordered_display_uuids_snapshot;
+};
+
+enum window_ax_snapshot_slot
+{
+    WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN_SLOT,
+    WINDOW_AX_SNAPSHOT_SLOT_COUNT
+};
+
+enum window_ax_snapshot_field
+{
+    WINDOW_AX_POSITION   = 1u << WINDOW_AX_POSITION_SLOT,
+    WINDOW_AX_SIZE       = 1u << WINDOW_AX_SIZE_SLOT,
+    WINDOW_AX_ROLE       = 1u << WINDOW_AX_ROLE_SLOT,
+    WINDOW_AX_SUBROLE    = 1u << WINDOW_AX_SUBROLE_SLOT,
+    WINDOW_AX_TITLE      = 1u << WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_PARENT     = 1u << WINDOW_AX_PARENT_SLOT,
+    WINDOW_AX_MINIMIZED  = 1u << WINDOW_AX_MINIMIZED_SLOT,
+    WINDOW_AX_FULLSCREEN = 1u << WINDOW_AX_FULLSCREEN_SLOT
+};
+
+struct window_ax_snapshot
+{
+    uint32_t requested;
+    uint32_t valid;
+    AXError slot_error[WINDOW_AX_SNAPSHOT_SLOT_COUNT];
+    CGPoint position;
+    CGSize size;
+    CFStringRef role;
+    CFStringRef subrole;
+    CFStringRef title;
+    AXUIElementRef parent;
+    bool minimized;
+    bool fullscreen;
+};
+
 struct window
 {
     struct application *application;
@@ -95,26 +153,44 @@ struct window
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
+    struct window_constraints constraints;
     bool is_root;
     bool is_eligible;
+    bool frame_correction_pending;
+    bool frame_correction_retry_active;
+    uint8_t frame_correction_retry_index;
+    uint8_t frame_correction_hint_rearms;
+    uint8_t frame_correction_source;
     uint8_t notification;
+    uint64_t frame_correction_started_at;
+    uint64_t frame_correction_retry_at;
     uint8_t rule_flags;
-    uint8_t flags;
+    uint16_t flags;
     float opacity;
     int layer;
     char *scratchpad;
 };
 
+enum window_frame_correction_source
+{
+    WINDOW_FRAME_CORRECTION_INITIAL,
+    WINDOW_FRAME_CORRECTION_EVENT_HINT,
+    WINDOW_FRAME_CORRECTION_APPLICATION_VISIBLE
+};
+
 enum window_flag
 {
-    WINDOW_SHADOW     = 0x01,
-    WINDOW_FULLSCREEN = 0x02,
-    WINDOW_MINIMIZE   = 0x04,
-    WINDOW_FLOAT      = 0x08,
-    WINDOW_STICKY     = 0x10,
-    WINDOW_WINDOWED   = 0x20,
-    WINDOW_MOVABLE    = 0x40,
-    WINDOW_RESIZABLE  = 0x80
+    WINDOW_SHADOW      = 0x001,
+    WINDOW_FULLSCREEN  = 0x002,
+    WINDOW_MINIMIZE    = 0x004,
+    WINDOW_FLOAT       = 0x008,
+    WINDOW_STICKY      = 0x010,
+    WINDOW_WINDOWED    = 0x020,
+    WINDOW_MOVABLE             = 0x040,
+    WINDOW_RESIZABLE           = 0x080,
+    WINDOW_ORDERED_OUT         = 0x100,
+    WINDOW_MANAGED_EXPLICIT    = 0x200,
+    WINDOW_FLOAT_MANAGE_DEFAULT = 0x400
 };
 
 enum window_rule_flag
@@ -136,20 +212,36 @@ static inline void window_set_rule_flag(struct window *w, enum window_rule_flag 
 CFStringRef window_display_uuid(uint32_t wid);
 uint32_t window_display_id(uint32_t wid);
 uint64_t window_space(uint32_t wid);
+uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
+void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
+                                         const struct window_serialization_context *context);
+void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
+void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t flags,
+                                   const struct window_serialization_context *context);
 void window_serialize(FILE *rsp, struct window *window, uint64_t flags);
 char *window_property_title_ts(uint32_t wid);
 char *window_title_ts(struct window *window);
 CFStringRef window_title(struct window *window);
 bool window_shadow(uint32_t wid);
 float window_opacity(uint32_t wid);
+bool window_parent_with_status(uint32_t wid, uint32_t *parent_wid);
 uint32_t window_parent(uint32_t wid);
 int window_level(uint32_t wid);
 int window_sub_level(uint32_t wid);
+bool window_tags_with_status(uint32_t wid, uint64_t *tags);
 uint64_t window_tags(uint32_t wid);
+bool window_is_ordered_in(uint32_t wid, bool *known);
+bool window_is_on_screen(uint32_t wid, bool *known);
 bool window_is_sticky(uint32_t wid);
+/* The output must be zero-initialized or previously destroyed. It owns its
+ * retained object fields until window_ax_snapshot_destroy is called. */
+bool window_ax_snapshot_read(AXUIElementRef ref, uint32_t requested, struct window_ax_snapshot *snapshot);
+void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot);
+bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect *frame);
 CGPoint window_ax_origin(struct window *window);
+bool window_ax_frame_with_status(struct window *window, CGRect *frame);
 CGRect window_ax_frame(struct window *window);
 CFStringRef window_ax_role(struct window *window);
 CFStringRef window_role(struct window *window);
@@ -168,8 +260,13 @@ bool window_is_real(struct window *window);
 bool window_is_standard(struct window *window);
 bool window_level_is_standard(struct window *window);
 bool window_is_unknown(struct window *window);
-bool window_observe(struct window *window);
+bool window_observe(struct window *window, bool *retry);
 void window_unobserve(struct window *window);
+/* Consumes the caller's retained window_ref on both success and failure.
+ * Application and server_record remain caller-owned. Returns an owned window or NULL. */
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+                                                uint32_t window_id,
+                                                const struct window_server_window_record *server_record);
 struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id);
 void window_destroy(struct window *window);
 

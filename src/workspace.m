@@ -1,9 +1,7 @@
 bool workspace_event_handler_begin(void **context)
 {
-    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
-#define SUPPORT_MACOS_VERSION(name, major_version) _workspace_is_macos_version_##name = version.majorVersion == major_version;
-    SUPPORTED_MACOS_VERSION_LIST
-#undef SUPPORT_MACOS_VERSION
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+    workspace_set_macos_version(os_version.majorVersion);
 
     workspace_context *ws_context = [workspace_context alloc];
     if (!ws_context) return false;
@@ -104,10 +102,10 @@ bool workspace_application_is_observable(struct process *process)
 {
     NSRunningApplication *application = __atomic_load_n(&process->ns_application, __ATOMIC_RELAXED);
     if (application) {
-        process->policy = [application activationPolicy];
-        return process->policy == NSApplicationActivationPolicyRegular;
+        process_policy_store(process, [application activationPolicy]);
+        return process_policy_load(process) == NSApplicationActivationPolicyRegular;
     } else {
-        process->policy = NSApplicationActivationPolicyProhibited;
+        process_policy_store(process, NSApplicationActivationPolicyProhibited);
         return false;
     }
 }
@@ -122,19 +120,68 @@ bool workspace_application_is_finished_launching(struct process *process)
     }
 }
 
+// CGDirectDisplayID was added to NSScreen as a public property in macOS 26.
+// Resolve it by selector so this source remains buildable with older SDKs, then
+// retain NSScreenNumber for systems whose AppKit does not implement the selector.
+static CGDirectDisplayID workspace_screen_display_id(NSScreen *screen)
+{
+    SEL display_id_selector = sel_registerName("CGDirectDisplayID");
+    if ([screen respondsToSelector:display_id_selector]) {
+        IMP display_id_method = [screen methodForSelector:display_id_selector];
+        if (!display_id_method) return kCGNullDirectDisplay;
+        return ((CGDirectDisplayID (*)(id, SEL)) display_id_method)(screen, display_id_selector);
+    }
+
+    NSNumber *legacy_display_id = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+    return legacy_display_id ? [legacy_display_id unsignedIntValue] : kCGNullDirectDisplay;
+}
+
+static bool workspace_screen_matches_display(NSScreen *screen, uint32_t did)
+{
+    CGDirectDisplayID screen_did = workspace_screen_display_id(screen);
+    return screen_did != kCGNullDirectDisplay && screen_did == did;
+}
+
 int workspace_display_notch_height(uint32_t did)
 {
     if (!CGDisplayIsBuiltin(did)) return 0;
 
     if (__builtin_available(macos 12.0, *)) {
         for (NSScreen *screen in [NSScreen screens]) {
-            if ([[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue] == did) {
+            if (workspace_screen_matches_display(screen, did)) {
                 return screen.safeAreaInsets.top;
             }
         }
     }
 
     return 0;
+}
+
+CGRect workspace_display_visible_frame_from_bounds(CGRect display_bounds, CGRect screen_frame, CGRect visible_frame)
+{
+    CGFloat left = CGRectGetMinX(visible_frame) - CGRectGetMinX(screen_frame);
+    CGFloat right = CGRectGetMaxX(screen_frame) - CGRectGetMaxX(visible_frame);
+    CGFloat bottom = CGRectGetMinY(visible_frame) - CGRectGetMinY(screen_frame);
+    CGFloat top = CGRectGetMaxY(screen_frame) - CGRectGetMaxY(visible_frame);
+
+    display_bounds.origin.x += left;
+    display_bounds.origin.y += top;
+    display_bounds.size.width -= left + right;
+    display_bounds.size.height -= top + bottom;
+    return display_bounds;
+}
+
+CGRect workspace_display_visible_frame(uint32_t did, CGRect display_bounds)
+{
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (workspace_screen_matches_display(screen, did)) {
+            return workspace_display_visible_frame_from_bounds(display_bounds,
+                                                               NSRectToCGRect(screen.frame),
+                                                               NSRectToCGRect(screen.visibleFrame));
+        }
+    }
+
+    return display_bounds;
 }
 
 pid_t workspace_get_dock_pid(void)
@@ -210,10 +257,10 @@ extern struct event_loop g_event_loop;
 {
     if ([keyPath isEqualToString:@"activationPolicy"]) {
         struct process *process = context;
-        if (process->terminated) return;
+        if (process_is_terminated(process)) return;
 
         id result = [change objectForKey:NSKeyValueChangeNewKey];
-        if ([result intValue] != process->policy) {
+        if ([result intValue] != process_policy_load(process)) {
             //
             // :WorstApiEverMade
             //
@@ -227,15 +274,15 @@ extern struct event_loop g_event_loop;
                 [object removeObserver:self forKeyPath:@"activationPolicy" context:process];
             } @catch (NSException * __unused exception) {}
 
-            process->policy = [result intValue];
+            process_policy_store(process, [result intValue]);
             debug("%s: activation policy changed for %s (%d)\n", __FUNCTION__, process->name, process->pid);
-            event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, process, 0);
+            event_loop_post_application_launched(process);
         }
     }
 
     if ([keyPath isEqualToString:@"finishedLaunching"]) {
         struct process *process = context;
-        if (process->terminated) return;
+        if (process_is_terminated(process)) return;
 
         id result = [change objectForKey:NSKeyValueChangeNewKey];
         if ([result intValue] == 1) {
@@ -253,7 +300,7 @@ extern struct event_loop g_event_loop;
             } @catch (NSException * __unused exception) {}
 
             debug("%s: %s (%d) finished launching\n", __FUNCTION__, process->name, process->pid);
-            event_loop_post(&g_event_loop, APPLICATION_LAUNCHED, process, 0);
+            event_loop_post_application_launched(process);
         }
     }
 }

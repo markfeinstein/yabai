@@ -1,8 +1,19 @@
 extern struct event_loop g_event_loop;
+extern struct space_manager g_space_manager;
 extern volatile bool __pending_gesture;
 extern volatile uint64_t __last_gesture_time;
 
-static inline uint8_t mouse_mod_from_cgflags(uint32_t cgflags)
+#define DIRECT_SPACE_SWIPE_PROGRESS_THRESHOLD 0.08
+#define DIRECT_SPACE_SWIPE_VELOCITY_THRESHOLD 1.0
+
+static int mouse_handler_direct_swipe_direction(double progress, double velocity)
+{
+    if (fabs(progress) >= DIRECT_SPACE_SWIPE_PROGRESS_THRESHOLD) return progress > 0.0 ? 1 : -1;
+    if (fabs(velocity) >= DIRECT_SPACE_SWIPE_VELOCITY_THRESHOLD) return velocity > 0.0 ? 1 : -1;
+    return 0;
+}
+
+static inline uint8_t mouse_mod_from_cgflags(CGEventFlags cgflags)
 {
     uint8_t flags = 0;
 
@@ -15,70 +26,235 @@ static inline uint8_t mouse_mod_from_cgflags(uint32_t cgflags)
     return flags;
 }
 
+enum mouse_mode mouse_action_for_event(CGEventType type, CGEventFlags flags, uint8_t modifier, enum mouse_mode action1, enum mouse_mode action2)
+{
+    if (mouse_mod_from_cgflags(flags) != modifier) return MOUSE_MODE_NONE;
+
+    if (type == kCGEventLeftMouseDown)  return action1;
+    if (type == kCGEventRightMouseDown) return action2;
+    return MOUSE_MODE_NONE;
+}
+
+struct mouse_click_state_up_result
+{
+    bool consume;
+    bool repost;
+};
+
+struct mouse_handler_context
+{
+    struct mouse_state *mouse_state;
+    CFMachPortRef handle;
+    bool direct_space_switch_available;
+    bool direct_swipe_tracking;
+    bool direct_swipe_fired;
+};
+
+static bool mouse_handler_post_direct_space_swipe(int direction)
+{
+    return event_loop_try_post(&g_event_loop, DIRECT_SPACE_SWIPE, NULL, direction);
+}
+
+#ifdef TESTS
+static bool (*mouse_handler_test_post_direct_space_swipe)(int direction) =
+    mouse_handler_post_direct_space_swipe;
+#else
+#define mouse_handler_test_post_direct_space_swipe mouse_handler_post_direct_space_swipe
+#endif
+
+static struct mouse_click_state *mouse_click_state_for_event(struct mouse_state *mouse_state, CGEventType type)
+{
+    switch (type) {
+    case kCGEventLeftMouseDown:
+    case kCGEventLeftMouseUp:
+    case kCGEventLeftMouseDragged:
+        return &mouse_state->left_click;
+    case kCGEventRightMouseDown:
+    case kCGEventRightMouseUp:
+    case kCGEventRightMouseDragged:
+        return &mouse_state->right_click;
+    default:
+        return NULL;
+    }
+}
+
+static void mouse_click_state_mouse_down(struct mouse_click_state *click_state, bool consume)
+{
+    click_state->drag_detected = false;
+    click_state->consume = consume;
+}
+
+static void mouse_click_state_mouse_dragged(struct mouse_click_state *click_state)
+{
+    if (click_state->consume) click_state->drag_detected = true;
+}
+
+static struct mouse_click_state_up_result mouse_click_state_mouse_up(struct mouse_click_state *click_state)
+{
+    return (struct mouse_click_state_up_result) {
+        .consume = click_state->consume,
+        .repost = click_state->consume && !click_state->drag_detected
+    };
+}
+
+static void mouse_click_state_clear(struct mouse_click_state *click_state)
+{
+    click_state->down_event = NULL;
+    click_state->consume = false;
+    click_state->drag_detected = false;
+}
+
+static void mouse_click_state_release(struct mouse_click_state *click_state)
+{
+    if (click_state->down_event) CFRelease(click_state->down_event);
+    mouse_click_state_clear(click_state);
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wswitch"
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 static MOUSE_HANDLER(mouse_handler)
 {
-    struct mouse_state *mouse_state = context;
+    struct mouse_handler_context *handler_context = context;
+    struct mouse_state *mouse_state = handler_context->mouse_state;
+
+    if ((type == /* kCGSEventGesture */ 29 || type == /* kCGSEventDockControl */ 30) &&
+        CGEventGetIntegerValueField(event, kCGEventSourceUserData) == SPACE_GESTURE_EVENT_TAG) {
+        return event;
+    }
 
     switch (type) {
     case kCGEventTapDisabledByTimeout:
     case kCGEventTapDisabledByUserInput: {
-        CFMachPortRef handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_RELAXED);
+        event_loop_post(&g_event_loop, NATIVE_RESIZE_CANCEL, NULL, 0);
+        handler_context->direct_swipe_tracking = false;
+        handler_context->direct_swipe_fired = false;
+        __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
+        CFMachPortRef handle = handler_context->handle;
         if (handle) CGEventTapEnable(handle, true);
     } break;
     case kCGEventLeftMouseDown:
     case kCGEventRightMouseDown: {
-        uint8_t mod = mouse_mod_from_cgflags(CGEventGetFlags(event));
-        event_loop_post(&g_event_loop, MOUSE_DOWN, (void *) CFRetain(event), mod);
+        struct mouse_click_state *click_state = mouse_click_state_for_event(mouse_state, type);
+        uint8_t modifier = __atomic_load_n(&mouse_state->modifier, __ATOMIC_ACQUIRE);
+        enum mouse_mode action1 = __atomic_load_n(&mouse_state->action1, __ATOMIC_ACQUIRE);
+        enum mouse_mode action2 = __atomic_load_n(&mouse_state->action2, __ATOMIC_ACQUIRE);
+        enum mouse_mode action = mouse_action_for_event(type, CGEventGetFlags(event), modifier, action1, action2);
+        mouse_click_state_release(click_state);
+        mouse_click_state_mouse_down(click_state, action != MOUSE_MODE_NONE);
+        event_loop_post(&g_event_loop, MOUSE_DOWN, (void *) CFRetain(event), action);
 
-        if (mod == mouse_state->modifier) {
-            mouse_state->consume_mouse_click = true;
-            mouse_state->consumed_event = (CGEventRef) CFRetain(event);
+        if (click_state->consume) {
+            click_state->down_event = (CGEventRef) CFRetain(event);
             return NULL;
         }
     } break;
     case kCGEventLeftMouseUp:
     case kCGEventRightMouseUp: {
+        struct mouse_click_state *click_state = mouse_click_state_for_event(mouse_state, type);
         event_loop_post(&g_event_loop, MOUSE_UP, (void *) CFRetain(event), 0);
 
-        if (mouse_state->consume_mouse_click) {
-            if (!mouse_state->drag_detected) {
-                CGEventTapPostEvent(proxy, mouse_state->consumed_event);
+        struct mouse_click_state_up_result up_result = mouse_click_state_mouse_up(click_state);
+        if (up_result.consume) {
+            if (up_result.repost) {
+                CGEventTapPostEvent(proxy, click_state->down_event);
                 CGEventTapPostEvent(proxy, event);
             }
 
-            mouse_state->drag_detected = false;
-            mouse_state->consume_mouse_click = false;
-            CFRelease(mouse_state->consumed_event);
+            mouse_click_state_release(click_state);
             return NULL;
         }
     } break;
     case kCGEventLeftMouseDragged:
     case kCGEventRightMouseDragged: {
-        mouse_state->drag_detected = true;
-        event_loop_post(&g_event_loop, MOUSE_DRAGGED, (void *) CFRetain(event), 0);
+        struct mouse_click_state *click_state = mouse_click_state_for_event(mouse_state, type);
+        mouse_click_state_mouse_dragged(click_state);
+        int button = (int) CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
+        event_loop_post(&g_event_loop, MOUSE_DRAGGED, (void *) CFRetain(event), button);
     } break;
     case kCGEventMouseMoved: {
+        enum ffm_mode ffm_mode = window_manager_effective_ffm_mode(&g_window_manager);
+        if (ffm_mode == FFM_DISABLED) return event;
+
         uint8_t mod = mouse_mod_from_cgflags(CGEventGetFlags(event));
-        if (mod == mouse_state->modifier) return event;
+        uint8_t modifier = __atomic_load_n(&mouse_state->modifier, __ATOMIC_ACQUIRE);
+        if (mod == modifier) return event;
 
         event_loop_post(&g_event_loop, MOUSE_MOVED, (void *) CFRetain(event), mod);
     } break;
+    case /* kCGSEventGesture */ 29: {
+        if (handler_context->direct_swipe_tracking && g_space_manager.direct_space_switch &&
+            handler_context->direct_space_switch_available) return NULL;
+        handler_context->direct_swipe_tracking = false;
+        handler_context->direct_swipe_fired = false;
+    } break;
     case /* kCGSEventDockControl */ 30: {
-        int type = CGEventGetIntegerValueField(event, /* kCGEventGestureHIDType */ 110);
-        if (type == /* kIOHIDEventTypeDockSwipe */ 23) {
-            int motion = CGEventGetIntegerValueField(event, /* kCGEventGestureSwipeMotion */ 123);
-            if (motion == /* kCGGestureMotionHorizontal */ 1) {
-                int phase = CGEventGetIntegerValueField(event, /* kCGEventGesturePhase */ 132);
-                if (phase == /* kCGSGesturePhaseBegan */ 1) {
-                    __atomic_store_n(&__pending_gesture, true, __ATOMIC_RELEASE);
-                } else if (phase == /* kCGSGesturePhaseEnded */ 4 || phase == /* kCGSGesturePhaseCancelled */ 8) {
-                    __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
-                    __atomic_store_n(&__last_gesture_time, read_os_timer(), __ATOMIC_RELEASE);
+        int hid_type = CGEventGetIntegerValueField(event, /* kCGEventGestureHIDType */ 110);
+        if (hid_type != /* kIOHIDEventTypeDockSwipe */ 23) break;
+        int motion = CGEventGetIntegerValueField(event, /* kCGEventGestureSwipeMotion */ 123);
+        if (motion != /* kCGGestureMotionHorizontal */ 1) break;
+
+        int phase = CGEventGetIntegerValueField(event, /* kCGEventGesturePhase */ 132);
+        bool direct = g_space_manager.direct_space_switch &&
+                      handler_context->direct_space_switch_available;
+        if (!direct) {
+            handler_context->direct_swipe_tracking = false;
+            handler_context->direct_swipe_fired = false;
+            if (phase == /* kCGSGesturePhaseBegan */ 1) {
+                __atomic_store_n(&__pending_gesture, true, __ATOMIC_RELEASE);
+            } else if (phase == /* kCGSGesturePhaseEnded */ 4 ||
+                       phase == /* kCGSGesturePhaseCancelled */ 8) {
+                __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
+                __atomic_store_n(&__last_gesture_time, read_os_timer(), __ATOMIC_RELEASE);
+            }
+            break;
+        }
+
+        switch (phase) {
+        case /* kCGSGesturePhaseBegan */ 1:
+            handler_context->direct_swipe_tracking = true;
+            handler_context->direct_swipe_fired = false;
+            __atomic_store_n(&__pending_gesture, true, __ATOMIC_RELEASE);
+            return NULL;
+        case /* kCGSGesturePhaseChanged */ 2:
+            if (handler_context->direct_swipe_tracking && !handler_context->direct_swipe_fired) {
+                double progress = CGEventGetDoubleValueField(event, /* kCGEventGestureSwipeProgress */ 124);
+                int direction = mouse_handler_direct_swipe_direction(progress, 0.0);
+                if (direction) {
+                    handler_context->direct_swipe_fired =
+                        mouse_handler_test_post_direct_space_swipe(direction);
                 }
             }
+            return handler_context->direct_swipe_tracking ? NULL : event;
+        case /* kCGSGesturePhaseEnded */ 4: {
+            bool was_tracking = handler_context->direct_swipe_tracking;
+            bool fired = handler_context->direct_swipe_fired;
+            if (was_tracking && !fired) {
+                double progress = CGEventGetDoubleValueField(event, /* kCGEventGestureSwipeProgress */ 124);
+                double velocity = CGEventGetDoubleValueField(event, /* kCGEventGestureSwipeVelocityX */ 129);
+                int direction = mouse_handler_direct_swipe_direction(progress, velocity);
+                if (direction) fired = mouse_handler_test_post_direct_space_swipe(direction);
+            }
+            handler_context->direct_swipe_tracking = false;
+            handler_context->direct_swipe_fired = false;
+            __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
+            __atomic_store_n(&__last_gesture_time, read_os_timer(), __ATOMIC_RELEASE);
+            if (was_tracking && fired) {
+                CGEventSetDoubleValueField(event, /* kCGEventGestureSwipeVelocityX */ 129, 0.0);
+                CGEventSetDoubleValueField(event, /* kCGEventGestureSwipeVelocityY */ 130, 0.0);
+                CGEventSetDoubleValueField(event, /* kCGEventGestureSwipeProgress */ 124, 0.0);
+                return event;
+            }
+            return was_tracking ? NULL : event;
+        }
+        case /* kCGSGesturePhaseCancelled */ 8:
+            handler_context->direct_swipe_tracking = false;
+            handler_context->direct_swipe_fired = false;
+            __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
+            __atomic_store_n(&__last_gesture_time, read_os_timer(), __ATOMIC_RELEASE);
+            return NULL;
+        default:
+            return handler_context->direct_swipe_tracking ? NULL : event;
         }
     } break;
     }
@@ -87,10 +263,8 @@ static MOUSE_HANDLER(mouse_handler)
 }
 #pragma clang diagnostic pop
 
-void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info)
+void mouse_window_info_populate_frame(struct mouse_state *ms, CGRect frame, struct mouse_window_info *info)
 {
-    CGRect frame = ms->window->frame;
-
     info->dx = frame.origin.x    - ms->window_frame.origin.x;
     info->dy = frame.origin.y    - ms->window_frame.origin.y;
     info->dw = frame.size.width  - ms->window_frame.size.width;
@@ -103,6 +277,11 @@ void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info
 
     info->changed_position = info->changed_x || info->changed_y;
     info->changed_size     = info->changed_w || info->changed_h;
+}
+
+void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info)
+{
+    mouse_window_info_populate_frame(ms, ms->window->frame, info);
 }
 
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point)
@@ -130,28 +309,114 @@ enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struc
     return MOUSE_DROP_ACTION_NONE;
 }
 
+static uint32_t mouse_drop_action_restore_insertion_point(struct window_node *src_node, struct window *src_window)
+{
+    for (int i = 0; i < src_node->window_count; ++i) {
+        if (src_node->window_order[i] != src_window->id) {
+            return src_node->window_order[i];
+        }
+    }
+
+    if (!src_node->parent) return 0;
+
+    struct window_node *sibling = window_node_is_right_child(src_node)
+                               ? src_node->parent->left
+                               : src_node->parent->right;
+
+    if (!sibling || sibling->window_count == 0) return 0;
+    return sibling->window_order[0];
+}
+
+static struct window_node *mouse_drop_action_restore_window(struct view *src_view, struct window *src_window, uint32_t insertion_point)
+{
+    struct window_node *node = view_add_window_node_with_insertion_point(src_view, src_window, insertion_point);
+    if (!node && insertion_point) {
+        node = view_add_window_node_with_insertion_point(src_view, src_window, 0);
+    }
+
+    return node;
+}
+
+static bool mouse_drop_action_warp_capacity_available(struct view *dst_view, struct window *dst_window)
+{
+    struct window_node *dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node) return false;
+
+    if (view_layout_is_single_root(dst_view->layout) && dst_view->root->window_count >= NODE_MAX_WINDOW_COUNT) {
+        return false;
+    }
+
+    if (dst_view->layout == VIEW_BSP && dst_node->insert_dir == STACK && dst_node->window_count >= NODE_MAX_WINDOW_COUNT) {
+        return false;
+    }
+
+    return true;
+}
+
+static __attribute__((noreturn)) void mouse_drop_action_fail_rollback(char *operation)
+{
+    error("fatal error: mouse-drop rollback failed for %s\n", operation);
+    __builtin_unreachable();
+}
+
+static bool mouse_drop_action_warp_node_contains(struct window_node *ancestor, struct window_node *node)
+{
+    for (struct window_node *cursor = node; cursor; cursor = cursor->parent) {
+        if (cursor == ancestor) return true;
+    }
+
+    return false;
+}
+
+static bool mouse_drop_action_warp_should_capture_add(struct window_node *src_node_rm, struct window_node *src_node_add)
+{
+    return !src_node_rm || !mouse_drop_action_warp_node_contains(src_node_rm, src_node_add);
+}
+
 void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, struct window *src_window, struct view *dst_view, struct window *dst_window)
 {
-    space_manager_untile_window(src_view, src_window);
-    window_manager_remove_managed_window(wm, src_window->id);
-
     struct window_node *dst_node = view_find_window_node(dst_view, dst_window->id);
-    if (dst_node->window_count+1 < NODE_MAX_WINDOW_COUNT) {
-        view_stack_window_node(dst_node, src_window);
-        window_manager_add_managed_window(wm, src_window, dst_view);
-        window_manager_adjust_layer(src_window, LAYER_BELOW);
-        scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
+    if (!dst_node || dst_node->window_count >= NODE_MAX_WINDOW_COUNT) return;
 
-        if (dst_node->zoom) {
-            window_manager_animate_window((struct window_capture) { src_window, dst_node->zoom->area.x, dst_node->zoom->area.y, dst_node->zoom->area.w, dst_node->zoom->area.h });
-        } else {
-            window_manager_animate_window((struct window_capture) { src_window, dst_node->area.x, dst_node->area.y, dst_node->area.w, dst_node->area.h });
+    struct window_node *src_node = view_find_window_node(src_view, src_window->id);
+    if (!src_node) return;
+
+    uint32_t src_restore_insertion_point = mouse_drop_action_restore_insertion_point(src_node, src_window);
+
+    space_manager_untile_window(src_view, src_window);
+
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node || !view_stack_window_node(dst_node, src_window)) {
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("stack");
         }
+
+        window_manager_adjust_layer(src_window, LAYER_BELOW);
+        return;
+    }
+
+    if (!window_manager_add_managed_window(wm, src_window, dst_view)) return;
+    window_manager_adjust_layer(src_window, LAYER_BELOW);
+    scripting_addition_order_window(src_window->id, 1, dst_node->window_order[1]);
+
+    if (view_layout_is_accordion(dst_view->layout)) {
+        view_update(dst_view);
+        view_flush(dst_view);
+        return;
+    }
+    if (dst_node->zoom) {
+        window_manager_animate_window((struct window_capture) { src_window, dst_node->zoom->area.x, dst_node->zoom->area.y, dst_node->zoom->area.w, dst_node->zoom->area.h });
+    } else {
+        window_manager_animate_window((struct window_capture) { src_window, dst_node->area.x, dst_node->area.y, dst_node->area.w, dst_node->area.h });
     }
 }
 
-void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window)
+bool mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window)
 {
+    if (src_view->sid != dst_view->sid &&
+        !window_manager_move_node_windows_between_spaces(wm, src_node, src_view->sid, dst_node, dst_view->sid)) {
+        return false;
+    }
     if (window_node_contains_window(src_node, src_view->insertion_point)) {
         src_view->insertion_point = dst_window->id;
     } else if (window_node_contains_window(dst_node, dst_view->insertion_point)) {
@@ -162,45 +427,82 @@ void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, st
 
     if (src_view->sid != dst_view->sid) {
         for (int i = 0; i < src_node->window_count; ++i) {
-            window_manager_remove_managed_window(wm, src_node->window_list[i]);
-            window_manager_add_managed_window(wm, window_manager_find_window(wm, src_node->window_list[i]), src_view);
+            (void) window_manager_add_managed_window(wm, window_manager_find_window(wm, src_node->window_list[i]), src_view);
         }
 
         for (int i = 0; i < dst_node->window_count; ++i) {
-            window_manager_remove_managed_window(wm, dst_node->window_list[i]);
-            window_manager_add_managed_window(wm, window_manager_find_window(wm, dst_node->window_list[i]), dst_view);
+            (void) window_manager_add_managed_window(wm, window_manager_find_window(wm, dst_node->window_list[i]), dst_view);
         }
     }
 
+    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+    if (dst_view != src_view && view_layout_is_accordion(dst_view->layout)) view_update(dst_view);
     struct window_capture *window_list = NULL;
     window_node_capture_windows(src_node, &window_list);
     window_node_capture_windows(dst_node, &window_list);
     window_manager_animate_window_list(window_list, ts_buf_len(window_list));
+    return true;
 }
 
 void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window, enum window_node_split split, enum window_node_child child)
 {
-    if ((src_node->parent && dst_node->parent) &&
-        (src_node->parent == dst_node->parent) &&
-        (src_node->window_count == 1)) {
-        if (dst_node->parent->split == split) {
-            mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
-            return;
-        } else {
-            dst_node->parent->split = split;
-            dst_node->parent->child = child;
-        }
-    } else {
-        dst_node->split = split;
-        dst_node->child = child;
+    if (!mouse_drop_action_warp_capacity_available(dst_view, dst_window)) return;
+
+    src_node = view_find_window_node(src_view, src_window->id);
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!src_node || !dst_node) return;
+    if (window_manager_find_managed_window(wm, src_window) != src_view) return;
+
+    bool sibling_collapse = (src_node->parent && dst_node->parent) &&
+                            (src_node->parent == dst_node->parent) &&
+                            (src_node->window_count == 1);
+
+    if (sibling_collapse && dst_node->parent->split == split) {
+        (void) mouse_drop_action_swap(wm, src_view, src_node, src_window, dst_view, dst_node, dst_window);
+        return;
     }
 
+    struct view_insertion_plan plan;
+    if (!view_prepare_window_node_insertion(dst_view, src_window, dst_window->id, &plan)) return;
+    uint32_t src_restore_insertion_point = mouse_drop_action_restore_insertion_point(src_node, src_window);
+
     struct window_node *src_node_rm = view_remove_window_node(src_view, src_window);
-    window_manager_remove_managed_window(wm, src_window->id);
     window_manager_purify_window(wm, src_window);
 
-    struct window_node *src_node_add = view_add_window_node_with_insertion_point(dst_view, src_window, dst_window->id);
-    window_manager_add_managed_window(wm, src_window, dst_view);
+    dst_node = view_find_window_node(dst_view, dst_window->id);
+    if (!dst_node) {
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("warp destination re-resolve");
+        }
+
+        view_abort_window_node_insertion(&plan);
+        (void) window_manager_add_managed_window(wm, src_window, src_view);
+        return;
+    }
+
+    enum window_node_split dst_prev_split = dst_node->split;
+    enum window_node_child dst_prev_child = dst_node->child;
+
+    dst_node->split = split;
+    dst_node->child = child;
+
+    struct window_node *src_node_add = view_commit_window_node_insertion(dst_view, src_window, dst_window->id, &plan);
+    view_abort_window_node_insertion(&plan);
+    if (!src_node_add) {
+        dst_node->split = dst_prev_split;
+        dst_node->child = dst_prev_child;
+
+        if (!mouse_drop_action_restore_window(src_view, src_window, src_restore_insertion_point)) {
+            mouse_drop_action_fail_rollback("warp insertion");
+        }
+
+        (void) window_manager_add_managed_window(wm, src_window, src_view);
+        return;
+    }
+
+    if (!window_manager_add_managed_window(wm, src_window, dst_view)) return;
+    if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
+    if (dst_view != src_view && view_layout_is_accordion(dst_view->layout)) view_update(dst_view);
 
     struct window_capture *window_list = NULL;
 
@@ -208,7 +510,7 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
         window_node_capture_windows(src_node_rm, &window_list);
     }
 
-    if (src_node_rm != src_node_add && src_node_rm != src_node_add->parent) {
+    if (mouse_drop_action_warp_should_capture_add(src_node_rm, src_node_add)) {
         window_node_capture_windows(src_node_add, &window_list);
     }
 
@@ -218,14 +520,11 @@ void mouse_drop_action_warp(struct window_manager *wm, struct view *src_view, st
 void mouse_drop_no_target(struct space_manager *sm, struct window_manager *wm, struct view *src_view, struct view *dst_view, struct window *window, struct window_node *node)
 {
     if (src_view->sid == dst_view->sid) {
+        if (view_layout_is_accordion(src_view->layout)) view_update(src_view);
         window_node_flush(node);
     } else {
-        space_manager_untile_window(src_view, window);
-        window_manager_remove_managed_window(wm, window->id);
-        window_manager_purify_window(wm, window);
-
-        struct view *view = space_manager_tile_window_on_space(sm, window, dst_view->sid);
-        window_manager_add_managed_window(wm, window, view);
+        (void) sm;
+        if (!window_manager_transfer_managed_window(wm, window, src_view, dst_view, 0)) return;
     }
 }
 
@@ -263,41 +562,367 @@ end:
     }
 }
 
-void mouse_state_init(struct mouse_state *state)
+static void mouse_state_set_modifier_on_main_thread(struct mouse_state *mouse_state, uint8_t modifier)
 {
-    state->modifier    = MOUSE_MOD_FN;
-    state->action1     = MOUSE_MODE_MOVE;
-    state->action2     = MOUSE_MODE_RESIZE;
-    state->drop_action = MOUSE_MODE_SWAP;
+    __atomic_store_n(&mouse_state->modifier, modifier, __ATOMIC_RELEASE);
 }
 
-bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask)
+void mouse_state_set_modifier(struct mouse_state *mouse_state, uint8_t modifier)
 {
-    if (mouse_state->handle) return true;
+    if (pthread_main_np()) {
+        mouse_state_set_modifier_on_main_thread(mouse_state, modifier);
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            mouse_state_set_modifier_on_main_thread(mouse_state, modifier);
+        });
+    }
+}
 
-    mouse_state->handle = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, mouse_handler, mouse_state);
-    if (!mouse_state->handle) return false;
+static void mouse_state_set_action1_on_main_thread(struct mouse_state *mouse_state, enum mouse_mode action)
+{
+    __atomic_store_n(&mouse_state->action1, action, __ATOMIC_RELEASE);
+}
 
-    if (!CGEventTapIsEnabled(mouse_state->handle)) {
-        CFMachPortInvalidate(mouse_state->handle);
-        CFRelease(mouse_state->handle);
-        return false;
+void mouse_state_set_action1(struct mouse_state *mouse_state, enum mouse_mode action)
+{
+    if (pthread_main_np()) {
+        mouse_state_set_action1_on_main_thread(mouse_state, action);
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            mouse_state_set_action1_on_main_thread(mouse_state, action);
+        });
+    }
+}
+
+static void mouse_state_set_action2_on_main_thread(struct mouse_state *mouse_state, enum mouse_mode action)
+{
+    __atomic_store_n(&mouse_state->action2, action, __ATOMIC_RELEASE);
+}
+
+void mouse_state_set_action2(struct mouse_state *mouse_state, enum mouse_mode action)
+{
+    if (pthread_main_np()) {
+        mouse_state_set_action2_on_main_thread(mouse_state, action);
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            mouse_state_set_action2_on_main_thread(mouse_state, action);
+        });
+    }
+}
+
+void mouse_state_init(struct mouse_state *state)
+{
+    mouse_state_set_modifier(state, MOUSE_MOD_FN);
+    mouse_state_set_action1(state, MOUSE_MODE_MOVE);
+    mouse_state_set_action2(state, MOUSE_MODE_RESIZE);
+    state->drop_action = MOUSE_MODE_SWAP;
+    state->native_edge_resize = false;
+    state->bsp_live_resize = false;
+    state->active_button = MOUSE_BUTTON_NONE;
+}
+
+struct mouse_handler_resources
+{
+    CFMachPortRef handle;
+    CFRunLoopSourceRef runloop_source;
+    CFRunLoopRef runloop;
+    pthread_t thread;
+    bool thread_started;
+    struct mouse_handler_context *context;
+};
+
+struct mouse_handler_thread_start
+{
+    struct mouse_handler_resources *resources;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool ready;
+    bool live;
+};
+
+static void mouse_handler_release_uninstalled_resources(struct mouse_handler_resources resources)
+{
+    if (resources.runloop_source) {
+        CFRunLoopSourceInvalidate(resources.runloop_source);
+        CFRelease(resources.runloop_source);
     }
 
-    mouse_state->runloop_source = CFMachPortCreateRunLoopSource(NULL, mouse_state->handle, 0);
-    CFRunLoopAddSource(CFRunLoopGetMain(), mouse_state->runloop_source, kCFRunLoopCommonModes);
+    if (resources.handle) {
+        CGEventTapEnable(resources.handle, false);
+        CFMachPortInvalidate(resources.handle);
+        CFRelease(resources.handle);
+    }
+
+    free(resources.context);
+}
+
+static bool mouse_handler_create_resources(struct mouse_state *mouse_state, uint32_t mask, struct mouse_handler_resources *resources)
+{
+    resources->context = calloc(1, sizeof(*resources->context));
+    if (!resources->context) return false;
+    resources->context->mouse_state = mouse_state;
+    resources->context->direct_space_switch_available =
+        window_management_bridge_direct_space_switch_available();
+
+    resources->handle = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, mouse_handler, resources->context);
+    if (!resources->handle) {
+        mouse_handler_release_uninstalled_resources(*resources);
+        *resources = (struct mouse_handler_resources) {0};
+        return false;
+    }
+    resources->context->handle = resources->handle;
+
+    if (!CGEventTapIsEnabled(resources->handle)) {
+        mouse_handler_release_uninstalled_resources(*resources);
+        *resources = (struct mouse_handler_resources) {0};
+        return false;
+    }
+    CGEventTapEnable(resources->handle, false);
+
+    resources->runloop_source = CFMachPortCreateRunLoopSource(NULL, resources->handle, 0);
+    if (!resources->runloop_source) {
+        mouse_handler_release_uninstalled_resources(*resources);
+        *resources = (struct mouse_handler_resources) {0};
+        return false;
+    }
 
     return true;
 }
 
+static void mouse_handler_signal_thread_start(struct mouse_handler_thread_start *start, CFRunLoopRef runloop, bool live)
+{
+    pthread_mutex_lock(&start->mutex);
+    start->resources->runloop = runloop;
+    start->live = live;
+    start->ready = true;
+    pthread_cond_signal(&start->cond);
+    pthread_mutex_unlock(&start->mutex);
+}
+
+static void *mouse_handler_thread_proc(void *context)
+{
+    struct mouse_handler_thread_start *start = context;
+    struct mouse_handler_resources *resources = start->resources;
+    CFRunLoopRef runloop = CFRunLoopGetCurrent();
+    CFRetain(runloop);
+
+    CFRunLoopAddSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+    bool live = CFRunLoopContainsSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+
+    if (!live) {
+        CFRunLoopRemoveSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRelease(runloop);
+        mouse_handler_signal_thread_start(start, NULL, false);
+        return NULL;
+    }
+
+    mouse_handler_signal_thread_start(start, runloop, true);
+    CFRunLoopRun();
+    CFRelease(runloop);
+    return NULL;
+}
+
+static bool mouse_handler_start_resources(struct mouse_handler_resources *resources)
+{
+    struct mouse_handler_thread_start start = {
+        .resources = resources
+    };
+
+    if (pthread_mutex_init(&start.mutex, NULL) != 0) return false;
+    if (pthread_cond_init(&start.cond, NULL) != 0) {
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+
+    if (pthread_create(&resources->thread, NULL, mouse_handler_thread_proc, &start) != 0) {
+        pthread_cond_destroy(&start.cond);
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+
+    pthread_mutex_lock(&start.mutex);
+    while (!start.ready) {
+        pthread_cond_wait(&start.cond, &start.mutex);
+    }
+    bool live = start.live;
+    pthread_mutex_unlock(&start.mutex);
+    pthread_cond_destroy(&start.cond);
+    pthread_mutex_destroy(&start.mutex);
+
+    if (!live) {
+        pthread_join(resources->thread, NULL);
+        resources->thread_started = false;
+        return false;
+    }
+
+    resources->thread_started = true;
+    return true;
+}
+
+static bool mouse_handler_enable_resources(struct mouse_handler_resources resources)
+{
+    if (!resources.handle) return false;
+    CGEventTapEnable(resources.handle, true);
+    return CGEventTapIsEnabled(resources.handle);
+}
+
+static void mouse_handler_stop_resources(struct mouse_handler_resources *resources)
+{
+    if (resources->handle) CGEventTapEnable(resources->handle, false);
+    if (resources->runloop && resources->runloop_source) {
+        CFRunLoopRemoveSource(resources->runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRunLoopStop(resources->runloop);
+        CFRunLoopWakeUp(resources->runloop);
+    }
+    if (resources->thread_started) pthread_join(resources->thread, NULL);
+
+    resources->runloop = NULL;
+    resources->thread = (pthread_t) {0};
+    resources->thread_started = false;
+}
+
+static void mouse_handler_dispose_resources(struct mouse_handler_resources resources)
+{
+    if (resources.runloop_source) {
+        CFRunLoopSourceInvalidate(resources.runloop_source);
+        CFRelease(resources.runloop_source);
+    }
+    if (resources.handle) {
+        CGEventTapEnable(resources.handle, false);
+        CFMachPortInvalidate(resources.handle);
+        CFRelease(resources.handle);
+    }
+    free(resources.context);
+}
+
+static void mouse_handler_remove_installed_resources(struct mouse_handler_resources resources)
+{
+    mouse_handler_stop_resources(&resources);
+    mouse_handler_dispose_resources(resources);
+}
+
+static void mouse_handler_clear_resources(struct mouse_state *mouse_state)
+{
+    __atomic_store_n(&mouse_state->handle, NULL, __ATOMIC_RELEASE);
+    mouse_state->runloop_source = NULL;
+    mouse_state->runloop = NULL;
+    mouse_state->thread = (pthread_t) {0};
+    mouse_state->thread_started = false;
+    mouse_state->handler_context = NULL;
+}
+
+static void mouse_handler_install_resources(struct mouse_state *mouse_state, struct mouse_handler_resources resources)
+{
+    __atomic_store_n(&mouse_state->handle, resources.handle, __ATOMIC_RELEASE);
+    mouse_state->runloop_source = resources.runloop_source;
+    mouse_state->runloop = resources.runloop;
+    mouse_state->thread = resources.thread;
+    mouse_state->thread_started = resources.thread_started;
+    mouse_state->handler_context = resources.context;
+}
+
+static bool mouse_handler_begin_on_main_thread(struct mouse_state *mouse_state, uint32_t mask)
+{
+    if (__atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE)) return true;
+
+    struct mouse_handler_resources resources = {0};
+    if (!mouse_handler_create_resources(mouse_state, mask, &resources)) return false;
+    if (!mouse_handler_start_resources(&resources) || !mouse_handler_enable_resources(resources)) {
+        mouse_handler_remove_installed_resources(resources);
+        return false;
+    }
+
+    mouse_handler_install_resources(mouse_state, resources);
+    return true;
+}
+
+bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask)
+{
+    if (pthread_main_np()) return mouse_handler_begin_on_main_thread(mouse_state, mask);
+
+    __block bool result;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = mouse_handler_begin_on_main_thread(mouse_state, mask);
+    });
+    return result;
+}
+
+static bool mouse_handler_reconfigure_on_main_thread(struct mouse_state *mouse_state, uint32_t mask)
+{
+    struct mouse_handler_resources replacement = {0};
+    if (!mouse_handler_create_resources(mouse_state, mask, &replacement)) return false;
+    if (!mouse_handler_start_resources(&replacement)) {
+        mouse_handler_remove_installed_resources(replacement);
+        return false;
+    }
+
+    struct mouse_handler_resources previous = {
+        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
+        .runloop_source = mouse_state->runloop_source,
+        .runloop = mouse_state->runloop,
+        .thread = mouse_state->thread,
+        .thread_started = mouse_state->thread_started,
+        .context = mouse_state->handler_context
+    };
+
+    mouse_handler_stop_resources(&previous);
+
+    if (!mouse_handler_enable_resources(replacement)) {
+        mouse_handler_remove_installed_resources(replacement);
+
+        if (previous.handle && previous.runloop_source &&
+            mouse_handler_start_resources(&previous) &&
+            mouse_handler_enable_resources(previous)) {
+            mouse_handler_install_resources(mouse_state, previous);
+        } else {
+            mouse_handler_remove_installed_resources(previous);
+            mouse_handler_clear_resources(mouse_state);
+        }
+
+        return false;
+    }
+
+    mouse_handler_install_resources(mouse_state, replacement);
+    mouse_handler_dispose_resources(previous);
+    return true;
+}
+
+bool mouse_handler_reconfigure(struct mouse_state *mouse_state, uint32_t mask)
+{
+    if (pthread_main_np()) return mouse_handler_reconfigure_on_main_thread(mouse_state, mask);
+
+    __block bool result;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = mouse_handler_reconfigure_on_main_thread(mouse_state, mask);
+    });
+    return result;
+}
+
+static void mouse_handler_end_on_main_thread(struct mouse_state *mouse_state)
+{
+    struct mouse_handler_resources resources = {
+        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
+        .runloop_source = mouse_state->runloop_source,
+        .runloop = mouse_state->runloop,
+        .thread = mouse_state->thread,
+        .thread_started = mouse_state->thread_started,
+        .context = mouse_state->handler_context
+    };
+
+    mouse_handler_clear_resources(mouse_state);
+    mouse_handler_remove_installed_resources(resources);
+
+    mouse_click_state_release(&mouse_state->left_click);
+    mouse_click_state_release(&mouse_state->right_click);
+}
+
 void mouse_handler_end(struct mouse_state *mouse_state)
 {
-    if (!mouse_state->handle) return;
-
-    CGEventTapEnable(mouse_state->handle, false);
-    CFMachPortInvalidate(mouse_state->handle);
-    CFRunLoopRemoveSource(CFRunLoopGetMain(), mouse_state->runloop_source, kCFRunLoopCommonModes);
-    CFRelease(mouse_state->runloop_source);
-    CFRelease(mouse_state->handle);
-    __atomic_store_n(&mouse_state->handle, NULL, __ATOMIC_RELEASE);
+    if (pthread_main_np()) {
+        mouse_handler_end_on_main_thread(mouse_state);
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            mouse_handler_end_on_main_thread(mouse_state);
+        });
+    }
 }

@@ -1,6 +1,8 @@
 #ifndef HELPERS_H
 #define HELPERS_H
 
+#include "socket_io.h"
+
 #define ANIMATION_EASING_TYPE_LIST \
     ANIMATION_EASING_TYPE_ENTRY(ease_in_sine) \
     ANIMATION_EASING_TYPE_ENTRY(ease_out_sine) \
@@ -159,6 +161,35 @@ static inline uint64_t read_os_freq(void)
     return 1000000000;
 }
 
+// A regressed timestamp is treated as no elapsed time. This also avoids
+// interpreting an unsigned underflow (including timer wrap) as a long delay.
+static inline double os_timer_elapsed_seconds(uint64_t start, uint64_t end)
+{
+    if (end < start) return 0.0;
+    uint64_t elapsed = end - start;
+    return (double) elapsed / (double) read_os_freq();
+}
+
+static inline double os_timer_elapsed_milliseconds(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_seconds(start, end) * 1000.0;
+}
+
+static inline bool os_timer_cmd_tab_should_fence(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) > 1500.0;
+}
+
+static inline bool os_timer_gesture_suppression_active(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) < 1250.0;
+}
+
+static inline bool os_timer_mouse_resize_ready(uint64_t start, uint64_t end)
+{
+    return os_timer_elapsed_milliseconds(start, end) >= (1000.0 / 60.0);
+}
+
 struct rgba_color
 {
     uint32_t p;
@@ -183,15 +214,28 @@ static const char *layer_str[] =
 static inline bool socket_open(int *sockfd)
 {
     *sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    return *sockfd != -1;
+    if (*sockfd == -1) return false;
+
+    if (!socket_set_cloexec(*sockfd)) {
+        close(*sockfd);
+        *sockfd = -1;
+        return false;
+    }
+
+    int no_sigpipe = 1;
+    if (setsockopt(*sockfd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) != 0) {
+        close(*sockfd);
+        *sockfd = -1;
+        return false;
+    }
+    return true;
 }
 
 static inline bool socket_connect(int sockfd, char *socket_path)
 {
     struct sockaddr_un socket_address;
-    socket_address.sun_family = AF_UNIX;
+    if (!socket_address_init(&socket_address, socket_path)) return false;
 
-    snprintf(socket_address.sun_path, sizeof(socket_address.sun_path), "%s", socket_path);
     return connect(sockfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) != -1;
 }
 
@@ -199,27 +243,6 @@ static inline void socket_close(int sockfd)
 {
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
-}
-
-static inline void mach_send(mach_port_t port, void *data, uint32_t size)
-{
-    struct {
-        mach_msg_header_t header;
-        mach_msg_size_t descriptor_count;
-        mach_msg_ool_descriptor_t descriptor;
-    } msg = {0};
-
-    msg.header.msgh_bits        = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND & MACH_MSGH_BITS_REMOTE_MASK, 0, 0, MACH_MSGH_BITS_COMPLEX);
-    msg.header.msgh_size        = sizeof(msg);
-    msg.header.msgh_remote_port = port;
-    msg.descriptor_count        = 1;
-    msg.descriptor.address      = data;
-    msg.descriptor.size         = size;
-    msg.descriptor.copy         = MACH_MSG_VIRTUAL_COPY;
-    msg.descriptor.deallocate   = false;
-    msg.descriptor.type         = MACH_MSG_OOL_DESCRIPTOR;
-
-    mach_msg(&msg.header, MACH_SEND_MSG, sizeof(msg), 0, 0, 0, 0);
 }
 
 static inline char *json_optional_bool(int value)
@@ -256,67 +279,148 @@ static inline bool string_equals(const char *a, const char *b)
     return a && b && strcmp(a, b) == 0;
 }
 
+static inline size_t utf8_valid_sequence_length(const unsigned char *bytes, size_t length)
+{
+    if (length == 0) return 0;
+
+    unsigned char fst = bytes[0];
+    if (fst <= 0x7f) return 1;
+
+    if (fst >= 0xc2 && fst <= 0xdf) {
+        return length >= 2 && bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 2 : 0;
+    }
+
+    if (fst >= 0xe0 && fst <= 0xef) {
+        if (length < 3 || bytes[2] < 0x80 || bytes[2] > 0xbf) return 0;
+        if (fst == 0xe0) return bytes[1] >= 0xa0 && bytes[1] <= 0xbf ? 3 : 0;
+        if (fst == 0xed) return bytes[1] >= 0x80 && bytes[1] <= 0x9f ? 3 : 0;
+        return bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 3 : 0;
+    }
+
+    if (fst >= 0xf0 && fst <= 0xf4) {
+        if (length < 4 ||
+            bytes[2] < 0x80 || bytes[2] > 0xbf ||
+            bytes[3] < 0x80 || bytes[3] > 0xbf) return 0;
+        if (fst == 0xf0) return bytes[1] >= 0x90 && bytes[1] <= 0xbf ? 4 : 0;
+        if (fst == 0xf4) return bytes[1] >= 0x80 && bytes[1] <= 0x8f ? 4 : 0;
+        return bytes[1] >= 0x80 && bytes[1] <= 0xbf ? 4 : 0;
+    }
+
+    return 0;
+}
+
+static inline bool utf8_validate_bytes(const void *data, size_t length)
+{
+    const unsigned char *bytes = data;
+    for (size_t offset = 0; offset < length;) {
+        size_t sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+        if (sequence_length == 0) return false;
+        offset += sequence_length;
+    }
+    return true;
+}
+
+static inline bool utf8_validate_string(const char *s)
+{
+    return utf8_validate_bytes(s, strlen(s));
+}
+
 static inline char *ts_string_escape(char *s)
 {
-    char *cursor = s;
-    int num_replacements = 0;
+    const unsigned char *bytes = (const unsigned char *) s;
+    size_t length = strlen(s);
+    size_t extra = 0;
 
-    while (*cursor) {
-        if ((*cursor == '"') ||
-            (*cursor == '\\') ||
-            (*cursor == '\b') ||
-            (*cursor == '\f') ||
-            (*cursor == '\n') ||
-            (*cursor == '\r') ||
-            (*cursor == '\t')) {
-            ++num_replacements;
-        } else if (*cursor >= 0x00 && *cursor <= 0x1f) {
-            num_replacements += 5;
+    for (size_t offset = 0; offset < length;) {
+        unsigned char c = bytes[offset];
+        size_t increment = 0;
+        size_t sequence_length = 1;
+
+        if (c >= 0x80) {
+            sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+            if (sequence_length == 0) {
+                increment = 5;
+                sequence_length = 1;
+            }
+        } else if (c == '"' || c == '\\' || c == '\b' || c == '\f' ||
+                   c == '\n' || c == '\r' || c == '\t') {
+            increment = 1;
+        } else if (c <= 0x1f) {
+            increment = 5;
         }
 
-        ++cursor;
+        if (extra > SIZE_MAX - increment) {
+            fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
+            exit(EXIT_FAILURE);
+        }
+        extra += increment;
+        offset += sequence_length;
     }
 
-    if (num_replacements == 0) return NULL;
+    if (extra == 0) return NULL;
+    if (extra == SIZE_MAX || length > SIZE_MAX - extra - 1) {
+        fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
+        exit(EXIT_FAILURE);
+    }
 
-    int size_in_bytes = (int)(cursor - s) + num_replacements;
-    char *result = ts_alloc_unaligned(sizeof(char) * (size_in_bytes+1));
-    result[size_in_bytes] = '\0';
+    size_t size_in_bytes = length + extra;
+    char *result = ts_alloc_unaligned(size_in_bytes + 1);
+    char *dst = result;
 
-    for (char *dst = result, *cursor = s; *cursor; ++cursor) {
-        if (*cursor == '"') {
-            *dst++ = '\\';
-            *dst++ = '"';
-        } else if (*cursor == '\\') {
-            *dst++ = '\\';
-            *dst++ = '\\';
-        } else if (*cursor == '\b') {
-            *dst++ = '\\';
-            *dst++ = 'b';
-        } else if (*cursor == '\f') {
-            *dst++ = '\\';
-            *dst++ = 'f';
-        } else if (*cursor == '\n') {
-            *dst++ = '\\';
-            *dst++ = 'n';
-        } else if (*cursor == '\r') {
-            *dst++ = '\\';
-            *dst++ = 'r';
-        } else if (*cursor == '\t') {
-            *dst++ = '\\';
-            *dst++ = 't';
-        } else if (*cursor >= 0x00 && *cursor <= 0x1f) {
-            *dst++ = '\\';
-            *dst++ = 'u';
-            sprintf(dst, "%04x", (int)*cursor);
-            dst += 4;
+    for (size_t offset = 0; offset < length;) {
+        unsigned char c = bytes[offset];
+        if (c >= 0x80) {
+            size_t sequence_length = utf8_valid_sequence_length(bytes + offset, length - offset);
+            if (sequence_length != 0) {
+                memcpy(dst, bytes + offset, sequence_length);
+                dst += sequence_length;
+                offset += sequence_length;
+            } else {
+                memcpy(dst, "\\ufffd", 6);
+                dst += 6;
+                ++offset;
+            }
         } else {
-            *dst++ = *cursor;
+            ++offset;
+            if (c == '"') {
+                *dst++ = '\\';
+                *dst++ = '"';
+            } else if (c == '\\') {
+                *dst++ = '\\';
+                *dst++ = '\\';
+            } else if (c == '\b') {
+                *dst++ = '\\';
+                *dst++ = 'b';
+            } else if (c == '\f') {
+                *dst++ = '\\';
+                *dst++ = 'f';
+            } else if (c == '\n') {
+                *dst++ = '\\';
+                *dst++ = 'n';
+            } else if (c == '\r') {
+                *dst++ = '\\';
+                *dst++ = 'r';
+            } else if (c == '\t') {
+                *dst++ = '\\';
+                *dst++ = 't';
+            } else if (c <= 0x1f) {
+                static const char hex[] = "0123456789abcdef";
+                *dst++ = '\\';
+                *dst++ = 'u';
+                *dst++ = '0';
+                *dst++ = '0';
+                *dst++ = hex[c >> 4];
+                *dst++ = hex[c & 0x0f];
+            } else {
+                *dst++ = (char) c;
+            }
         }
     }
 
+    *dst = '\0';
     return result;
 }
+
 
 static inline CFStringRef CFSTRINGNUM32(int32_t num)
 {
@@ -325,34 +429,55 @@ static inline CFStringRef CFSTRINGNUM32(int32_t num)
     return CFStringCreateWithCString(NULL, num_str, kCFStringEncodingMacRoman);
 }
 
+#ifndef YABAI_CFNUMBER_CREATE
+#define YABAI_CFNUMBER_CREATE CFNumberCreate
+#endif
+#ifndef YABAI_CFARRAY_CREATE_MUTABLE
+#define YABAI_CFARRAY_CREATE_MUTABLE CFArrayCreateMutable
+#endif
+#ifndef YABAI_CFDICTIONARY_CREATE
+#define YABAI_CFDICTIONARY_CREATE CFDictionaryCreate
+#endif
+
 static inline CFNumberRef CFNUM32(int32_t num)
 {
-    return CFNumberCreate(NULL, kCFNumberSInt32Type, &num);
+    return YABAI_CFNUMBER_CREATE(NULL, kCFNumberSInt32Type, &num);
 }
 
-static inline void sls_window_disable_shadow(uint32_t id)
+static inline bool sls_window_disable_shadow(uint32_t id)
 {
     CFNumberRef density = CFNUM32(0);
+    if (!density) return false;
+
     const void *keys[1] = { CFSTR("com.apple.WindowShadowDensity") };
     const void *values[1] = { density };
-    CFDictionaryRef options = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    SLSWindowSetShadowProperties(id, options);
+    CFDictionaryRef options = YABAI_CFDICTIONARY_CREATE(NULL, keys, values, 1,
+                                                        &kCFTypeDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
     CFRelease(density);
+    if (!options) return false;
+
+    bool result = SLSWindowSetShadowProperties(id, options) == kCGErrorSuccess;
     CFRelease(options);
+    return result;
 }
 
-static inline CFArrayRef cfarray_of_cfnumbers(void *values, size_t size, int count, CFNumberType type)
+// An empty input is a successful conversion and returns an empty array.
+static inline CFArrayRef cfarray_of_cfnumbers(const void *values, size_t size, int count, CFNumberType type)
 {
-    CFNumberRef temp[count];
+    if (count < 0 || (count && (!values || !size))) return NULL;
+
+    CFMutableArrayRef result = YABAI_CFARRAY_CREATE_MUTABLE(NULL, count, &kCFTypeArrayCallBacks);
+    if (!result) return NULL;
 
     for (int i = 0; i < count; ++i) {
-        temp[i] = CFNumberCreate(NULL, type, ((char *)values) + (size * i));
-    }
-
-    CFArrayRef result = CFArrayCreate(NULL, (const void **)temp, count, &kCFTypeArrayCallBacks);
-
-    for (int i = 0; i < count; ++i) {
-        CFRelease(temp[i]);
+        CFNumberRef number = YABAI_CFNUMBER_CREATE(NULL, type, ((const char *) values) + (size * i));
+        if (!number) {
+            CFRelease(result);
+            return NULL;
+        }
+        CFArrayAppendValue(result, number);
+        CFRelease(number);
     }
 
     return result;
@@ -439,7 +564,7 @@ static inline bool file_can_execute(char *filename)
         return false;
     }
 
-    return (buffer.st_mode & S_IXUSR);
+    return S_ISREG(buffer.st_mode) && access(filename, X_OK) == 0;
 }
 
 static bool get_config_file(char *restrict filename, char *restrict buffer, int buffer_size)
@@ -460,6 +585,34 @@ static bool get_config_file(char *restrict filename, char *restrict buffer, int 
     return file_exists(buffer);
 }
 
+static void config_file_exec_argv(char *config_file, bool executable, char **argv)
+{
+    if (executable) {
+        argv[0] = config_file;
+        argv[1] = NULL;
+    } else {
+        argv[0] = "/usr/bin/env";
+        argv[1] = "sh";
+        argv[2] = config_file;
+        argv[3] = NULL;
+    }
+}
+
+static int config_file_spawn(char *config_file, bool executable, pid_t *pid)
+{
+    extern char **environ;
+    char *argv[4];
+    config_file_exec_argv(config_file, executable, argv);
+    int status = posix_spawn(pid, argv[0], NULL, NULL, argv, environ);
+
+    if (status == ENOEXEC && executable) {
+        config_file_exec_argv(config_file, false, argv);
+        status = posix_spawn(pid, argv[0], NULL, NULL, argv, environ);
+    }
+
+    return status;
+}
+
 static void exec_config_file(char *config_file, int config_file_size)
 {
     if (config_file[0] == '\0' && !get_config_file("yabairc", config_file, config_file_size)) {
@@ -474,14 +627,10 @@ static void exec_config_file(char *config_file, int config_file_size)
         return;
     }
 
-    int pid = fork();
-    if (pid == 0) {
-        char **exec = file_can_execute(config_file)
-                    ? (char*[]){ "/usr/bin/env", "sh", "-c", config_file, NULL}
-                    : (char*[]){ "/usr/bin/env", "sh", config_file, NULL};
-        exit(execvp(exec[0], exec));
-    } else if (pid == -1) {
-        warn("yabai: failed to load config file '%s'\n", config_file);
+    pid_t pid;
+    int status = config_file_spawn(config_file, file_can_execute(config_file), &pid);
+    if (status != 0) {
+        warn("yabai: failed to load config file '%s': %s\n", config_file, strerror(status));
         notify("configuration", "failed to load file '%s'", config_file);
     }
 }
@@ -490,7 +639,11 @@ static inline bool ax_privilege(void)
 {
     const void *keys[] = { kAXTrustedCheckOptionPrompt };
     const void *values[] = { kCFBooleanTrue };
-    CFDictionaryRef options = CFDictionaryCreate(NULL, keys, values, array_count(keys), &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef options = YABAI_CFDICTIONARY_CREATE(NULL, keys, values, array_count(keys),
+                                                        &kCFCopyStringDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
+    if (!options) return false;
+
     bool result = AXIsProcessTrustedWithOptions(options);
     CFRelease(options);
     return result;
@@ -587,14 +740,27 @@ static inline float clampf_range(float value, float min, float max)
 
 static CGImageRef cgimage_restore_alpha(CGImageRef image)
 {
-    int width     = CGImageGetWidth(image);
-    int height    = CGImageGetHeight(image);
-    int pitch     = width * 4;
-    uint8_t *data = (uint8_t *) calloc(height * pitch, 1);
+    size_t width = CGImageGetWidth(image);
+    size_t height = CGImageGetHeight(image);
+    if (!width || !height || width > SIZE_MAX / 4) return NULL;
+
+    size_t pitch = width * 4;
+    if (height > SIZE_MAX / pitch) return NULL;
+    uint8_t *data = (uint8_t *) calloc(height, pitch);
+    if (!data) return NULL;
 
     CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    if (!color_space) {
+        free(data);
+        return NULL;
+    }
+
     CGContextRef context = CGBitmapContextCreate(data, width, height, 8, pitch, color_space, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
     CGColorSpaceRelease(color_space);
+    if (!context) {
+        free(data);
+        return NULL;
+    }
     CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
 
 #ifdef __x86_64__
@@ -609,8 +775,10 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
     int32x4_t  mask_ff = vdupq_n_s32(0xff);
 #endif
 
+    size_t pixel_count = height * width;
+    size_t simd_count = pixel_count & ~(size_t) 3;
     uint32_t *pixel = (uint32_t *) data;
-    for (int i = 0; i < height*width; i += 4) {
+    for (size_t i = 0; i < simd_count; i += 4) {
 #ifdef __x86_64__
         __m128i source = _mm_loadu_si128((__m128i *) pixel);
         __m128 r = _mm_cvtepi32_ps(_mm_and_si128(source, mask_ff));
@@ -629,10 +797,11 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
         g = _mm_mul_ps(inv255, _mm_mul_ps(g, a));
         b = _mm_mul_ps(inv255, _mm_mul_ps(b, a));
 
-        __m128i sr = _mm_cvtps_epi32(r);
-        __m128i sg = _mm_slli_epi32(_mm_cvtps_epi32(g),  8);
-        __m128i sb = _mm_slli_epi32(_mm_cvtps_epi32(b), 16);
-        __m128i sa = _mm_slli_epi32(_mm_cvtps_epi32(a), 24);
+        __m128 half = _mm_set1_ps(0.5f);
+        __m128i sr = _mm_cvttps_epi32(_mm_add_ps(r, half));
+        __m128i sg = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(g, half)),  8);
+        __m128i sb = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(b, half)), 16);
+        __m128i sa = _mm_slli_epi32(_mm_cvttps_epi32(_mm_add_ps(a, half)), 24);
 
         __m128i color = _mm_or_si128(_mm_or_si128(_mm_or_si128(sr, sg), sb), sa);
         __m128i masked_color = _mm_or_si128(_mm_and_si128(mask, color), _mm_andnot_si128(mask, source));
@@ -655,16 +824,32 @@ static CGImageRef cgimage_restore_alpha(CGImageRef image)
         g = vmulq_f32(inv255, vmulq_f32(g, a));
         b = vmulq_f32(inv255, vmulq_f32(b, a));
 
-        int32x4_t sr = vcvtnq_s32_f32(r);
-        int32x4_t sg = vshlq_s32(vcvtnq_s32_f32(g), vdupq_n_s32(8));
-        int32x4_t sb = vshlq_s32(vcvtnq_s32_f32(b), vdupq_n_s32(16));
-        int32x4_t sa = vshlq_s32(vcvtnq_s32_f32(a), vdupq_n_s32(24));
+        float32x4_t half = vdupq_n_f32(0.5f);
+        int32x4_t sr = vcvtq_s32_f32(vaddq_f32(r, half));
+        int32x4_t sg = vshlq_s32(vcvtq_s32_f32(vaddq_f32(g, half)), vdupq_n_s32(8));
+        int32x4_t sb = vshlq_s32(vcvtq_s32_f32(vaddq_f32(b, half)), vdupq_n_s32(16));
+        int32x4_t sa = vshlq_s32(vcvtq_s32_f32(vaddq_f32(a, half)), vdupq_n_s32(24));
 
         int32x4_t color = vorrq_s32(vorrq_s32(vorrq_s32(sr, sg), sb), sa);
         int32x4_t masked_color = vorrq_s32(vandq_s32(color, mask), vbicq_s32(source, mask));
         vst1q_s32((int32_t *) pixel, masked_color);
 #endif
         pixel += 4;
+    }
+
+    for (size_t i = simd_count; i < pixel_count; ++i) {
+        uint32_t source = ((uint32_t *) data)[i];
+        uint32_t alpha = (source >> 24) & 0xff;
+        if (!alpha) continue;
+
+        uint32_t red = source & 0xff;
+        uint32_t green = (source >> 8) & 0xff;
+        uint32_t blue = (source >> 16) & 0xff;
+        red = (uint32_t) lroundf(255.0f * (float) red / (float) alpha);
+        green = (uint32_t) lroundf(255.0f * (float) green / (float) alpha);
+        blue = (uint32_t) lroundf(255.0f * (float) blue / (float) alpha);
+        ((uint32_t *) data)[i] = (red & 0xff) | ((green & 0xff) << 8) |
+                                 ((blue & 0xff) << 16) | 0xff000000;
     }
 
     CGImageRef result = CGBitmapContextCreateImage(context);

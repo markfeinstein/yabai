@@ -10,6 +10,7 @@ typedef DISPLAY_EVENT_HANDLER(display_callback);
     DISPLAY_PROPERTY_ENTRY("index",     DISPLAY_PROPERTY_INDEX,     0x04) \
     DISPLAY_PROPERTY_ENTRY("label",     DISPLAY_PROPERTY_LABEL,     0x08) \
     DISPLAY_PROPERTY_ENTRY("frame",     DISPLAY_PROPERTY_FRAME,     0x10) \
+    DISPLAY_PROPERTY_ENTRY("visible-frame", DISPLAY_PROPERTY_VISIBLE_FRAME, 0x80) \
     DISPLAY_PROPERTY_ENTRY("spaces",    DISPLAY_PROPERTY_SPACES,    0x20) \
     DISPLAY_PROPERTY_ENTRY("has-focus", DISPLAY_PROPERTY_HAS_FOCUS, 0x40)
 
@@ -38,9 +39,11 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags);
 CFStringRef display_uuid(uint32_t did);
 uint32_t display_id(CFStringRef uuid);
 CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar);
+CGRect display_bounds_constrained_with_external_bar(uint32_t did, int mode, int top_padding, int bottom_padding);
 CGPoint display_center(uint32_t did);
 uint64_t display_space_id(uint32_t did);
 int display_space_count(uint32_t did);
+uint64_t *display_space_list_with_topology(uint32_t did, CFArrayRef topology, int *count);
 uint64_t *display_space_list(uint32_t did, int *count);
 
 #endif

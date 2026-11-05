@@ -2,12 +2,12 @@
 .\"     Title: yabai
 .\"    Author: [see the "AUTHOR(S)" section]
 .\" Generator: Asciidoctor 2.0.26
-.\"      Date: 2026-05-08
+.\"      Date: 2026-10-07
 .\"    Manual: Yabai Manual
 .\"    Source: Yabai
 .\"  Language: English
 .\"
-.TH "YABAI" "1" "2026-05-08" "Yabai" "Yabai Manual"
+.TH "YABAI" "1" "2026-10-07" "Yabai" "Yabai Manual"
 .ie \n(.g .ds Aq \(aq
 .el       .ds Aq '
 .ss \n[.ss] 0
@@ -31,7 +31,7 @@
 yabai \- window manager
 .SH "SYNOPSIS"
 .sp
-\fByabai\fP [\fB\-\-load\-sa\fP|\fB\-\-uninstall\-sa\fP|\fB\-\-install\-service\fP|\fB\-\-uninstall\-service\fP|\fB\-\-start\-service\fP|\fB\-\-restart\-service\fP|\fB\-\-stop\-service\fP|\fB\-\-message\fP,\fB\-m\fP \fImsg\fP|\fB\-\-config\fP,\fB\-c\fP \fIconfig_file\fP|\fB\-\-verbose\fP,\fB\-V\fP|\fB\-\-version\fP,\fB\-v\fP|\fB\-\-help\fP,\fB\-h\fP]
+\fByabai\fP [\fB\-\-load\-sa\fP|\fB\-\-uninstall\-sa\fP|\fB\-\-install\-service\fP|\fB\-\-uninstall\-service\fP|\fB\-\-start\-service\fP|\fB\-\-restart\-service\fP|\fB\-\-stop\-service\fP|\fB\-\-doctor\fP|\fB\-\-message\fP,\fB\-m\fP \fImsg\fP|\fB\-\-config\fP,\fB\-c\fP \fIconfig_file\fP|\fB\-\-config\-jsonc\fP \fIconfig_file\fP|\fB\-\-check\-config\fP \fIconfig_file\fP|\fB\-\-verbose\fP,\fB\-V\fP|\fB\-\-version\fP,\fB\-v\fP|\fB\-\-help\fP,\fB\-h\fP]
 .SH "DESCRIPTION"
 .sp
 \fByabai\fP is a tiling window manager for macOS based on binary space partitioning.
@@ -93,13 +93,42 @@ Stops a running instance of the service and unloads it.
 Send message to a running instance of yabai.
 .RE
 .sp
+Yabai stores its daemon socket, scripting\-addition socket, and their lifecycle
+locks in \f(CR~/Library/Caches/yabai/runtime\fP. The directory is private mode 0700 and
+socket and lock entries are mode 0600. Startup and client operations fail closed
+if the home/cache path has unsafe ownership, permissions, ACLs, symlinks, or
+conflicting entries; legacy shared \f(CR/tmp\fP entries are not used. These checks and
+locks protect against other UIDs and coordinate cooperating instances of the
+same UID. A malicious process running as the same UID can still mutate pathname
+entries between non\-atomic Unix\-domain socket unlink and bind operations and is
+outside this isolation boundary.
+.sp
 \fB\-\-config\fP, \fB\-c\fP \fI<config_file>\fP
 .RS 4
-Use the specified configuration file.
+Use the specified legacy \fByabairc\fP file.
 .br
-Executes using \f(CR/usr/bin/env sh \-c <config_file>\fP if the exec\-bit is set.
+Executes the file directly if it is a regular file executable by the current user.
 .br
-Interpreted using \f(CR/usr/bin/env sh <config_file>\fP if the exec\-bit is unset.
+If direct execution rejects the file format, or the file is not executable, interprets it using \f(CR/usr/bin/env sh <config_file>\fP.
+.RE
+.sp
+\fB\-\-config\-jsonc\fP \fI<config_file>\fP
+.RS 4
+Use the specified native JSONC configuration file. A relative path is captured as an absolute lexical path before startup.
+.br
+This option does not disable \fByabairc\fP discovery or an explicit \fB\-\-config\fP path.
+.RE
+.sp
+\fB\-\-check\-config\fP \fI<config_file>\fP
+.RS 4
+Validate one native JSONC file and exit. This exact three\-argument invocation cannot be combined with any other option or trailing argument.
+.br
+Success prints \f(CRconfiguration is valid; runtime preparation was not checked\fP. It checks file input, JSONC syntax, schema, limits and regular expressions, but not display or Space targets, permissions, event resources, runtime labels or other runtime preparation.
+.RE
+.sp
+\fB\-\-doctor\fP
+.RS 4
+Run bounded, read\-only installation diagnostics and exit. Each diagnostic is classified as \f(CRPASS\fP, \f(CRWARN\fP, \f(CRFAIL\fP, or \f(CRUNKNOWN\fP, names the inspection mechanism, and gives a next action. The checks cover the running binary, version, native slices and translation; Accessibility trust; core and optional scripting\-addition SIP requirements; the Apple Silicon arm64e boot argument, including when the x86_64 slice runs under Rosetta (omitted only on native Intel); canonical launch agent plist fields read from one no\-follow descriptor snapshot, CFBoolean types, safe type, ownership and mode, and a program that resolves to the running yabai executable (a matching path\-component symlink warns rather than passes, after both lexical and canonical parent chains are checked and the original path is re\-resolved with final identity, owner, group, mode and execute permission revalidated); the known \f(CRcom.koekeishiya.yabai.plist\fP and \f(CRhomebrew.mxcl.yabai.plist\fP collisions; selected native and legacy configuration readability; and descriptor\-snapshot running\-binary and scripting\-addition bundle/socket metadata. After socket ownership, mode, ACL, and type validation succeeds, doctor performs one bounded read\-only payload handshake to classify the live scripting\-addition version and required capabilities. Scripting\-addition absence is determined from the top\-level \f(CRyabai.osax\fP bundle; once that bundle is observed, missing or raced nested metadata is \f(CRUNKNOWN\fP, not absent. User paths and the socket name are derived from the real uid, or from a valid nonroot \f(CRSUDO_UID\fP when invoked as root, using the passwd database rather than \f(CRHOME\fP or \f(CRUSER\fP. During an elevated inspection, permissions are evaluated by forking a bounded probe, initializing the target user\(cqs supplementary groups, dropping to the target uid/gid, and calling \f(CRaccess(2)\fP, so effective ACL and mode\-bit policy is honored. If that target\-identity probe is unavailable, a conservative owner/group/other mode\-bit fallback uses the target uid plus primary and resolved supplementary groups; unavailable or unrepresentable group membership remains \f(CRUNKNOWN\fP rather than using root\(cqs own access result. Legacy configuration directories, including symlinks to directories, are skipped according to runtime precedence, while a selected non\-regular file fails. launchd loaded/running state and scripting\-addition responsiveness remain \f(CRUNKNOWN\fP because doctor does not contact either service. It does not prompt for permissions, contact or load the scripting addition, invoke \f(CRsudo\fP, change launchd services, or inspect skhd. Unavailable privileged information and transient inspection errors are \f(CRUNKNOWN\fP; only permission denial or a contractually absent/invalid state is definitive. Optional prerequisites are warnings. The exit status is zero when there are no \f(CRFAIL\fP results and nonzero otherwise. Output is deliberately limited and does not dump paths, the environment, plist contents, or configuration contents.
 .RE
 .sp
 \fB\-\-verbose\fP, \fB\-V\fP
@@ -116,6 +145,823 @@ Print version to stdout and exit.
 .RS 4
 Print options to stdout and exit.
 .RE
+.SH "NATIVE JSONC CONFIGURATION"
+.SS "Startup and validation"
+.sp
+The native configuration file is named \f(CRyabai.jsonc\fP. Without \fB\-\-config\-jsonc\fP, yabai checks an absolute \f(CR$XDG_CONFIG_HOME/yabai/yabai.jsonc\fP first, then \f(CR$HOME/.config/yabai/yabai.jsonc\fP. A relative \f(CRXDG_CONFIG_HOME\fP is ignored. A missing discovered file is allowed; a missing explicit file is an error. Ordinary symlinks are followed. An explicit relative path is captured as an absolute lexical path without resolving its final symlink, and reload reopens that same path. If no native file was installed, reload repeats default discovery.
+.sp
+Native JSONC and \fByabairc\fP are independent. At daemon startup yabai parses and prepares JSONC, installs native settings and rules, inventories existing windows, publishes the initial menu state, starts the message socket, and then executes \fByabairc\fP. Native rules therefore apply to the initial window inventory. Settings in \fByabairc\fP override native settings, and rules added there follow the native rule prefix and normally affect later windows only.
+.sp
+Use the exact offline check before starting the daemon:
+.sp
+.if n .RS 4
+.nf
+.fam C
+yabai \-\-check\-config ~/.config/yabai/yabai.jsonc
+.fam
+.fi
+.if n .RE
+.sp
+This command validates the authored file and schema only. It does not resolve display or Space indices, check current topology, check runtime label collisions, test SIP or Screen Recording requirements, or acquire daemon resources. Startup and reload can still reject a file that passes this check.
+.SS "File and JSONC rules"
+.sp
+The file must be a regular UTF\-8 file no larger than 1 MiB. One UTF\-8 BOM is accepted only at byte zero. \f(CR//\fP line comments and \f(CR/* ... */\fP block comments are accepted outside strings. Block comments do not nest. Trailing commas, single\-quoted strings, unquoted keys, JSON5 numbers and other JSON5 syntax are rejected.
+.sp
+The reader opens the selected path once with \f(CRO_RDONLY | O_CLOEXEC\fP, follows ordinary symlinks, and compares descriptor metadata before and after reading. A changed device, inode, file type, size, high\-resolution modification time or change time rejects the candidate. Premature EOF and detected growth also reject it. Unlocked POSIX reads cannot detect a same\-metadata overwrite, so this check promises detection of observable metadata changes rather than every concurrent write.
+.sp
+Raw NUL bytes, malformed UTF\-8, a BOM away from byte zero, UTF\-16 or UTF\-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and \f(CRnull\fP are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
+.sp
+Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 accepts those fields plus \f(CRmodes\fP and \f(CRactive_mode\fP. \f(CRversion\fP is required and must have the mathematical integer value 1 or 2; \f(CRmodes\fP and \f(CRactive_mode\fP are rejected in version 1. All other fields shown here are optional:
+.sp
+.if n .RS 4
+.nf
+.fam C
+{
+  "version": 2,
+  "config": {},
+  "spaces": [],
+  "modes": [
+    { "name": "work", "spaces": [] }
+  ],
+  "active_mode": "work",
+  "rules": []
+}
+.fam
+.fi
+.if n .RE
+.SS "Numbers and limits"
+.sp
+Integer fields use mathematical value semantics: \f(CR1\fP, \f(CR1.0\fP and \f(CR1e0\fP are equivalent when the value is integral and in range. JSON booleans are not numbers. Signed setting integers use \f(CRINT_MIN...INT_MAX\fP; unsigned fields use the ranges stated below.
+.sp
+A float starts as a finite \f(CRdouble\fP. Except for an allowed zero, its absolute value must be between \f(CRFLT_MIN\fP and \f(CRFLT_MAX\fP. Yabai casts it once to \f(CRfloat\fP, requires the result to remain finite and nonzero when the input was nonzero, then applies the field range. Rounding inside that destination range is accepted.
+.sp
+Parser and copied\-model limits are:
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+authored file: 1 MiB, including comments and a BOM;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+nesting depth: 64 containers;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+members in one object: 256;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+base and mode Space policies: 1,024 total;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+named modes: 64;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+native rules: 1,024;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+decoded key: 128 UTF\-8 bytes;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+Space UUID, rule label or scratchpad: 1,024 UTF\-8 bytes;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+regular expression: 4,096 UTF\-8 bytes;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+path: \f(CRPATH_MAX \- 1\fP UTF\-8 bytes;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+copied native model: 8 MiB. This budget does not include Foundation parser overhead;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+display and Space target index: \f(CR1...INT_MAX\fP.
+.RE
+.SS "Global settings"
+.sp
+\f(CRconfig\fP accepts every current \f(CRconfig\fP setting. Omitting a field leaves the built\-in value at startup; a successful reload restores the built\-in value before applying the new native fields.
+.sp
+Boolean fields are \f(CRdebug_output\fP, \f(CRmouse_follows_focus\fP, \f(CRmanage\fP, \f(CRwindow_sublayer_auto\fP, \f(CRwindow_zoom_persist\fP, \f(CRdirect_space_switch\fP, \f(CRskip_window_focus_animation\fP, \f(CRwindow_opacity\fP, \f(CRnative_edge_resize\fP and \f(CRmouse_bsp_live_resize\fP.
+.sp
+Enum fields are:
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRfocus_follows_mouse\fP: \f(CRoff\fP, \f(CRautofocus\fP, \f(CRautoraise\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRdisplay_arrangement_order\fP: \f(CRdefault\fP, \f(CRhorizontal\fP, \f(CRvertical\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_origin_display\fP: \f(CRdefault\fP, \f(CRfocused\fP, \f(CRcursor\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_focus_fallback\fP: \f(CRoff\fP, \f(CRrecent\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_placement\fP: \f(CRfirst_child\fP, \f(CRsecond_child\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_insertion_point\fP: \f(CRfocused\fP, \f(CRfirst\fP, \f(CRlast\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_shadow\fP: \f(CRoff\fP, \f(CRfloat\fP, \f(CRon\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmenubar\fP: \f(CRoff\fP, \f(CRon\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmenubar_interface\fP: \f(CRmenu\fP, \f(CRpanel\fP, \f(CRauto\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmenubar_style\fP: \f(CRautomatic\fP, \f(CRcompact\fP, \f(CRexpanded\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmenubar_space_filter\fP: \f(CRoccupied\fP, \f(CRall\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRlayout\fP: \f(CRbsp\fP, \f(CRstack\fP, \f(CRfloat\fP, \f(CRaccordion_horizontal\fP, \f(CRaccordion_vertical\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsplit_type\fP: \f(CRvertical\fP, \f(CRhorizontal\fP, \f(CRauto\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRauto_balance\fP: \f(CRoff\fP, \f(CRon\fP, \f(CRx\-axis\fP, \f(CRy\-axis\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmouse_modifier\fP: \f(CRalt\fP, \f(CRshift\fP, \f(CRcmd\fP, \f(CRctrl\fP, \f(CRfn\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmouse_action1\fP, \f(CRmouse_action2\fP: \f(CRmove\fP, \f(CRresize\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmouse_drop_action\fP: \f(CRswap\fP, \f(CRstack\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_animation_easing\fP: \f(CRease_in_sine\fP, \f(CRease_out_sine\fP, \f(CRease_in_out_sine\fP, \f(CRease_in_quad\fP, \f(CRease_out_quad\fP, \f(CRease_in_out_quad\fP, \f(CRease_in_cubic\fP, \f(CRease_out_cubic\fP, \f(CRease_in_out_cubic\fP, \f(CRease_in_quart\fP, \f(CRease_out_quart\fP, \f(CRease_in_out_quart\fP, \f(CRease_in_quint\fP, \f(CRease_out_quint\fP, \f(CRease_in_out_quint\fP, \f(CRease_in_expo\fP, \f(CRease_out_expo\fP, \f(CRease_in_out_expo\fP, \f(CRease_in_circ\fP, \f(CRease_out_circ\fP, \f(CRease_in_out_circ\fP.
+.RE
+.sp
+Numeric fields are:
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_opacity_duration\fP: finite seconds in \f(CR0...INT_MAX/1000\fP, also subject to the scripting\-addition duration conversion;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRwindow_animation_duration\fP: finite seconds greater than or equal to zero. A nonzero value requires nonprompting SIP and Screen Recording preflight during runtime preparation;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmenubar_opacity\fP: \f(CR0...1\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_opacity\fP, \f(CRnormal_window_opacity\fP: greater than zero and at most 1;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_highlight_color\fP: unsigned mathematical integer \f(CR1...UINT32_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_highlight_radius\fP: finite display points greater than or equal to zero, default 9;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRactive_window_highlight_width\fP: finite display points greater than zero, default 4; rendering clamps it to half the focused window\(cqs shorter dimension;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRinsert_feedback_color\fP: unsigned mathematical integer \f(CR1...UINT32_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRinsert_feedback_radius\fP: finite display points greater than or equal to zero, default 9;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRinsert_feedback_width\fP: finite display points greater than zero, default 2; rendering clamps it to half the feedback frame\(cqs shorter dimension;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP: mathematical integer \f(CRINT_MIN...INT_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRaccordion_padding\fP: mathematical integer \f(CR0...INT_MAX\fP, default 30 display points;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsingle_window_max_width\fP: mathematical integer \f(CR0...INT_MAX\fP, default 0 (no ceiling);
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsingle_window_min_width\fP: mathematical integer \f(CR0...INT_MAX\fP, default 0 (no floor);
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsingle_window_width_ratio\fP: finite float greater than zero and at most 1, default 1;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsplit_ratio\fP: \f(CR0.1...0.9\fP.
+.RE
+.sp
+\f(CRexternal_bar\fP is an exact object. All three fields are required: \f(CRmode\fP is \f(CRoff\fP, \f(CRmain\fP or \f(CRall\fP, while \f(CRtop_padding\fP and \f(CRbottom_padding\fP are mathematical integers in \f(CRINT_MIN...INT_MAX\fP.
+.sp
+The native \f(CRwindow_shadow\fP, \f(CRwindow_opacity\fP, \f(CRwindow_opacity_duration\fP, \f(CRactive_window_opacity\fP and \f(CRnormal_window_opacity\fP settings use the scripting addition when yabai applies them to windows. The scripting addition requires partial SIP disablement. Other native settings do not gain that requirement merely by being stored in JSONC; \f(CRwindow_animation_duration\fP has the separate Screen Recording and SIP preflight described above.
+.SS "Space policy"
+.sp
+Each \f(CRspaces\fP entry is an exact object with required \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. \f(CRmatch\fP contains exactly one selector: a positive global one\-based Mission Control \f(CRindex\fP, or a nonempty exact \f(CRuuid\fP. When present, \f(CRsettings\fP must contain at least one of \f(CRlayout\fP, \f(CRtop_padding\fP, \f(CRbottom_padding\fP, \f(CRleft_padding\fP, \f(CRright_padding\fP, \f(CRwindow_gap\fP, \f(CRaccordion_padding\fP, \f(CRsingle_window_width_ratio\fP, \f(CRsingle_window_min_width\fP, \f(CRsingle_window_max_width\fP, \f(CRsplit_ratio\fP, \f(CRsplit_type\fP and \f(CRauto_balance\fP, using the types and ranges above. A Space \f(CRsplit_ratio\fP uses the existing \f(CR0.1...0.9\fP range and controls the default ratio for new BSP splits on that Space.
+.sp
+Yabai evaluates Space entries in file order and resolves each setting separately. Later matching entries win within the native Space layer. A positive index that is not present in the current valid topology is accepted and its policy remains dormant. An index follows its Mission Control slot, so reconciliation automatically applies that policy if the slot later appears; a UUID follows the captured identity when macOS remaps its runtime Space ID. System and native\-fullscreen Spaces remain floating.
+.sp
+Effective precedence is:
+.sp
+.if n .RS 4
+.nf
+.fam C
+built\-in < native global < native Space < runtime global < runtime Space
+.fam
+.fi
+.if n .RE
+.sp
+A successful imperative \f(CRconfig\fP command owns the field at its runtime layer. Runtime ownership survives topology reconciliation, Space remapping, mode activation and mode deactivation, then clears only after a successful JSONC reload. When an installed policy has a scaffold, successful imperative global or scoped layout changes request coalesced reconciliation so a BSP scaffold is restored after a stack\-to\-BSP transition without changing inventory or runtime ownership. \f(CRspace \-\-layout\fP uses runtime Space ownership. For \f(CRwindow_focus_fallback\fP, this means \f(CRyabai \-m config window_focus_fallback recent\fP overrides the native value until a successful reload clears runtime ownership and reapplies the native candidate; omitting it from that candidate restores the built\-in \f(CRoff\fP value. Imperative \f(CRspace \-\-padding\fP, \f(CRspace \-\-gap\fP and their toggles do not create declarative ownership; a later native reconciliation may overwrite their numeric result.
+.SS "Named modes"
+.sp
+Version 2 may declare up to 64 uniquely named modes in source order. A mode is an exact object containing \f(CRname\fP (a nonempty UTF\-8 string of at most 1,024 bytes) and \f(CRspaces\fP (an array using the version 2 Space\-policy form). Base \f(CRspaces\fP are evaluated first, then the selected mode\(cqs policies overlay them in declaration order. Thus later matching mode fields override native base fields while runtime global and runtime Space ownership still have higher precedence.
+.sp
+Every base or mode Space policy requires \f(CRmatch\fP and at least one of \f(CRsettings\fP or \f(CRscaffold\fP. For scaffold specifically, omission from a policy that has \f(CRsettings\fP means inherit the last matching base or earlier mode scaffold, while \f(CR"scaffold": []\fP explicitly clears it. A nonempty mode scaffold replaces the earlier scaffold. Missing applications simply leave their scaffold primary slots vacant; mode selection never launches applications.
+.sp
+\f(CRactive_mode\fP, when present, must exactly name a declared mode and selects it during startup and every successful reload. At runtime, \f(CRyabai \-m mode \-\-activate <name>\fP selects an overlay and \f(CR\-\-deactivate\fP selects base policies only; deactivation does not restore the file\(cqs \f(CRactive_mode\fP and does not clear imperative runtime overrides. Reload selects the newly authored \f(CRactive_mode\fP (or no mode when omitted) and, like every successful reload, clears runtime setting ownership under the normal reload contract.
+.sp
+Runtime selection is transactional and errors are typed through topology capture/snapshot and Space preparation/commit. An unknown explicit name, malformed internal state, or invariant/admission/commit failure is terminal; an unavailable error means no installed native mode runtime; allocation/resource exhaustion and a temporarily unavailable production Space inventory query may be retried later without reserving reconciliation; only topology settling, races, or stale identity failures reserve runtime\-owned reconciliation and are retried after it settles. A successful command reports selection publication, not completion of the follow\-up asynchronous reconciliation, and the client performs exactly one activation/deactivation operation with no retry loop. Failed selection produces no query/list JSON and preserves the installed selection, rules, runtime ownership and Space state.
+.sp
+\f(CR\-\-query\fP returns the active mode as one escaped JSON string, or JSON \f(CRnull\fP. \f(CR\-\-list\fP returns stable JSON with declared names in source order and \f(CRactive\fP set to that same string or \f(CRnull\fP. Snapshot creation is worker\-only and requires a fresh\-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
+.sp
+Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored\-file, mode\-count, aggregate\-policy, string, model\-memory and topology limits above all continue to apply.
+.SS "Managed scaffold"
+.sp
+An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.
+.sp
+The first matching scaffold entry owns a window, so overlapping expressions resolve in array order. The lowest nonzero window ID matching each present entry is its primary window. Other windows from that application and windows matching no entry remain ordinary BSP overflow windows.
+.sp
+Present primaries compact in declaration order. One fills the Space. With two primaries, the first occupies the effective Space \f(CRsplit_ratio\fP on the left and the second gets the remainder. With three primaries, the first occupies that ratio on the left; the right branch keeps an equal \f(CR0.5\fP split, placing the second upper\-right and the third lower\-right. The default remains \f(CR0.5\fP. Opening order does not affect that primary topology. A primary membership change, successful scaffold generation change, or effective ratio change rebuilds the detached BSP root transactionally; overflow\-only membership changes retain normal BSP insertion and collapse behavior. During a required rebuild, overflow windows are reinserted in captured order through the ordinary BSP insertion policy.
+.sp
+.if n .RS 4
+.nf
+.fam C
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 2 },
+      "scaffold": [
+        { "pattern": "^Mail$" },
+        { "pattern": "^Calendar$" },
+        { "pattern": "^Messages$" }
+      ]
+    }
+  ]
+}
+.fam
+.fi
+.if n .RE
+.SS "Single\-window geometry"
+.sp
+\f(CRsingle_window_width_ratio\fP, \f(CRsingle_window_min_width\fP and \f(CRsingle_window_max_width\fP form an opt\-in managed\-layout policy for wide displays. After display, menu bar, Dock, external\-bar and ordinary Space padding constraints are applied, the ratio selects a percentage of the usable root width when the Space contains exactly one managed window. Yabai preserves the full usable height and centers the narrower root horizontally. The ratio is a finite value greater than zero and at most 1; its default of 1 selects 100% width.
+.sp
+Let \f(CRA\fP be the usable width, \f(CRr\fP the effective \f(CRsingle_window_width_ratio\fP, \f(CRn\fP the effective \f(CRsingle_window_min_width\fP, and \f(CRm\fP the effective \f(CRsingle_window_max_width\fP. Start with \f(CRA * r\fP, apply \f(CRm\fP as a ceiling when it is positive, apply \f(CRn\fP as a floor when it is positive, then clamp the result to \f(CRA\fP. Thus a display narrower than the configured floor uses its complete usable width instead of overflowing. If an effective floor exceeds a positive ceiling, the usability floor takes precedence before the final available\-width clamp; configurations should normally keep \f(CRn <= m\fP. Zero means no floor or ceiling. The default values (\f(CRr = 1\fP, \f(CRn = 0\fP, \f(CRm = 0\fP) preserve ordinary full\-width behavior. Because each side margin is \f(CR(A \- selected width) / 2\fP, one ratio produces smaller absolute margins on a laptop and larger absolute margins on an ultrawide.
+.sp
+The trigger counts managed windows, not applications or occupied leaves. A BSP stack, \f(CRstack\fP layout or accordion containing two or more managed windows therefore uses ordinary full\-width geometry even though windows may overlap. Floating, unmanaged, system and native\-fullscreen windows do not participate. \f(CRfloat\fP Spaces are unchanged.
+.sp
+Opening a second managed window restores the ordinary root before its final frames are flushed; closing, minimizing, hiding or moving windows so that exactly one remains reapplies the ratio, floor and ceiling. Display and Space changes, startup, reload, mode activation and topology reconciliation recompute the same geometry without rebuilding or reordering an otherwise unchanged tree. All three settings follow normal global and per\-Space precedence and runtime ownership.
+.sp
+For an eligible single managed BSP window, \f(CRwindow \-\-toggle zoom\-fullscreen\fP bypasses the responsive singleton width and uses the complete ordinary root. Toggling it again restores the ratio, floor and ceiling. Adding another managed window, removing or moving the singleton, or changing away from BSP clears this singleton\-only zoom state. Ordinary multi\-window \f(CRzoom\-fullscreen\fP behavior is unchanged.
+.SS "Accordion geometry"
+.sp
+\f(CRaccordion_horizontal\fP and \f(CRaccordion_vertical\fP are managed layouts. Every managed window remains in the Space forest and managed\-window table; rules with \f(CRmanage=false\fP, native\-fullscreen Spaces and system Spaces remain outside that forest. Accordion does not require the scripting addition.
+.sp
+The layout keeps one stable membership order. Every window retains the same\-size overlapping frame; changing focus raises that window above its peers without changing geometry or moving it in the membership order. Insertion, removal, minimization, restoration, a cross\-Space move or an explicit swap may change membership order.
+.sp
+After display, menu bar, Dock, external\-bar and Space padding constraints, let \f(CRL\fP be the finite nonnegative length on the accordion axis, \f(CRn\fP the managed\-window count and \f(CRp\fP the nonnegative \f(CRaccordion_padding\fP request. With no windows, yabai emits no frames. One window receives the complete effective root area, including any singleton width ratio, floor or ceiling. For two or more windows, the effective exposed strip is \f(CRs = min(p, L / n)\fP and every window receives axis length \f(CRW = L \- (n \- 1) * s\fP. Window \f(CRi\fP in stable zero\-based order starts at \f(CRi * s\fP from the usable\-area origin. In ideal real\-number geometry, the equal frames overlap, remain inside the usable area, fill the cross axis and place their first and last edges on the constrained boundaries. Stored origins are deterministically rounded and clamped to representable in\-bounds coordinates, while every stored frame uses the same rounded axis length; at extreme coordinate magnitudes, adjacent origins may therefore coincide. Over\-capacity requests give every window one equal share rather than a negative or nonfinite frame. A request of zero is valid and makes all frames coincide.
+.sp
+Focus, inventory, delayed create, destroy, minimize, restore, Space move, display change, topology reconciliation and Mission Control exit paths recompute the same geometry. A successful JSONC reload may add, change or remove the layout and \f(CRaccordion_padding\fP under the normal transaction and precedence rules. Preparation failure preserves the installed generation, roots, managed\-window table, ownership and effective layout.
+.sp
+To assign Mission Control Space 9 to the horizontal accordion layout with the default strip request:
+.sp
+.if n .RS 4
+.nf
+.fam C
+{
+  "version": 1,
+  "spaces": [
+    {
+      "match": { "index": 9 },
+      "settings": {
+        "layout": "accordion_horizontal",
+        "accordion_padding": 30
+      }
+    }
+  ]
+}
+.fam
+.fi
+.if n .RE
+.SS "Native rules"
+.sp
+Each \f(CRrules\fP entry accepts exactly \f(CRlabel\fP, \f(CRone_shot\fP, \f(CRmatch\fP and \f(CReffects\fP. \f(CRmatch\fP is required and nonempty. \f(CRlabel\fP is optional, nonempty, unique within the file and at most 1,024 UTF\-8 bytes. \f(CRone_shot\fP is an optional boolean, defaulting to \f(CRfalse\fP. \f(CReffects\fP is optional and may be empty, so an effectless persistent rule is valid.
+.sp
+\f(CRmatch\fP accepts \f(CRapp\fP, \f(CRtitle\fP, \f(CRrole\fP and \f(CRsubrole\fP. Each matcher is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, which defaults to \f(CRfalse\fP. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role or subrole without app or title.
+.sp
+\f(CReffects\fP accepts:
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRdisplay\fP: exact object \f(CR{ "index": n }\fP, where \f(CRn\fP is \f(CR1...INT_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRspace\fP: exact object \f(CR{ "index": n }\fP, where \f(CRn\fP is \f(CR1...INT_MAX\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRfollow\fP: boolean shared by the selected display or Space target. It is invalid without either target;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRgrid\fP: exactly \f(CR[rows, columns, x, y, width, height]\fP. Each value is a mathematical integer in \f(CR0...UINT_MAX\fP; rows and columns must be greater than zero;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRopacity\fP: finite float in \f(CR0...1\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRmanage\fP, \f(CRsticky\fP, \f(CRmouse_follows_focus\fP, \f(CRnative_fullscreen\fP: boolean;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRsub_layer\fP: \f(CRbelow\fP, \f(CRnormal\fP, \f(CRabove\fP, \f(CRauto\fP;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+\f(CRscratchpad\fP: nonempty string of at most 1,024 UTF\-8 bytes. The reserved identifiers \f(CRfloat\fP, \f(CRsticky\fP, \f(CRshadow\fP, \f(CRsplit\fP, \f(CRzoom\-parent\fP, \f(CRzoom\-fullscreen\fP, \f(CRwindowed\-fullscreen\fP, \f(CRnative\-fullscreen\fP, \f(CRexpose\fP, \f(CRpip\fP and \f(CRrecover\fP are rejected.
+.RE
+.sp
+A rule cannot specify both \f(CRscratchpad\fP and \f(CRmanage\fP. If both display and Space are present, Space wins and the shared \f(CRfollow\fP applies to it.
+.sp
+During daemon startup, target moves still apply while each pre\-existing application\(cqs initial window inventory converges, but \f(CRfollow\fP is suppressed so restarting yabai does not change the active Space. Window\-created retries retain that startup context. Later windows and explicit \f(CRrule \-\-apply\fP operations use normal follow behavior; native fullscreen continues to focus its target.
+.sp
+The native \f(CRsticky\fP, \f(CRsub_layer\fP and \f(CRopacity\fP effects call the scripting addition and require partial SIP disablement. Assigning a \f(CRscratchpad\fP label is retained by yabai, but normal scratchpad ordering, hiding, recovery and presentation use scripting\-addition operations and therefore need the same setup. The other native rule effects do not require the scripting addition solely because they appear in JSONC.
+.sp
+Native display and Space targets use one\-based indices only. Display indices resolve using the candidate \f(CRdisplay_arrangement_order\fP; equal coordinates use the captured managed\-display ordinal as the final tie\-break. Space indices use the captured global Mission Control order. A positive authored index absent from the current valid topology is accepted, and the native rule remains installed with its source order and label. Runtime preparation still strictly rejects malformed, incomplete, duplicate, zero\-ID or ambiguous display/Space topology instead of filtering it.
+.sp
+When both display and Space are authored, Space is the selected target. An unavailable Space never falls back to display, and an unavailable lower\-priority display does not invalidate a valid Space. Until the selected target is bound, matching suppresses only move and follow; grid, opacity, management, sticky, mouse\-follows\-focus, layer, fullscreen and scratchpad effects remain independent. The unavailable\-or\-stale warning is emitted at most once per rule and generation, and only after a root window first matches the rule; a rule with no matching root window emits no warning.
+.sp
+Some macOS topologies expose a user Space whose public UUID is the empty string. Yabai preserves that empty value in query output and it cannot match a declarative UUID selector. Internally, index policy and native index rules use a private fallback identity containing the parent display UUID, display ID and managed ordinal, Space ID and kind, and global Mission Control ordinal. The fallback is never serialized as a public UUID. If any tuple field changes, the installed target becomes stale; yabai does not transfer a UUID\-less view, tree or runtime ownership to another Space ID. A coincidentally reused complete tuple cannot be distinguished because macOS supplied no durable UUID.
+.sp
+Topology reconciliation publishes a fully prepared current\-topology rule context even when fallback\-identity drift prevents safe Space\-policy or forest publication. Native rule targets therefore become stale immediately, while the existing Space roots, managed\-window table and runtime ownership remain unchanged. Yabai does not guess or transfer that state. A coherent Space lifecycle event, configuration reload or daemon restart may be required to construct fresh UUID\-less view state.
+.sp
+Targets bind once per successful explicit configuration load to an internal ID and an identity fingerprint. An unavailable native rule requires a successful explicit reload after its target appears before it can bind. Topology reconciliation alone does not bind or retarget it, and a rule already bound in that generation remains fixed and may become stale rather than following an index to a new identity. When the ID disappears, changes kind, maps to another UUID, or changes a UUID\-less fallback tuple, that rule contributes no move or follow effect, still contributes its independent effects, and emits at most one warning for that rule and generation after a match. A stale Space target does not fall back to a display target in the same rule. A later valid runtime target may still win during rule folding.
+.sp
+Native rules remain before runtime rules. Runtime \f(CRrule \-\-add\fP cannot claim a native label, even after a native one\-shot has been consumed, and \f(CRrule \-\-remove\fP cannot remove a native rule. A successful reload recreates native one\-shots and retains runtime rules in their existing order. Direct reapply and delayed window\-created retries fold against the currently installed generation context. Reload changes registrations for future windows; it does not undo or reapply effects on existing windows. Use \f(CRrule \-\-apply\fP for an explicit reapplication where supported.
+.SS "Reload, topology and atomicity"
+.sp
+The reload grammar is exactly:
+.sp
+.if n .RS 4
+.nf
+.fam C
+yabai \-m config reload
+.fam
+.fi
+.if n .RE
+.sp
+A scoped form, trailing token or mixed lifecycle/setting message is rejected before mutation. Reload uses the installed absolute lexical path. When generation is 0 because startup found no native file, it repeats default discovery. A successful first installation uses generation 1; each later successful reload increments once, including a byte\-identical reload. Reload at \f(CRUINT64_MAX\fP is rejected.
+.sp
+Reload parses and prepares the entire candidate before changing installed state. Preparation includes regular expressions, strict topology, target fingerprints, runtime\-label collision checks, permission preflight, detached Space trees, and a complete managed\-window table. Strict topology validation and target availability are distinct: malformed or internally inconsistent topology remains fatal, while a positive native rule or Space\-policy index absent from a valid current topology is accepted. Native rules bind unavailable targets only at a later successful explicit reload; reconciliation does not retarget them. Space policies instead continue to follow their current index or identity and automatically apply when reconciliation finds the target. Any preparation failure preserves the installed model, path, generation, settings, runtime ownership, native rules, views, forest and managed\-window table.
+.sp
+The event\-loop worker publishes prepared settings, views, forest, managed\-window table, native rule prefix, native label index, model, path, fold context and generation through a no\-allocation, no\-post boundary. Allocation\-capable refreshes, tree flushes, animations, notifications and logging run afterward as best\-effort reconciliation. A failure after publication does not roll back the committed generation.
+.sp
+Topology lifecycle work uses one active reservation token spanning the queued event and its retry/backoff lifecycle. Intervening triggers coalesce into that reservation; each retry reconciles the latest live topology and runtime state. SkyLight can expose a new window before its Accessibility discovery event reaches yabai. Reconciliation excludes that unowned ID from the candidate snapshot; the later window\-discovery event applies normal management without weakening validation for already\-owned windows. Other transient failures retry seven times at 50, 100, 200, 400, 800, 1,600 and 3,200 milliseconds before reporting exhaustion. The token clears only after success, terminal failure, retry exhaustion, rejected retry scheduling, explicit cancellation or shutdown. Queue admission owns event context and daemon response/socket cleanup on both acceptance and rejection.
+.sp
+Focus follows mouse uses one daemon\-lifetime event tap with the superset event mask. \f(CRconfigured_ffm_mode\fP holds the configured value. Nested menu tracking forces the atomic effective mode to \f(CRoff\fP; closing the final menu derives the effective mode from the latest configured value rather than restoring a saved stale value.
+.SS "Diagnostics"
+.sp
+Startup and offline\-check errors go to stderr; reload errors go to the daemon client. Configuration errors and stale native targets also request a best\-effort Notification Center notification and write an error to the macOS unified log with subsystem \f(CRcom.asmvik.yabai\fP and category \f(CRconfiguration\fP. Configuration notifications use one stable identifier, so Notification Center replaces the previous yabai configuration alert instead of accumulating repeated copies.
+.sp
+A complete stderr or notification diagnostic is capped at 2,048 UTF\-8 bytes. A failing daemon response has the same 2,048\-byte wire cap, including its one\-byte failure marker, so its diagnostic text is at most 2,047 bytes. The dynamic unified\-log payload is capped at 1,024 UTF\-8 bytes. Truncation preserves valid UTF\-8. Paths escape control characters, JSON paths are sanitized, and diagnostics omit source text, candidate values, regular\-expression text, shell commands and unknown key text. Notification and log sink failures do not replace the primary error. Notification presentation and unified\-log persistence remain subject to macOS settings and policy.
+.sp
+Inspect recent configuration log records with:
+.sp
+.if n .RS 4
+.nf
+.fam C
+log show \-\-predicate \*(Aqsubsystem == "com.asmvik.yabai" && category == "configuration"\*(Aq \-\-last 5m
+.fam
+.fi
+.if n .RE
 .SH "DEFINITIONS"
 .sp
 .if n .RS 4
@@ -130,7 +976,15 @@ LAYER\&       := below | normal | above | auto
 
 BOOL_SEL\&    := on | off
 
-FLOAT_SEL\&   := 0 < <value> <= 1.0
+UNIT_SEL\&             := 0.0 <= <value> <= 1.0
+
+POSITIVE_UNIT_SEL\&    := 0.0 < <value> <= 1.0
+
+SPLIT_RATIO_SEL\&      := 0.1 <= <value> <= 0.9
+
+DURATION_SEL\&         := finite <value> >= 0.0
+
+OPACITY_DURATION_SEL := finite 0.0 <= <value> <= INT_MAX / 1000 seconds
 
 RULE_SEL\&    := <index> | LABEL
 
@@ -157,6 +1011,27 @@ EASING\&      := ease_in_sine\&  | ease_out_sine\&  | ease_in_out_sine\&  |
 .fi
 .if n .RE
 .SH "DOMAINS"
+.SS "Mode"
+.sp
+yabai \-m mode \-\-activate \fI<name>\fP
+.RS 4
+Select exactly one declared version 2 mode. The command accepts one name and no trailing token. Unknown names are terminal; other activation failures advise retry only after asynchronous reconciliation settles.
+.RE
+.sp
+yabai \-m mode \-\-deactivate
+.RS 4
+Select base Space policies only while preserving imperative runtime overrides. No argument or trailing token is accepted.
+.RE
+.sp
+yabai \-m mode \-\-query
+.RS 4
+Print the selected mode as an escaped JSON string or \f(CRnull\fP. No argument or trailing token is accepted.
+.RE
+.sp
+yabai \-m mode \-\-list
+.RS 4
+Print \f(CR{\(rs"modes\(rs":[...],\(rs"active\(rs":...}\fP as valid JSON, preserving declaration order. No argument or trailing token is accepted.
+.RE
 .SS "Config"
 .SS "General Syntax"
 .sp
@@ -168,6 +1043,11 @@ Get or set the value of <global setting>.
 yabai \-m config [\-\-space \fI<SPACE_SEL>\fP] <space setting>
 .RS 4
 Get or set the value of <space setting>.
+.RE
+.sp
+yabai \-m config reload
+.RS 4
+Reload the native JSONC configuration. The command must be unscoped and contain no trailing token or additional config mutation.
 .RE
 .SS "Global Settings"
 .sp
@@ -187,7 +1067,49 @@ Specify top and bottom padding for a potential custom bar that you may be runnin
 \fIoff\fP:  Do not apply any special padding.
 .RE
 .sp
-\fBmenubar_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBmenubar\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Show yabai Spaces as a native macOS menu bar status item. Default is \fIoff\fP.
+.br
+Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right\-click, or press and hold to open the menu. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and \fBmenubar_opacity\fP settings.
+.RE
+.sp
+\fBmenubar_interface\fP [\fImenu|panel|auto\fP]
+.RS 4
+Select the read\-only menu bar item\(cqs expanded interface. Default is \fImenu\fP.
+.br
+\fImenu\fP: Use the existing native informational menu.
+.br
+\fIpanel\fP: On macOS 27 or newer, use a transient keyboard\-accessible read\-only panel; fall back to the native menu when unavailable.
+.br
+\fIauto\fP: Use the panel on macOS 27 or newer and the native menu on older systems.
+.br
+The panel uses the existing display/Space snapshot and exposes only the existing space\-filter and indicator\-layout settings. It does not expose window content and does not require Screen Recording permission.
+.RE
+.sp
+\fBmenubar_style\fP [\fIautomatic|compact|expanded\fP]
+.RS 4
+Set the menu bar status item layout. Default is \fIexpanded\fP.
+.br
+\fIautomatic\fP: Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout.
+.br
+\fIcompact\fP: Show one screen outline for the keyboard\-focused display\(cqs visible space.
+.br
+\fIexpanded\fP: Show a bounded display\-grouped interval of filtered spaces around the focused space in the menu bar. When every outline does not fit within the 520\-point strip, \f(CR←+N\fP and \f(CR+N→\fP controls separately report spaces omitted before and after the visible interval.
+.RE
+.sp
+\fBmenubar_space_filter\fP [\fIoccupied|all\fP]
+.RS 4
+Select which spaces are shown by the menu bar item and its menu. Default is \fIoccupied\fP.
+.br
+\fIoccupied\fP: Show spaces with user\-facing application windows, spaces that are currently visible on a display, and spaces with unresolved occupancy. Floating, unmanaged, minimized, hidden and native\-fullscreen application windows count. Sticky\-only, system and transient windows do not make a space occupied.
+.br
+\fIall\fP: Show all user\-navigation spaces reported by macOS, including native\-fullscreen spaces. Virtual spaces are not created or shown.
+.br
+The automatic, compact and expanded layouts share the same flat menu. Each display appears as a labeled section header with its Space rows directly below it, and a checkmark marks that display\(cqs visible space. Choosing a Space row dismisses the menu without animation and focuses that Space, including Spaces on another display; choosing the already focused Space is a no\-op. The focused display is the display with keyboard focus and is tracked separately from visible spaces. Overflow controls open the menu. Accessibility exposes the visible Space summary for every display through the status button and labeled display sections. Layout and filter choices change the running configuration only; set these options in \fByabairc\fP to persist them.
+.RE
+.sp
+\fBmenubar_opacity\fP [\fI<UNIT_SEL>\fP]
 .RS 4
 Changes the transparency of the macOS menubar.
 .br
@@ -199,6 +1121,24 @@ The menubar will automatically become fully opaque upon entering a native\-fulls
 \fBmouse_follows_focus\fP [\fI<BOOL_SEL>\fP]
 .RS 4
 When focusing a window, put the mouse at its center.
+.RE
+.sp
+\fBmanage\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Automatically tile eligible windows. Default is \fIon\fP.
+.br
+\fIoff\fP: New and currently auto\-managed windows float unless a rule explicitly sets \fImanage=on\fP or the window is manually tiled with \fBwindow \-\-toggle float\fP. Windows manually floated by the user and windows matched by \fImanage=off\fP rules remain floating when automatic management is turned back on.
+.br
+Changing this setting at runtime or through a native configuration reload re\-evaluates existing windows. Manual overrides last for the lifetime of the window; use rules for persistent policy.
+.RE
+.sp
+\fBwindow_sublayer_auto\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Automatically place managed windows in the \fIbelow\fP sub\-layer while windows using the automatic layer float in the normal sub\-layer. Default is \fIon\fP.
+.br
+\fIoff\fP: Automatic \fIbelow\fP requests resolve to the normal sub\-layer, so tiled and floating windows retain normal macOS ordering. Explicit \fBwindow \-\-sub\-layer\fP values and rule sub\-layers remain authoritative.
+.br
+Changing this setting re\-applies every window whose configured sub\-layer is \fIauto\fP. Applying sub\-layers requires the scripting addition.
 .RE
 .sp
 \fBfocus_follows_mouse\fP [\fIautofocus|autoraise|off\fP]
@@ -228,6 +1168,15 @@ Specify which display a newly created window should be managed in.
 \fIcursor\fP: The display that currently holds the mouse cursor.
 .RE
 .sp
+\fBwindow_focus_fallback\fP [\fIoff|recent\fP]
+.RS 4
+Select the native policy used after \f(CRWINDOW_DESTROYED\fP, \f(CRWINDOW_MINIMIZED\fP and \f(CRAPPLICATION_HIDDEN\fP. The default is \fIoff\fP.
+.br
+\fIrecent\fP: After the triggering handler finishes mutating manager state, queue one event\-loop follow\-up. When that follow\-up executes, yabai rechecks the current focused window and does nothing if an eligible window is already focused. Otherwise it resolves the same valid managed window as \f(CRwindow \-\-focus recent\fP and focuses it through the normal focus path only when that window is sticky or belongs to the active Space. Destroyed, minimized, hidden, ineligible, invalid, unavailable and inactive\-Space recent windows are ignored; no candidate is a no\-op. Duplicate triggers coalesce while one follow\-up is pending.
+.br
+This is a typed focus policy. It does not execute generic signals, invoke a shell, spawn a process, or route a synthetic command through the daemon socket. Existing user\-configured signals keep their normal behavior and order.
+.RE
+.sp
 \fBwindow_placement\fP [\fIfirst_child|second_child\fP]
 .RS 4
 Specify whether managed windows should become the first or second leaf\-node.
@@ -243,13 +1192,22 @@ Specify where new managed windows will be inserted.
 Windows will keep their zoom\-state through layout changes.
 .RE
 .sp
+\fBdirect_space_switch\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Switch explicitly focused native Spaces through the validated WindowManagement bridge without invoking Dock\(cqs gesture animation.
+.br
+The bridge sets the target Space and hides the origin as one fail\-closed operation pair. Horizontal trackpad Space swipes are intercepted after reaching a small progress threshold, or on a committed terminal flick, and dispatched through the same direct path; vertical Mission Control and App Exposé gestures pass through unchanged.
+.br
+If the private ABI is unavailable, yabai retains its existing scripting\-addition and gesture fallback paths and does not intercept trackpad swipes.
+.RE
+.sp
 \fBskip_window_focus_animation\fP [\fI<BOOL_SEL>\fP]
 .RS 4
-Bypass macOS space animation when an application or window on an inactive space is focused.
+Deprecated compatibility setting with no effect.
 .br
-You should only enable this if you do NOT use the scripting addition.
+Ordinary application activation, Dock activation, Cmd\-Tab, link opening and Accessibility focus notifications use native macOS space transitions without an automatic synthetic animation\-skip transition.
 .br
-The scripting addition implements the same functionality in a more robust way.
+Explicit space focus commands and explicitly configured Space\-follow or fullscreen rules may still perform Space operations and use a synthetic gesture fallback when the scripting addition is unavailable; those operations are not controlled by this setting.
 .RE
 .sp
 \fBwindow_shadow\fP [\fI<BOOL_SEL>|float\fP]
@@ -266,36 +1224,58 @@ Enable opacity for windows.
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBwindow_opacity_duration\fP [\fI<FLOAT_SEL>\fP]
+\fBwindow_opacity_duration\fP [\fI<OPACITY_DURATION_SEL>\fP]
 .RS 4
 Duration of transition between active / normal opacity.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBactive_window_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBactive_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]
 .RS 4
 Opacity of the focused window.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBnormal_window_opacity\fP [\fI<FLOAT_SEL>\fP]
+\fBnormal_window_opacity\fP [\fI<POSITIVE_UNIT_SEL>\fP]
 .RS 4
 Opacity of an unfocused window.
 .br
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBwindow_animation_duration\fP [\fI<FLOAT_SEL>\fP]
+\fBactive_window_highlight\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Draw a click\-through outline around the focused eligible window using a private WindowServer overlay; the scripting addition is not required.
+.br
+The highlight is hidden while the window is minimized, ordered out, in native fullscreen, represented by a yabai animation proxy, or while Mission Control is active. (default: off)
+.RE
+.sp
+\fBactive_window_highlight_color\fP [\fI0xAARRGGBB\fP]
+.RS 4
+Color of the focused\-window highlight. (default: 0xffd75f5f)
+.RE
+.sp
+\fBactive_window_highlight_radius\fP [\fIfloat\fP]
+.RS 4
+Target corner radius in display points for the focused\-window highlight. Must be finite and greater than or equal to zero. (default: 9)
+.RE
+.sp
+\fBactive_window_highlight_width\fP [\fIfloat\fP]
+.RS 4
+Stroke width in display points for the focused\-window highlight. Must be finite and greater than zero.
+.br
+Rendering clamps the width to half the focused window\(cqs shorter dimension. (default: 4)
+.RE
+.sp
+\fBwindow_animation_duration\fP [\fI<DURATION_SEL>\fP]
 .RS 4
 Duration of window frame animation.
 .br
-If 0.0, the change in dimension is not animated.
+If 0.0, the change in dimension is not animated and does not require Screen Recording permissions or a partially disabled System Integrity Protection.
 .br
-Requires Screen Recording permissions.
-.br
-System Integrity Protection must be partially disabled.
+A nonzero value requires Screen Recording permissions and System Integrity Protection to be partially disabled.
 .RE
 .sp
 \fBwindow_animation_easing\fP [\fI<EASING>\fP]
@@ -314,9 +1294,46 @@ Color of the \fBwindow \-\-insert\fP message and mouse_drag selection.
 The purpose is to provide a visual preview of the new window frame.
 .RE
 .sp
-\fBsplit_ratio\fP [\fI<FLOAT_SEL>\fP]
+\fBinsert_feedback_radius\fP [\fIfloat\fP]
 .RS 4
-Specify the size distribution when a window is split.
+Corner radius in display points for insert feedback. Must be finite and greater than or equal to zero. (default: 9)
+.RE
+.sp
+\fBinsert_feedback_width\fP [\fIfloat\fP]
+.RS 4
+Stroke width in display points for insert feedback. Must be finite and greater than zero.
+.br
+Rendering clamps the width to half the shorter feedback\-frame dimension. (default: 2)
+.RE
+.sp
+\fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]
+.RS 4
+Set the default size distribution for new BSP splits on Spaces without a higher\-precedence scoped value.
+.RE
+.sp
+\fBsingle_window_max_width\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Optional absolute ceiling in display points for a Space containing exactly one managed window. Zero disables the ceiling. The proportional setting still applies. (default: 0)
+.RE
+.sp
+\fBsingle_window_min_width\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Absolute usability floor in display points for a Space containing exactly one managed window. Zero disables the floor. A narrower display uses its complete usable width. (default: 0)
+.RE
+.sp
+\fBsingle_window_width_ratio\fP [\fI<POSITIVE_UNIT_SEL>\fP]
+.RS 4
+Proportion of usable width assigned to a Space containing exactly one managed window. The window keeps the full usable height and is centered horizontally. A value of 1 preserves full width unless an absolute ceiling is configured. (default: 1)
+.RE
+.sp
+\fBnative_edge_resize\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application\(cqs mouse events. Only a focused, visible, resizable, unzoomed single\-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse\-up. Auto\-balance and managed\-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
+.RE
+.sp
+\fBmouse_bsp_live_resize\fP [\fI<BOOL_SEL>\fP]
+.RS 4
+Reflow sibling BSP windows during \fBmouse_modifier\fP resizing. Updates are limited to 30 Hz and require a two\-point cursor delta. This setting does not alter ordinary macOS edge or corner resizing, which remains release\-only under \fBnative_edge_resize\fP. Zoomed, floating and non\-BSP windows retain the ordinary resize path. The setting is latched when a modifier\-assisted gesture begins, so a runtime change applies to the next gesture. (default: off)
 .RE
 .sp
 \fBmouse_modifier\fP [\fIcmd|alt|shift|ctrl|fn\fP]
@@ -340,9 +1357,9 @@ Action performed when a bsp\-managed window is dropped in the center of some oth
 .RE
 .SS "Space Settings"
 .sp
-\fBlayout\fP [\fIbsp|stack|float\fP]
+\fBlayout\fP [\fIbsp|stack|float|accordion_horizontal|accordion_vertical\fP]
 .RS 4
-Set the layout of the selected space.
+Set the layout of the selected space. \f(CRaccordion_horizontal\fP arranges the strips along the x\-axis; \f(CRaccordion_vertical\fP arranges them along the y\-axis.
 .RE
 .sp
 \fBsplit_type\fP [\fIvertical|horizontal|auto\fP]
@@ -379,6 +1396,31 @@ Padding added at the right side of the selected space.
 \fBwindow_gap\fP [\fI<integer number>\fP]
 .RS 4
 Size of the gap that separates windows for the selected space.
+.RE
+.sp
+\fBaccordion_padding\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Requested exposed strip size for accordion layouts. The default is 30 display points. This setting has no effect on \f(CRbsp\fP, \f(CRstack\fP or \f(CRfloat\fP geometry.
+.RE
+.sp
+\fBsingle_window_max_width\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Optional absolute ceiling in display points when the selected Space contains exactly one managed window. Zero disables the ceiling. Multiple managed windows retain ordinary layout geometry.
+.RE
+.sp
+\fBsingle_window_min_width\fP [\fI<nonnegative integer number>\fP]
+.RS 4
+Absolute usability floor in display points when the selected Space contains exactly one managed window. Zero disables the floor. The result never exceeds the usable display width.
+.RE
+.sp
+\fBsingle_window_width_ratio\fP [\fI<POSITIVE_UNIT_SEL>\fP]
+.RS 4
+Proportion of usable width assigned when the selected Space contains exactly one managed window. The result is centered horizontally and then limited by \f(CRsingle_window_max_width\fP when that ceiling is positive. A value of 1 preserves full proportional width.
+.RE
+.sp
+\fBsplit_ratio\fP [\fI<SPLIT_RATIO_SEL>\fP]
+.RS 4
+Set the default ratio for new BSP splits on the selected Space. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right\-side subdivision remains \f(CR0.5\fP. Native and imperative values follow \f(CRbuilt\-in < native global < native Space < runtime global < runtime Space\fP, and runtime ownership clears on the next successful native reload like other Space settings.
 .RE
 .sp
 \fBauto_balance\fP [\fI<BOOL_SEL>|x\-axis|y\-axis\fP]
@@ -519,7 +1561,7 @@ Size of the gap that separates windows on the selected space.
 Toggle space setting on or off for the selected space.
 .RE
 .sp
-\fB\-\-layout\fP \fIbsp|stack|float\fP
+\fB\-\-layout\fP \fIbsp|stack|float|accordion_horizontal|accordion_vertical\fP
 .RS 4
 Set the layout of the selected space.
 .RE
@@ -634,6 +1676,8 @@ A positive/negative delta will increase/decrease the size of the left\-child.
 .RS 4
 Toggle the given property of the selected window.
 .br
+For a single managed BSP window constrained by responsive singleton width settings, \f(CRzoom\-fullscreen\fP toggles between the constrained width and the complete ordinary root.
+.br
 The following properties require System Integrity Protection to be partially disabled: sticky, pip, shadow, LABEL (scratchpad identifier) .
 .RE
 .sp
@@ -648,7 +1692,7 @@ Specify the value \fIauto\fP to reset back to normal and make it become automati
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fB\-\-opacity\fP \fI<FLOAT_SEL>\fP
+\fB\-\-opacity\fP \fI<UNIT_SEL>\fP
 .RS 4
 Set the opacity of the selected window.
 .br
@@ -713,6 +1757,15 @@ Retrieve information about spaces.
 .RS 4
 Retrieve information about windows.
 .RE
+.sp
+\fB\-\-daemon\-identity\fP
+.RS 4
+Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments.
+.br
+The JSON object contains \f(CRpid\fP (the daemon process identifier), \f(CRarchitecture\fP (\f(CRarm64\fP or \f(CRx86_64\fP), and \f(CRuuid\fP (the Mach\-O UUID of the running architecture slice).
+.br
+Field names and JSON types are stable for diagnostics and integration checks; values identify only the current daemon process and binary, and are not persistent identifiers.
+.RE
 .SS "ARGUMENT"
 .sp
 \fB\-\-display\fP [\fI<DISPLAY_SEL>\fP]
@@ -752,12 +1805,20 @@ DISPLAY
         "w": number,
         "h": number
     },
+    "visible\-frame": object {
+        "x": number,
+        "y": number,
+        "w": number,
+        "h": number
+    },
     "spaces": array of number,
     "has\-focus": bool
 }
 .fam
 .fi
 .if n .RE
+.sp
+The display \f(CRframe\fP is the full display bounds. The \f(CRvisible\-frame\fP excludes the system menu bar or notch and the Dock, matching \f(CRNSScreen.visibleFrame\fP; it does not exclude yabai\(cqs configured external bar.
 .sp
 SPACE
 .sp
@@ -802,12 +1863,14 @@ WINDOW
     "role": string,
     "subrole": string,
     "root\-window": bool,
+    "parent": number or null,
     "display": number,
     "space": number,
     "level": number,
     "sub\-level": number,
     "layer": string,
     "sub\-layer": string,
+    "tags": string or null,
     "opacity": number,
     "split\-type": string,
     "split\-child": string,
@@ -820,6 +1883,8 @@ WINDOW
     "has\-fullscreen\-zoom": bool,
     "has\-ax\-reference": bool,
     "is\-native\-fullscreen": bool,
+    "is\-ordered\-in": bool or null,
+    "is\-on\-screen": bool or null,
     "is\-visible": bool,
     "is\-minimized": bool,
     "is\-hidden": bool,
@@ -830,6 +1895,9 @@ WINDOW
 .fam
 .fi
 .if n .RE
+.sp
+\f(CRparent\fP is the raw WindowServer parent window id (\f(CR0\fP when no parent is reported), and \f(CRtags\fP is the raw 64\-bit WindowServer tag mask encoded as a hexadecimal string; either is \f(CRnull\fP when its native query fails. \f(CRis\-ordered\-in\fP reports WindowServer ordering state, while \f(CRis\-on\-screen\fP reports CoreGraphics compositor presence; either is also \f(CRnull\fP when its native query fails. These non\-mutating diagnostic fields are omitted from the default window query to avoid extra WindowServer calls; request them explicitly through \f(CRPROPERTIES\fP.
+.br
 .sp
 Some window properties are only accessible when yabai has a valid AX\-reference for that window.
 .br
@@ -975,7 +2043,7 @@ Specify the value \fIauto\fP to reset back to normal and make it become automati
 System Integrity Protection must be partially disabled.
 .RE
 .sp
-\fBopacity=\fI<FLOAT_SEL>\fP\fP
+\fBopacity=\fI<UNIT_SEL>\fP\fP
 .RS 4
 Set window opacity.
 .br

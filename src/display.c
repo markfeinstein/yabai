@@ -1,6 +1,9 @@
 extern struct event_loop g_event_loop;
 extern int g_connection;
 
+static CGRect display_bounds_platform_display_bounds(uint32_t did);
+static CGRect display_bounds_platform_visible_frame(uint32_t did);
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static DISPLAY_EVENT_HANDLER(display_handler)
@@ -56,15 +59,25 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
         if (did_output) fprintf(rsp, ",\n");
 
         struct display_label *display_label = display_manager_get_label_for_display(&g_display_manager, did);
-        fprintf(rsp, "\t\"label\":\"%s\"", display_label ? display_label->label : "");
+        char *label = display_label ? display_label->label : NULL;
+        char *escaped_label = label ? ts_string_escape(label) : NULL;
+        fprintf(rsp, "\t\"label\":\"%s\"", escaped_label ? escaped_label : label ? label : "");
         did_output = true;
     }
 
     if (flags & DISPLAY_PROPERTY_FRAME) {
         if (did_output) fprintf(rsp, ",\n");
 
-        CGRect frame = CGDisplayBounds(did);
+        CGRect frame = display_bounds_platform_display_bounds(did);
         fprintf(rsp, "\t\"frame\":{\n\t\t\"x\":%.4f,\n\t\t\"y\":%.4f,\n\t\t\"w\":%.4f,\n\t\t\"h\":%.4f\n\t}", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+        did_output = true;
+    }
+
+    if (flags & DISPLAY_PROPERTY_VISIBLE_FRAME) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        CGRect frame = display_bounds_platform_visible_frame(did);
+        fprintf(rsp, "\t\"visible-frame\":{\n\t\t\"x\":%.4f,\n\t\t\"y\":%.4f,\n\t\t\"w\":%.4f,\n\t\t\"h\":%.4f\n\t}", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
         did_output = true;
     }
 
@@ -75,7 +88,7 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
         uint64_t *space_list = display_space_list(did, &count);
 
         fprintf(rsp, "\t\"spaces\":[");
-        if (space_list) {
+        if (space_list && count > 0) {
             int first_mci = space_manager_mission_control_index(space_list[0]);
             for (int i = 0; i < count; ++i) {
                 if (i < count - 1) {
@@ -111,6 +124,7 @@ inline CFStringRef display_uuid(uint32_t did)
 
 inline uint32_t display_id(CFStringRef uuid)
 {
+    if (!cf_is_type(uuid, CFStringGetTypeID())) return 0;
     CFUUIDRef uuid_ref = CFUUIDCreateFromString(NULL, uuid);
     if (!uuid_ref) return 0;
 
@@ -120,54 +134,172 @@ inline uint32_t display_id(CFStringRef uuid)
     return did;
 }
 
-CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar)
+static CGRect display_bounds_apply_constraints(CGRect frame, uint32_t did, uint32_t main_did,
+                                                int external_bar_mode,
+                                                int external_top_padding, int external_bottom_padding,
+                                                bool menu_bar_hidden, int notch_height, CGRect menu,
+                                                bool dock_hidden, bool dock_display, int dock_orientation,
+                                                CGRect dock)
 {
-    CGRect frame = CGDisplayBounds(did);
     int effective_ext_top_padding = 0;
-
-    if (!ignore_external_bar) {
-        if ((g_display_manager.mode == EXTERNAL_BAR_MAIN &&
-             did == display_manager_main_display_id()) ||
-            (g_display_manager.mode == EXTERNAL_BAR_ALL)) {
-            effective_ext_top_padding = g_display_manager.top_padding;
-
-            frame.origin.y    += effective_ext_top_padding;
-            frame.size.height -= effective_ext_top_padding;
-            frame.size.height -= g_display_manager.bottom_padding;
-        }
+    bool external_bar_applies = (external_bar_mode == EXTERNAL_BAR_MAIN && did == main_did) ||
+                                external_bar_mode == EXTERNAL_BAR_ALL;
+    if (external_bar_applies) {
+        effective_ext_top_padding = external_top_padding;
+        frame.origin.y += effective_ext_top_padding;
+        frame.size.height -= effective_ext_top_padding;
+        frame.size.height -= external_bottom_padding;
     }
 
-    if (display_manager_menu_bar_hidden()) {
-        int notch_height = workspace_display_notch_height(did);
+    if (menu_bar_hidden) {
         if (notch_height > effective_ext_top_padding) {
-             frame.origin.y    += (notch_height - effective_ext_top_padding);
-             frame.size.height -= (notch_height - effective_ext_top_padding);
+            CGFloat notch_adjustment = (CGFloat) notch_height - (CGFloat) effective_ext_top_padding;
+            frame.origin.y += notch_adjustment;
+            frame.size.height -= notch_adjustment;
         }
     } else {
-        CGRect menu = display_manager_menu_bar_rect(did);
-        frame.origin.y    += menu.size.height;
+        frame.origin.y += menu.size.height;
         frame.size.height -= menu.size.height;
     }
 
-    if (!display_manager_dock_hidden()) {
-        if (did == display_manager_dock_display_id()) {
-            CGRect dock = display_manager_dock_rect();
-            switch (display_manager_dock_orientation()) {
-            case DOCK_ORIENTATION_LEFT: {
-                frame.origin.x   += dock.size.width;
-                frame.size.width -= dock.size.width;
-            } break;
-            case DOCK_ORIENTATION_RIGHT: {
-                frame.size.width -= dock.size.width;
-            } break;
-            case DOCK_ORIENTATION_BOTTOM: {
-                frame.size.height -= dock.size.height;
-            } break;
-            }
+    if (!dock_hidden && dock_display) {
+        switch (dock_orientation) {
+        case DOCK_ORIENTATION_LEFT: {
+            frame.origin.x += dock.size.width;
+            frame.size.width -= dock.size.width;
+        } break;
+        case DOCK_ORIENTATION_RIGHT: {
+            frame.size.width -= dock.size.width;
+        } break;
+        case DOCK_ORIENTATION_BOTTOM: {
+            frame.size.height -= dock.size.height;
+        } break;
         }
     }
-
     return frame;
+}
+
+#ifdef TESTS
+struct display_bounds_platform_ops
+{
+    CGRect (*display_bounds)(uint32_t did, void *context);
+    CGRect (*visible_frame)(uint32_t did, CGRect display_bounds, void *context);
+    uint32_t (*main_display_id)(void *context);
+    bool (*menu_bar_hidden)(void *context);
+    int (*notch_height)(uint32_t did, void *context);
+    CGRect (*menu_bar_rect)(uint32_t did, void *context);
+    bool (*dock_hidden)(void *context);
+    uint32_t (*dock_display_id)(void *context);
+    int (*dock_orientation)(void *context);
+    CGRect (*dock_rect)(void *context);
+    void *context;
+};
+static struct display_bounds_platform_ops display_bounds_test_ops;
+#endif
+
+static CGRect display_bounds_platform_display_bounds(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.display_bounds) return display_bounds_test_ops.display_bounds(did, display_bounds_test_ops.context);
+#endif
+    return CGDisplayBounds(did);
+}
+
+static CGRect display_bounds_platform_visible_frame(uint32_t did)
+{
+    CGRect display_bounds = display_bounds_platform_display_bounds(did);
+#ifdef TESTS
+    if (display_bounds_test_ops.visible_frame) return display_bounds_test_ops.visible_frame(did, display_bounds, display_bounds_test_ops.context);
+#endif
+    return workspace_display_visible_frame(did, display_bounds);
+}
+
+static uint32_t display_bounds_platform_main_display_id(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.main_display_id) return display_bounds_test_ops.main_display_id(display_bounds_test_ops.context);
+#endif
+    return display_manager_main_display_id();
+}
+
+static bool display_bounds_platform_menu_bar_hidden(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.menu_bar_hidden) return display_bounds_test_ops.menu_bar_hidden(display_bounds_test_ops.context);
+#endif
+    return display_manager_menu_bar_hidden();
+}
+
+static int display_bounds_platform_notch_height(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.notch_height) return display_bounds_test_ops.notch_height(did, display_bounds_test_ops.context);
+#endif
+    return workspace_display_notch_height(did);
+}
+
+static CGRect display_bounds_platform_menu_bar_rect(uint32_t did)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.menu_bar_rect) return display_bounds_test_ops.menu_bar_rect(did, display_bounds_test_ops.context);
+#endif
+    return display_manager_menu_bar_rect(did);
+}
+
+static bool display_bounds_platform_dock_hidden(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_hidden) return display_bounds_test_ops.dock_hidden(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_hidden();
+}
+
+static uint32_t display_bounds_platform_dock_display_id(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_display_id) return display_bounds_test_ops.dock_display_id(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_display_id();
+}
+
+static int display_bounds_platform_dock_orientation(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_orientation) return display_bounds_test_ops.dock_orientation(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_orientation();
+}
+
+static CGRect display_bounds_platform_dock_rect(void)
+{
+#ifdef TESTS
+    if (display_bounds_test_ops.dock_rect) return display_bounds_test_ops.dock_rect(display_bounds_test_ops.context);
+#endif
+    return display_manager_dock_rect();
+}
+
+CGRect display_bounds_constrained_with_external_bar(uint32_t did, int mode, int top_padding, int bottom_padding)
+{
+    uint32_t main_did = mode == EXTERNAL_BAR_MAIN ? display_bounds_platform_main_display_id() : 0;
+    bool menu_bar_hidden = display_bounds_platform_menu_bar_hidden();
+    bool dock_hidden = display_bounds_platform_dock_hidden();
+    bool dock_display = !dock_hidden && did == display_bounds_platform_dock_display_id();
+    return display_bounds_apply_constraints(display_bounds_platform_display_bounds(did), did, main_did, mode,
+                                            top_padding, bottom_padding,
+                                            menu_bar_hidden,
+                                            menu_bar_hidden ? display_bounds_platform_notch_height(did) : 0,
+                                            menu_bar_hidden ? CGRectZero : display_bounds_platform_menu_bar_rect(did),
+                                            dock_hidden, dock_display,
+                                            dock_display ? display_bounds_platform_dock_orientation() : 0,
+                                            dock_display ? display_bounds_platform_dock_rect() : CGRectZero);
+}
+
+CGRect display_bounds_constrained(uint32_t did, bool ignore_external_bar)
+{
+    return display_bounds_constrained_with_external_bar(did,
+                                                        ignore_external_bar ? EXTERNAL_BAR_OFF : g_display_manager.mode,
+                                                        g_display_manager.top_padding,
+                                                        g_display_manager.bottom_padding);
 }
 
 CGPoint display_center(uint32_t did)
@@ -189,64 +321,61 @@ inline uint64_t display_space_id(uint32_t did)
 
 int display_space_count(uint32_t did)
 {
-    int space_count = 0;
+    int result = 0;
+    CFStringRef uuid = display_uuid(did);
+    if (!uuid) return 0;
+
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (topology) {
+        CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+        managed_space_count_valid_checked(spaces, &result);
+        CFRelease(topology);
+    }
+    CFRelease(uuid);
+    return result;
+}
+
+static uint64_t *display_space_list_from_spaces(CFArrayRef spaces, int *count)
+{
+    if (count) *count = 0;
+    if (!count || !cf_is_type(spaces, CFArrayGetTypeID())) return NULL;
+
+    int valid_count = 0;
+    if (!managed_space_count_valid_checked(spaces, &valid_count)) return NULL;
+    uint64_t *result = ts_alloc_list(uint64_t, valid_count);
+    if (result) *count = managed_space_copy_valid(spaces, result);
+    return result;
+}
+
+uint64_t *display_space_list_with_topology(uint32_t did, CFArrayRef topology, int *count)
+{
+    if (count) *count = 0;
+    if (!count || !topology) return NULL;
 
     CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    if (!uuid) return NULL;
 
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) goto err;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFStringRef identifier = CFDictionaryGetValue(display_ref, CFSTR("Display Identifier"));
-        if (!CFEqual(uuid, identifier)) continue;
-
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        space_count = CFArrayGetCount(spaces_ref);
-        break;
-    }
-
-    CFRelease(display_spaces_ref);
-err:
+    CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+    uint64_t *result = display_space_list_from_spaces(spaces, count);
     CFRelease(uuid);
-out:
-    return space_count;
+    return result;
 }
 
 uint64_t *display_space_list(uint32_t did, int *count)
 {
-    uint64_t *space_list = NULL;
+    if (count) *count = 0;
+    if (!count) return NULL;
 
     CFStringRef uuid = display_uuid(did);
-    if (!uuid) goto out;
+    if (!uuid) return NULL;
 
-    CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(g_connection);
-    if (!display_spaces_ref) goto err;
-
-    int display_spaces_count = CFArrayGetCount(display_spaces_ref);
-    for (int i = 0; i < display_spaces_count; ++i) {
-        CFDictionaryRef display_ref = CFArrayGetValueAtIndex(display_spaces_ref, i);
-        CFStringRef identifier = CFDictionaryGetValue(display_ref, CFSTR("Display Identifier"));
-        if (!CFEqual(uuid, identifier)) continue;
-
-        CFArrayRef spaces_ref = CFDictionaryGetValue(display_ref, CFSTR("Spaces"));
-        int spaces_count = CFArrayGetCount(spaces_ref);
-
-        space_list = ts_alloc_list(uint64_t, spaces_count);
-        *count = spaces_count;
-
-        for (int j = 0; j < spaces_count; ++j) {
-            CFDictionaryRef space_ref = CFArrayGetValueAtIndex(spaces_ref, j);
-            CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
-            CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref), &space_list[j]);
-        }
+    uint64_t *result = NULL;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (topology) {
+        CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
+        result = display_space_list_from_spaces(spaces, count);
+        CFRelease(topology);
     }
-
-    CFRelease(display_spaces_ref);
-err:
     CFRelease(uuid);
-out:
-    return space_list;
+    return result;
 }

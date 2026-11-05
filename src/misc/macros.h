@@ -1,6 +1,8 @@
 #ifndef MACROS_H
 #define MACROS_H
 
+#include <limits.h>
+
 #define KILOBYTES(value) ((value) * 1024ULL)
 #define MEGABYTES(value) (KILOBYTES(value) * 1024ULL)
 #define GIGABYTES(value) (MEGABYTES(value) * 1024ULL)
@@ -8,7 +10,11 @@
 #define array_count(a) (int)(sizeof((a)) / sizeof(*(a)))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
-#define add_and_clamp_to_zero(a, b) (((a) + (b) <= 0) ? 0 : (a) + (b))
+static inline int add_and_clamp_to_zero(int a, int b)
+{
+    long long sum = (long long) a + (long long) b;
+    return sum <= 0 ? 0 : sum > INT_MAX ? INT_MAX : (int) sum;
+}
 #define in_range_ii(a, b, c) (((a) >= (b)) && ((a) <= (c)))
 #define in_range_ie(a, b, c) (((a) >= (b)) && ((a) <  (c)))
 #define in_range_ei(a, b, c) (((a) >  (b)) && ((a) <= (c)))

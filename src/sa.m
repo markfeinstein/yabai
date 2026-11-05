@@ -1,4 +1,5 @@
 #include "sa.h"
+#include "sa_message.h"
 
 extern int csr_get_active_config(uint32_t *config);
 #define CSR_ALLOW_UNRESTRICTED_FS 0x02
@@ -107,33 +108,38 @@ err:
     return false;
 }
 
+#ifdef TESTS
+static size_t (*scripting_addition_write_stream)(const void *, size_t, size_t, FILE *) = fwrite;
+static int (*scripting_addition_close_file)(FILE *) = fclose;
+#else
+#define scripting_addition_write_stream fwrite
+#define scripting_addition_close_file fclose
+#endif
+
 static bool scripting_addition_write_file(char *buffer, unsigned int size, char *file, char *file_mode)
 {
     FILE *handle = fopen(file, file_mode);
     if (!handle) return false;
 
-    size_t bytes = fwrite(buffer, size, 1, handle);
+    size_t bytes = scripting_addition_write_stream(buffer, size, 1, handle);
     bool result = bytes == 1;
-    fclose(handle);
+    if (scripting_addition_close_file(handle) != 0) result = false;
 
     return result;
 }
 
-static void scripting_addition_prepare_binaries(void)
+static bool scripting_addition_prepare_binary(char *path)
 {
-    char cmd[MAXLEN];
+    if (chmod(path, 0755) != 0) return false;
 
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_loader);
-    system(cmd);
+    const char *const args[] = { "/usr/bin/codesign", "-f", "-s", "-", path, NULL };
+    return safe_exec((char *const *) args, true) == 0;
+}
 
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_loader, "2>/dev/null");
-    system(cmd);
-
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_payload);
-    system(cmd);
-
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_payload, "2>/dev/null");
-    system(cmd);
+static bool scripting_addition_prepare_binaries(void)
+{
+    return scripting_addition_prepare_binary(osax_bin_loader) &&
+           scripting_addition_prepare_binary(osax_bin_payload);
 }
 
 static void scripting_addition_restart_dock(void)
@@ -142,21 +148,23 @@ static void scripting_addition_restart_dock(void)
     [dock makeObjectsPerformSelector:@selector(terminate)];
 }
 
+#ifndef YABAI_RUNTIME_HOME_OVERRIDE
+#define YABAI_RUNTIME_HOME_OVERRIDE NULL
+#endif
+
+static bool scripting_addition_socket_path_for_sudo_uid(const char *sudo_uid, char *socket_path, size_t socket_path_size)
+{
+    uid_t uid;
+    struct yabai_runtime_paths runtime_paths;
+    if (!socket_path || !socket_path_size || !yabai_runtime_parse_uid(sudo_uid, &uid) ||
+        !yabai_runtime_derive_for_uid(uid, YABAI_RUNTIME_HOME_OVERRIDE, &runtime_paths)) return false;
+    int length = snprintf(socket_path, socket_path_size, "%s", runtime_paths.sa_socket);
+    return length >= 0 && (size_t) length < socket_path_size;
+}
+
 static bool scripting_addition_set_socket_path(void)
 {
-    const char *sudo_uid = getenv("SUDO_UID");
-
-    uid_t uid = getuid();
-    assert(uid == 0);
-
-    if (sudo_uid == NULL)                  return false;
-    if (sscanf(sudo_uid, "%u", &uid) != 1) return false;
-
-    struct passwd *pw = getpwuid(uid);
-    if (!pw) return false;
-
-    snprintf(g_sa_socket_file, sizeof(g_sa_socket_file), SA_SOCKET_PATH_FMT, pw->pw_name);
-    return true;
+    return scripting_addition_socket_path_for_sudo_uid(getenv("SUDO_UID"), g_sa_socket_file, sizeof(g_sa_socket_file));
 }
 
 static bool scripting_addition_is_installed(void)
@@ -190,13 +198,15 @@ static int scripting_addition_check(void)
     return result;
 }
 
+static bool scripting_addition_remove_path(char *path)
+{
+    const char *const args[] = { "/bin/rm", "-rf", path, NULL };
+    return safe_exec((char *const *) args, true) == 0;
+}
+
 static bool scripting_addition_remove(void)
 {
-    char cmd[MAXLEN];
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "rm -rf", osax_base_dir, "2>/dev/null");
-
-    int code = system(cmd);
-    return code == 0;
+    return scripting_addition_remove_path(osax_base_dir);
 }
 
 static int scripting_addition_install(void)
@@ -227,7 +237,10 @@ static int scripting_addition_install(void)
         goto cleanup;
     }
 
-    scripting_addition_prepare_binaries();
+    if (!scripting_addition_prepare_binaries()) {
+        goto cleanup;
+    }
+
     scripting_addition_restart_dock();
     return 0;
 
@@ -236,35 +249,64 @@ cleanup:
     return 2;
 }
 
-static bool scripting_addition_request_handshake(char *version, uint32_t *attrib)
+static bool scripting_addition_handshake_fd(int sockfd, char *version, size_t version_capacity,
+                                            uint32_t *attrib, uint64_t deadline)
+{
+    const char request[] = { 0x01, 0x00, SA_OPCODE_HANDSHAKE };
+    return socket_io_write_all_until(sockfd, request, sizeof(request), deadline) &&
+           socket_io_read_cstring_until(sockfd, version, version_capacity, deadline) &&
+           socket_io_read_exact_until(sockfd, attrib, sizeof(*attrib), deadline);
+}
+
+static bool scripting_addition_request_handshake_with_timeout(char *version, size_t version_capacity,
+                                                              uint32_t *attrib, uint64_t timeout_ms)
 {
     int sockfd;
     bool result = false;
-    char rsp[BUFSIZ] = {0};
-    char bytes[SA_SOCKET_BUFF_LEN] = { 0x01, 0x00, SA_OPCODE_HANDSHAKE };
 
     if (socket_open(&sockfd)) {
         if (socket_connect(sockfd, g_sa_socket_file)) {
-            if (send(sockfd, bytes, 3, 0) != -1) {
-                int length = recv(sockfd, rsp, sizeof(rsp)-1, 0);
-                if (length <= 0) goto out;
-
-                char *zero = rsp;
-                while (*zero != '\0') ++zero;
-
-                assert(*zero == '\0');
-                memcpy(version, rsp, zero - rsp + 1);
-                memcpy(attrib, zero+1, sizeof(uint32_t));
-
-                result = true;
-            }
+            uint64_t deadline = socket_io_deadline_after_ms(timeout_ms);
+            result = scripting_addition_handshake_fd(sockfd, version, version_capacity, attrib, deadline);
         }
 
-out:
         socket_close(sockfd);
     }
 
     return result;
+}
+
+static bool scripting_addition_request_handshake(char *version, size_t version_capacity, uint32_t *attrib)
+{
+    return scripting_addition_request_handshake_with_timeout(version, version_capacity, attrib,
+                                                             SOCKET_IO_PRODUCTION_TIMEOUT_MS);
+}
+
+enum scripting_addition_runtime_status scripting_addition_classify_runtime(
+    bool reachable, const char *version, uint32_t attributes,
+    long macos_major, long macos_minor, bool arm64)
+{
+    if (!reachable) return SA_RUNTIME_UNREACHABLE;
+    if (!version || !string_equals(version, OSAX_VERSION)) return SA_RUNTIME_OUTDATED;
+    uint32_t required_attributes = osax_required_attributes(macos_major, macos_minor, arm64);
+    return (attributes & required_attributes) == required_attributes
+         ? SA_RUNTIME_CURRENT
+         : SA_RUNTIME_INCOMPLETE;
+}
+
+enum scripting_addition_runtime_status scripting_addition_probe_runtime(void)
+{
+    uint32_t attributes = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    bool reachable = scripting_addition_request_handshake_with_timeout(version, sizeof(version), &attributes, 250);
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+#ifdef __arm64__
+    bool arm64 = true;
+#else
+    bool arm64 = false;
+#endif
+    return scripting_addition_classify_runtime(reachable, version, attributes,
+                                               os_version.majorVersion, os_version.minorVersion, arm64);
 }
 
 static int scripting_addition_perform_validation(void)
@@ -273,17 +315,25 @@ static int scripting_addition_perform_validation(void)
     char version[SA_SOCKET_BUFF_LEN] = {0};
     bool is_latest_version_installed = scripting_addition_check() == 0;
 
-    if (!scripting_addition_request_handshake(version, &attrib)) {
+    if (!scripting_addition_request_handshake(version, sizeof(version), &attrib)) {
         notify("scripting-addition", "connection failed!");
         return 1;
     }
 
-    if (string_equals(version, OSAX_VERSION)) {
-        if ((attrib & OSAX_ATTRIB_ALL) == OSAX_ATTRIB_ALL) {
-            notify("scripting-addition", "payload v%s", version);
-            return 0;
-        }
-
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+#ifdef __arm64__
+    bool arm64 = true;
+#else
+    bool arm64 = false;
+#endif
+    enum scripting_addition_runtime_status runtime =
+        scripting_addition_classify_runtime(true, version, attrib,
+                                            os_version.majorVersion, os_version.minorVersion, arm64);
+    if (runtime == SA_RUNTIME_CURRENT) {
+        notify("scripting-addition", "payload v%s", version);
+        return 0;
+    }
+    if (runtime == SA_RUNTIME_INCOMPLETE) {
         notify("scripting-addition", "payload (0x%X) doesn't support this macOS version!", attrib);
         return 1;
     }
@@ -378,6 +428,13 @@ int scripting_addition_load(void)
         goto out;
     }
 
+    if (!scripting_addition_set_socket_path()) {
+        warn("yabai: scripting-addition could not determine socket path from SUDO_UID!\n");
+        notify("scripting-addition", "could not determine socket path from SUDO_UID!");
+        result = 1;
+        goto out;
+    }
+
     if (!scripting_addition_is_sip_friendly()) {
         warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
         notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
@@ -406,31 +463,34 @@ int scripting_addition_load(void)
         goto out;
     }
 
-    if (scripting_addition_set_socket_path()) {
-        result = scripting_addition_perform_validation();
-    }
+    result = scripting_addition_perform_validation();
 
 out:
     [pool drain];
     return result;
 }
 
-#define sa_payload_init() char bytes[SA_SOCKET_BUFF_LEN]; int16_t length = 1+sizeof(length)
-#define pack(v) memcpy(bytes+length, &v, sizeof(v)); length += sizeof(v)
-#define sa_payload_send(op) *(int16_t*)bytes = length-sizeof(length), bytes[sizeof(length)] = op, scripting_addition_send_bytes(bytes, length)
+static bool scripting_addition_send_bytes_fd(int sockfd, char *bytes, size_t length,
+                                             uint64_t request_deadline, uint32_t response_timeout_ms)
+{
+    uint8_t status = 0;
+    if (!socket_io_write_all_until(sockfd, bytes, length, request_deadline)) return false;
+    /* The response budget includes bounded operation time and begins only after
+     * the complete request has been written. */
+    uint64_t response_deadline = socket_io_deadline_after_ms(response_timeout_ms);
+    return socket_io_read_exact_until(sockfd, &status, sizeof(status), response_deadline) && status != 0;
+}
 
-static bool scripting_addition_send_bytes(char *bytes, int length)
+static bool scripting_addition_send_bytes(char *bytes, size_t length)
 {
     int sockfd;
-    char dummy;
     bool result = false;
 
     if (socket_open(&sockfd)) {
         if (socket_connect(sockfd, g_sa_socket_file)) {
-            if (send(sockfd, bytes, length, 0) != -1) {
-                recv(sockfd, &dummy, 1, 0);
-                result = true;
-            }
+            uint64_t deadline = socket_io_deadline_after_ms(SOCKET_IO_PRODUCTION_TIMEOUT_MS);
+            result = scripting_addition_send_bytes_fd(sockfd, bytes, length, deadline,
+                                                       SA_OPERATION_RESPONSE_TIMEOUT_MS);
         }
 
         socket_close(sockfd);
@@ -439,147 +499,226 @@ static bool scripting_addition_send_bytes(char *bytes, int length)
     return result;
 }
 
+#ifdef TESTS
+static bool (*scripting_addition_transport)(char *, size_t) = scripting_addition_send_bytes;
+#else
+#define scripting_addition_transport scripting_addition_send_bytes
+#endif
+
+static bool scripting_addition_send_payload(struct sa_payload_builder *builder)
+{
+    size_t length;
+    return sa_payload_builder_finish(builder, &length) &&
+           scripting_addition_transport((char *) builder->bytes, length);
+}
+
+#define SA_PAYLOAD_BEGIN(op) \
+    uint8_t bytes[SA_SOCKET_BUFF_LEN]; \
+    struct sa_payload_builder builder; \
+    if (!sa_payload_builder_init(&builder, bytes, sizeof(bytes), (op))) return false
+#define SA_PAYLOAD_APPEND(value) \
+    do { if (!sa_payload_builder_append(&builder, &(value), sizeof(value))) return false; } while (0)
+
 bool scripting_addition_focus_space(uint64_t sid)
 {
-    sa_payload_init();
-    pack(sid);
-    return sa_payload_send(SA_OPCODE_SPACE_FOCUS);
+    if (!sid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_SPACE_FOCUS);
+    SA_PAYLOAD_APPEND(sid);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_create_space(uint64_t sid)
 {
-    sa_payload_init();
-    pack(sid);
-    return sa_payload_send(SA_OPCODE_SPACE_CREATE);
+    if (!sid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_SPACE_CREATE);
+    SA_PAYLOAD_APPEND(sid);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_destroy_space(uint64_t sid)
 {
-    sa_payload_init();
-    pack(sid);
-    return sa_payload_send(SA_OPCODE_SPACE_DESTROY);
+    if (!sid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_SPACE_DESTROY);
+    SA_PAYLOAD_APPEND(sid);
+    return scripting_addition_send_payload(&builder);
+}
+
+static bool scripting_addition_can_move_space(void)
+{
+    uint32_t attributes = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    if (!scripting_addition_request_handshake(version, sizeof(version), &attributes) ||
+        !string_equals(version, OSAX_VERSION)) return false;
+    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
+#ifdef __arm64__
+    bool arm64 = true;
+#else
+    bool arm64 = false;
+#endif
+    uint32_t required = osax_space_move_required_attributes(
+        os_version.majorVersion, os_version.minorVersion, arm64);
+    return (attributes & required) == required;
 }
 
 bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid, uint64_t src_prev_sid, bool focus)
 {
-    sa_payload_init();
-    pack(src_sid);
-    pack(dst_sid);
-    pack(src_prev_sid);
-    pack(focus);
-    return sa_payload_send(SA_OPCODE_SPACE_MOVE);
+    if (!src_sid || !dst_sid || !scripting_addition_can_move_space()) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_SPACE_MOVE);
+    SA_PAYLOAD_APPEND(src_sid);
+    SA_PAYLOAD_APPEND(dst_sid);
+    SA_PAYLOAD_APPEND(src_prev_sid);
+    SA_PAYLOAD_APPEND(focus);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_move_space_after_space(uint64_t src_sid, uint64_t dst_sid, bool focus)
 {
+    if (!src_sid || !dst_sid || !scripting_addition_can_move_space()) return false;
     uint64_t dummy_sid = 0;
-    sa_payload_init();
-    pack(src_sid);
-    pack(dst_sid);
-    pack(dummy_sid);
-    pack(focus);
-    return sa_payload_send(SA_OPCODE_SPACE_MOVE);
+    SA_PAYLOAD_BEGIN(SA_OPCODE_SPACE_MOVE);
+    SA_PAYLOAD_APPEND(src_sid);
+    SA_PAYLOAD_APPEND(dst_sid);
+    SA_PAYLOAD_APPEND(dummy_sid);
+    SA_PAYLOAD_APPEND(focus);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_move_window(uint32_t wid, int x, int y)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(x);
-    pack(y);
-    return sa_payload_send(SA_OPCODE_WINDOW_MOVE);
+    if (!wid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_MOVE);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(x);
+    SA_PAYLOAD_APPEND(y);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_set_opacity(uint32_t wid, float opacity, float duration)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(opacity);
-    pack(duration);
-    return sa_payload_send(duration > 0.0f ? SA_OPCODE_WINDOW_OPACITY_FADE : SA_OPCODE_WINDOW_OPACITY);
+    if (!wid || !sa_opacity_is_safe(opacity) || !sa_opacity_duration_is_safe(duration)) return false;
+
+    SA_PAYLOAD_BEGIN(duration > 0.0f ? SA_OPCODE_WINDOW_OPACITY_FADE : SA_OPCODE_WINDOW_OPACITY);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(opacity);
+    SA_PAYLOAD_APPEND(duration);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_set_layer(uint32_t wid, int layer)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(layer);
-    return sa_payload_send(SA_OPCODE_WINDOW_LAYER);
+    if (!wid || !sa_layer_key_is_supported(layer)) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_LAYER);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(layer);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_set_sticky(uint32_t wid, bool sticky)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(sticky);
-    return sa_payload_send(SA_OPCODE_WINDOW_STICKY);
+    if (!wid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_STICKY);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(sticky);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_set_shadow(uint32_t wid, bool shadow)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(shadow);
-    return sa_payload_send(SA_OPCODE_WINDOW_SHADOW);
+    if (!wid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_SHADOW);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(shadow);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_focus_window(uint32_t wid)
 {
-    sa_payload_init();
-    pack(wid);
-    return sa_payload_send(SA_OPCODE_WINDOW_FOCUS);
+    if (!wid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_FOCUS);
+    SA_PAYLOAD_APPEND(wid);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_scale_window(uint32_t wid, float x, float y, float w, float h)
 {
-    sa_payload_init();
-    pack(wid);
-    pack(x);
-    pack(y);
-    pack(w);
-    pack(h);
-    return sa_payload_send(SA_OPCODE_WINDOW_SCALE);
+    if (!wid || !sa_scale_geometry_is_safe(x, y, w, h)) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_SCALE);
+    SA_PAYLOAD_APPEND(wid);
+    SA_PAYLOAD_APPEND(x);
+    SA_PAYLOAD_APPEND(y);
+    SA_PAYLOAD_APPEND(w);
+    SA_PAYLOAD_APPEND(h);
+    return scripting_addition_send_payload(&builder);
+}
+
+static int scripting_addition_pack_swap_window_proxy_batch(uint8_t op, struct window_animation *animation_list,
+                                                            int animation_count, int start,
+                                                            uint8_t bytes[SA_SOCKET_BUFF_LEN],
+                                                            struct sa_payload_builder *builder)
+{
+    if (!animation_list || animation_count < 0 || start < 0 || start > animation_count ||
+        !sa_payload_builder_init(builder, bytes, SA_SOCKET_BUFF_LEN, op)) return -1;
+
+    size_t count_offset = builder->length;
+    int count = 0;
+    if (!sa_payload_builder_append_count(builder, count)) return -1;
+
+    int i = start;
+    while (i < animation_count && count < 1022) {
+        bool skip = __atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED);
+        size_t record_size = skip ? sizeof(uint32_t) : 2 * sizeof(uint32_t);
+        if (record_size > builder->capacity - builder->length) break;
+        if (!sa_payload_builder_append_swap_record(builder, skip, animation_list[i].wid,
+                                                   animation_list[i].proxy.id)) return -1;
+        ++count;
+        ++i;
+    }
+
+    if (i == start && i < animation_count) return -1;
+    memcpy(builder->bytes + count_offset, &count, sizeof(count));
+    return i;
+}
+
+#ifdef TESTS
+static bool (*scripting_addition_swap_send_payload)(struct sa_payload_builder *) = scripting_addition_send_payload;
+#else
+#define scripting_addition_swap_send_payload scripting_addition_send_payload
+#endif
+
+static bool scripting_addition_swap_window_proxy(uint8_t op, struct window_animation *animation_list, int animation_count)
+{
+    if (!animation_list || animation_count < 0 || animation_count > SA_SWAP_PROXY_ACTIVE_RECORD_LIMIT) return false;
+
+    int cursor = 0;
+    do {
+        uint8_t bytes[SA_SOCKET_BUFF_LEN];
+        struct sa_payload_builder builder;
+        int next = scripting_addition_pack_swap_window_proxy_batch(op, animation_list, animation_count,
+                                                                   cursor, bytes, &builder);
+        if (next < 0 || !scripting_addition_swap_send_payload(&builder)) return false;
+        cursor = next;
+    } while (cursor < animation_count);
+    return true;
 }
 
 bool scripting_addition_swap_window_proxy_in(struct window_animation *animation_list, int animation_count)
 {
-    uint32_t dummy_wid = 0;
-    sa_payload_init();
-    pack(animation_count);
-    for (int i = 0; i < animation_count; ++i) {
-        if (__atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED)) {
-            pack(dummy_wid);
-        } else {
-            pack(animation_list[i].wid);
-            pack(animation_list[i].proxy.id);
-        }
-    }
-    return sa_payload_send(SA_OPCODE_WINDOW_SWAP_PROXY_IN);
+    return scripting_addition_swap_window_proxy(SA_OPCODE_WINDOW_SWAP_PROXY_IN, animation_list, animation_count);
 }
 
 bool scripting_addition_swap_window_proxy_out(struct window_animation *animation_list, int animation_count)
 {
-    uint32_t dummy_wid = 0;
-    sa_payload_init();
-    pack(animation_count);
-    for (int i = 0; i < animation_count; ++i) {
-        if (__atomic_load_n(&animation_list[i].skip, __ATOMIC_RELAXED)) {
-            pack(dummy_wid);
-        } else {
-            pack(animation_list[i].wid);
-            pack(animation_list[i].proxy.id);
-        }
-    }
-    return sa_payload_send(SA_OPCODE_WINDOW_SWAP_PROXY_OUT);
+    return scripting_addition_swap_window_proxy(SA_OPCODE_WINDOW_SWAP_PROXY_OUT, animation_list, animation_count);
 }
 
 bool scripting_addition_order_window(uint32_t a_wid, int order, uint32_t b_wid)
 {
-    sa_payload_init();
-    pack(a_wid);
-    pack(order);
-    pack(b_wid);
-    return sa_payload_send(SA_OPCODE_WINDOW_ORDER);
+    if (!a_wid || !sa_window_order_is_supported(order)) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_ORDER);
+    SA_PAYLOAD_APPEND(a_wid);
+    SA_PAYLOAD_APPEND(order);
+    SA_PAYLOAD_APPEND(b_wid);
+    return scripting_addition_send_payload(&builder);
 }
 
 extern int g_connection;
@@ -588,38 +727,40 @@ bool scripting_addition_order_window_in(uint32_t *window_list, int window_count)
     uint32_t dummy_wid = 0;
     uint8_t ordered_in = 0;
 
-    sa_payload_init();
-    pack(window_count);
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_ORDER_IN);
+    if (!sa_payload_builder_append_count_max(&builder, window_count, 1022)) return false;
+    if (window_count > 0 && !window_list) return false;
     for (int i = 0; i < window_count; ++i) {
-        SLSWindowIsOrderedIn(g_connection, window_list[i], &ordered_in);
-        if (ordered_in) {
-            pack(dummy_wid);
-        } else {
-            pack(window_list[i]);
-        }
+        if (!window_list[i]) return false;
+        ordered_in = 0;
+        if (SLSWindowIsOrderedIn(g_connection, window_list[i], &ordered_in) != kCGErrorSuccess) return false;
+        uint32_t wid = ordered_in ? dummy_wid : window_list[i];
+        SA_PAYLOAD_APPEND(wid);
     }
-    return sa_payload_send(SA_OPCODE_WINDOW_ORDER_IN);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_move_window_list_to_space(uint64_t sid, uint32_t *window_list, int window_count)
 {
-    sa_payload_init();
-    pack(sid);
-    pack(window_count);
+    if (!sid || (window_count > 0 && !window_list)) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_LIST_TO_SPACE);
+    SA_PAYLOAD_APPEND(sid);
+    if (!sa_payload_builder_append_count_max(&builder, window_count, 1020)) return false;
     for (int i = 0; i < window_count; ++i) {
-        pack(window_list[i]);
+        if (!window_list[i]) return false;
+        SA_PAYLOAD_APPEND(window_list[i]);
     }
-    return sa_payload_send(SA_OPCODE_WINDOW_LIST_TO_SPACE);
+    return scripting_addition_send_payload(&builder);
 }
 
 bool scripting_addition_move_window_to_space(uint64_t sid, uint32_t wid)
 {
-    sa_payload_init();
-    pack(sid);
-    pack(wid);
-    return sa_payload_send(SA_OPCODE_WINDOW_TO_SPACE);
+    if (!sid || !wid) return false;
+    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_TO_SPACE);
+    SA_PAYLOAD_APPEND(sid);
+    SA_PAYLOAD_APPEND(wid);
+    return scripting_addition_send_payload(&builder);
 }
 
-#undef sa_payload_init
-#undef pack
-#undef sa_payload_send
+#undef SA_PAYLOAD_BEGIN
+#undef SA_PAYLOAD_APPEND
