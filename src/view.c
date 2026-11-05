@@ -572,9 +572,9 @@ void window_node_flush_direct(struct window_node *node)
     window_node_capture_windows(node, &window_list);
     int window_count = window_list ? ts_buf_len(window_list) : 0;
     bool refreshed_highlight = false;
+    window_manager_set_window_frames(window_list, window_count);
     for (int i = 0; i < window_count; ++i) {
         struct window_capture *capture = &window_list[i];
-        window_manager_set_window_frame(capture->window, capture->x, capture->y, capture->w, capture->h);
         if (capture->window->id == g_window_manager.focused_window_id) {
             CGRect frame = CGRectMake(capture->x, capture->y, capture->w, capture->h);
             window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, capture->window->id, frame);

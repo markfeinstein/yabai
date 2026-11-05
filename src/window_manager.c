@@ -1177,10 +1177,28 @@ static void window_manager_animation_setup_cleanup(struct window_animation_conte
 }
 static void window_manager_animation_apply_final_frames(struct window_animation_context *context)
 {
+    struct window_capture *captures = NULL;
+#ifdef TESTS
+    if (window_manager_animation_set_frame == window_manager_set_window_frame)
+#endif
+    captures = malloc((size_t) context->animation_count * sizeof(struct window_capture));
+
+    if (!captures) {
+        for (int i = 0; i < context->animation_count; ++i) {
+            struct window_animation *animation = &context->animation_list[i];
+            window_manager_animation_set_frame(animation->window, animation->x, animation->y, animation->w, animation->h);
+        }
+        return;
+    }
+
     for (int i = 0; i < context->animation_count; ++i) {
         struct window_animation *animation = &context->animation_list[i];
-        window_manager_animation_set_frame(animation->window, animation->x, animation->y, animation->w, animation->h);
+        captures[i] = (struct window_capture) {
+            .window = animation->window, .x = animation->x, .y = animation->y, .w = animation->w, .h = animation->h
+        };
     }
+    window_manager_set_window_frames(captures, context->animation_count);
+    free(captures);
 }
 
 static void window_manager_animation_prune_failed_locked(struct window_animation_context *context)
@@ -1295,10 +1313,15 @@ cleanup:
     window_manager_animation_setup_cleanup(context, false);
     goto set_final_frames;
 set_final_frames:
-    for (int i = 0; i < window_count; ++i) {
-        window_manager_animation_set_frame(window_list[i].window, window_list[i].x, window_list[i].y,
-                                           window_list[i].w, window_list[i].h);
-    }
+#ifdef TESTS
+    if (window_manager_animation_set_frame != window_manager_set_window_frame) {
+        for (int i = 0; i < window_count; ++i) {
+            window_manager_animation_set_frame(window_list[i].window, window_list[i].x, window_list[i].y,
+                                               window_list[i].w, window_list[i].h);
+        }
+    } else
+#endif
+    window_manager_set_window_frames(window_list, window_count);
     window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
 }
 #ifdef TESTS
@@ -1362,11 +1385,16 @@ void window_manager_animate_window_list(struct window_capture *window_list, int 
         }
         window_manager_animation_async_route(window_list, window_count);
     } else {
-        for (int i = 0; i < window_count; ++i) {
-            window_manager_animation_direct_route(window_list[i].window, window_list[i].x,
-                                                   window_list[i].y, window_list[i].w,
-                                                   window_list[i].h);
-        }
+#ifdef TESTS
+        if (window_manager_animation_direct_route != window_manager_set_window_frame) {
+            for (int i = 0; i < window_count; ++i) {
+                window_manager_animation_direct_route(window_list[i].window, window_list[i].x,
+                                                       window_list[i].y, window_list[i].w,
+                                                       window_list[i].h);
+            }
+        } else
+#endif
+        window_manager_set_window_frames(window_list, window_count);
         window_manager_refresh_active_window_highlight_for_captures(window_list, window_count);
     }
 }
@@ -1393,7 +1421,8 @@ void window_manager_animate_window(struct window_capture capture)
     }
 }
 
-static AXError window_manager_set_window_frame_internal(struct window *window, float x, float y, float width, float height)
+// Writes size, position, then size again. Callers own the enhanced-UI workaround.
+static AXError window_manager_write_window_frame(struct window *window, float x, float y, float width, float height)
 {
     //
     // NOTE(asmvik): Attempting to check the window frame cache to prevent unnecessary movement and resize calls to the AX API
@@ -1406,40 +1435,105 @@ static AXError window_manager_set_window_frame_internal(struct window *window, f
     //
 
     AXError result = kAXErrorSuccess;
-    AX_ENHANCED_UI_WORKAROUND(window->application->ref, {
-        CGPoint position = CGPointMake(x, y);
-        CFTypeRef position_ref = AXValueCreate(kAXValueTypeCGPoint, (void *) &position);
+    CGPoint position = CGPointMake(x, y);
+    CFTypeRef position_ref = AXValueCreate(kAXValueTypeCGPoint, (void *) &position);
 
-        CGSize size = CGSizeMake(width, height);
-        CFTypeRef size_ref = AXValueCreate(kAXValueTypeCGSize, (void *) &size);
+    CGSize size = CGSizeMake(width, height);
+    CFTypeRef size_ref = AXValueCreate(kAXValueTypeCGSize, (void *) &size);
 
-        // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *before* moving it.
-        if (size_ref) {
-            AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-            if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
-        }
+    // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *before* moving it.
+    if (size_ref) {
+        AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
+        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+    }
 
-        if (position_ref) {
-            AXError error = window_manager_set_attribute_value(window->ref, kAXPositionAttribute, position_ref);
-            if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
-            CFRelease(position_ref);
-        }
+    if (position_ref) {
+        AXError error = window_manager_set_attribute_value(window->ref, kAXPositionAttribute, position_ref);
+        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+        CFRelease(position_ref);
+    }
 
-        // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *after* moving it.
-        if (size_ref) {
-            AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-            if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
-            CFRelease(size_ref);
-        }
-    });
+    // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *after* moving it.
+    if (size_ref) {
+        AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
+        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+        CFRelease(size_ref);
+    }
+
     return result;
+}
+
+static void window_manager_write_window_frame_with_refresh(struct window *window, float x, float y, float width, float height)
+{
+    if (window_manager_write_window_frame(window, x, y, width, height) == kAXErrorInvalidUIElement &&
+        window_manager_refresh_window_ref(&g_window_manager, window)) {
+        (void) window_manager_write_window_frame(window, x, y, width, height);
+    }
+}
+
+#ifdef TESTS
+static bool (*window_manager_test_enhanced_ui_enabled)(AXUIElementRef);
+static void (*window_manager_test_set_enhanced_ui)(AXUIElementRef, bool);
+#endif
+
+static bool window_manager_enhanced_ui_enabled(AXUIElementRef application_ref)
+{
+#ifdef TESTS
+    if (window_manager_test_enhanced_ui_enabled) return window_manager_test_enhanced_ui_enabled(application_ref);
+#endif
+    return ax_enhanced_userinterface(application_ref);
+}
+
+static void window_manager_set_enhanced_ui(AXUIElementRef application_ref, bool enabled)
+{
+#ifdef TESTS
+    if (window_manager_test_set_enhanced_ui) {
+        window_manager_test_set_enhanced_ui(application_ref, enabled);
+        return;
+    }
+#endif
+    AXUIElementSetAttributeValue(application_ref, kAXEnhancedUserInterface, enabled ? kCFBooleanTrue : kCFBooleanFalse);
 }
 
 void window_manager_set_window_frame(struct window *window, float x, float y, float width, float height)
 {
-    if (window_manager_set_window_frame_internal(window, x, y, width, height) == kAXErrorInvalidUIElement &&
-        window_manager_refresh_window_ref(&g_window_manager, window)) {
-        (void) window_manager_set_window_frame_internal(window, x, y, width, height);
+    struct window_capture capture = { .window = window, .x = x, .y = y, .w = width, .h = height };
+    window_manager_set_window_frames(&capture, 1);
+}
+
+// Applies frames grouped by application so each application's enhanced-UI
+// state is read and toggled once per batch instead of once per window. Writes
+// for one application keep their list order; applications are processed in
+// order of first appearance.
+void window_manager_set_window_frames(struct window_capture *window_list, int window_count)
+{
+    if (!window_list || window_count <= 0) return;
+
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_list[i].window;
+        if (!window) continue;
+
+        bool seen = false;
+        for (int j = 0; j < i; ++j) {
+            if (window_list[j].window && window_list[j].window->application == window->application) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+
+        AXUIElementRef application_ref = window->application->ref;
+        bool eui = window_manager_enhanced_ui_enabled(application_ref);
+        if (eui) window_manager_set_enhanced_ui(application_ref, false);
+
+        for (int j = i; j < window_count; ++j) {
+            struct window_capture *capture = &window_list[j];
+            if (!capture->window || capture->window->application != window->application) continue;
+            window_manager_write_window_frame_with_refresh(capture->window, capture->x, capture->y,
+                                                           capture->w, capture->h);
+        }
+
+        if (eui) window_manager_set_enhanced_ui(application_ref, true);
     }
 }
 

@@ -2497,3 +2497,101 @@ TEST_FUNC(window_manager_remaps_both_stacked_nodes_after_cross_space_swap,
     table_free(&window_manager.managed_window);
     table_free(&window_manager.window);
 });
+
+static int eui_test_reads;
+static int eui_test_toggles;
+static int eui_test_writes;
+static AXUIElementRef eui_test_enabled_app;
+static AXUIElementRef eui_test_disabled_by_write[16];
+static AXUIElementRef eui_test_write_elements[16];
+static bool eui_test_disabled_during_write[16];
+static AXUIElementRef eui_test_currently_disabled;
+static AXUIElementRef eui_test_app_for_window(AXUIElementRef window_ref);
+
+static bool eui_test_enabled(AXUIElementRef application_ref)
+{
+    ++eui_test_reads;
+    return application_ref == eui_test_enabled_app;
+}
+
+static void eui_test_set(AXUIElementRef application_ref, bool enabled)
+{
+    ++eui_test_toggles;
+    eui_test_currently_disabled = enabled ? NULL : application_ref;
+}
+
+static AXError eui_test_set_attribute(AXUIElementRef element, CFStringRef attribute, CFTypeRef value)
+{
+    (void) value;
+    if (CFEqual(attribute, kAXPositionAttribute) && eui_test_writes < 16) {
+        eui_test_write_elements[eui_test_writes] = element;
+        eui_test_disabled_during_write[eui_test_writes] =
+            eui_test_currently_disabled == eui_test_app_for_window(element);
+        ++eui_test_writes;
+    }
+    return kAXErrorSuccess;
+}
+
+static struct application eui_test_apps[2];
+static AXUIElementRef eui_test_app_for_window(AXUIElementRef window_ref)
+{
+    // Window refs 1x belong to app 0, 2x to app 1.
+    return (uintptr_t) window_ref < 20 ? eui_test_apps[0].ref : eui_test_apps[1].ref;
+}
+
+TEST_FUNC(window_frames_toggle_enhanced_ui_once_per_application,
+{
+    __auto_type saved_enabled = window_manager_test_enhanced_ui_enabled;
+    __auto_type saved_toggle = window_manager_test_set_enhanced_ui;
+    __auto_type saved_set = window_manager_test_set_attribute_value;
+    window_manager_test_enhanced_ui_enabled = eui_test_enabled;
+    window_manager_test_set_enhanced_ui = eui_test_set;
+    window_manager_test_set_attribute_value = eui_test_set_attribute;
+
+    eui_test_apps[0] = (struct application) { .ref = (AXUIElementRef) (uintptr_t) 1001 };
+    eui_test_apps[1] = (struct application) { .ref = (AXUIElementRef) (uintptr_t) 1002 };
+    eui_test_enabled_app = eui_test_apps[0].ref;
+    struct window windows[] = {
+        { .id = 1, .application = &eui_test_apps[0], .ref = (AXUIElementRef) (uintptr_t) 11 },
+        { .id = 2, .application = &eui_test_apps[1], .ref = (AXUIElementRef) (uintptr_t) 21 },
+        { .id = 3, .application = &eui_test_apps[0], .ref = (AXUIElementRef) (uintptr_t) 12 },
+        { .id = 4, .application = &eui_test_apps[0], .ref = (AXUIElementRef) (uintptr_t) 13 },
+        { .id = 5, .application = &eui_test_apps[1], .ref = (AXUIElementRef) (uintptr_t) 22 },
+    };
+    struct window_capture captures[5];
+    for (int i = 0; i < 5; ++i) {
+        captures[i] = (struct window_capture) { .window = &windows[i], .x = i, .y = i, .w = 100, .h = 100 };
+    }
+
+    eui_test_reads = eui_test_toggles = eui_test_writes = 0;
+    eui_test_currently_disabled = NULL;
+    window_manager_set_window_frames(captures, 5);
+
+    // One enhanced-UI read per application; only the enabled app is toggled off and back on.
+    TEST_CHECK(eui_test_reads, 2);
+    TEST_CHECK(eui_test_toggles, 2);
+    TEST_CHECK(eui_test_currently_disabled == NULL, true);
+    TEST_CHECK(eui_test_writes, 5);
+    // Grouped by first appearance; list order kept within an application.
+    AXUIElementRef expected[] = { windows[0].ref, windows[2].ref, windows[3].ref, windows[1].ref, windows[4].ref };
+    for (int i = 0; i < 5; ++i) TEST_CHECK(eui_test_write_elements[i] == expected[i], true);
+    // The enabled app's writes all happen with enhanced UI disabled.
+    TEST_CHECK(eui_test_disabled_during_write[0] && eui_test_disabled_during_write[1] &&
+               eui_test_disabled_during_write[2], true);
+    TEST_CHECK(eui_test_disabled_during_write[3] || eui_test_disabled_during_write[4], false);
+
+    // The single-window entry point keeps the per-call workaround.
+    eui_test_reads = eui_test_toggles = eui_test_writes = 0;
+    window_manager_set_window_frame(&windows[0], 1, 2, 3, 4);
+    TEST_CHECK(eui_test_reads, 1);
+    TEST_CHECK(eui_test_toggles, 2);
+    TEST_CHECK(eui_test_writes, 1);
+
+    window_manager_set_window_frames(NULL, 3);
+    window_manager_set_window_frames(captures, 0);
+    TEST_CHECK(eui_test_reads, 1);
+
+    window_manager_test_enhanced_ui_enabled = saved_enabled;
+    window_manager_test_set_enhanced_ui = saved_toggle;
+    window_manager_test_set_attribute_value = saved_set;
+});

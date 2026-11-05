@@ -3527,6 +3527,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(managed_window_correction_bounds_retries_and_rearms_from_signals) \
     TEST_ENTRY(managed_window_correction_failed_reads_preserve_cache_and_advance_lease) \
     TEST_ENTRY(mouse_drag_top_clamp_is_cached_per_display_for_a_drag) \
+    TEST_ENTRY(window_frames_toggle_enhanced_ui_once_per_application) \
     TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
     TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
     TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
