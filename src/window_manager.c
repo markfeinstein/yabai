@@ -1441,22 +1441,23 @@ static AXError window_manager_write_window_frame(struct window *window, float x,
     CGSize size = CGSizeMake(width, height);
     CFTypeRef size_ref = AXValueCreate(kAXValueTypeCGSize, (void *) &size);
 
+    // A stale reference requires refresh even if an earlier write failed differently.
     // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *before* moving it.
     if (size_ref) {
         AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
     }
 
     if (position_ref) {
         AXError error = window_manager_set_attribute_value(window->ref, kAXPositionAttribute, position_ref);
-        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
         CFRelease(position_ref);
     }
 
     // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *after* moving it.
     if (size_ref) {
         AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-        if (result == kAXErrorSuccess && error != kAXErrorSuccess) result = error;
+        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
         CFRelease(size_ref);
     }
 

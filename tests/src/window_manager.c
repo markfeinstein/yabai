@@ -2115,3 +2115,116 @@ TEST_FUNC(window_frames_toggle_enhanced_ui_once_per_application,
     TEST_CHECK(eui_test_reads, 1);
 
 });
+
+static AXError frame_stale_test_errors[3];
+static AXError frame_stale_test_retry_error;
+static int frame_stale_test_writes;
+static int frame_stale_test_lookups;
+static bool frame_stale_test_arguments_valid;
+static AXUIElementRef frame_stale_test_fresh;
+
+static CFArrayRef frame_stale_test_window_list(struct application *application)
+{
+    ++frame_stale_test_lookups;
+    return stale_ref_test_window_list(application);
+}
+
+static AXError frame_stale_test_set_attribute(AXUIElementRef element, CFStringRef attribute, CFTypeRef value)
+{
+    int call = frame_stale_test_writes++;
+    int slot = call % 3;
+    bool is_old = call < 3;
+    frame_stale_test_arguments_valid &= element == (is_old ? stale_ref_test_old : frame_stale_test_fresh) &&
+        CFEqual(attribute, slot == 1 ? kAXPositionAttribute : kAXSizeAttribute) &&
+        CFGetTypeID(value) == AXValueGetTypeID() &&
+        AXValueGetType(value) == (slot == 1 ? kAXValueTypeCGPoint : kAXValueTypeCGSize) &&
+        eui_test_currently_disabled == eui_test_enabled_app;
+    if (slot == 1) {
+        CGPoint point = CGPointZero;
+        frame_stale_test_arguments_valid &= AXValueGetValue(value, kAXValueTypeCGPoint, &point) &&
+            CGPointEqualToPoint(point, CGPointMake(10, 20));
+    } else {
+        CGSize size = CGSizeZero;
+        frame_stale_test_arguments_valid &= AXValueGetValue(value, kAXValueTypeCGSize, &size) &&
+            CGSizeEqualToSize(size, CGSizeMake(300, 200));
+    }
+    return is_old ? frame_stale_test_errors[slot] : frame_stale_test_retry_error;
+}
+
+TEST_FUNC(window_frame_refreshes_stale_ref_after_any_write_error,
+{
+    TEST_SAVE(g_window_manager.managed_window);
+    TEST_SAVE(stale_ref_test_old);
+    TEST_SAVE(stale_ref_test_fresh);
+    TEST_SAVE(stale_ref_test_window_id);
+    TEST_SAVE(stale_ref_test_observe_calls);
+    TEST_SAVE(stale_ref_test_unobserve_calls);
+    TEST_SAVE(eui_test_enabled_app);
+    TEST_SAVE(eui_test_currently_disabled);
+    TEST_SAVE(eui_test_reads);
+    TEST_SAVE(eui_test_toggles);
+    TEST_OVERRIDE(window_manager_test_application_window_list, frame_stale_test_window_list);
+    TEST_OVERRIDE(window_manager_test_ax_window_id, stale_ref_test_id);
+    TEST_OVERRIDE(window_manager_test_window_observe, stale_ref_test_observe);
+    TEST_OVERRIDE(window_manager_test_window_unobserve, stale_ref_test_unobserve);
+    TEST_OVERRIDE(window_manager_test_set_attribute_value, frame_stale_test_set_attribute);
+    TEST_OVERRIDE(window_manager_test_enhanced_ui_enabled, eui_test_enabled);
+    TEST_OVERRIDE(window_manager_test_set_enhanced_ui, eui_test_set);
+    g_window_manager.managed_window = (struct table) {0};
+    table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
+
+    const struct {
+        AXError errors[3];
+        AXError retry_error;
+        bool fresh_available;
+        bool lookup_expected;
+        bool refresh_expected;
+    } cases[] = {
+        { { kAXErrorSuccess, kAXErrorSuccess, kAXErrorSuccess }, kAXErrorSuccess, true, false, false },
+        { { kAXErrorAttributeUnsupported, kAXErrorCannotComplete, kAXErrorSuccess }, kAXErrorSuccess, true, false, false },
+        { { kAXErrorInvalidUIElement, kAXErrorAttributeUnsupported, kAXErrorSuccess }, kAXErrorSuccess, true, true, true },
+        { { kAXErrorAttributeUnsupported, kAXErrorInvalidUIElement, kAXErrorSuccess }, kAXErrorSuccess, true, true, true },
+        { { kAXErrorCannotComplete, kAXErrorSuccess, kAXErrorInvalidUIElement }, kAXErrorSuccess, true, true, true },
+        { { kAXErrorAttributeUnsupported, kAXErrorInvalidUIElement, kAXErrorSuccess }, kAXErrorSuccess, false, true, false },
+        { { kAXErrorAttributeUnsupported, kAXErrorInvalidUIElement, kAXErrorSuccess }, kAXErrorInvalidUIElement, true, true, true },
+    };
+    struct application application = { .name = "frame-stale", .ref = (AXUIElementRef) CFSTR("frame-app") };
+    eui_test_enabled_app = application.ref;
+    stale_ref_test_window_id = 4242;
+
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        stale_ref_test_old = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("old-frame-ref"));
+        frame_stale_test_fresh = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("fresh-frame-ref"));
+        TEST_CHECK(stale_ref_test_old != NULL && frame_stale_test_fresh != NULL, true);
+        if (!stale_ref_test_old || !frame_stale_test_fresh) {
+            if (stale_ref_test_old) CFRelease(stale_ref_test_old);
+            if (frame_stale_test_fresh) CFRelease(frame_stale_test_fresh);
+            break;
+        }
+        stale_ref_test_fresh = cases[i].fresh_available ? frame_stale_test_fresh : NULL;
+        struct window window = { .application = &application, .ref = stale_ref_test_old, .id = stale_ref_test_window_id };
+        memcpy(frame_stale_test_errors, cases[i].errors, sizeof(frame_stale_test_errors));
+        frame_stale_test_retry_error = cases[i].retry_error;
+        frame_stale_test_writes = frame_stale_test_lookups = 0;
+        stale_ref_test_observe_calls = stale_ref_test_unobserve_calls = 0;
+        frame_stale_test_arguments_valid = true;
+        eui_test_reads = eui_test_toggles = 0;
+        eui_test_currently_disabled = NULL;
+
+        window_manager_set_window_frame(&window, 10, 20, 300, 200);
+        TEST_CHECK(frame_stale_test_writes, cases[i].refresh_expected ? 6 : 3);
+        TEST_CHECK(frame_stale_test_lookups, cases[i].lookup_expected ? 1 : 0);
+        TEST_CHECK(stale_ref_test_observe_calls, cases[i].refresh_expected ? 1 : 0);
+        TEST_CHECK(stale_ref_test_unobserve_calls, cases[i].refresh_expected ? 1 : 0);
+        TEST_CHECK(window.ref == (cases[i].refresh_expected ? frame_stale_test_fresh : stale_ref_test_old), true);
+        TEST_CHECK(frame_stale_test_arguments_valid, true);
+        TEST_CHECK(eui_test_reads, 1);
+        TEST_CHECK(eui_test_toggles, 2);
+        TEST_CHECK(eui_test_currently_disabled == NULL, true);
+
+        CFRelease(window.ref);
+        CFRelease(frame_stale_test_fresh);
+    }
+    frame_stale_test_fresh = NULL;
+    table_free(&g_window_manager.managed_window);
+});
