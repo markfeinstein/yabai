@@ -1421,8 +1421,9 @@ void window_manager_animate_window(struct window_capture capture)
     }
 }
 
-// Writes size, position, then size again. Callers own the enhanced-UI workaround.
-static AXError window_manager_write_window_frame(struct window *window, float x, float y, float width, float height)
+// Writes size, position, then size again; returns whether any write saw a stale reference.
+// Callers own the enhanced-UI workaround.
+static bool window_manager_write_window_frame(struct window *window, float x, float y, float width, float height)
 {
     //
     // NOTE(asmvik): Attempting to check the window frame cache to prevent unnecessary movement and resize calls to the AX API
@@ -1434,39 +1435,35 @@ static AXError window_manager_write_window_frame(struct window *window, float x,
     // track changes to the window frame in real-time without delay.
     //
 
-    AXError result = kAXErrorSuccess;
+    bool stale_ref = false;
     CGPoint position = CGPointMake(x, y);
     CFTypeRef position_ref = AXValueCreate(kAXValueTypeCGPoint, (void *) &position);
 
     CGSize size = CGSizeMake(width, height);
     CFTypeRef size_ref = AXValueCreate(kAXValueTypeCGSize, (void *) &size);
 
-    // A stale reference requires refresh even if an earlier write failed differently.
     // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *before* moving it.
     if (size_ref) {
-        AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
+        if (window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref) == kAXErrorInvalidUIElement) stale_ref = true;
     }
 
     if (position_ref) {
-        AXError error = window_manager_set_attribute_value(window->ref, kAXPositionAttribute, position_ref);
-        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
+        if (window_manager_set_attribute_value(window->ref, kAXPositionAttribute, position_ref) == kAXErrorInvalidUIElement) stale_ref = true;
         CFRelease(position_ref);
     }
 
     // NOTE(asmvik): Due to macOS constraints (visible screen-area), we might need to resize the window *after* moving it.
     if (size_ref) {
-        AXError error = window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref);
-        if (error == kAXErrorInvalidUIElement || result == kAXErrorSuccess) result = error;
+        if (window_manager_set_attribute_value(window->ref, kAXSizeAttribute, size_ref) == kAXErrorInvalidUIElement) stale_ref = true;
         CFRelease(size_ref);
     }
 
-    return result;
+    return stale_ref;
 }
 
 static void window_manager_write_window_frame_with_refresh(struct window *window, float x, float y, float width, float height)
 {
-    if (window_manager_write_window_frame(window, x, y, width, height) == kAXErrorInvalidUIElement &&
+    if (window_manager_write_window_frame(window, x, y, width, height) &&
         window_manager_refresh_window_ref(&g_window_manager, window)) {
         (void) window_manager_write_window_frame(window, x, y, width, height);
     }
