@@ -70,7 +70,8 @@ static bool window_manager_query_serializes_display(uint64_t flags)
 
 static bool window_manager_query_needs_topology(uint64_t flags)
 {
-    return window_manager_query_serializes_space(flags) || window_manager_query_serializes_display(flags);
+    return window_manager_query_serializes_space(flags) || window_manager_query_serializes_display(flags) ||
+           (flags & WINDOW_PROPERTY_IS_VISIBLE);
 }
 
 static bool window_manager_query_windows_for_spaces_with_topology(FILE *rsp,
@@ -1525,6 +1526,18 @@ static CGRect window_manager_active_window_highlight_resolve_frame(struct active
     return highlight->pending_target_frame;
 }
 
+#ifdef TESTS
+static bool (*window_manager_test_highlight_space_is_visible)(uint64_t);
+#endif
+
+static bool window_manager_highlight_space_is_visible(uint64_t sid)
+{
+#ifdef TESTS
+    if (window_manager_test_highlight_space_is_visible) return window_manager_test_highlight_space_is_visible(sid);
+#endif
+    return space_is_visible(sid);
+}
+
 static bool window_manager_active_window_highlight_window_is_animating(struct window_manager *wm,
                                                                         uint32_t window_id)
 {
@@ -1600,7 +1613,8 @@ static void window_manager_refresh_active_window_highlight_internal(struct windo
     // a later ordinary refresh still rejects stale published bounds.
     if (target_frame && target_wid == window->id &&
         active_window_highlight_can_fast_update(highlight, window->id) &&
-        (highlight->sticky || (highlight->sid && space_is_visible(highlight->sid)))) {
+        (highlight->sticky || (highlight->sid && highlight->space_visible_cached) ||
+         (highlight->sid && window_manager_highlight_space_is_visible(highlight->sid)))) {
         if (!active_window_highlight_show(highlight, window->id, *target_frame,
                                           highlight->level, highlight->sub_level,
                                           highlight->sid, highlight->sticky,
@@ -1625,14 +1639,23 @@ static void window_manager_refresh_active_window_highlight_internal(struct windo
     CGRect frame = window_manager_active_window_highlight_resolve_frame(highlight, window->id, observed_frame);
     bool sticky = (tags & WINDOW_SERVER_TAG_ON_ALL_WORKSPACES) != 0;
     uint64_t sid = window_space(window->id);
-    if ((!sticky && (!sid || !space_is_visible(sid))) ||
+    bool space_visible = sticky || (sid && window_manager_highlight_space_is_visible(sid));
+    highlight->space_visible_cached = false;
+    if (!space_visible ||
         !active_window_highlight_show(highlight, window->id, frame,
                                       window_level(window->id), window_sub_level(window->id),
                                       sid, sticky, wm->active_window_highlight_color.p,
                                       wm->active_window_highlight_width,
                                       wm->active_window_highlight_radius)) {
         window_manager_hide_active_window_highlight(wm);
+        return;
     }
+    highlight->space_visible_cached = !sticky;
+}
+
+void window_manager_invalidate_active_window_highlight_space(struct window_manager *wm)
+{
+    wm->active_window_highlight.space_visible_cached = false;
 }
 
 void window_manager_refresh_active_window_highlight(struct window_manager *wm)
@@ -4586,7 +4609,7 @@ static void window_manager_finalize_mutated_views(struct view **mutated_views, i
     for (int i = 0; i < mutated_count; ++i) {
         struct view *mutated_view = mutated_views[i];
         if (view_layout_is_accordion(mutated_view->layout)) view_update(mutated_view);
-        if (space_is_visible(mutated_view->sid) && view_is_dirty(mutated_view)) {
+        if (view_is_dirty(mutated_view) && space_is_visible(mutated_view->sid)) {
             window_node_flush(mutated_view->root);
             view_clear_flag(mutated_view, VIEW_IS_DIRTY);
         }

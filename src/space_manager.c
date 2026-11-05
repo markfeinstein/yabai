@@ -84,7 +84,8 @@ static void space_manager_query_context_begin(struct view_serialization_context 
 {
     *context = (struct view_serialization_context) {0};
     bool needs_display = space_manager_query_serializes_display(flags);
-    if (!topology && (space_manager_query_serializes_index(flags) || needs_display)) {
+    if (!topology && (space_manager_query_serializes_index(flags) || needs_display ||
+                      (flags & SPACE_PROPERTY_IS_VISIBLE))) {
         topology = space_manager_query_managed_display_spaces(g_connection);
     } else if (topology) {
         CFRetain(topology);

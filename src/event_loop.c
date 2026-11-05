@@ -4857,8 +4857,36 @@ static bool event_loop_consume_topology_resync(struct event_loop *event_loop)
     return !follow_up;
 }
 
+// High-frequency events that cannot change Space or display topology. Every
+// other event, including mouse-up drops that may move a window between Spaces,
+// drops the highlight's cached Space visibility so its fast path re-queries.
+static bool event_loop_event_preserves_space_topology(enum event_type type)
+{
+    switch (type) {
+    case WINDOW_MOVED:
+    case WINDOW_RESIZED:
+    case WINDOW_TITLE_CHANGED:
+    case ACTIVE_WINDOW_HIGHLIGHT_REFRESH:
+    case MANAGED_WINDOW_CORRECTION_HINT:
+    case SLS_WINDOW_ORDERED:
+    case MOUSE_DRAGGED:
+    case MOUSE_MOVED:
+    case NATIVE_RESIZE_FINALIZE:
+    case NATIVE_RESIZE_CANCEL:
+    case MENU_BAR_REFRESH: {
+        return true;
+    } break;
+    default: {
+        return false;
+    } break;
+    }
+}
+
 static void event_loop_dispatch_event(struct event event)
 {
+    if (!event_loop_event_preserves_space_topology(event.type)) {
+        window_manager_invalidate_active_window_highlight_space(&g_window_manager);
+    }
     switch (event.type) {
     case SPACE_CHANGED:
     case DISPLAY_ADDED:

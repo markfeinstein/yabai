@@ -153,3 +153,120 @@ TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,
     window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
     window_manager_test_active_window_highlight_hide_observer = saved_hide;
 });
+
+static int active_window_highlight_space_visible_calls;
+static bool active_window_highlight_space_visible_result;
+static bool active_window_highlight_test_space_visible(uint64_t sid)
+{
+    (void) sid;
+    ++active_window_highlight_space_visible_calls;
+    return active_window_highlight_space_visible_result;
+}
+
+TEST_FUNC(active_window_highlight_fast_path_reuses_space_visibility_until_topology_event,
+{
+    bool initialized_window = false;
+    if (!g_window_manager.window.buckets) {
+        table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+        initialized_window = true;
+    }
+    bool initialized_animations = false;
+    if (!g_window_manager.window_animations_table.buckets) {
+        table_init(&g_window_manager.window_animations_table, 8, hash_wm, compare_wm);
+        initialized_animations = true;
+    }
+    struct window_manager saved = g_window_manager;
+    __auto_type saved_visible = window_manager_test_highlight_space_is_visible;
+    __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
+    __auto_type saved_hide = window_manager_test_active_window_highlight_hide_observer;
+    window_manager_test_active_window_highlight_refresh_observer = NULL;
+    window_manager_test_active_window_highlight_hide_observer = active_window_highlight_test_hide_observer;
+    window_manager_test_highlight_space_is_visible = active_window_highlight_test_space_visible;
+
+    struct application application = {0};
+    struct window window = { .id = 42, .application = &application, .is_root = true };
+    window_set_rule_flag(&window, WINDOW_RULE_MANAGED);
+    table_add(&g_window_manager.window, &window.id, &window);
+
+    float width = 4.0f;
+    float radius = 9.0f;
+    CGRect target = CGRectMake(10.0, 20.0, 300.0, 200.0);
+    struct active_window_highlight_geometry geometry = active_window_highlight_geometry_make(target, width, radius);
+    g_window_manager.enable_active_window_highlight = true;
+    g_window_manager.focused_window_id = window.id;
+    g_window_manager.active_window_highlight_color.p = 0xff9ccfd8U;
+    g_window_manager.active_window_highlight_width = width;
+    g_window_manager.active_window_highlight_radius = radius;
+    g_window_manager.active_window_highlight = (struct active_window_highlight) {
+        .id = 7, .context = (CGContextRef) (uintptr_t) 1, .frame = geometry.frame, .target_wid = window.id,
+        .color = 0xff9ccfd8U, .sid = 5, .width = width, .radius = radius, .ordered = true,
+        .space_visible_cached = true
+    };
+
+    // Cached visibility: no Space query on repeated frame updates.
+    active_window_highlight_space_visible_calls = 0;
+    active_window_highlight_hide_calls = 0;
+    for (int i = 0; i < 4; ++i) {
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window.id, target);
+    }
+    TEST_CHECK(active_window_highlight_space_visible_calls, 0);
+    TEST_CHECK(active_window_highlight_hide_calls, 0);
+
+    // Frame-only events keep the cache; any other event drops it.
+    TEST_CHECK(event_loop_event_preserves_space_topology(WINDOW_MOVED), true);
+    TEST_CHECK(event_loop_event_preserves_space_topology(WINDOW_RESIZED), true);
+    TEST_CHECK(event_loop_event_preserves_space_topology(SPACE_CHANGED), false);
+    TEST_CHECK(event_loop_event_preserves_space_topology(DISPLAY_CHANGED), false);
+    TEST_CHECK(event_loop_event_preserves_space_topology(WINDOW_FOCUSED), false);
+    TEST_CHECK(event_loop_event_preserves_space_topology(DAEMON_MESSAGE), false);
+    TEST_CHECK(event_loop_event_preserves_space_topology(MOUSE_UP), false);
+    TEST_CHECK(event_loop_event_preserves_space_topology(DIRECT_SPACE_SWIPE), false);
+    window_manager_invalidate_active_window_highlight_space(&g_window_manager);
+    TEST_CHECK(g_window_manager.active_window_highlight.space_visible_cached, false);
+
+    // Without the cache the fast path queries once per update.
+    active_window_highlight_space_visible_result = true;
+    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window.id, target);
+    TEST_CHECK(active_window_highlight_space_visible_calls, 1);
+    TEST_CHECK(active_window_highlight_hide_calls, 0);
+
+    // Sticky highlights never query.
+    g_window_manager.active_window_highlight.sticky = true;
+    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window.id, target);
+    TEST_CHECK(active_window_highlight_space_visible_calls, 1);
+
+    table_remove(&g_window_manager.window, &window.id);
+    struct table window_table = g_window_manager.window;
+    struct table animations_table = g_window_manager.window_animations_table;
+    g_window_manager = saved;
+    g_window_manager.window = window_table;
+    g_window_manager.window_animations_table = animations_table;
+    if (initialized_window) { table_free(&g_window_manager.window); memset(&g_window_manager.window, 0, sizeof(g_window_manager.window)); }
+    if (initialized_animations) { table_free(&g_window_manager.window_animations_table); memset(&g_window_manager.window_animations_table, 0, sizeof(g_window_manager.window_animations_table)); }
+    window_manager_test_highlight_space_is_visible = saved_visible;
+    window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
+    window_manager_test_active_window_highlight_hide_observer = saved_hide;
+});
+
+TEST_FUNC(managed_space_visibility_resolves_from_topology_or_reports_unknown,
+{
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"one", @"Current Space": @{ @"id64": @2 },
+           @"Spaces": @[ @{ @"id64": @1 }, @{ @"id64": @2 } ] },
+        @{ @"Display Identifier": @"two", @"Current Space": @{ @"id64": @9 },
+           @"Spaces": @[ @{ @"id64": @9 } ] },
+        @{ @"Display Identifier": @"three", @"Spaces": @[ @{ @"id64": @11 } ] }
+    ];
+    bool visible = true;
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 1, &visible), true);
+    TEST_CHECK(visible, false);
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 2, &visible), true);
+    TEST_CHECK(visible, true);
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 9, &visible), true);
+    TEST_CHECK(visible, true);
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 11, &visible), false);
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 77, &visible), false);
+    TEST_CHECK(managed_space_is_visible((CFArrayRef) topology, 0, &visible), false);
+    TEST_CHECK(managed_space_is_visible(NULL, 2, &visible), false);
+    TEST_CHECK(managed_space_is_visible((CFTypeRef) CFSTR("bad"), 2, &visible), false);
+});

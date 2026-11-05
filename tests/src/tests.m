@@ -3551,6 +3551,8 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(active_window_highlight_redraws_when_only_origin_changes) \
     TEST_ENTRY(active_window_highlight_pending_geometry_rejects_stale_server_frame) \
     TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
+    TEST_ENTRY(active_window_highlight_fast_path_reuses_space_visibility_until_topology_event) \
+    TEST_ENTRY(managed_space_visibility_resolves_from_topology_or_reports_unknown) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
     TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
     TEST_ENTRY(display_topology_refresh_recomputes_centered_singleton_on_existing_display) \
@@ -3770,6 +3772,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(message_query_backend_failures_are_reported)                \
     TEST_ENTRY(message_space_query_reuses_topology_across_serialization)  \
     TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
+    TEST_ENTRY(message_window_visibility_uses_topology_snapshot_before_live_query) \
     TEST_ENTRY(message_window_query_reuses_inventory_snapshot_for_serialization) \
     TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
     TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \

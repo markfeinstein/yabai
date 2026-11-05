@@ -1238,6 +1238,13 @@ static int view_serialization_display(const struct view_serialization_context *c
     return display_manager_display_id_arrangement(space_display_id(sid));
 }
 
+static bool view_serialization_is_visible(const struct view_serialization_context *context, uint64_t sid)
+{
+    bool visible = false;
+    if (context && managed_space_is_visible(context->managed_display_spaces, sid, &visible)) return visible;
+    return space_is_visible(sid);
+}
+
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
 {
     view_serialize_with_context(rsp, view, flags, NULL);
@@ -1341,7 +1348,7 @@ void view_serialize_with_context(FILE *rsp, struct view *view, uint64_t flags,
     if (flags & SPACE_PROPERTY_IS_VISIBLE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        fprintf(rsp, "\t\"is-visible\":%s", json_bool(space_is_visible(view->sid)));
+        fprintf(rsp, "\t\"is-visible\":%s", json_bool(view_serialization_is_visible(context, view->sid)));
         did_output = true;
     }
 

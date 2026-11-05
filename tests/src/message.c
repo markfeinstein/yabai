@@ -1858,3 +1858,46 @@ TEST_FUNC(message_mode_domain_is_exclusive_strict_and_json_safe,
 });
 #undef MESSAGE_MODE_REJECT
 #undef MESSAGE_MODE_RUN
+
+static int message_serialization_visible_fallback_calls;
+static bool message_serialization_visible_fallback(uint64_t sid)
+{
+    (void) sid;
+    ++message_serialization_visible_fallback_calls;
+    return true;
+}
+
+TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
+{
+    __auto_type saved_visible = window_test_serialization_space_is_visible;
+    window_test_serialization_space_is_visible = message_serialization_visible_fallback;
+    NSArray *topology = @[
+        @{ @"Display Identifier": @"one", @"Current Space": @{ @"id64": @3 },
+           @"Spaces": @[ @{ @"id64": @3 }, @{ @"id64": @4 } ] }
+    ];
+    struct window_serialization_context context = {
+        .managed_display_spaces = (CFArrayRef) topology,
+        .has_managed_display_spaces_snapshot = true
+    };
+
+    message_serialization_visible_fallback_calls = 0;
+    TEST_CHECK(window_serialization_space_is_visible(&context, 3), true);
+    TEST_CHECK(window_serialization_space_is_visible(&context, 4), false);
+    TEST_CHECK(message_serialization_visible_fallback_calls, 0);
+
+    // Unknown Space, missing snapshot, or no context fall back to the live query.
+    TEST_CHECK(window_serialization_space_is_visible(&context, 99), true);
+    context.managed_display_spaces = NULL;
+    TEST_CHECK(window_serialization_space_is_visible(&context, 3), true);
+    context.managed_display_spaces = (CFArrayRef) topology;
+    context.has_managed_display_spaces_snapshot = false;
+    TEST_CHECK(window_serialization_space_is_visible(&context, 4), true);
+    TEST_CHECK(window_serialization_space_is_visible(NULL, 4), true);
+    TEST_CHECK(message_serialization_visible_fallback_calls, 4);
+
+    // The visibility property alone captures topology for the query.
+    TEST_CHECK(window_manager_query_needs_topology(WINDOW_PROPERTY_IS_VISIBLE), true);
+    TEST_CHECK(window_manager_query_needs_topology(WINDOW_PROPERTY_ID), false);
+
+    window_test_serialization_space_is_visible = saved_visible;
+});

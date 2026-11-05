@@ -183,4 +183,33 @@ static inline uint64_t managed_space_last(CFTypeRef topology)
     return result;
 }
 
+// Resolves whether `requested_sid` is the current Space of the display that
+// owns it in a SLSCopyManagedDisplaySpaces snapshot. Returns false when the
+// snapshot cannot answer (malformed, Space absent, or no current Space), in
+// which case callers must fall back to a live query.
+static inline bool managed_space_is_visible(CFTypeRef topology, uint64_t requested_sid, bool *visible)
+{
+    if (visible) *visible = false;
+    if (!visible || !requested_sid || !cf_is_type(topology, CFArrayGetTypeID())) return false;
+
+    CFArrayRef displays = (CFArrayRef) topology;
+    for (CFIndex i = 0; i < CFArrayGetCount(displays); ++i) {
+        CFTypeRef display = CFArrayGetValueAtIndex(displays, i);
+        CFArrayRef spaces = managed_space_display_spaces(display);
+        if (!spaces) continue;
+
+        for (CFIndex j = 0; j < CFArrayGetCount(spaces); ++j) {
+            uint64_t sid;
+            if (!managed_space_id(CFArrayGetValueAtIndex(spaces, j), &sid) || sid != requested_sid) continue;
+
+            uint64_t current_sid;
+            CFTypeRef current = CFDictionaryGetValue((CFDictionaryRef) display, CFSTR("Current Space"));
+            if (!managed_space_id(current, &current_sid)) return false;
+            *visible = current_sid == requested_sid;
+            return true;
+        }
+    }
+    return false;
+}
+
 #endif

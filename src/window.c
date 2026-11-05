@@ -30,6 +30,7 @@ static bool (*window_test_serialization_tags)(uint32_t, uint64_t *) = window_tag
 static bool (*window_test_serialization_shadow)(uint32_t) = window_shadow;
 static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
 static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
+static bool (*window_test_serialization_space_is_visible)(uint64_t) = space_is_visible;
 #else
 #define window_observe_add_notification AXObserverAddNotification
 #define window_ax_snapshot_create_attributes CFArrayCreate
@@ -52,6 +53,7 @@ static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_dis
 #define window_test_serialization_shadow window_shadow
 #define window_test_space_display_id space_display_id
 #define window_test_display_id_arrangement display_manager_display_id_arrangement
+#define window_test_serialization_space_is_visible space_is_visible
 #endif
 
 bool window_observe(struct window *window, bool *retry)
@@ -283,6 +285,17 @@ static int window_serialization_space_index(const struct window_serialization_co
         return managed_space_index(context->managed_display_spaces, sid);
     }
     return space_manager_mission_control_index(sid);
+}
+
+static bool window_serialization_space_is_visible(const struct window_serialization_context *context,
+                                                  uint64_t sid)
+{
+    bool visible = false;
+    if (context && context->has_managed_display_spaces_snapshot &&
+        managed_space_is_visible(context->managed_display_spaces, sid, &visible)) {
+        return visible;
+    }
+    return window_test_serialization_space_is_visible(sid);
 }
 
 static int window_serialization_display_index(const struct window_serialization_context *context,
@@ -998,7 +1011,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
 
         bool known = false;
         bool ordered_in = window_is_ordered_in(window->id, &known);
-        bool visible = known && ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || space_is_visible(sid));
+        bool visible = known && ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || window_serialization_space_is_visible(context, sid));
         fprintf(rsp, "\t\"is-visible\":%s", json_bool(visible));
         did_output = true;
     }

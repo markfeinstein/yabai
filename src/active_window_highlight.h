@@ -37,6 +37,9 @@ struct active_window_highlight
     bool ordered;
     bool needs_reorder;
     bool pending_target_frame_valid;
+    // Set when a full refresh confirmed `sid` visible; cleared by the event loop
+    // before any event that can change Space or display topology.
+    bool space_visible_cached;
 };
 
 struct active_window_highlight_geometry active_window_highlight_geometry_make(CGRect target_frame,
