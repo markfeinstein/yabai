@@ -13,6 +13,10 @@
 #include <sys/utsname.h>
 #include <time.h>
 
+#include "probe_support.h"
+#define now_ns() probe_clock_ns(CLOCK_UPTIME_RAW)
+#define spin_ms probe_spin_ms
+#define safe_token probe_safe_token
 #include "../src/misc/extern.h"
 #include "../src/window_corner_geometry.c"
 
@@ -44,30 +48,6 @@ struct corner_observation
     bool mask_repeat_same;
     uint64_t latency_ns;
 };
-
-static uint64_t now_ns(void)
-{
-    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-}
-
-static void spin_ms(unsigned milliseconds)
-{
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)milliseconds / 1000.0];
-    while ([deadline timeIntervalSinceNow] > 0) {
-        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-    }
-}
-
-static bool safe_token(const char *value)
-{
-    if (!value || !value[0]) return false;
-    for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.')) return false;
-    }
-    return true;
-}
 
 static const char *cf_type(CFTypeRef value)
 {

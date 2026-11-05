@@ -1,29 +1,9 @@
 #include "display_cadence_diagnostic_core.h"
+#include "probe_support.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-static bool cadence_json_string(FILE *stream, const char *value)
-{
-    if (!stream || !value || fputc('"', stream) == EOF) return false;
-    for (const unsigned char *cursor = (const unsigned char *) value; *cursor; ++cursor) {
-        switch (*cursor) {
-        case '"': if (fputs("\\\"", stream) == EOF) return false; break;
-        case '\\': if (fputs("\\\\", stream) == EOF) return false; break;
-        case '\b': if (fputs("\\b", stream) == EOF) return false; break;
-        case '\f': if (fputs("\\f", stream) == EOF) return false; break;
-        case '\n': if (fputs("\\n", stream) == EOF) return false; break;
-        case '\r': if (fputs("\\r", stream) == EOF) return false; break;
-        case '\t': if (fputs("\\t", stream) == EOF) return false; break;
-        default:
-            if (*cursor < 0x20) {
-                if (fprintf(stream, "\\u%04x", *cursor) < 0) return false;
-            } else if (fputc(*cursor, stream) == EOF) return false;
-        }
-    }
-    return fputc('"', stream) != EOF;
-}
 
 static bool cadence_revision_is_valid(const char *value)
 {
@@ -133,13 +113,13 @@ bool display_cadence_diagnostic_write_json(
     if (fprintf(stream, "{\"schema\":\"%s\",\"tool\":\"display-cadence-diagnostic\","
                 "\"mode\":\"public-nsscreen-cadisplaylink-read-only\","
                 "\"source_revision\":", DISPLAY_CADENCE_DIAGNOSTIC_SCHEMA) < 0 ||
-        !cadence_json_string(stream, metadata->source_revision) ||
+        !probe_json_string(stream, metadata->source_revision) ||
         fputs(",\"fixture_revision\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->fixture_revision) ||
+        !probe_json_string(stream, metadata->fixture_revision) ||
         fputs(",\"platform\":{\"os_version\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->os_version) ||
-        fputs(",\"os_build\":", stream) == EOF || !cadence_json_string(stream, metadata->os_build) ||
-        fputs(",\"architecture\":", stream) == EOF || !cadence_json_string(stream, metadata->architecture) ||
+        !probe_json_string(stream, metadata->os_version) ||
+        fputs(",\"os_build\":", stream) == EOF || !probe_json_string(stream, metadata->os_build) ||
+        fputs(",\"architecture\":", stream) == EOF || !probe_json_string(stream, metadata->architecture) ||
         fprintf(stream, "},\"requested\":{\"duration_seconds\":%.9f,"
                       "\"max_samples_per_screen\":%zu},\"lifecycle\":{"
                       "\"screens_current\":%zu,\"links_created\":%zu,"
@@ -226,15 +206,15 @@ bool display_cadence_stress_write_json(
                 "\"tool\":\"display-cadence-diagnostic\","
                 "\"mode\":\"public-nsscreen-cadisplaylink-stress-read-only\","
                 "\"source_revision\":") < 0 ||
-        !cadence_json_string(stream, metadata->source_revision) ||
+        !probe_json_string(stream, metadata->source_revision) ||
         fputs(",\"fixture_revision\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->fixture_revision) ||
+        !probe_json_string(stream, metadata->fixture_revision) ||
         fputs(",\"platform\":{\"os_version\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->os_version) ||
+        !probe_json_string(stream, metadata->os_version) ||
         fputs(",\"os_build\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->os_build) ||
+        !probe_json_string(stream, metadata->os_build) ||
         fputs(",\"architecture\":", stream) == EOF ||
-        !cadence_json_string(stream, metadata->architecture) ||
+        !probe_json_string(stream, metadata->architecture) ||
         fprintf(stream, "},\"requested\":{\"cycles\":%zu,\"reinventory_interval\":%zu,"
                       "\"active_cycle_seconds\":%.6f,\"main_thread_load_ms\":%.3f},"
                       "\"lifecycle\":{\"cycles_completed\":%zu,"

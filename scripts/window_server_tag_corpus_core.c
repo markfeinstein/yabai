@@ -1,4 +1,5 @@
 #include "window_server_tag_corpus_core.h"
+#include "probe_support.h"
 
 #include "../src/window_server_tags.h"
 #include "../src/window_server_classifier.h"
@@ -9,29 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static bool corpus_json_string(FILE *stream, const char *value)
-{
-    if (!stream || !value || fputc('"', stream) == EOF) return false;
-    for (const unsigned char *cursor = (const unsigned char *) value; *cursor; ++cursor) {
-        switch (*cursor) {
-        case '"': if (fputs("\\\"", stream) == EOF) return false; break;
-        case '\\': if (fputs("\\\\", stream) == EOF) return false; break;
-        case '\b': if (fputs("\\b", stream) == EOF) return false; break;
-        case '\f': if (fputs("\\f", stream) == EOF) return false; break;
-        case '\n': if (fputs("\\n", stream) == EOF) return false; break;
-        case '\r': if (fputs("\\r", stream) == EOF) return false; break;
-        case '\t': if (fputs("\\t", stream) == EOF) return false; break;
-        default:
-            if (*cursor < 0x20) {
-                if (fprintf(stream, "\\u%04x", *cursor) < 0) return false;
-            } else if (fputc(*cursor, stream) == EOF) {
-                return false;
-            }
-        }
-    }
-    return fputc('"', stream) != EOF;
-}
 
 bool window_server_tag_corpus_scenario_is_valid(const char *scenario)
 {
@@ -210,17 +188,17 @@ bool window_server_tag_corpus_serialize(
 
     if (fputs("{\"schema\":\"" WINDOW_SERVER_TAG_CORPUS_SCHEMA
               "\",\"type\":\"capture\",\"scenario\":", stream) == EOF ||
-        !corpus_json_string(stream, metadata->scenario) ||
-        fputs(",\"capture_set_id\":", stream) == EOF || !corpus_json_string(stream, metadata->capture_set_id) ||
+        !probe_json_string(stream, metadata->scenario) ||
+        fputs(",\"capture_set_id\":", stream) == EOF || !probe_json_string(stream, metadata->capture_set_id) ||
         fprintf(stream, ",\"repeat_index\":%u", metadata->repeat_index) < 0 ||
-        fputs(",\"os_version\":", stream) == EOF || !corpus_json_string(stream, metadata->os_version) ||
-        fputs(",\"os_build\":", stream) == EOF || !corpus_json_string(stream, metadata->os_build) ||
-        fputs(",\"architecture\":", stream) == EOF || !corpus_json_string(stream, metadata->architecture) ||
-        fputs(",\"source_revision\":", stream) == EOF || !corpus_json_string(stream, metadata->source_revision) ||
-        fputs(",\"ax_mode\":", stream) == EOF || !corpus_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
+        fputs(",\"os_version\":", stream) == EOF || !probe_json_string(stream, metadata->os_version) ||
+        fputs(",\"os_build\":", stream) == EOF || !probe_json_string(stream, metadata->os_build) ||
+        fputs(",\"architecture\":", stream) == EOF || !probe_json_string(stream, metadata->architecture) ||
+        fputs(",\"source_revision\":", stream) == EOF || !probe_json_string(stream, metadata->source_revision) ||
+        fputs(",\"ax_mode\":", stream) == EOF || !probe_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
         fprintf(stream, ",\"display_count\":%u", metadata->display_count) < 0 ||
-        fputs(",\"separate_spaces\":", stream) == EOF || !corpus_json_string(stream, metadata->separate_spaces) ||
-        fputs(",\"stage_manager\":", stream) == EOF || !corpus_json_string(stream, metadata->stage_manager) ||
+        fputs(",\"separate_spaces\":", stream) == EOF || !probe_json_string(stream, metadata->separate_spaces) ||
+        fputs(",\"stage_manager\":", stream) == EOF || !probe_json_string(stream, metadata->stage_manager) ||
         fprintf(stream,
                 ",\"tag_map\":\"modern-advisory-v1\","
                 "\"tag_map_evidence\":\"mapped-26.3.1-sampled-27.0.1-unverified-27.2\","
@@ -264,7 +242,7 @@ bool window_server_tag_corpus_serialize(
         for (size_t tag = 0; tag < window_server_tag_descriptor_count; ++tag) {
             if (!(record->tags & window_server_tag_descriptors[tag].mask)) continue;
             if (emitted && fputc(',', stream) == EOF) return false;
-            if (!corpus_json_string(stream, window_server_tag_descriptors[tag].name)) return false;
+            if (!probe_json_string(stream, window_server_tag_descriptors[tag].name)) return false;
             emitted = true;
         }
         if (fprintf(stream,
@@ -333,7 +311,7 @@ static bool corpus_write_reasons(FILE *stream, uint64_t reasons)
     for (size_t i = 0; i < ws_window_classification_reason_descriptor_count; ++i) {
         if (!(reasons & ws_window_classification_reason_descriptors[i].mask)) continue;
         if (emitted && fputc(',', stream) == EOF) return false;
-        if (!corpus_json_string(stream, ws_window_classification_reason_descriptors[i].name)) return false;
+        if (!probe_json_string(stream, ws_window_classification_reason_descriptors[i].name)) return false;
         emitted = true;
     }
     return fputc(']', stream) != EOF;
@@ -501,17 +479,17 @@ bool window_server_tag_corpus_serialize_comparison(
 
     if (fputs("{\"schema\":\"" WINDOW_SERVER_CLASSIFIER_COMPARISON_SCHEMA "\","
               "\"type\":\"capture\",\"scenario\":", stream) == EOF ||
-        !corpus_json_string(stream, metadata->scenario) ||
-        fputs(",\"capture_set_id\":", stream) == EOF || !corpus_json_string(stream, metadata->capture_set_id) ||
+        !probe_json_string(stream, metadata->scenario) ||
+        fputs(",\"capture_set_id\":", stream) == EOF || !probe_json_string(stream, metadata->capture_set_id) ||
         fprintf(stream, ",\"repeat_index\":%u", metadata->repeat_index) < 0 ||
-        fputs(",\"os_version\":", stream) == EOF || !corpus_json_string(stream, metadata->os_version) ||
-        fputs(",\"os_build\":", stream) == EOF || !corpus_json_string(stream, metadata->os_build) ||
-        fputs(",\"architecture\":", stream) == EOF || !corpus_json_string(stream, metadata->architecture) ||
-        fputs(",\"source_revision\":", stream) == EOF || !corpus_json_string(stream, metadata->source_revision) ||
-        fputs(",\"ax_mode\":", stream) == EOF || !corpus_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
+        fputs(",\"os_version\":", stream) == EOF || !probe_json_string(stream, metadata->os_version) ||
+        fputs(",\"os_build\":", stream) == EOF || !probe_json_string(stream, metadata->os_build) ||
+        fputs(",\"architecture\":", stream) == EOF || !probe_json_string(stream, metadata->architecture) ||
+        fputs(",\"source_revision\":", stream) == EOF || !probe_json_string(stream, metadata->source_revision) ||
+        fputs(",\"ax_mode\":", stream) == EOF || !probe_json_string(stream, corpus_ax_mode_name(metadata->ax_mode)) ||
         fprintf(stream, ",\"display_count\":%u", metadata->display_count) < 0 ||
-        fputs(",\"separate_spaces\":", stream) == EOF || !corpus_json_string(stream, metadata->separate_spaces) ||
-        fputs(",\"stage_manager\":", stream) == EOF || !corpus_json_string(stream, metadata->stage_manager) ||
+        fputs(",\"separate_spaces\":", stream) == EOF || !probe_json_string(stream, metadata->separate_spaces) ||
+        fputs(",\"stage_manager\":", stream) == EOF || !probe_json_string(stream, metadata->stage_manager) ||
         fprintf(stream,
                 ",\"legacy_algorithm\":\"legacy-space-eligibility-v1\","
                 "\"candidate_algorithm\":\"conservative-candidate-v1\","
@@ -624,9 +602,9 @@ bool window_server_tag_corpus_serialize_comparison(
         const struct window_server_tag_corpus_label *label = &comparison->windows[i].label;
         if (label->present) {
             if (fputs(",\"fixture_id\":", stream) == EOF ||
-                !corpus_json_string(stream, label->fixture_id) ||
+                !probe_json_string(stream, label->fixture_id) ||
                 fputs(",\"fixture_role\":", stream) == EOF ||
-                !corpus_json_string(stream, label->fixture_role) ||
+                !probe_json_string(stream, label->fixture_role) ||
                 fprintf(stream, ",\"expected_normal\":\"%s\","
                                 "\"expected_include_minimized\":\"%s\","
                                 "\"adjudication_status\":\"%s\","
@@ -637,13 +615,13 @@ bool window_server_tag_corpus_serialize_comparison(
                         corpus_bit58_state_name(label->bit58_state)) < 0) return false;
             if (label->adjudication != WINDOW_SERVER_TAG_CORPUS_ADJUDICATION_PENDING) {
                 if (fputs(",\"adjudication_reason\":", stream) == EOF ||
-                    !corpus_json_string(stream, label->adjudication_reason) ||
+                    !probe_json_string(stream, label->adjudication_reason) ||
                     fputs(",\"evidence_ref\":", stream) == EOF ||
-                    !corpus_json_string(stream, label->evidence_ref)) return false;
+                    !probe_json_string(stream, label->evidence_ref)) return false;
             }
             if (label->control_pair_id) {
                 if (fputs(",\"control_pair_id\":", stream) == EOF ||
-                    !corpus_json_string(stream, label->control_pair_id)) return false;
+                    !probe_json_string(stream, label->control_pair_id)) return false;
             }
         }
         if (fputs("}\n", stream) == EOF) return false;

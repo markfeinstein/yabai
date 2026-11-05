@@ -13,6 +13,9 @@
 #include <sys/utsname.h>
 #include <time.h>
 
+#include "probe_support.h"
+#define now_ns() probe_clock_ns(CLOCK_MONOTONIC_RAW)
+#define spin_ms probe_spin_ms
 #include "../src/misc/extern.h"
 #include "../src/window_constraints.c"
 
@@ -105,22 +108,6 @@ struct summary
     return self.lastOutput;
 }
 @end
-
-static uint64_t now_ns(void)
-{
-    struct timespec value;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &value);
-    return (uint64_t)value.tv_sec * UINT64_C(1000000000) + (uint64_t)value.tv_nsec;
-}
-
-static void spin_ms(unsigned milliseconds)
-{
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)milliseconds / 1000.0];
-    while ([deadline timeIntervalSinceNow] > 0) {
-        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-    }
-}
 
 static bool finite_positive(CGSize value)
 {
