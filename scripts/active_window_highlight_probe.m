@@ -122,7 +122,7 @@ static struct inspection inspect_window(pid_t daemon_pid, uint32_t target, CGFlo
         }
     }
 
-    CGRect expected = CGRectInset(target_bounds, -width, -width);
+    CGRect expected = CGRectInset(target_bounds, -0.5 * width, -0.5 * width);
     uint32_t overlay = 0;
     CFIndex overlay_index = -1;
     double nearest_score = HUGE_VAL;

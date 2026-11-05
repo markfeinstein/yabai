@@ -1562,6 +1562,12 @@ static void window_manager_refresh_active_window_highlight_internal(struct windo
         return;
     }
 #endif
+    if (g_mouse_state.native_resize.highlight_suppressed &&
+        g_mouse_state.native_resize.window_id == wm->focused_window_id) {
+        window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
     struct active_window_highlight *highlight = &wm->active_window_highlight;
     // AX frame writes can complete before WindowServer publishes matching bounds.
     if (target_frame && target_wid == wm->focused_window_id) {
@@ -1586,6 +1592,23 @@ static void window_manager_refresh_active_window_highlight_internal(struct windo
         window_check_flag(window, WINDOW_ORDERED_OUT) ||
         window_manager_active_window_highlight_window_is_animating(wm, window->id)) {
         window_manager_hide_active_window_highlight(wm);
+        return;
+    }
+
+    // Known frame writes for the existing target do not need another round trip for
+    // WindowServer bounds, tags, level, or Space metadata. Keep the pending frame so
+    // a later ordinary refresh still rejects stale published bounds.
+    if (target_frame && target_wid == window->id &&
+        active_window_highlight_can_fast_update(highlight, window->id) &&
+        (highlight->sticky || (highlight->sid && space_is_visible(highlight->sid)))) {
+        if (!active_window_highlight_show(highlight, window->id, *target_frame,
+                                          highlight->level, highlight->sub_level,
+                                          highlight->sid, highlight->sticky,
+                                          wm->active_window_highlight_color.p,
+                                          wm->active_window_highlight_width,
+                                          wm->active_window_highlight_radius)) {
+            window_manager_hide_active_window_highlight(wm);
+        }
         return;
     }
 

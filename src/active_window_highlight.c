@@ -8,10 +8,11 @@ struct active_window_highlight_geometry active_window_highlight_geometry_make(CG
     target_frame.size.height = fmax(0.0, target_frame.size.height);
     CGFloat minimum_dimension = fmin(target_frame.size.width, target_frame.size.height);
     CGFloat stroke_width = fmin((CGFloat) configured_width, 0.5 * minimum_dimension);
-    CGRect frame = CGRectInset(target_frame, -stroke_width, -stroke_width);
+    CGFloat stroke_outset = 0.5 * stroke_width;
+    CGRect frame = CGRectInset(target_frame, -stroke_outset, -stroke_outset);
     CGRect bounds = CGRectMake(0.0, 0.0, frame.size.width, frame.size.height);
-    CGRect stroke_rect = CGRectInset(bounds, 0.5 * stroke_width, 0.5 * stroke_width);
-    CGFloat radius = fmax(0.0, (CGFloat) configured_radius) + 0.5 * stroke_width;
+    CGRect stroke_rect = CGRectInset(bounds, stroke_outset, stroke_outset);
+    CGFloat radius = fmax(0.0, (CGFloat) configured_radius) + stroke_outset;
 
     return (struct active_window_highlight_geometry) {
         .frame = frame,
@@ -47,6 +48,13 @@ void active_window_highlight_hide(struct active_window_highlight *highlight)
 void active_window_highlight_invalidate_order(struct active_window_highlight *highlight)
 {
     if (highlight) highlight->needs_reorder = true;
+}
+
+bool active_window_highlight_can_fast_update(const struct active_window_highlight *highlight,
+                                             uint32_t target_wid)
+{
+    return highlight && highlight->id && highlight->context && highlight->ordered &&
+           !highlight->needs_reorder && highlight->target_wid == target_wid;
 }
 
 void active_window_highlight_destroy(struct active_window_highlight *highlight)
@@ -106,6 +114,14 @@ static bool active_window_highlight_assign_space(struct active_window_highlight 
     return true;
 }
 
+static bool active_window_highlight_needs_redraw(const struct active_window_highlight *highlight,
+                                                  const struct active_window_highlight_geometry *geometry,
+                                                  uint32_t color, float width, float radius)
+{
+    return !highlight->id || !CGRectEqualToRect(highlight->frame, geometry->frame) ||
+           highlight->color != color || highlight->width != width || highlight->radius != radius;
+}
+
 static bool active_window_highlight_draw(struct active_window_highlight *highlight,
                                          const struct active_window_highlight_geometry *geometry,
                                          uint32_t color)
@@ -151,6 +167,7 @@ bool active_window_highlight_show(struct active_window_highlight *highlight,
     bool target_changed = highlight->target_wid != target_wid;
     bool frame_changed = !CGRectEqualToRect(highlight->frame, geometry.frame);
     bool style_changed = highlight->color != color || highlight->width != width || highlight->radius != radius;
+    bool redraw = active_window_highlight_needs_redraw(highlight, &geometry, color, width, radius);
     bool level_changed = highlight->level != level || highlight->sub_level != sub_level;
     bool space_changed = highlight->sticky != sticky || (!sticky && highlight->sid != sid);
     bool order_changed = highlight->needs_reorder || !highlight->ordered || target_changed || level_changed;
@@ -172,14 +189,15 @@ bool active_window_highlight_show(struct active_window_highlight *highlight,
         SLSSetWindowShape(g_connection, highlight->id, 0.0f, 0.0f, frame_region) != kCGErrorSuccess) {
         success = false;
     }
-    if (success && (create || target_changed || space_changed) &&
+    if (success && (create || space_changed) &&
         !active_window_highlight_assign_space(highlight, sid, sticky)) success = false;
     if (success && (create || highlight->level != level) &&
         SLSSetWindowLevel(g_connection, highlight->id, level) != kCGErrorSuccess) success = false;
     if (success && (create || highlight->sub_level != sub_level) &&
         SLSSetWindowSubLevel(g_connection, highlight->id, sub_level) != kCGErrorSuccess) success = false;
-    if (success && (create || frame_changed || style_changed) &&
-        !active_window_highlight_draw(highlight, &geometry, color)) success = false;
+    // Updating the WindowServer shape can discard the context contents even when
+    // only the origin changed, so every frame change must repaint the outline.
+    if (success && redraw && !active_window_highlight_draw(highlight, &geometry, color)) success = false;
     if (success && (create || order_changed) &&
         SLSOrderWindow(g_connection, highlight->id, 1, target_wid) != kCGErrorSuccess) success = false;
 

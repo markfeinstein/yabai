@@ -84,6 +84,7 @@ struct native_resize_state
     bool provisional;
     bool pending_size;
     bool saw_resize;
+    bool highlight_suppressed;
 };
 
 struct mouse_state

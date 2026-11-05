@@ -48,6 +48,8 @@ bool active_window_highlight_show(struct active_window_highlight *highlight,
                                   uint32_t color, float width, float radius);
 void active_window_highlight_hide(struct active_window_highlight *highlight);
 void active_window_highlight_invalidate_order(struct active_window_highlight *highlight);
+bool active_window_highlight_can_fast_update(const struct active_window_highlight *highlight,
+                                             uint32_t target_wid);
 void active_window_highlight_destroy(struct active_window_highlight *highlight);
 
 #endif

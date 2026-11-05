@@ -25,27 +25,27 @@ TEST_FUNC(active_window_highlight_geometry_is_bounded_and_outset,
 
     struct active_window_highlight_geometry geometry =
         active_window_highlight_geometry_make(CGRectMake(10.0, 20.0, 100.0, 40.0), 4.0f, 9.0f);
-    TEST_CHECK(geometry.frame.origin.x, 6.0);
-    TEST_CHECK(geometry.frame.origin.y, 16.0);
-    TEST_CHECK(geometry.frame.size.width, 108.0);
-    TEST_CHECK(geometry.frame.size.height, 48.0);
+    TEST_CHECK(geometry.frame.origin.x, 8.0);
+    TEST_CHECK(geometry.frame.origin.y, 18.0);
+    TEST_CHECK(geometry.frame.size.width, 104.0);
+    TEST_CHECK(geometry.frame.size.height, 44.0);
     TEST_CHECK(geometry.stroke_width, 4.0);
     TEST_CHECK(geometry.stroke_rect.origin.x, 2.0);
     TEST_CHECK(geometry.stroke_rect.origin.y, 2.0);
-    TEST_CHECK(geometry.stroke_rect.size.width, 104.0);
-    TEST_CHECK(geometry.stroke_rect.size.height, 44.0);
+    TEST_CHECK(geometry.stroke_rect.size.width, 100.0);
+    TEST_CHECK(geometry.stroke_rect.size.height, 40.0);
     TEST_CHECK(geometry.corner_radius_x, 11.0);
     TEST_CHECK(geometry.corner_radius_y, 11.0);
 
     struct active_window_highlight_geometry clamped =
         active_window_highlight_geometry_make(CGRectMake(0.0, 0.0, 8.0, 4.0), 100.0f, 100.0f);
     TEST_CHECK(clamped.stroke_width, 2.0);
-    TEST_CHECK(clamped.frame.size.width, 12.0);
-    TEST_CHECK(clamped.frame.size.height, 8.0);
-    TEST_CHECK(clamped.stroke_rect.size.width, 10.0);
-    TEST_CHECK(clamped.stroke_rect.size.height, 6.0);
-    TEST_CHECK(clamped.corner_radius_x, 5.0);
-    TEST_CHECK(clamped.corner_radius_y, 3.0);
+    TEST_CHECK(clamped.frame.size.width, 10.0);
+    TEST_CHECK(clamped.frame.size.height, 6.0);
+    TEST_CHECK(clamped.stroke_rect.size.width, 8.0);
+    TEST_CHECK(clamped.stroke_rect.size.height, 4.0);
+    TEST_CHECK(clamped.corner_radius_x, 4.0);
+    TEST_CHECK(clamped.corner_radius_y, 2.0);
 
     struct active_window_highlight_geometry empty =
         active_window_highlight_geometry_make(CGRectMake(3.0, 4.0, -8.0, -4.0), 4.0f, 9.0f);
@@ -55,10 +55,41 @@ TEST_FUNC(active_window_highlight_geometry_is_bounded_and_outset,
     TEST_CHECK(empty.stroke_rect.size.width, 0.0);
     TEST_CHECK(empty.stroke_rect.size.height, 0.0);
 
-    struct active_window_highlight state = { .ordered = true };
+    struct active_window_highlight state = {
+        .id = 7,
+        .context = (CGContextRef) (uintptr_t) 1,
+        .target_wid = 42,
+        .ordered = true
+    };
+    TEST_CHECK(active_window_highlight_can_fast_update(&state, 42), true);
+    TEST_CHECK(active_window_highlight_can_fast_update(&state, 99), false);
     active_window_highlight_invalidate_order(&state);
     TEST_CHECK(state.ordered, true);
     TEST_CHECK(state.needs_reorder, true);
+    TEST_CHECK(active_window_highlight_can_fast_update(&state, 42), false);
+});
+
+TEST_FUNC(active_window_highlight_redraws_when_only_origin_changes,
+{
+    struct active_window_highlight highlight = {
+        .id = 7,
+        .frame = CGRectMake(8.0, 18.0, 104.0, 44.0),
+        .color = 0xff9ccfd8U,
+        .width = 4.0f,
+        .radius = 9.0f
+    };
+    struct active_window_highlight_geometry same =
+        active_window_highlight_geometry_make(CGRectMake(10.0, 20.0, 100.0, 40.0), 4.0f, 9.0f);
+    struct active_window_highlight_geometry moved =
+        active_window_highlight_geometry_make(CGRectMake(10.0, 120.0, 100.0, 40.0), 4.0f, 9.0f);
+
+    TEST_CHECK(active_window_highlight_needs_redraw(&highlight, &same,
+                                                    highlight.color, highlight.width,
+                                                    highlight.radius), false);
+    TEST_CHECK(CGSizeEqualToSize(highlight.frame.size, moved.frame.size), true);
+    TEST_CHECK(active_window_highlight_needs_redraw(&highlight, &moved,
+                                                    highlight.color, highlight.width,
+                                                    highlight.radius), true);
 });
 
 TEST_FUNC(active_window_highlight_pending_geometry_rejects_stale_server_frame,

@@ -1801,6 +1801,11 @@ static uint64_t window_reconcile_test_delays[8];
 static int window_reconcile_test_schedule_count;
 static uint64_t window_reconcile_test_validated[8];
 static int window_reconcile_test_validate_count;
+static int window_reconcile_test_ordered_query_count;
+static int window_reconcile_test_restore_count;
+static int window_reconcile_test_highlight_refresh_count;
+static uint32_t window_reconcile_test_restored_wid;
+static uint64_t window_reconcile_test_restored_sid;
 static bool window_reconcile_test_is_visible = true;
 
 static uint64_t window_reconcile_test_space(uint32_t wid)
@@ -1829,9 +1834,37 @@ static bool window_reconcile_test_user(uint64_t sid)
     return true;
 }
 
+static CGError window_reconcile_test_ordered_query(int connection, uint32_t wid, uint8_t *ordered_in)
+{
+    (void) connection;
+    ++window_reconcile_test_ordered_query_count;
+    *ordered_in = wid == 8001 || wid == 8003;
+    return kCGErrorSuccess;
+}
+
+static bool window_reconcile_test_window_on_space(uint64_t sid, struct window *window)
+{
+    return sid == 11 && window->id != 8003;
+}
+
+static void window_reconcile_test_restore_ordered(struct window_manager *wm, struct window *window, uint64_t sid)
+{
+    (void) wm;
+    ++window_reconcile_test_restore_count;
+    window_reconcile_test_restored_wid = window->id;
+    window_reconcile_test_restored_sid = sid;
+    window_clear_flag(window, WINDOW_ORDERED_OUT);
+}
+
 static void window_reconcile_test_validate(uint64_t sid)
 {
     window_reconcile_test_validated[window_reconcile_test_validate_count++] = sid;
+}
+
+static void window_reconcile_test_refresh_highlight(struct window_manager *wm)
+{
+    (void) wm;
+    ++window_reconcile_test_highlight_refresh_count;
 }
 
 static void window_reconcile_test_dispatch(uint64_t sid, uint64_t token)
@@ -1844,25 +1877,50 @@ static void window_reconcile_test_dispatch(uint64_t sid, uint64_t token)
 TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
 {
     struct table saved_views = g_space_manager.view;
+    struct table saved_windows = g_window_manager.window;
     __auto_type saved_space = event_loop_test_window_reconcile_space;
     __auto_type saved_schedule = event_loop_test_window_reconcile_schedule;
     __auto_type saved_visible = event_loop_test_window_reconcile_visible;
     __auto_type saved_user = event_loop_test_window_reconcile_user;
+    __auto_type saved_ordered_query = event_loop_test_window_reconcile_ordered_query;
+    __auto_type saved_window_on_space = event_loop_test_window_reconcile_window_on_space;
+    __auto_type saved_restore_ordered = event_loop_test_window_reconcile_restore_ordered;
     __auto_type saved_validate = event_loop_test_window_reconcile_validate;
+    __auto_type saved_refresh_highlight = event_loop_test_window_reconcile_refresh_highlight;
 
     g_space_manager.view = (struct table) {0};
+    g_window_manager.window = (struct table) {0};
     table_init(&g_space_manager.view, 8, hash_view, compare_view);
+    table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
     struct view first = { .sid = 11, .layout = VIEW_BSP };
     struct view second = { .sid = 12, .layout = VIEW_BSP };
     table_add(&g_space_manager.view, &first.sid, &first);
     table_add(&g_space_manager.view, &second.sid, &second);
+    struct window ordered_in = { .id = 8001 };
+    struct window ordered_out = { .id = 8002 };
+    struct window other_space = { .id = 8003 };
+    struct window unflagged = { .id = 8004 };
+    window_set_flag(&ordered_in, WINDOW_ORDERED_OUT);
+    window_set_flag(&ordered_out, WINDOW_ORDERED_OUT);
+    window_set_flag(&other_space, WINDOW_ORDERED_OUT);
+    table_add(&g_window_manager.window, &ordered_in.id, &ordered_in);
+    table_add(&g_window_manager.window, &ordered_out.id, &ordered_out);
+    table_add(&g_window_manager.window, &other_space.id, &other_space);
+    table_add(&g_window_manager.window, &unflagged.id, &unflagged);
     event_loop_test_window_reconcile_space = window_reconcile_test_space;
     event_loop_test_window_reconcile_schedule = window_reconcile_test_schedule;
     event_loop_test_window_reconcile_visible = window_reconcile_test_visible;
     event_loop_test_window_reconcile_user = window_reconcile_test_user;
+    event_loop_test_window_reconcile_ordered_query = window_reconcile_test_ordered_query;
+    event_loop_test_window_reconcile_window_on_space = window_reconcile_test_window_on_space;
+    event_loop_test_window_reconcile_restore_ordered = window_reconcile_test_restore_ordered;
     event_loop_test_window_reconcile_validate = window_reconcile_test_validate;
+    event_loop_test_window_reconcile_refresh_highlight = window_reconcile_test_refresh_highlight;
     window_reconcile_test_schedule_count = 0;
     window_reconcile_test_validate_count = 0;
+    window_reconcile_test_ordered_query_count = 0;
+    window_reconcile_test_restore_count = 0;
+    window_reconcile_test_highlight_refresh_count = 0;
     window_reconcile_test_is_visible = true;
     pthread_mutex_lock(&window_reconcile_lock);
     memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));
@@ -1887,6 +1945,14 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     TEST_CHECK(window_reconcile_test_validate_count, 2);
     TEST_CHECK(window_reconcile_test_validated[0], 11ULL);
     TEST_CHECK(window_reconcile_test_validated[1], 12ULL);
+    TEST_CHECK(window_reconcile_test_ordered_query_count, 5);
+    TEST_CHECK(window_reconcile_test_restore_count, 1);
+    TEST_CHECK(window_reconcile_test_restored_wid, 8001U);
+    TEST_CHECK(window_reconcile_test_restored_sid, 11ULL);
+    TEST_CHECK(window_reconcile_test_highlight_refresh_count, 1);
+    TEST_CHECK(window_check_flag(&ordered_in, WINDOW_ORDERED_OUT), false);
+    TEST_CHECK(window_check_flag(&ordered_out, WINDOW_ORDERED_OUT), true);
+    TEST_CHECK(window_check_flag(&other_space, WINDOW_ORDERED_OUT), true);
 
     window_reconcile_test_sid = 11;
     window_reconcile_schedule(&window);
@@ -1898,12 +1964,66 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));
     pthread_mutex_unlock(&window_reconcile_lock);
     table_free(&g_space_manager.view);
+    table_free(&g_window_manager.window);
     g_space_manager.view = saved_views;
+    g_window_manager.window = saved_windows;
     event_loop_test_window_reconcile_space = saved_space;
     event_loop_test_window_reconcile_schedule = saved_schedule;
     event_loop_test_window_reconcile_visible = saved_visible;
     event_loop_test_window_reconcile_user = saved_user;
+    event_loop_test_window_reconcile_ordered_query = saved_ordered_query;
+    event_loop_test_window_reconcile_window_on_space = saved_window_on_space;
+    event_loop_test_window_reconcile_restore_ordered = saved_restore_ordered;
     event_loop_test_window_reconcile_validate = saved_validate;
+    event_loop_test_window_reconcile_refresh_highlight = saved_refresh_highlight;
+});
+
+TEST_FUNC(application_visibility_schedules_ordered_window_reconciliation,
+{
+    struct table saved_windows = g_window_manager.window;
+    __auto_type saved_space = event_loop_test_window_reconcile_space;
+    __auto_type saved_schedule = event_loop_test_window_reconcile_schedule;
+
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
+    struct application restored = {0};
+    struct application foreign = {0};
+    struct window first = { .id = 8101, .application = &restored };
+    struct window second = { .id = 8102, .application = &restored };
+    struct window ordinary = { .id = 8103, .application = &restored };
+    struct window unrelated = { .id = 8104, .application = &foreign };
+    window_set_flag(&first, WINDOW_ORDERED_OUT);
+    window_set_flag(&second, WINDOW_ORDERED_OUT);
+    window_set_flag(&unrelated, WINDOW_ORDERED_OUT);
+    table_add(&g_window_manager.window, &first.id, &first);
+    table_add(&g_window_manager.window, &second.id, &second);
+    table_add(&g_window_manager.window, &ordinary.id, &ordinary);
+    table_add(&g_window_manager.window, &unrelated.id, &unrelated);
+
+    event_loop_test_window_reconcile_space = window_reconcile_test_space;
+    event_loop_test_window_reconcile_schedule = window_reconcile_test_schedule;
+    window_reconcile_test_sid = 13;
+    window_reconcile_test_schedule_count = 0;
+    pthread_mutex_lock(&window_reconcile_lock);
+    memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));
+    pthread_mutex_unlock(&window_reconcile_lock);
+
+    window_reconcile_schedule_application(&restored);
+
+    TEST_CHECK(window_reconcile_test_schedule_count, 2);
+    TEST_CHECK(window_reconcile_test_sids[0], 13ULL);
+    TEST_CHECK(window_reconcile_test_sids[1], 13ULL);
+    TEST_CHECK(window_reconcile_test_delays[0], (uint64_t) WINDOW_RECONCILE_DELAY_MS);
+    TEST_CHECK(window_reconcile_test_delays[1], (uint64_t) WINDOW_RECONCILE_DELAY_MS);
+    TEST_CHECK(window_reconcile_test_tokens[0] != window_reconcile_test_tokens[1], true);
+
+    pthread_mutex_lock(&window_reconcile_lock);
+    memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));
+    pthread_mutex_unlock(&window_reconcile_lock);
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    event_loop_test_window_reconcile_space = saved_space;
+    event_loop_test_window_reconcile_schedule = saved_schedule;
 });
 
 TEST_FUNC(application_termination_rejects_stale_pid_reuse_identity,

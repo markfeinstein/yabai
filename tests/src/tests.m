@@ -1571,6 +1571,8 @@ static bool g_native_resize_live_frame_result;
 static bool g_native_resize_live_frame_override;
 static CGRect g_native_resize_live_frame;
 static int g_native_resize_restore_count;
+static int g_native_resize_highlight_hide_count;
+static int g_native_resize_highlight_refresh_count;
 
 static bool test_native_resize_space_visible(uint64_t sid)
 {
@@ -1582,6 +1584,22 @@ static void test_native_resize_restore(uint32_t window_id)
 {
     (void) window_id;
     ++g_native_resize_restore_count;
+}
+
+static void test_native_resize_hide_highlight(struct window_manager *wm)
+{
+    (void) wm;
+    ++g_native_resize_highlight_hide_count;
+}
+
+static void test_native_resize_refresh_highlight(struct window_manager *wm,
+                                                 uint32_t target_wid,
+                                                 const CGRect *target_frame)
+{
+    (void) wm;
+    (void) target_wid;
+    (void) target_frame;
+    ++g_native_resize_highlight_refresh_count;
 }
 
 static bool test_native_resize_live_frame(struct window *window, CGRect *frame)
@@ -1666,6 +1684,8 @@ struct native_resize_test_fixture
     void (*schedule_hook)(uint32_t, uint64_t);
     void (*restore_hook)(uint32_t);
     bool (*live_frame_hook)(struct window *, CGRect *);
+    void (*highlight_refresh_hook)(struct window_manager *, uint32_t, const CGRect *);
+    void (*highlight_hide_hook)(struct window_manager *);
     void (*drop_hook)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *);
     struct window window;
     struct window_node node;
@@ -1684,6 +1704,8 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     fixture->schedule_hook = event_loop_test_native_resize_schedule;
     fixture->restore_hook = event_loop_test_native_resize_restore;
     fixture->live_frame_hook = event_loop_test_native_resize_live_frame;
+    fixture->highlight_refresh_hook = window_manager_test_active_window_highlight_refresh_observer;
+    fixture->highlight_hide_hook = window_manager_test_active_window_highlight_hide_observer;
     fixture->drop_hook = event_loop_test_mouse_drop_try_adjust_bsp_grid;
 
     table_init(&g_window_manager.window, 1, hash_wm, compare_wm);
@@ -1709,11 +1731,15 @@ static void native_resize_test_begin(struct native_resize_test_fixture *fixture,
     g_native_resize_live_frame_override = false;
     g_native_resize_live_frame = CGRectZero;
     g_native_resize_restore_count = 0;
+    g_native_resize_highlight_hide_count = 0;
+    g_native_resize_highlight_refresh_count = 0;
     g_mouse_drop_adjust_call_count = 0;
     event_loop_test_native_resize_space_visible = test_native_resize_space_visible;
     event_loop_test_native_resize_schedule = test_native_resize_schedule;
     event_loop_test_native_resize_restore = test_native_resize_restore;
     event_loop_test_native_resize_live_frame = test_native_resize_live_frame;
+    window_manager_test_active_window_highlight_refresh_observer = test_native_resize_refresh_highlight;
+    window_manager_test_active_window_highlight_hide_observer = test_native_resize_hide_highlight;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = test_mouse_drop_adjust;
 }
 
@@ -1723,6 +1749,8 @@ static void native_resize_test_end(struct native_resize_test_fixture *fixture)
     event_loop_test_native_resize_schedule = fixture->schedule_hook;
     event_loop_test_native_resize_restore = fixture->restore_hook;
     event_loop_test_native_resize_live_frame = fixture->live_frame_hook;
+    window_manager_test_active_window_highlight_refresh_observer = fixture->highlight_refresh_hook;
+    window_manager_test_active_window_highlight_hide_observer = fixture->highlight_hide_hook;
     event_loop_test_mouse_drop_try_adjust_bsp_grid = fixture->drop_hook;
     g_mouse_state = fixture->mouse_state;
     if (fixture->window.ref) CFRelease(fixture->window.ref);
@@ -1745,6 +1773,55 @@ static void native_resize_test_mouse_up(CGPoint point)
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
     if (event) EVENT_HANDLER_MOUSE_UP(event, 0);
 }
+
+TEST_FUNC(native_edge_resize_suppresses_highlight_until_completion,
+{
+    struct native_resize_test_fixture fixture;
+    native_resize_test_begin(&fixture, 1210);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(g_mouse_state.native_resize.highlight_suppressed, false);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 0);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    TEST_CHECK(g_mouse_state.native_resize.highlight_suppressed, true);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 1);
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 415.0f, 300.0f), true), true);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 1);
+    native_resize_test_mouse_up(CGPointMake(435.0f, 150.0f));
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_mouse_state.native_resize.highlight_suppressed, false);
+    TEST_CHECK(g_native_resize_highlight_refresh_count, 1);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(20.0f, 30.0f, 410.0f, 300.0f), true), true);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 2);
+    native_resize_abort(&g_mouse_state, true);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_mouse_state.native_resize.highlight_suppressed, false);
+    TEST_CHECK(g_native_resize_highlight_refresh_count, 2);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    TEST_CHECK(native_resize_observe(&fixture.window, &fixture.view, &fixture.node,
+                                     CGRectMake(15.0f, 30.0f, 405.0f, 300.0f), true), false);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 2);
+    TEST_CHECK(g_native_resize_highlight_refresh_count, 2);
+
+    native_resize_test_mouse_down(CGPointMake(420.0f, 150.0f));
+    native_resize_test_mouse_up(CGPointMake(420.0f, 150.0f));
+    EVENT_HANDLER_NATIVE_RESIZE_FINALIZE(
+        (void *) (uintptr_t) g_native_resize_scheduled_generation, 0);
+    TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
+    TEST_CHECK(g_native_resize_highlight_hide_count, 2);
+    TEST_CHECK(g_native_resize_highlight_refresh_count, 2);
+
+    native_resize_test_end(&fixture);
+});
 
 TEST_FUNC(native_edge_resize_accepts_mouse_up_before_and_between_geometry_events,
 {
@@ -3380,6 +3457,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_created_event_ax_ownership_matrix_is_exact) \
     TEST_ENTRY(window_created_identity_retry_preserves_origin_and_falls_back_to_refresh) \
     TEST_ENTRY(window_focus_reconciliation_is_per_space_coalesced_and_bounded) \
+    TEST_ENTRY(application_visibility_schedules_ordered_window_reconciliation) \
     TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
     TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
     TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
@@ -3434,6 +3512,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
     TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
     TEST_ENTRY(active_window_highlight_geometry_is_bounded_and_outset) \
+    TEST_ENTRY(active_window_highlight_redraws_when_only_origin_changes) \
     TEST_ENTRY(active_window_highlight_pending_geometry_rejects_stale_server_frame) \
     TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
     TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
@@ -3508,6 +3587,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(mouse_queued_action_is_immutable_across_configuration_changes) \
     TEST_ENTRY(mouse_unclassified_action_does_not_begin_gesture) \
     TEST_ENTRY(mouse_resize_latches_live_bsp_policy_for_the_gesture) \
+    TEST_ENTRY(native_edge_resize_suppresses_highlight_until_completion) \
     TEST_ENTRY(native_edge_resize_accepts_mouse_up_before_and_between_geometry_events) \
     TEST_ENTRY(native_edge_resize_live_setting_remains_release_only) \
     TEST_ENTRY(native_edge_resize_adapts_post_release_quiescence_to_geometry_state) \

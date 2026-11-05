@@ -504,6 +504,25 @@ static void native_resize_clear(struct mouse_state *mouse_state)
     state->provisional = false;
     state->pending_size = false;
     state->saw_resize = false;
+    state->highlight_suppressed = false;
+}
+
+static void native_resize_restore_highlight(uint32_t window_id, bool suppressed)
+{
+    if (suppressed && window_id && window_id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
+}
+
+static bool native_resize_suppress_highlight(uint32_t window_id)
+{
+    struct native_resize_state *state = &g_mouse_state.native_resize;
+    if (!window_id || state->window_id != window_id) return false;
+    if (!state->highlight_suppressed) {
+        state->highlight_suppressed = true;
+        window_manager_hide_active_window_highlight(&g_window_manager);
+    }
+    return true;
 }
 
 static void native_resize_restore_window(uint32_t window_id)
@@ -529,8 +548,10 @@ static void native_resize_abort(struct mouse_state *mouse_state, bool restore)
 {
     uint32_t window_id = mouse_state->native_resize.window_id;
     bool claimed = mouse_state->native_resize.claimed;
+    bool highlight_suppressed = mouse_state->native_resize.highlight_suppressed;
     native_resize_clear(mouse_state);
     if (restore && claimed) native_resize_restore_window(window_id);
+    native_resize_restore_highlight(window_id, highlight_suppressed);
 }
 
 static bool native_resize_window_is_eligible(struct window *window, struct view *view,
@@ -597,6 +618,7 @@ static void native_resize_candidate_begin(CGEventRef event)
     state->provisional = false;
     state->pending_size = false;
     state->saw_resize = false;
+    state->highlight_suppressed = false;
     uint32_t generation = native_resize_next_generation(state);
     native_resize_schedule(generation, NATIVE_RESIZE_TIMEOUT_MS);
 }
@@ -737,6 +759,7 @@ static bool native_resize_observe(struct window *window, struct view *view,
         }
     }
 
+    (void) native_resize_suppress_highlight(window->id);
     state->claimed = true;
     uint32_t generation = native_resize_next_generation(state);
     native_resize_schedule(generation, state->released ? native_resize_post_release_delay(state)
@@ -872,7 +895,11 @@ static uint64_t (*event_loop_test_window_reconcile_space)(uint32_t);
 static void (*event_loop_test_window_reconcile_schedule)(uint64_t, uint64_t, uint64_t);
 static bool (*event_loop_test_window_reconcile_visible)(uint64_t);
 static bool (*event_loop_test_window_reconcile_user)(uint64_t);
+static CGError (*event_loop_test_window_reconcile_ordered_query)(int, uint32_t, uint8_t *);
+static bool (*event_loop_test_window_reconcile_window_on_space)(uint64_t, struct window *);
+static void (*event_loop_test_window_reconcile_restore_ordered)(struct window_manager *, struct window *, uint64_t);
 static void (*event_loop_test_window_reconcile_validate)(uint64_t);
+static void (*event_loop_test_window_reconcile_refresh_highlight)(struct window_manager *);
 #endif
 
 static void window_reconcile_context_destroy(struct window_reconcile_context *context)
@@ -969,6 +996,53 @@ static void window_reconcile_schedule(struct window *window)
     });
 }
 
+static void window_reconcile_schedule_application(struct application *application)
+{
+    int window_count = 0;
+    struct window **window_list = window_manager_find_application_windows(&g_window_manager, application, &window_count);
+    for (int i = 0; i < window_count; ++i) {
+        if (window_check_flag(window_list[i], WINDOW_ORDERED_OUT)) {
+            window_reconcile_schedule(window_list[i]);
+        }
+    }
+}
+
+static int window_reconcile_restore_ordered_windows(uint64_t sid)
+{
+    int restored = 0;
+    table_for (struct window *window, g_window_manager.window, {
+        if (!window_check_flag(window, WINDOW_ORDERED_OUT)) continue;
+        uint8_t ordered_in = 0;
+#ifdef TESTS
+        CGError ordered_result = event_loop_test_window_reconcile_ordered_query
+                               ? event_loop_test_window_reconcile_ordered_query(g_connection, window->id, &ordered_in)
+                               : SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in);
+#else
+        CGError ordered_result = SLSWindowIsOrderedIn(g_connection, window->id, &ordered_in);
+#endif
+        if (ordered_result != kCGErrorSuccess || !ordered_in) continue;
+#ifdef TESTS
+        bool on_space = event_loop_test_window_reconcile_window_on_space
+                      ? event_loop_test_window_reconcile_window_on_space(sid, window)
+                      : space_manager_is_window_on_space(sid, window);
+#else
+        bool on_space = space_manager_is_window_on_space(sid, window);
+#endif
+        if (!on_space) continue;
+#ifdef TESTS
+        if (event_loop_test_window_reconcile_restore_ordered) {
+            event_loop_test_window_reconcile_restore_ordered(&g_window_manager, window, sid);
+        } else {
+            window_manager_window_did_order_in(&g_window_manager, window, sid);
+        }
+#else
+        window_manager_window_did_order_in(&g_window_manager, window, sid);
+#endif
+        ++restored;
+    })
+    return restored;
+}
+
 static EVENT_HANDLER(WINDOW_RECONCILE)
 {
     (void) param1;
@@ -990,13 +1064,28 @@ static EVENT_HANDLER(WINDOW_RECONCILE)
 
     struct view *view = table_find(&g_space_manager.view, &event.sid);
     if (!view || view->layout == VIEW_FLOAT) return;
+    int restored = window_reconcile_restore_ordered_windows(event.sid);
 #ifdef TESTS
     if (event_loop_test_window_reconcile_validate) {
         event_loop_test_window_reconcile_validate(event.sid);
-        return;
+    } else {
+        window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
     }
-#endif
+#else
     window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
+#endif
+    if (restored) {
+#ifdef TESTS
+        if (event_loop_test_window_reconcile_refresh_highlight) {
+            event_loop_test_window_reconcile_refresh_highlight(&g_window_manager);
+        } else {
+            window_manager_refresh_active_window_highlight(&g_window_manager);
+        }
+#else
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+#endif
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
+    }
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
@@ -1028,7 +1117,9 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     if (focus_changed) event_loop_active_window_highlight_target_did_change();
 
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-    if (focus_changed && view) window_reconcile_schedule(window);
+    if (focus_changed && (view || window_check_flag(window, WINDOW_ORDERED_OUT))) {
+        window_reconcile_schedule(window);
+    }
     if (focus_changed && previous_view && previous_view != view && view_layout_is_accordion(previous_view->layout)) {
         view_update(previous_view);
         view_flush(previous_view);
@@ -1828,6 +1919,8 @@ static EVENT_HANDLER(APPLICATION_VISIBLE)
 
     event_loop_flush_batched_views(view_list, view_count);
     managed_window_correction_schedule_application(application);
+    // WindowServer can omit the ordered-in notification while restoring an application after wake.
+    window_reconcile_schedule_application(application);
 
     window_manager_refresh_active_window_highlight(&g_window_manager);
     event_signal_push(SIGNAL_APPLICATION_VISIBLE, application);
@@ -2342,7 +2435,8 @@ static EVENT_HANDLER(WINDOW_MOVED)
     event_signal_push(SIGNAL_WINDOW_MOVED, window);
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame.origin = new_origin;
-    if (window->id == g_window_manager.focused_window_id) {
+    if (window->id == g_window_manager.focused_window_id &&
+        !native_resize_suppress_highlight(window->id)) {
         window_manager_refresh_active_window_highlight(&g_window_manager);
     }
 
@@ -2431,7 +2525,8 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
-    if (window->id == g_window_manager.focused_window_id) {
+    if (window->id == g_window_manager.focused_window_id &&
+        !native_resize_suppress_highlight(window->id)) {
         window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window->id, window->frame);
     }
 
@@ -3354,9 +3449,12 @@ static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
         return;
     }
 
-    struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
+    uint32_t window_id = state->window_id;
+    bool highlight_suppressed = state->highlight_suppressed;
+    struct window *window = window_manager_find_window(&g_window_manager, window_id);
     if (!window || !__sync_bool_compare_and_swap(&window->id_ptr, &window->id, &window->id)) {
         native_resize_clear(&g_mouse_state);
+        native_resize_restore_highlight(window_id, highlight_suppressed);
         return;
     }
     struct view *view = window_manager_find_managed_window(&g_window_manager, window);
@@ -3373,7 +3471,6 @@ static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
         return;
     }
     if (!native_resize_frames_match(live_frame, state->latest_frame)) {
-        uint32_t window_id = state->window_id;
         if (native_resize_reconcile_live_frame(window, view, node, live_frame)) return;
         if (g_mouse_state.native_resize.window_id) native_resize_abort(&g_mouse_state, false);
         native_resize_restore_window(window_id);
@@ -3397,6 +3494,7 @@ static EVENT_HANDLER(NATIVE_RESIZE_FINALIZE)
     } else {
         window_node_flush(node);
     }
+    native_resize_restore_highlight(window_id, highlight_suppressed);
 }
 
 static EVENT_HANDLER(NATIVE_RESIZE_CANCEL)
@@ -3991,6 +4089,7 @@ static EVENT_HANDLER(SYSTEM_WOKE)
     if (focused_window) {
         window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.active_window_opacity);
         window_manager_center_mouse(&g_window_manager, focused_window);
+        window_reconcile_schedule(focused_window);
     }
 
     if (workspace_is_macos_monterey_or_newer()) {
