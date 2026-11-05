@@ -246,6 +246,7 @@ bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect 
 CGPoint window_ax_origin(struct window *window);
 bool window_ax_frame_with_status(struct window *window, CGRect *frame);
 CGRect window_ax_frame(struct window *window);
+CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen);
 CFStringRef window_ax_role(struct window *window);
 CFStringRef window_role(struct window *window);
 char *window_role_ts(struct window *window);

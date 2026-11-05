@@ -361,6 +361,50 @@ TEST_FUNC(window_ax_frame_status_uses_complete_validated_snapshots,
     CFRelease(ref);
 });
 
+TEST_FUNC(window_ax_frame_and_fullscreen_share_one_batch_with_field_fallbacks,
+{
+    AXUIElementRef ref = AXUIElementCreateApplication(getpid());
+    struct window window = { .ref = ref, .frame = CGRectMake(5, 6, 700, 500) };
+    bool is_fullscreen = false;
+
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
+    window_ax_snapshot_test_frame_value = CGRectMake(-80, 25, 320, 240);
+    CGRect frame = window_ax_frame_and_fullscreen(&window, &is_fullscreen);
+    TEST_CHECK(CGRectEqualToRect(frame, CGRectMake(-80, 25, 320, 240)), true);
+    TEST_CHECK(is_fullscreen, true);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_last_attribute_count, 3);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
+    window_ax_snapshot_test_end();
+
+    // An invalid frame keeps the cached frame while fullscreen still resolves.
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_NONPOSITIVE);
+    is_fullscreen = false;
+    frame = window_ax_frame_and_fullscreen(&window, &is_fullscreen);
+    TEST_CHECK(CGRectEqualToRect(frame, window.frame), true);
+    TEST_CHECK(is_fullscreen, true);
+    window_ax_snapshot_test_end();
+
+    // A failed batch falls back per field; the fullscreen fallback is
+    // unsupported here, so it reports false as window_is_fullscreen does.
+    window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_BATCH_FAILURE);
+    is_fullscreen = true;
+    frame = window_ax_frame_and_fullscreen(&window, &is_fullscreen);
+    TEST_CHECK(CGRectEqualToRect(frame, CGRectMake(40, 50, 600, 700)), true);
+    TEST_CHECK(is_fullscreen, false);
+    TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 3);
+    window_ax_snapshot_test_end();
+
+    struct window no_ref = { .frame = CGRectMake(1, 2, 3, 4) };
+    is_fullscreen = true;
+    frame = window_ax_frame_and_fullscreen(&no_ref, &is_fullscreen);
+    TEST_CHECK(CGRectEqualToRect(frame, no_ref.frame), true);
+    TEST_CHECK(is_fullscreen, false);
+
+    CFRelease(ref);
+});
+
 TEST_FUNC(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure,
 {
     AXUIElementRef ref = AXUIElementCreateApplication(getpid());

@@ -1395,6 +1395,23 @@ CGRect window_ax_frame(struct window *window)
     return frame;
 }
 
+// Reads frame and native-fullscreen state in one AX batch. Each field keeps
+// the fallback of its standalone reader: the cached frame for an incomplete
+// or invalid frame, and false for an unavailable fullscreen attribute.
+CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen)
+{
+    CGRect frame = window ? window->frame : CGRectZero;
+    if (is_fullscreen) *is_fullscreen = false;
+    if (!window || !window->ref) return frame;
+
+    struct window_ax_snapshot snapshot = {0};
+    (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_FULLSCREEN, &snapshot);
+    (void) window_ax_snapshot_frame(&snapshot, &frame);
+    if (is_fullscreen && (snapshot.valid & WINDOW_AX_FULLSCREEN)) *is_fullscreen = snapshot.fullscreen;
+    window_ax_snapshot_destroy(&snapshot);
+    return frame;
+}
+
 bool window_ax_can_move(struct window *window)
 {
     Boolean result;

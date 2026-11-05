@@ -3467,6 +3467,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_ax_snapshot_validates_slots_and_couples_frame_fallback) \
     TEST_ENTRY(window_ax_snapshot_rejects_malformed_batch_shapes_and_types) \
     TEST_ENTRY(window_ax_frame_status_uses_complete_validated_snapshots) \
+    TEST_ENTRY(window_ax_frame_and_fullscreen_share_one_batch_with_field_fallbacks) \
     TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
     TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
     TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \

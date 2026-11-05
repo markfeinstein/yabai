@@ -2558,9 +2558,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
         return;
     }
 
-    CGRect new_frame = window_ax_frame(window);
+    bool is_fullscreen = false;
+    CGRect new_frame = window_ax_frame_and_fullscreen(window, &is_fullscreen);
     bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
-    bool is_fullscreen = window_is_fullscreen(window);
     if (window_resize_should_debounce(was_fullscreen, is_fullscreen, window->frame, new_frame)) {
         debug("%s:DEBOUNCED %s %d\n", __FUNCTION__, window->application->name, window->id);
         return;
