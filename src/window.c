@@ -259,6 +259,50 @@ uint64_t *window_space_list(uint32_t wid, int *count)
     return window_space_list_with_status(wid, count, NULL);
 }
 
+#ifdef TESTS
+static CFArrayRef (*window_test_membership_copy_spaces)(int, int, CFArrayRef) = SLSCopySpacesForWindows;
+#else
+#define window_test_membership_copy_spaces SLSCopySpacesForWindows
+#endif
+
+bool window_space_membership_contains(CFArrayRef space_list_ref, uint64_t sid)
+{
+    if (!sid || !cf_is_type(space_list_ref, CFArrayGetTypeID())) return false;
+    CFIndex count = CFArrayGetCount(space_list_ref);
+    for (CFIndex i = 0; i < count; ++i) {
+        CFNumberRef id_ref = CFArrayGetValueAtIndex(space_list_ref, i);
+        uint64_t candidate = 0;
+        if (cf_is_type(id_ref, CFNumberGetTypeID()) &&
+            CFNumberGetValue(id_ref, kCFNumberSInt64Type, &candidate) && candidate == sid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Copies the Spaces that contain `wid` as a CFArray of CFNumbers, or NULL.
+CFArrayRef window_copy_space_membership(uint32_t wid)
+{
+    CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_list_ref) return NULL;
+    CFArrayRef space_list_ref = window_test_membership_copy_spaces(g_connection, 0x7, window_list_ref);
+    CFRelease(window_list_ref);
+    if (space_list_ref && !cf_is_type(space_list_ref, CFArrayGetTypeID())) {
+        CFRelease(space_list_ref);
+        return NULL;
+    }
+    return space_list_ref;
+}
+
+bool window_is_on_space(uint32_t wid, uint64_t sid)
+{
+    if (!sid) return false;
+    CFArrayRef space_list_ref = window_copy_space_membership(wid);
+    bool result = window_space_membership_contains(space_list_ref, sid);
+    if (space_list_ref) CFRelease(space_list_ref);
+    return result;
+}
+
 static inline const char *window_layer(int level)
 {
     if (level == g_layer_below_window_level)  return layer_str[LAYER_BELOW];

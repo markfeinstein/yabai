@@ -1641,17 +1641,7 @@ bool space_manager_is_window_on_active_space(struct window *window)
 
 bool space_manager_is_window_on_space(uint64_t sid, struct window *window)
 {
-    int space_count;
-    uint64_t *space_list = window_space_list(window->id, &space_count);
-    if (!space_list) return false;
-
-    for (int i = 0; i < space_count; ++i) {
-        if (sid == space_list[i]) {
-            return true;
-        }
-    }
-
-    return false;
+    return window_is_on_space(window->id, sid);
 }
 
 void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uint32_t did)

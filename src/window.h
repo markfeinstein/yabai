@@ -214,6 +214,9 @@ uint32_t window_display_id(uint32_t wid);
 uint64_t window_space(uint32_t wid);
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
+bool window_space_membership_contains(CFArrayRef space_list_ref, uint64_t sid);
+CFArrayRef window_copy_space_membership(uint32_t wid);
+bool window_is_on_space(uint32_t wid, uint64_t sid);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
 void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
                                          const struct window_serialization_context *context);

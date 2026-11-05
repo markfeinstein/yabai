@@ -3030,34 +3030,50 @@ static bool (*event_loop_test_order_in_space_visible)(uint64_t);
 static bool (*event_loop_test_order_in_window_on_space)(uint64_t, struct window *);
 #endif
 
-static uint64_t event_loop_window_order_in_space(struct window *window)
+static bool event_loop_order_in_on_space(CFArrayRef membership, uint64_t sid, struct window *window)
 {
 #ifdef TESTS
-    uint64_t sid = event_loop_test_order_in_window_space
-                 ? event_loop_test_order_in_window_space(window->id)
-                 : window_space(window->id);
+    if (event_loop_test_order_in_window_on_space) return event_loop_test_order_in_window_on_space(sid, window);
+#else
+    (void) window;
+#endif
+    return window_space_membership_contains(membership, sid);
+}
+
+static uint64_t event_loop_window_order_in_space(struct window *window)
+{
+    // One membership copy answers the window's own Space and the active-Space
+    // fallback, instead of a Space query plus two membership queries.
+    CFArrayRef membership = window_copy_space_membership(window->id);
+    uint64_t sid = 0;
+#ifdef TESTS
+    if (event_loop_test_order_in_window_space) sid = event_loop_test_order_in_window_space(window->id);
+    else
+#endif
+    if (membership && CFArrayGetCount(membership) > 0) {
+        CFTypeRef id_ref = CFArrayGetValueAtIndex(membership, 0);
+        if (cf_is_type(id_ref, CFNumberGetTypeID())) {
+            (void) CFNumberGetValue((CFNumberRef) id_ref, kCFNumberSInt64Type, &sid);
+        }
+    }
+
+#ifdef TESTS
     bool visible = event_loop_test_order_in_space_visible
                  ? event_loop_test_order_in_space_visible(sid)
-                 : space_is_visible(sid);
-    bool on_space = event_loop_test_order_in_window_on_space
-                  ? event_loop_test_order_in_window_on_space(sid, window)
-                  : space_manager_is_window_on_space(sid, window);
+                 : sid && space_is_visible(sid);
 #else
-    uint64_t sid = window_space(window->id);
-    bool visible = space_is_visible(sid);
-    bool on_space = space_manager_is_window_on_space(sid, window);
+    bool visible = sid && space_is_visible(sid);
 #endif
-    if (sid && visible && on_space) return sid;
 
-    sid = space_manager_active_space();
-#ifdef TESTS
-    on_space = event_loop_test_order_in_window_on_space
-             ? event_loop_test_order_in_window_on_space(sid, window)
-             : space_manager_is_window_on_space(sid, window);
-#else
-    on_space = space_manager_is_window_on_space(sid, window);
-#endif
-    return sid && on_space ? sid : 0;
+    uint64_t result = 0;
+    if (sid && visible && event_loop_order_in_on_space(membership, sid, window)) {
+        result = sid;
+    } else {
+        uint64_t active_sid = space_manager_active_space();
+        if (active_sid && event_loop_order_in_on_space(membership, active_sid, window)) result = active_sid;
+    }
+    if (membership) CFRelease(membership);
+    return result;
 }
 
 static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)

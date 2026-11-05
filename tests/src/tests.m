@@ -3680,6 +3680,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(scaffold_identity_is_invalidated_for_global_layout_batch) \
     TEST_ENTRY(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory) \
     TEST_ENTRY(window_ordered_in_prefers_its_own_visible_space) \
+    TEST_ENTRY(window_ordered_in_space_uses_one_membership_query) \
     TEST_ENTRY(window_ordered_query_failure_preserves_state)    \
     TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
     TEST_ENTRY(window_ordered_out_stays_unmanaged)              \

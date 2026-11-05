@@ -991,3 +991,57 @@ TEST_FUNC(macos_version_classifies_named_and_future_releases,
 
     workspace_set_macos_version(saved_macos_version);
 });
+
+static int ordered_in_membership_copy_calls;
+static CFArrayRef ordered_in_membership_copy(int cid, int selector, CFArrayRef windows)
+{
+    (void) cid;
+    (void) selector;
+    (void) windows;
+    ++ordered_in_membership_copy_calls;
+    uint64_t spaces[] = { TEST_ORDERED_SID, TEST_ORDERED_OTHER_SID };
+    return cfarray_of_cfnumbers(spaces, sizeof(spaces[0]), ordered_in_active_sid_member ? 2 : 1,
+                                kCFNumberSInt64Type);
+}
+
+TEST_FUNC(window_ordered_in_space_uses_one_membership_query,
+{
+    struct window window = { .id = TEST_ORDERED_WID_A };
+    __auto_type saved_copy = window_test_membership_copy_spaces;
+    window_test_membership_copy_spaces = ordered_in_membership_copy;
+    event_loop_test_order_in_space_visible = ordered_in_test_space_visible;
+    space_manager_test_active_space_id = TEST_ORDERED_OTHER_SID;
+    ordered_in_window_sid = TEST_ORDERED_SID;
+
+    // Own Space visible: answered from the first membership entry.
+    ordered_in_membership_copy_calls = 0;
+    ordered_in_window_sid_visible = true;
+    ordered_in_active_sid_member = true;
+    TEST_CHECK(event_loop_window_order_in_space(&window), TEST_ORDERED_SID);
+    TEST_CHECK(ordered_in_membership_copy_calls, 1);
+
+    // Own Space hidden: falls back to the active Space from the same membership.
+    ordered_in_window_sid_visible = false;
+    TEST_CHECK(event_loop_window_order_in_space(&window), TEST_ORDERED_OTHER_SID);
+    TEST_CHECK(ordered_in_membership_copy_calls, 2);
+
+    // Not on the active Space either.
+    ordered_in_active_sid_member = false;
+    TEST_CHECK(event_loop_window_order_in_space(&window), 0ULL);
+
+    // Membership helper semantics.
+    uint64_t spaces[] = { 5, 9 };
+    CFArrayRef list = cfarray_of_cfnumbers(spaces, sizeof(spaces[0]), 2, kCFNumberSInt64Type);
+    TEST_CHECK(window_space_membership_contains(list, 9), true);
+    TEST_CHECK(window_space_membership_contains(list, 6), false);
+    TEST_CHECK(window_space_membership_contains(list, 0), false);
+    TEST_CHECK(window_space_membership_contains(NULL, 5), false);
+    TEST_CHECK(window_space_membership_contains((CFArrayRef) CFSTR("bad"), 5), false);
+    CFRelease(list);
+    TEST_CHECK(window_is_on_space(TEST_ORDERED_WID_A, TEST_ORDERED_SID), true);
+    TEST_CHECK(window_is_on_space(TEST_ORDERED_WID_A, 0), false);
+
+    window_test_membership_copy_spaces = saved_copy;
+    event_loop_test_order_in_space_visible = NULL;
+    space_manager_test_active_space_id = 0;
+});
