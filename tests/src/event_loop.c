@@ -3908,3 +3908,77 @@ TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
     declarative_installed.generation = saved_generation;
     g_event_loop = saved_event_loop;
 })
+
+static int mouse_drag_clamp_test_display_calls;
+static int mouse_drag_clamp_test_bounds_calls;
+static uint32_t mouse_drag_clamp_test_point_display(CGPoint point)
+{
+    ++mouse_drag_clamp_test_display_calls;
+    if (point.x < 0) return 0;
+    return point.x < 1000 ? 1 : 2;
+}
+static CGRect mouse_drag_clamp_test_display_frame(uint32_t did)
+{
+    return did == 1 ? CGRectMake(0, 0, 1000, 800) : CGRectMake(1000, 0, 1000, 800);
+}
+static CGRect mouse_drag_clamp_test_constrained(uint32_t did, bool ignore_external_bar)
+{
+    (void) ignore_external_bar;
+    ++mouse_drag_clamp_test_bounds_calls;
+    return did == 1 ? CGRectMake(0, 25, 1000, 775) : CGRectMake(1000, 40, 1000, 760);
+}
+
+TEST_FUNC(mouse_drag_top_clamp_is_cached_per_display_for_a_drag,
+{
+    uint32_t (*saved_display)(CGPoint) = event_loop_test_drag_point_display_id;
+    CGRect (*saved_frame)(uint32_t) = event_loop_test_drag_display_bounds;
+    CGRect (*saved_constrained)(uint32_t, bool) = event_loop_test_drag_display_bounds_constrained;
+    event_loop_test_drag_point_display_id = mouse_drag_clamp_test_point_display;
+    event_loop_test_drag_display_bounds = mouse_drag_clamp_test_display_frame;
+    event_loop_test_drag_display_bounds_constrained = mouse_drag_clamp_test_constrained;
+    mouse_drag_clamp_test_display_calls = 0;
+    mouse_drag_clamp_test_bounds_calls = 0;
+
+    struct application application = {0};
+    struct window window = { .id = 7, .application = &application, .frame = CGRectMake(10, 30, 200, 200) };
+    struct mouse_state state = { .active_button = MOUSE_BUTTON_NONE };
+    TEST_CHECK(mouse_drag_begin(&state, MOUSE_MODE_MOVE, kCGMouseButtonLeft, &window, CGPointMake(20, 40)), true);
+    TEST_CHECK(state.drag_clamp_valid, false);
+
+    CGFloat min_y = 0;
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(10, 30), &min_y), true);
+    TEST_CHECK(min_y == 25, true);
+    for (int i = 0; i < 50; ++i) {
+        TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(10 + i, 30 + i), &min_y), true);
+        TEST_CHECK(min_y == 25, true);
+    }
+    TEST_CHECK(mouse_drag_clamp_test_display_calls, 1);
+    TEST_CHECK(mouse_drag_clamp_test_bounds_calls, 1);
+
+    // Above the display frame (clamped region) resolves the same display without recomputing bounds.
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(10, -5), &min_y), true);
+    TEST_CHECK(min_y == 25, true);
+    TEST_CHECK(mouse_drag_clamp_test_display_calls, 2);
+    TEST_CHECK(mouse_drag_clamp_test_bounds_calls, 1);
+
+    // Crossing to another display recomputes once.
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(1500, 30), &min_y), true);
+    TEST_CHECK(min_y == 40, true);
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(1600, 50), &min_y), true);
+    TEST_CHECK(mouse_drag_clamp_test_bounds_calls, 2);
+    TEST_CHECK(mouse_drag_clamp_test_display_calls, 3);
+
+    // No display: no clamp.
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(-50, -50), &min_y), false);
+
+    // A new drag must not reuse a previous drag's geometry.
+    mouse_drag_reset(&state);
+    TEST_CHECK(state.drag_clamp_valid, false);
+    TEST_CHECK(mouse_drag_begin(&state, MOUSE_MODE_MOVE, kCGMouseButtonLeft, &window, CGPointMake(20, 40)), true);
+    TEST_CHECK(mouse_drag_min_y_for_point(&state, CGPointMake(10, 30), &min_y), true);
+    TEST_CHECK(mouse_drag_clamp_test_bounds_calls, 3);
+
+    event_loop_test_drag_point_display_id = saved_display;
+    event_loop_test_drag_display_bounds = saved_frame;
+    event_loop_test_drag_display_bounds_constrained = saved_constrained;
+})

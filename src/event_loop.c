@@ -222,6 +222,13 @@ static bool (*event_loop_test_managed_window_correction_admit)(struct event_loop
 static void (*event_loop_test_managed_window_correction_leave)(struct event_loop *);
 static AXError (*event_loop_test_managed_window_correction_hint_pid)(AXUIElementRef, pid_t *);
 static uint64_t (*event_loop_test_frame_recovery_time)(void);
+static uint32_t (*event_loop_test_drag_point_display_id)(CGPoint) = display_manager_point_display_id;
+static CGRect (*event_loop_test_drag_display_bounds)(uint32_t) = CGDisplayBounds;
+static CGRect (*event_loop_test_drag_display_bounds_constrained)(uint32_t, bool) = display_bounds_constrained;
+#else
+#define event_loop_test_drag_point_display_id display_manager_point_display_id
+#define event_loop_test_drag_display_bounds CGDisplayBounds
+#define event_loop_test_drag_display_bounds_constrained display_bounds_constrained
 #endif
 
 #define MANAGED_WINDOW_CORRECTION_DELAY_MS 50u
@@ -3341,6 +3348,7 @@ static bool mouse_drag_begin(struct mouse_state *mouse_state, enum mouse_mode ac
     mouse_state->direction = 0;
     mouse_state->bsp_live_resize_active = action == MOUSE_MODE_RESIZE && mouse_state->bsp_live_resize;
     mouse_state->bsp_live_resize_applied = false;
+    mouse_state->drag_clamp_valid = false;
     mouse_state->current_action = action;
     mouse_state->active_button = button;
 
@@ -3479,6 +3487,36 @@ static void mouse_drag_reset(struct mouse_state *mouse_state)
     mouse_state->drag_location = CGPointZero;
     mouse_state->bsp_live_resize_active = false;
     mouse_state->bsp_live_resize_applied = false;
+    mouse_state->drag_clamp_valid = false;
+}
+
+// Returns the minimum origin y for a window dragged to `point`, or false when
+// no display owns the point. Display ownership and constrained bounds are
+// cached for the drag. Points inside the cached display frame skip all
+// queries; points outside it resolve only the owning display and recompute
+// constrained bounds (menu bar, Dock, and padding) when that display changes.
+static bool mouse_drag_min_y_for_point(struct mouse_state *mouse_state, CGPoint point, CGFloat *min_y)
+{
+    if (mouse_state->drag_clamp_valid &&
+        CGRectContainsPoint(mouse_state->drag_clamp_display_frame, point)) {
+        *min_y = mouse_state->drag_clamp_min_y;
+        return true;
+    }
+
+    uint32_t did = event_loop_test_drag_point_display_id(point);
+    if (!did) return false;
+    if (mouse_state->drag_clamp_valid && mouse_state->drag_clamp_did == did) {
+        *min_y = mouse_state->drag_clamp_min_y;
+        return true;
+    }
+
+    CGRect bounds = event_loop_test_drag_display_bounds_constrained(did, false);
+    mouse_state->drag_clamp_valid = true;
+    mouse_state->drag_clamp_did = did;
+    mouse_state->drag_clamp_display_frame = event_loop_test_drag_display_bounds(did);
+    mouse_state->drag_clamp_min_y = bounds.origin.y;
+    *min_y = bounds.origin.y;
+    return true;
 }
 
 static bool mouse_drag_reset_if_owner(struct mouse_state *mouse_state, int64_t button)
@@ -3724,10 +3762,9 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         CGPoint new_point = { g_mouse_state.window_frame.origin.x + (point.x - g_mouse_state.down_location.x),
                               g_mouse_state.window_frame.origin.y + (point.y - g_mouse_state.down_location.y) };
 
-        uint32_t did = display_manager_point_display_id(new_point);
-        if (did) {
-            CGRect bounds = display_bounds_constrained(did, false);
-            if (new_point.y < bounds.origin.y) new_point.y = bounds.origin.y;
+        CGFloat min_y;
+        if (mouse_drag_min_y_for_point(&g_mouse_state, new_point, &min_y) && new_point.y < min_y) {
+            new_point.y = min_y;
         }
 
 #ifdef TESTS

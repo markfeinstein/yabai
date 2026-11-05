@@ -118,6 +118,13 @@ struct mouse_state
     bool bsp_live_resize_active;
     bool bsp_live_resize_applied;
     struct window_node *feedback_node;
+    // Per-drag cache of the display containing the dragged window origin and its
+    // constrained top edge; display and Dock geometry are WindowServer and Dock
+    // round trips that do not change while a single drag is in progress.
+    bool drag_clamp_valid;
+    uint32_t drag_clamp_did;
+    CGRect drag_clamp_display_frame;
+    CGFloat drag_clamp_min_y;
 };
 
 static char *mouse_mod_str[] =
