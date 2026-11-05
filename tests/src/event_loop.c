@@ -1841,7 +1841,7 @@ static CGError window_reconcile_test_ordered_query(int connection, uint32_t wid,
 {
     (void) connection;
     ++window_reconcile_test_ordered_query_count;
-    *ordered_in = wid == 8001 || wid == 8003 || wid == 8005;
+    *ordered_in = wid == 8001 || wid == 8003 || wid == 8005 || wid == 8006;
     return kCGErrorSuccess;
 }
 
@@ -1921,17 +1921,20 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     struct window unflagged = { .id = 8004 };
     struct window stale_minimized = { .id = 8005 };
     struct window minimized = { .id = 8006 };
+    struct window hidden_minimized = { .id = 8007 };
     window_set_flag(&ordered_in, WINDOW_ORDERED_OUT);
     window_set_flag(&ordered_out, WINDOW_ORDERED_OUT);
     window_set_flag(&other_space, WINDOW_ORDERED_OUT);
     window_set_flag(&stale_minimized, WINDOW_MINIMIZE);
     window_set_flag(&minimized, WINDOW_MINIMIZE);
+    window_set_flag(&hidden_minimized, WINDOW_MINIMIZE);
     table_add(&g_window_manager.window, &ordered_in.id, &ordered_in);
     table_add(&g_window_manager.window, &ordered_out.id, &ordered_out);
     table_add(&g_window_manager.window, &other_space.id, &other_space);
     table_add(&g_window_manager.window, &unflagged.id, &unflagged);
     table_add(&g_window_manager.window, &stale_minimized.id, &stale_minimized);
     table_add(&g_window_manager.window, &minimized.id, &minimized);
+    table_add(&g_window_manager.window, &hidden_minimized.id, &hidden_minimized);
     event_loop_test_window_reconcile_space = window_reconcile_test_space;
     event_loop_test_window_reconcile_schedule = window_reconcile_test_schedule;
     event_loop_test_window_reconcile_visible = window_reconcile_test_visible;
@@ -1976,8 +1979,9 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     TEST_CHECK(window_reconcile_test_validate_count, 2);
     TEST_CHECK(window_reconcile_test_validated[0], 11ULL);
     TEST_CHECK(window_reconcile_test_validated[1], 12ULL);
-    TEST_CHECK(window_reconcile_test_ordered_query_count, 6);
-    TEST_CHECK(window_reconcile_test_minimized_query_count, 3);
+    TEST_CHECK(window_reconcile_test_ordered_query_count, 10);
+    // Blocking AX queries are limited to minimized-flagged windows WindowServer shows on the Space.
+    TEST_CHECK(window_reconcile_test_minimized_query_count, 2);
     TEST_CHECK(window_reconcile_test_deminimized_refresh_count, 1);
     TEST_CHECK(window_reconcile_test_restore_count, 2);
     TEST_CHECK(window_reconcile_test_restored_ordered, true);
@@ -1989,12 +1993,30 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     TEST_CHECK(window_check_flag(&other_space, WINDOW_ORDERED_OUT), true);
     TEST_CHECK(window_check_flag(&stale_minimized, WINDOW_MINIMIZE), false);
     TEST_CHECK(window_check_flag(&minimized, WINDOW_MINIMIZE), true);
+    TEST_CHECK(window_check_flag(&hidden_minimized, WINDOW_MINIMIZE), true);
 
     window_reconcile_test_sid = 11;
     window_reconcile_schedule(&window);
     window_reconcile_test_is_visible = false;
     window_reconcile_test_dispatch(11, window_reconcile_test_tokens[3]);
     TEST_CHECK(window_reconcile_test_validate_count, 2);
+
+    // Visibility flags and highlights must recover even when the Space does not tile.
+    first.layout = VIEW_FLOAT;
+    window_reconcile_test_is_visible = true;
+    window_set_flag(&ordered_in, WINDOW_ORDERED_OUT);
+    window_set_flag(&stale_minimized, WINDOW_MINIMIZE);
+    window_reconcile_schedule(&window);
+    window_reconcile_test_dispatch(11, window_reconcile_test_tokens[4]);
+    TEST_CHECK(window_reconcile_test_validate_count, 2);
+    TEST_CHECK(window_reconcile_test_deminimized_refresh_count, 2);
+    TEST_CHECK(window_reconcile_test_restore_count, 4);
+    TEST_CHECK(window_reconcile_test_highlight_refresh_count, 2);
+    TEST_CHECK(window_check_flag(&ordered_in, WINDOW_ORDERED_OUT), false);
+    TEST_CHECK(window_check_flag(&stale_minimized, WINDOW_MINIMIZE), false);
+    TEST_CHECK(window_check_flag(&ordered_out, WINDOW_ORDERED_OUT), true);
+    TEST_CHECK(window_check_flag(&other_space, WINDOW_ORDERED_OUT), true);
+    TEST_CHECK(window_check_flag(&minimized, WINDOW_MINIMIZE), true);
 
     pthread_mutex_lock(&window_reconcile_lock);
     memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));

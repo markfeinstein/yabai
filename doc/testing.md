@@ -40,6 +40,15 @@ self-tests with synthetic positive and negative evidence. Both also run through
 `make test` / `make test-all` and an explicit CI step, without a daemon, live
 captures, or network access. These validate the gates, not real-host coverage.
 
+## Wake and visibility recovery
+
+The offline `window_focus_reconciliation_` test uses mocked live AX and
+WindowServer state to check stale minimized/ordered-out recovery on tiled and
+floating-layout Spaces. Floating Spaces must refresh visibility flags and the
+active-window highlight without running tiling validation; genuinely minimized,
+ordered-out, other-Space, and non-visible cases remain untouched. This is not
+live wake/sleep confirmation.
+
 ## Native matcher compilation limits
 
 JSONC rule matchers and base/mode scaffold matchers use the same regex

@@ -1059,14 +1059,8 @@ static int window_reconcile_restore_windows(uint64_t sid)
     table_for (struct window *window, g_window_manager.window, {
         // Wake restoration can omit the AX deminiaturized notification just as it can omit
         // WindowServer's ordered-in notification. Confirm both live states before clearing either flag.
-        bool stale_minimized = false;
-        if (window_check_flag(window, WINDOW_MINIMIZE)) {
-            bool minimized = true;
-            if (!window_reconcile_window_is_minimized(window, &minimized) || minimized) continue;
-            stale_minimized = true;
-        } else if (!window_check_flag(window, WINDOW_ORDERED_OUT)) {
-            continue;
-        }
+        bool flagged_minimized = window_check_flag(window, WINDOW_MINIMIZE);
+        if (!flagged_minimized && !window_check_flag(window, WINDOW_ORDERED_OUT)) continue;
 
         uint8_t ordered_in = 0;
 #ifdef TESTS
@@ -1085,7 +1079,11 @@ static int window_reconcile_restore_windows(uint64_t sid)
         bool on_space = space_manager_is_window_on_space(sid, window);
 #endif
         if (!on_space) continue;
-        if (stale_minimized) {
+        // The AX query is a blocking cross-process round trip, so ask only for windows that
+        // WindowServer already reports as visible on this Space.
+        if (flagged_minimized) {
+            bool minimized = true;
+            if (!window_reconcile_window_is_minimized(window, &minimized) || minimized) continue;
 #ifdef TESTS
             if (event_loop_test_window_reconcile_refresh_deminimized) {
                 event_loop_test_window_reconcile_refresh_deminimized(window);
@@ -1130,17 +1128,20 @@ static EVENT_HANDLER(WINDOW_RECONCILE)
     if (!visible || !user) return;
 
     struct view *view = table_find(&g_space_manager.view, &event.sid);
-    if (!view || view->layout == VIEW_FLOAT) return;
+    if (!view) return;
+    // Live visibility state is independent of whether this Space tiles windows.
     int restored = window_reconcile_restore_windows(event.sid);
+    if (view->layout != VIEW_FLOAT) {
 #ifdef TESTS
-    if (event_loop_test_window_reconcile_validate) {
-        event_loop_test_window_reconcile_validate(event.sid);
-    } else {
-        window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
-    }
+        if (event_loop_test_window_reconcile_validate) {
+            event_loop_test_window_reconcile_validate(event.sid);
+        } else {
+            window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
+        }
 #else
-    window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
+        window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, event.sid);
 #endif
+    }
     if (restored) {
 #ifdef TESTS
         if (event_loop_test_window_reconcile_refresh_highlight) {
