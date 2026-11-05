@@ -547,6 +547,47 @@ TEST_FUNC(core_foundation_constructors_fail_conservatively,
     }
 });
 
+TEST_FUNC(cfstring_copy_replaces_unpaired_surrogates,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+
+    static const struct {
+        UniChar characters[6];
+        CFIndex length;
+        const char *expected;
+    } cases[] = {
+        { { 'a', 0xd83d, 'b' }, 3, "a\xef\xbf\xbd" "b" },
+        { { 0xde00, 'x' }, 2, "\xef\xbf\xbd" "x" },
+        { { 'x', 0xd83d }, 2, "x\xef\xbf\xbd" },
+        { { 0xd83d, 0xde00, 0x00e9, 0xd83d }, 4, "\xf0\x9f\x98\x80\xc3\xa9\xef\xbf\xbd" },
+        { { 0xd83d, 0xd83d, 0xde00 }, 3, "\xef\xbf\xbd\xf0\x9f\x98\x80" },
+        { { 0x00e9, 0x4e2d }, 2, "\xc3\xa9\xe4\xb8\xad" },
+        { { 0 }, 0, "" },
+    };
+
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        CFStringRef string = CFStringCreateWithCharacters(NULL, cases[i].characters, cases[i].length);
+        TEST_CHECK(string != NULL, true);
+        if (!string) continue;
+
+        char *temporary = ts_cfstring_copy(string);
+        char *owned = cfstring_copy(string);
+        TEST_CHECK(temporary != NULL, true);
+        TEST_CHECK(owned != NULL, true);
+        if (temporary) {
+            TEST_CHECK(strcmp(temporary, cases[i].expected), 0);
+            TEST_CHECK(utf8_validate_string(temporary), true);
+        }
+        if (owned) TEST_CHECK(strcmp(owned, cases[i].expected), 0);
+
+        free(owned);
+        CFRelease(string);
+    }
+});
+
 TEST_FUNC(display_selection_helpers_are_null_and_type_safe,
 {
     TEST_CHECK(display_manager_display_id_for_uuid(NULL), 0U);
@@ -3697,6 +3738,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(stretch_buffers_use_full_capacity_before_growth)             \
     TEST_ENTRY(temporary_stretch_buffer_growth_charges_only_capacity)       \
     TEST_ENTRY(core_foundation_constructors_fail_conservatively) \
+    TEST_ENTRY(cfstring_copy_replaces_unpaired_surrogates) \
     TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
     TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
     TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \

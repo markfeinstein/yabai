@@ -483,13 +483,65 @@ static inline CFArrayRef cfarray_of_cfnumbers(const void *values, size_t size, i
     return result;
 }
 
+// Each UTF-16 code unit encodes to at most three UTF-8 bytes, including U+FFFD
+// replacements; a surrogate pair uses four bytes for two units.
+static inline CFIndex cfstring_utf8_capacity(CFStringRef string)
+{
+    CFIndex length = CFStringGetLength(string);
+    if (length < 0 || length > (LONG_MAX - 1) / 3) return -1;
+    return length * 3 + 1;
+}
+
+// CFStringGetCString rejects strings containing unpaired UTF-16 surrogates, which
+// applications can report in window titles. Encode them as U+FFFD instead.
+static inline void cfstring_copy_utf8_lossy(CFStringRef string, char *buffer)
+{
+    CFIndex length = CFStringGetLength(string);
+    CFStringInlineBuffer characters;
+    CFStringInitInlineBuffer(string, &characters, CFRangeMake(0, length));
+
+    unsigned char *out = (unsigned char *) buffer;
+    for (CFIndex i = 0; i < length; ++i) {
+        uint32_t cp = CFStringGetCharacterFromInlineBuffer(&characters, i);
+        if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < length) {
+            uint32_t low = CFStringGetCharacterFromInlineBuffer(&characters, i + 1);
+            if (low >= 0xdc00 && low <= 0xdfff) {
+                cp = 0x10000 + ((cp - 0xd800) << 10) + (low - 0xdc00);
+                ++i;
+            } else {
+                cp = 0xfffd;
+            }
+        } else if (cp >= 0xd800 && cp <= 0xdfff) {
+            cp = 0xfffd;
+        }
+
+        if (cp <= 0x7f) {
+            *out++ = (unsigned char) cp;
+        } else if (cp <= 0x7ff) {
+            *out++ = (unsigned char) (0xc0 | (cp >> 6));
+            *out++ = (unsigned char) (0x80 | (cp & 0x3f));
+        } else if (cp <= 0xffff) {
+            *out++ = (unsigned char) (0xe0 | (cp >> 12));
+            *out++ = (unsigned char) (0x80 | ((cp >> 6) & 0x3f));
+            *out++ = (unsigned char) (0x80 | (cp & 0x3f));
+        } else {
+            *out++ = (unsigned char) (0xf0 | (cp >> 18));
+            *out++ = (unsigned char) (0x80 | ((cp >> 12) & 0x3f));
+            *out++ = (unsigned char) (0x80 | ((cp >> 6) & 0x3f));
+            *out++ = (unsigned char) (0x80 | (cp & 0x3f));
+        }
+    }
+    *out = '\0';
+}
+
 static inline char *ts_cfstring_copy(CFStringRef string)
 {
-    CFIndex num_bytes = CFStringGetMaximumSizeForEncoding(CFStringGetLength(string), kCFStringEncodingUTF8);
-    char *result = ts_alloc_unaligned(num_bytes + 1);
+    CFIndex capacity = cfstring_utf8_capacity(string);
+    if (capacity < 0) return NULL;
+    char *result = ts_alloc_unaligned(capacity);
 
-    if (!CFStringGetCString(string, result, num_bytes + 1, kCFStringEncodingUTF8)) {
-        result = NULL;
+    if (!CFStringGetCString(string, result, capacity, kCFStringEncodingUTF8)) {
+        cfstring_copy_utf8_lossy(string, result);
     }
 
     return result;
@@ -497,13 +549,13 @@ static inline char *ts_cfstring_copy(CFStringRef string)
 
 static inline char *cfstring_copy(CFStringRef string)
 {
-    CFIndex num_bytes = CFStringGetMaximumSizeForEncoding(CFStringGetLength(string), kCFStringEncodingUTF8);
-    char *result = malloc(num_bytes + 1);
+    CFIndex capacity = cfstring_utf8_capacity(string);
+    if (capacity < 0) return NULL;
+    char *result = malloc(capacity);
     if (!result) return NULL;
 
-    if (!CFStringGetCString(string, result, num_bytes + 1, kCFStringEncodingUTF8)) {
-        free(result);
-        result = NULL;
+    if (!CFStringGetCString(string, result, capacity, kCFStringEncodingUTF8)) {
+        cfstring_copy_utf8_lossy(string, result);
     }
 
     return result;
