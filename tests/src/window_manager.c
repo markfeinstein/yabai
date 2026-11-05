@@ -378,6 +378,36 @@ TEST_FUNC(hashtable_rekey_is_allocation_free_and_preserves_value,
     table_free(&table);
 })
 
+TEST_FUNC(hashtable_for_preserves_enclosing_loop_variables,
+{
+    struct table table = {0};
+    table_init(&table, 8, hash_wm, compare_wm);
+    uint32_t keys[] = { 3, 5, 7 };
+    int values[] = { 30, 50, 70 };
+    for (int k = 0; k < 3; ++k) table_add(&table, &keys[k], &values[k]);
+
+    // The body must observe the caller's `i`, not the macro's internal bucket
+    // index; a shadowed `i` indexes the caller's array out of bounds (seen in
+    // space_manager_handle_display_add).
+    int seen[2] = {0};
+    int observed_outer[2] = { -1, -1 };
+    for (int i = 0; i < 2; ++i) {
+        int *value;
+        table_for (value, table, {
+            (void) value;
+            if (i >= 0 && i < 2) {
+                ++seen[i];
+                observed_outer[i] = i;
+            }
+        })
+    }
+    TEST_CHECK(observed_outer[0], 0);
+    TEST_CHECK(observed_outer[1], 1);
+    TEST_CHECK(seen[0], 3);
+    TEST_CHECK(seen[1], 3);
+    table_free(&table);
+})
+
 TEST_FUNC(window_identity_transaction_migrates_unmanaged_state_atomically,
 {
     __auto_type saved_id = window_manager_test_ax_window_id;

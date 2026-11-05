@@ -46,11 +46,14 @@ void table_test_fail_allocation_after(int successful_allocations);
 void table_remove(struct table *table, void *key);
 void *table_find(struct table *table, void *key);
 
+// The iteration state uses reserved names so the body can safely refer to
+// caller variables such as `i` or `bucket` from an enclosing scope.
 #define table_for(it, table, code) \
-    for (int i = 0; i < table.capacity; ++i) { \
-        for (struct bucket *bucket = table.buckets[i]; bucket; bucket = bucket->next) { \
-            if (!bucket->value) continue; \
-            it = bucket->value; \
+    for (int table_for__index = 0; table_for__index < (table).capacity; ++table_for__index) { \
+        for (struct bucket *table_for__bucket = (table).buckets[table_for__index]; \
+             table_for__bucket; table_for__bucket = table_for__bucket->next) { \
+            if (!table_for__bucket->value) continue; \
+            it = table_for__bucket->value; \
             code; \
         } \
     }

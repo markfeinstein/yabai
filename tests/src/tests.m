@@ -3565,6 +3565,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
     TEST_ENTRY(hashtable_rekey_is_allocation_free_and_preserves_value) \
+    TEST_ENTRY(hashtable_for_preserves_enclosing_loop_variables) \
     TEST_ENTRY(window_identity_transaction_migrates_unmanaged_state_atomically) \
     TEST_ENTRY(window_identity_transaction_migrates_managed_tree_without_geometry_changes) \
     TEST_ENTRY(window_identity_transaction_rejects_collisions_busy_state_and_invariants_without_mutation) \
