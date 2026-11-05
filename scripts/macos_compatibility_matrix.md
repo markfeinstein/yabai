@@ -47,7 +47,9 @@ Do not create or download a VM merely to fill this matrix.
 
 The new read-only smoke probe passed locally on macOS **27.2.0**, build **26B123**, loaded **arm64**, not translated: two managed displays, two current Spaces, and 15 queried/sampled windows. All eleven checks passed, including real managed-display/Space queries, the production snapshot iterator path, bounds, and ordered-state queries. Initial native execution exposed a JSON boolean encoding mismatch; after correcting it, the strict driver passed. No running daemon, permissions, windows, services, or scripting addition were changed.
 
-This is local working-tree evidence for the new probe, not a dispatched self-hosted CI run. The final verification report supplies its exact tested source revision. It does not supersede earlier feature-specific evidence or fill any UI/animation acceptance row.
+The initial run was local working-tree evidence for the new probe. A repeat on the clean source revision `008cf1fac0bd86e4a2a6f42aa45f1d0d13fc2fbc` passed all eleven checks on the same native host with the same counts. Neither run was a dispatched self-hosted CI job. This does not supersede earlier feature-specific evidence or fill any UI/animation acceptance row.
+
+Prepared-host availability was checked again on 2026-11-04: the read-only GitHub repository runner API for `markfeinstein/yabai` returned `total_count: 0`. The configured Mac SSH alias (`m5`) names this current 27.2 arm64 host, not an additional environment. No additional prepared Mac was identified in existing configuration or supplied for this task. The other native rows therefore remain NOT-RUN; no workflow was queued without a matching runner, and no machine was provisioned, downloaded, or reconfigured.
 
 | Native smoke row | Evidence |
 |---|---|

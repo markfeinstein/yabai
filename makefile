@@ -35,11 +35,13 @@ DISPLAY_CADENCE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/display-cadence-diagnostic
 NATIVE_RESIZE_PIPELINE_PROBE_BIN = $(BUILD_PATH)/debug/native-resize-pipeline-probe
 PRIVATE_API_SMOKE_BIN = $(BUILD_PATH)/debug/private-api-smoke
 YABAI_COMMON   = ./src/manifest.m
-YABAI_DEPS     = $(filter-out ./src/menu_bar_model.c ./src/menu_bar_model.h,$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
-DEBUG_MODEL    = $(BUILD_PATH)/debug/menu_bar_model.o
-RELEASE_MODEL  = $(BUILD_PATH)/release/menu_bar_model.o
-ASAN_MODEL     = $(BUILD_PATH)/asan/menu_bar_model.o
-TSAN_MODEL     = $(BUILD_PATH)/tsan/menu_bar_model.o
+YABAI_MODULES  = menu_bar_model window_constraints window_server_classifier
+YABAI_MODULE_SOURCES = $(foreach module,$(YABAI_MODULES),./src/$(module).c ./src/$(module).h)
+YABAI_DEPS     = $(filter-out $(YABAI_MODULE_SOURCES),$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
+DEBUG_MODULES  = $(addprefix $(BUILD_PATH)/debug/,$(addsuffix .o,$(YABAI_MODULES)))
+RELEASE_MODULES = $(addprefix $(BUILD_PATH)/release/,$(addsuffix .o,$(YABAI_MODULES)))
+ASAN_MODULES   = $(addprefix $(BUILD_PATH)/asan/,$(addsuffix .o,$(YABAI_MODULES)))
+TSAN_MODULES   = $(addprefix $(BUILD_PATH)/tsan/,$(addsuffix .o,$(YABAI_MODULES)))
 OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
 TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m src/window_server_hit_test.c src/window_server_hit_test.h src/window_server_tags.h src/misc/extern.h makefile
@@ -230,31 +232,32 @@ $(eval $(call OSAX_RULE,release))
 $(eval $(call OSAX_RULE,asan))
 $(eval $(call OSAX_RULE,tsan))
 
-define MODEL_RULE
-$(BUILD_PATH)/$(1)/menu_bar_model.o: ./src/menu_bar_model.c ./src/menu_bar_model.h makefile
+# Pure modules own their includes and compile independently in every configuration.
+define MODULE_RULE
+$(BUILD_PATH)/$(1)/$(3).o: ./src/$(3).c ./src/$(3).h makefile
 	@mkdir -p '$(BUILD_PATH)/$(1)'
-	$(XCRUN) clang -c ./src/menu_bar_model.c -o '$$@' $($(2)_FLAGS) -MMD -MP
+	$(XCRUN) clang -c ./src/$(3).c -o '$$@' $($(2)_FLAGS) -MMD -MP
 endef
-$(eval $(call MODEL_RULE,debug,DEBUG))
-$(eval $(call MODEL_RULE,release,RELEASE))
-$(eval $(call MODEL_RULE,asan,ASAN))
-$(eval $(call MODEL_RULE,tsan,TSAN))
+$(foreach module,$(YABAI_MODULES),$(eval $(call MODULE_RULE,debug,DEBUG,$(module))))
+$(foreach module,$(YABAI_MODULES),$(eval $(call MODULE_RULE,release,RELEASE,$(module))))
+$(foreach module,$(YABAI_MODULES),$(eval $(call MODULE_RULE,asan,ASAN,$(module))))
+$(foreach module,$(YABAI_MODULES),$(eval $(call MODULE_RULE,tsan,TSAN,$(module))))
 
-$(DEBUG_BIN): $(YABAI_DEPS) $(BUILD_PATH)/debug/osax/generated.c $(DEBUG_MODEL)
+$(DEBUG_BIN): $(YABAI_DEPS) $(BUILD_PATH)/debug/osax/generated.c $(DEBUG_MODULES)
 	mkdir -p '$(BUILD_PATH)/debug'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/debug/osax/generated.c' $(DEBUG_MODEL) $(DEBUG_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/debug/osax/generated.c' $(DEBUG_MODULES) $(DEBUG_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
-$(RELEASE_BIN): $(YABAI_DEPS) $(BUILD_PATH)/release/osax/generated.c $(RELEASE_MODEL)
+$(RELEASE_BIN): $(YABAI_DEPS) $(BUILD_PATH)/release/osax/generated.c $(RELEASE_MODULES)
 	mkdir -p '$(BUILD_PATH)/release'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/release/osax/generated.c' $(RELEASE_MODEL) $(RELEASE_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/release/osax/generated.c' $(RELEASE_MODULES) $(RELEASE_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
-$(ASAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/asan/osax/generated.c $(ASAN_MODEL)
+$(ASAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/asan/osax/generated.c $(ASAN_MODULES)
 	mkdir -p '$(BUILD_PATH)/asan'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/asan/osax/generated.c' $(ASAN_MODEL) $(ASAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/asan/osax/generated.c' $(ASAN_MODULES) $(ASAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
-$(TSAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/tsan/osax/generated.c $(TSAN_MODEL)
+$(TSAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/tsan/osax/generated.c $(TSAN_MODULES)
 	mkdir -p '$(BUILD_PATH)/tsan'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/tsan/osax/generated.c' $(TSAN_MODEL) $(TSAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/tsan/osax/generated.c' $(TSAN_MODULES) $(TSAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 man:
 	@set -eu; $(MAN_DATE_SETUP); '$(ASCIIDOCTOR)' -a "docdate=$$date" -b manpage '$(DOC_PATH)/yabai.asciidoc' -o '$(DOC_PATH)/yabai.1'
@@ -351,4 +354,4 @@ distclean: clean
 	root="$$repo/release"; [ ! -L "$$root" ]; \
 	if [ -e "$$root" ]; then [ -d "$$root" ] && [ "$$(cd "$$root" && pwd -P)" = "$$root" ]; find "$$root" -mindepth 1 -delete; rmdir "$$root"; fi
 
--include $(DEBUG_MODEL:.o=.d) $(RELEASE_MODEL:.o=.d) $(ASAN_MODEL:.o=.d) $(TSAN_MODEL:.o=.d)
+-include $(DEBUG_MODULES:.o=.d) $(RELEASE_MODULES:.o=.d) $(ASAN_MODULES:.o=.d) $(TSAN_MODULES:.o=.d)

@@ -26,6 +26,8 @@ jobs:
           make man-contract
           make man-check
           git diff --check
+      - name: Offline evidence-gate self-tests
+        run: make classifier-corpus-gate native-tab-evidence-gate
       - name: AX frame request benchmark
         run: make test-benchmark-ax
 

@@ -33,6 +33,26 @@ unit tests run in every core suite. For another configuration, build with
 `tests/bin/<configuration>/tests` executable; retain the sanitizer environment
 settings from `tests/makefile` when running it directly.
 
+## Offline evidence-gate self-tests
+
+`make classifier-corpus-gate native-tab-evidence-gate` runs the existing Python
+self-tests with synthetic positive and negative evidence. Both also run through
+`make test` / `make test-all` and an explicit CI step, without a daemon, live
+captures, or network access. These validate the gates, not real-host coverage.
+
+## Independent compilation boundaries
+
+`src/window_constraints.c` and `src/window_server_classifier.c` compile as
+ordinary C objects alongside `menu_bar_model.c`, rather than being included by
+`src/manifest.m`. The daemon and core tests link these modules separately in
+every build/sanitizer/architecture configuration. Source/header dependencies and
+generated `.d` files preserve incremental rebuilds; repository fixtures verify
+that a module change recompiles
+its object and relinks without rebuilding unrelated modules or OSAX artifacts.
+These are incremental boundary extractions, not a wholesale rewrite of the
+manifest. Existing constraint/classifier behavior and public interfaces are
+unchanged; classifier tests exercise the separately linked implementation.
+
 ## Read-only native private-API smoke
 
 `make private-api-smoke` builds and runs a **live**, read-only probe with a

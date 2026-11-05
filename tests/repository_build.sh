@@ -227,6 +227,8 @@ awk '
 for config in debug release asan tsan; do
     test -x "$WORK/bin/$config/yabai"
     test -f "$WORK/bin/$config/osax/generated.c"
+    test -f "$WORK/bin/$config/menu_bar_model.o"
+    test -f "$WORK/bin/$config/window_constraints.o"
     test ! -e "$WORK/bin/$config/osax/payload"
     test ! -e "$WORK/bin/$config/osax/loader"
 done
@@ -249,6 +251,25 @@ grep -F 'xcrun-arg:./src/manifest.m' "$XCRUN_LOG" >/dev/null
 : > "$XCRUN_LOG"
 run_make release >/dev/null
 test ! -s "$XCRUN_LOG"
+
+# A standalone module source/header change rebuilds only that object and
+# relinks once, without rebuilding unrelated modules or the scripting addition.
+for module in window_constraints window_server_classifier; do
+    for extension in c h; do
+        /bin/sleep 1
+        touch "src/$module.$extension"
+        run_make release >/dev/null
+        grep -F "xcrun-arg:./src/$module.c" "$XCRUN_LOG" >/dev/null
+        grep -F 'xcrun-arg:./src/manifest.m' "$XCRUN_LOG" >/dev/null
+        for other in menu_bar_model window_constraints window_server_classifier; do
+            [ "$module" = "$other" ] || ! grep -F "xcrun-arg:./src/$other.c" "$XCRUN_LOG"
+        done
+        ! grep -F 'xcrun-arg:./src/osax/payload.m' "$XCRUN_LOG"
+        : > "$XCRUN_LOG"
+        run_make release >/dev/null
+        test ! -s "$XCRUN_LOG"
+    done
+done
 
 printf 'archive\n' > "$WORK/release/keep.tar.gz"
 run_make clean-debug
