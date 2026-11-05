@@ -391,6 +391,55 @@ TEST_FUNC(declarative_phase1_boundary_matrix,
     char mutable_source[]="{\"version\":1,\"spaces\":[{\"match\":{\"uuid\":\"stable\"},\"settings\":{\"layout\":\"bsp\"}}]}";TEST_CHECK(declarative_config_parse_bytes((uint8_t*)mutable_source,strlen(mutable_source),"owned",&m,&e),true);memset(mutable_source,'x',strlen(mutable_source));if(m)TEST_CHECK(strcmp(m->spaces[0].uuid,"stable"),0);declarative_config_destroy(m);
 )
 
+TEST_FUNC(declarative_native_matcher_regex_compilation_is_bounded,
+{
+    struct matcher_case {
+        const char *format;
+        const char *path;
+    } cases[] = {
+        { "{\"version\":1,\"rules\":[{\"match\":{\"app\":{\"pattern\":\"%s\"}}}]}",
+          "$.rules[0].match.app.pattern" },
+        { "{\"version\":1,\"rules\":[{\"match\":{\"title\":{\"pattern\":\"%s\"}}}]}",
+          "$.rules[0].match.title.pattern" },
+        { "{\"version\":1,\"rules\":[{\"match\":{\"role\":{\"pattern\":\"%s\"}}}]}",
+          "$.rules[0].match.role.pattern" },
+        { "{\"version\":1,\"rules\":[{\"match\":{\"subrole\":{\"pattern\":\"%s\"}}}]}",
+          "$.rules[0].match.subrole.pattern" },
+        { "{\"version\":1,\"spaces\":[{\"match\":{\"index\":1},\"scaffold\":[{\"pattern\":\"%s\"}]}]}",
+          "$.spaces[0].scaffold[0].pattern" },
+        { "{\"version\":2,\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},\"scaffold\":[{\"pattern\":\"%s\"}]}]}]}",
+          "$.modes[0].spaces[0].scaffold[0].pattern" }
+    };
+    struct pattern_case {
+        const char *pattern;
+        const char *error;
+    } patterns[] = {
+        { "^Mail( Inbox)?$", NULL },
+        { "(a?){16}", NULL },
+        { "[", "invalid regular expression" },
+        { "((a{255}){255}){255}", "regular expression is too complex" }
+    };
+    for (size_t i = 0; i < array_count(cases); ++i) {
+        for (size_t j = 0; j < array_count(patterns); ++j) {
+            char json[512];
+            snprintf(json, sizeof(json), cases[i].format, patterns[j].pattern);
+            struct declarative_config_model *model = NULL;
+            struct declarative_error error = {0};
+            bool parsed = declarative_config_parse_bytes((const uint8_t *) json, strlen(json),
+                                                         "bounded.jsonc", &model, &error);
+            TEST_CHECK(parsed, patterns[j].error == NULL);
+            if (patterns[j].error) {
+                TEST_CHECK(model, NULL);
+                TEST_CHECK(error.stage, DECLARATIVE_ERROR_REGEX);
+                TEST_CHECK(strcmp(error.json_path, cases[i].path), 0);
+                TEST_CHECK(strcmp(error.message, patterns[j].error), 0);
+                TEST_CHECK(strstr(error.message, patterns[j].pattern), NULL);
+            }
+            declarative_config_destroy(model);
+        }
+    }
+});
+
 TEST_FUNC(declarative_scaffold_schema_is_strict_and_owned,
 {
     char valid[] = "{\"version\":1,\"spaces\":[{\"match\":{\"index\":2},\"scaffold\":[{\"pattern\":\"^Mail$\"},{\"pattern\":\"Calendar\",\"exclude\":false},{\"pattern\":\"Messages\"}]}]}";

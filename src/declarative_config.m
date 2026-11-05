@@ -1203,6 +1203,20 @@ static bool reserved_scratchpad(NSString *s) {
             return true;
     return false;
 }
+static bool validate_matcher_pattern(struct model_builder *b, const char *pattern, const char *path)
+{
+    regex_t regex;
+    enum pattern_compile_result result = pattern_compile(&regex, pattern);
+    if (result != PATTERN_COMPILE_OK) {
+        return builder_error(b, DECLARATIVE_ERROR_REGEX, path,
+                             result == PATTERN_COMPILE_TOO_COMPLEX
+                                 ? "regular expression is too complex"
+                                 : "invalid regular expression");
+    }
+    regfree(&regex);
+    return true;
+}
+
 static bool convert_scaffold_matcher(struct model_builder *b, id object, struct declarative_matcher *out,
                                      const char *path) {
     if (![object isKindOfClass:[NSDictionary class]])
@@ -1233,11 +1247,7 @@ static bool convert_scaffold_matcher(struct model_builder *b, id object, struct 
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "exclude must be boolean");
         out->exclude = [d[@"exclude"] boolValue];
     }
-    regex_t re;
-    if (regcomp(&re, out->pattern, REG_EXTENDED))
-        return builder_error(b, DECLARATIVE_ERROR_REGEX, pattern_path, "invalid regular expression");
-    regfree(&re);
-    return true;
+    return validate_matcher_pattern(b, out->pattern, pattern_path);
 }
 static bool convert_rules(struct model_builder *b, id object) {
     if (![object isKindOfClass:[NSArray class]])
@@ -1330,10 +1340,8 @@ static bool convert_rules(struct model_builder *b, id object) {
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "exclude must be boolean");
                 r->matchers[mi].exclude = [md[@"exclude"] boolValue];
             }
-            regex_t re;
-            if (regcomp(&re, r->matchers[mi].pattern, REG_EXTENDED))
-                return builder_error(b, DECLARATIVE_ERROR_REGEX, pattern_path, "invalid regular expression");
-            regfree(&re);
+            if (!validate_matcher_pattern(b, r->matchers[mi].pattern, pattern_path))
+                return false;
             r->matcher_present[mi] = true;
         }
         id effects = d[@"effects"] ?: @{};

@@ -40,6 +40,15 @@ self-tests with synthetic positive and negative evidence. Both also run through
 `make test` / `make test-all` and an explicit CI step, without a daemon, live
 captures, or network access. These validate the gates, not real-host coverage.
 
+## Native matcher compilation limits
+
+JSONC rule matchers and base/mode scaffold matchers use the same regex
+complexity guard as CLI rules, both during validation and runtime preparation.
+The offline regressions reject compact nested repetitions before system regex
+compilation, retain field-specific redacted diagnostics, and check cleanup of
+partially prepared rules and scaffold regex arrays. Valid matcher and exclusion
+behavior remains covered by the existing rule and scaffold suites.
+
 ## Independent compilation boundaries
 
 `src/window_constraints.c` and `src/window_server_classifier.c` compile as

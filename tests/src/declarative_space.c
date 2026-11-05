@@ -515,6 +515,25 @@ TEST_FUNC(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_ha
     TEST_CHECK(declarative_space_scaffold_hash(7, &policies[0]) != declarative_space_scaffold_hash(8, &copy), true);
 })
 
+TEST_FUNC(declarative_scaffold_preparation_bounds_each_compiled_slot,
+{
+    for (size_t slot = 0; slot < DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS; ++slot) {
+        struct declarative_space_prepared_target target = {
+            .target = { .sid = 11, .index = 1, .is_user_space = true }
+        };
+        target.effective.fields[DECLARATIVE_RUNTIME_SPACE_LAYOUT].value.integer = VIEW_BSP;
+        struct declarative_space_preparation preparation = { .targets = &target, .target_count = 1 };
+        struct declarative_space_policy policy = {
+            .by_index = true, .index = 1, .scaffold_count = slot + 1
+        };
+        for (size_t i = 0; i < slot; ++i) policy.scaffold[i].pattern = "^Mail$";
+        policy.scaffold[slot].pattern = "((a{255}){255}){255}";
+        TEST_CHECK(declarative_space_prepare_scaffolds(&preparation, &policy, 1, 7), false);
+        TEST_CHECK(target.final_scaffold_count, 0UL);
+        TEST_CHECK(target.final_scaffold_fingerprint, 0ULL);
+    }
+});
+
 TEST_FUNC(declarative_scaffold_compacts_subsets_and_ignores_opening_order,
 {
     uint32_t all[] = { 10, 20, 30 };

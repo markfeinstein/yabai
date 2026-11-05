@@ -303,7 +303,7 @@ static bool declarative_rule_copy_matcher(struct rule *rule, int index, const ch
     enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
     *strings[index] = declarative_rule_strdup(pattern);
     if (!*strings[index]) return false;
-    if (regcomp(regexes[index], *strings[index], REG_EXTENDED) != 0) return false;
+    if (pattern_compile(regexes[index], *strings[index]) != PATTERN_COMPILE_OK) return false;
     rule_set_flag(rule, valid[index]);
     if (exclude) rule_set_flag(rule, excluded[index]);
     return true;

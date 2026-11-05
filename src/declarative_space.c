@@ -1637,7 +1637,10 @@ static bool declarative_space_prepare_scaffolds(struct declarative_space_prepara
         size_t compiled = 0;
         bool valid = true;
         for (; compiled < policy->scaffold_count; ++compiled) {
-            if (regcomp(&regex[compiled], policy->scaffold[compiled].pattern, REG_EXTENDED)) { valid = false; break; }
+            if (pattern_compile(&regex[compiled], policy->scaffold[compiled].pattern) != PATTERN_COMPILE_OK) {
+                valid = false;
+                break;
+            }
         }
         if (valid) {
             target->final_scaffold_count = policy->scaffold_count;

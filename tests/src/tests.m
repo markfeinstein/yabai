@@ -3781,6 +3781,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
     TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
     TEST_ENTRY(declarative_split_ratio_is_valid_globally_and_in_space_policy) \
+    TEST_ENTRY(declarative_native_matcher_regex_compilation_is_bounded) \
     TEST_ENTRY(declarative_scaffold_schema_is_strict_and_owned)            \
     TEST_ENTRY(declarative_modes_v1_compatibility_and_v2_schema)            \
     TEST_ENTRY(declarative_modes_schema_errors_and_limits)                  \
@@ -3837,6 +3838,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay) \
     TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
     TEST_ENTRY(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash) \
+    TEST_ENTRY(declarative_scaffold_preparation_bounds_each_compiled_slot) \
     TEST_ENTRY(declarative_scaffold_compacts_subsets_and_ignores_opening_order) \
     TEST_ENTRY(declarative_scaffold_uses_effective_ratio_only_for_its_root_split) \
     TEST_ENTRY(declarative_scaffold_ratio_change_rebuilds_existing_canonical_root) \
@@ -3938,6 +3940,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(declarative_rule_unavailable_targets_preserve_rules_precedence_and_independent_effects) \
     TEST_ENTRY(declarative_rule_preparation_supports_each_matcher_independently) \
     TEST_ENTRY(declarative_rule_preparation_rejects_labels_regex_and_preserves_manager) \
+    TEST_ENTRY(declarative_rule_preparation_bounds_every_matcher_before_compilation) \
     TEST_ENTRY(declarative_rule_preparation_cleans_every_allocator_failure) \
     TEST_ENTRY(declarative_rule_fold_context_creation_cleans_every_allocator_failure) \
     TEST_ENTRY(declarative_rule_maximum_preparation_and_destruction_tracks_every_allocation) \

@@ -355,6 +355,26 @@ TEST_FUNC(declarative_rule_preparation_rejects_labels_regex_and_preserves_manage
                                         DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 1, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_INVALID_TOPOLOGY);
 });
 
+TEST_FUNC(declarative_rule_preparation_bounds_every_matcher_before_compilation,
+{
+    size_t outstanding = declarative_rules_test_outstanding_allocations();
+    int rule_count = buf_len(g_window_manager.rules);
+    for (int matcher = 0; matcher < 4; ++matcher) {
+        struct declarative_rule_model model = {0};
+        model.matcher_present[matcher] = true;
+        model.matchers[matcher].pattern = "((a{255}){255}){255}";
+        struct declarative_prepared_rules prepared = {0};
+        TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
+                                            DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 1, NULL, 0, &prepared),
+                   DECLARATIVE_RULE_PREPARE_INVALID_REGEX);
+        TEST_CHECK(prepared.count, 0UL);
+        TEST_CHECK(prepared.templates, NULL);
+        TEST_CHECK(prepared.live, NULL);
+        TEST_CHECK(declarative_rules_test_outstanding_allocations(), outstanding);
+        TEST_CHECK(buf_len(g_window_manager.rules), rule_count);
+    }
+});
+
 TEST_FUNC(declarative_rule_preparation_cleans_every_allocator_failure,
 {
     struct declarative_rule_model model = declarative_rule_test_model();
