@@ -1450,6 +1450,222 @@ static void handle_global_layout_result(FILE *rsp, enum declarative_apply_result
     }
 }
 
+static bool config_boolean_current(enum declarative_config_id id)
+{
+    switch (id) {
+    case DECLARATIVE_CONFIG_DEBUG_OUTPUT: return g_verbose;
+    case DECLARATIVE_CONFIG_MFF: return g_window_manager.enable_mff;
+    case DECLARATIVE_CONFIG_MANAGE: return !g_window_manager.disable_management;
+    case DECLARATIVE_CONFIG_WINDOW_SUBLAYER_AUTO: return !g_window_manager.disable_window_sublayer_auto;
+    case DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST: return g_space_manager.window_zoom_persist;
+    case DECLARATIVE_CONFIG_OPACITY: return g_window_manager.enable_window_opacity;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT: return g_window_manager.enable_active_window_highlight;
+    case DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE: return g_mouse_state.native_edge_resize;
+    case DECLARATIVE_CONFIG_MOUSE_BSP_LIVE_RESIZE: return g_mouse_state.bsp_live_resize;
+    case DECLARATIVE_CONFIG_DIRECT_SPACE_SWITCH: return g_space_manager.direct_space_switch;
+    case DECLARATIVE_CONFIG_SKIP_SPACE_ANIMATION: return g_space_manager.skip_window_focus_animation;
+    default: return false;
+    }
+}
+
+static void handle_config_boolean(FILE *rsp, struct token domain, struct token command,
+                                  char **message, enum declarative_config_id id)
+{
+    struct token value = get_token(message);
+    if (!token_is_valid(value)) {
+        fprintf(rsp, "%s\n", bool_str[config_boolean_current(id)]);
+    } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF) ||
+               token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+        declarative_apply_runtime_setting(id, &(struct declarative_value) {
+            .present = true,
+            .boolean = token_equals(value, ARGUMENT_COMMON_VAL_ON)
+        }, 0);
+    } else {
+        daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                    value.length, value.text, command.length, command.text,
+                    domain.length, domain.text);
+    }
+}
+
+static int config_integer_current(enum declarative_config_id id, const struct view *view)
+{
+    switch (id) {
+    case DECLARATIVE_CONFIG_TOP_PADDING: return view ? view->top_padding : g_space_manager.top_padding;
+    case DECLARATIVE_CONFIG_BOTTOM_PADDING: return view ? view->bottom_padding : g_space_manager.bottom_padding;
+    case DECLARATIVE_CONFIG_LEFT_PADDING: return view ? view->left_padding : g_space_manager.left_padding;
+    case DECLARATIVE_CONFIG_RIGHT_PADDING: return view ? view->right_padding : g_space_manager.right_padding;
+    case DECLARATIVE_CONFIG_WINDOW_GAP: return view ? view->window_gap : g_space_manager.window_gap;
+    case DECLARATIVE_CONFIG_ACCORDION_PADDING: return view ? view->accordion_padding : g_space_manager.accordion_padding;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH: return view ? view->single_window_max_width : g_space_manager.single_window_max_width;
+    case DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH: return view ? view->single_window_min_width : g_space_manager.single_window_min_width;
+    default: return 0;
+    }
+}
+
+static bool config_integer_is_valid(enum declarative_config_id id, int value)
+{
+    return id < DECLARATIVE_CONFIG_ACCORDION_PADDING || value >= 0;
+}
+
+static void handle_config_integer(FILE *rsp, struct token domain, struct token command,
+                                  char **message, enum declarative_config_id id,
+                                  uint64_t sid, struct view *view)
+{
+    struct token_value value = token_to_value(get_token(message));
+    if (value.type == TOKEN_TYPE_INVALID) {
+        fprintf(rsp, "%d\n", config_integer_current(id, view));
+    } else if (value.type == TOKEN_TYPE_INT && config_integer_is_valid(id, value.int_value)) {
+        struct declarative_value setting = { .present = true, .integer = value.int_value };
+        if (sid) apply_scoped_setting(rsp, view, sid, id, &setting, false);
+        else declarative_apply_runtime_setting(id, &setting, 0);
+    } else {
+        daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                    value.token.length, value.token.text, command.length, command.text,
+                    domain.length, domain.text);
+    }
+}
+
+static bool config_float_is_generic(enum declarative_config_id id)
+{
+    return id == DECLARATIVE_CONFIG_OPACITY_DURATION ||
+           id == DECLARATIVE_CONFIG_MENUBAR_OPACITY ||
+           id == DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY ||
+           id == DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY ||
+           id == DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS ||
+           id == DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH ||
+           id == DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS ||
+           id == DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH;
+}
+
+static float config_float_current(enum declarative_config_id id)
+{
+    switch (id) {
+    case DECLARATIVE_CONFIG_OPACITY_DURATION: return g_window_manager.window_opacity_duration;
+    case DECLARATIVE_CONFIG_MENUBAR_OPACITY: return g_window_manager.menubar_opacity;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY: return g_window_manager.active_window_opacity;
+    case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY: return g_window_manager.normal_window_opacity;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS: return g_window_manager.active_window_highlight_radius;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH: return g_window_manager.active_window_highlight_width;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS: return g_window_manager.insert_feedback_radius;
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH: return g_window_manager.insert_feedback_width;
+    default: return 0.0f;
+    }
+}
+
+static bool config_float_is_valid(enum declarative_config_id id, float value)
+{
+    if (!isfinite(value)) return false;
+    switch (id) {
+    case DECLARATIVE_CONFIG_OPACITY_DURATION:
+        return value >= 0.0f && sa_opacity_duration_is_safe(value);
+    case DECLARATIVE_CONFIG_MENUBAR_OPACITY:
+        return in_range_ii(value, 0.0f, 1.0f);
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY:
+    case DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY:
+        return in_range_ei(value, 0.0f, 1.0f);
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS:
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS:
+        return value >= 0.0f;
+    case DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH:
+    case DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH:
+        return value > 0.0f;
+    default:
+        return false;
+    }
+}
+
+static void handle_config_float(FILE *rsp, struct token domain, struct token command,
+                                char **message, enum declarative_config_id id)
+{
+    struct token_value value = token_to_value(get_token(message));
+    float real;
+    if (value.type == TOKEN_TYPE_INVALID) {
+        const char *format = id == DECLARATIVE_CONFIG_OPACITY_DURATION ? "%f\n" :
+                             id <= DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY ? "%.4f\n" : "%.9g\n";
+        fprintf(rsp, format, config_float_current(id));
+    } else if (token_value_to_float(value, &real) && config_float_is_valid(id, real)) {
+        declarative_apply_runtime_setting(id,
+            &(struct declarative_value) { .present = true, .real = real }, 0);
+    } else {
+        daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                    value.token.length, value.token.text, command.length, command.text,
+                    domain.length, domain.text);
+    }
+}
+
+struct config_enum_spec
+{
+    const char **names;
+    int first;
+    int count;
+    int current;
+};
+
+static bool config_enum_spec(enum declarative_config_id id, struct config_enum_spec *spec)
+{
+    switch (id) {
+    case DECLARATIVE_CONFIG_FFM:
+        *spec = (struct config_enum_spec) { (const char **) ffm_mode_str, 0, array_count(ffm_mode_str), g_window_manager.configured_ffm_mode };
+        return true;
+    case DECLARATIVE_CONFIG_DISPLAY_ORDER:
+        *spec = (struct config_enum_spec) { display_arrangement_order_str, 0, array_count(display_arrangement_order_str), g_display_manager.order };
+        return true;
+    case DECLARATIVE_CONFIG_WINDOW_ORIGIN:
+        *spec = (struct config_enum_spec) { window_origin_mode_str, 0, array_count(window_origin_mode_str), g_window_manager.window_origin_mode };
+        return true;
+    case DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK:
+        *spec = (struct config_enum_spec) { window_focus_fallback_str, 0, array_count(window_focus_fallback_str), g_window_manager.window_focus_fallback };
+        return true;
+    case DECLARATIVE_CONFIG_WINDOW_PLACEMENT:
+        *spec = (struct config_enum_spec) { window_node_child_str, CHILD_SECOND, 2, g_space_manager.window_placement };
+        return true;
+    case DECLARATIVE_CONFIG_WINDOW_INSERT_POINT:
+        *spec = (struct config_enum_spec) { window_insertion_point_str, 0, array_count(window_insertion_point_str), g_space_manager.window_insertion_point };
+        return true;
+    case DECLARATIVE_CONFIG_ANIMATION_EASING:
+        *spec = (struct config_enum_spec) { (const char **) animation_easing_type_str, 0, EASING_TYPE_COUNT, g_window_manager.window_animation_easing };
+        return true;
+    case DECLARATIVE_CONFIG_SHADOW:
+        *spec = (struct config_enum_spec) { purify_mode_str, 0, array_count(purify_mode_str), g_window_manager.purify_mode };
+        return true;
+    case DECLARATIVE_CONFIG_MOUSE_ACTION1:
+        *spec = (struct config_enum_spec) { (const char **) mouse_mode_str, MOUSE_MODE_MOVE, 2, g_mouse_state.action1 };
+        return true;
+    case DECLARATIVE_CONFIG_MOUSE_ACTION2:
+        *spec = (struct config_enum_spec) { (const char **) mouse_mode_str, MOUSE_MODE_MOVE, 2, g_mouse_state.action2 };
+        return true;
+    case DECLARATIVE_CONFIG_MOUSE_DROP_ACTION:
+        *spec = (struct config_enum_spec) { (const char **) mouse_mode_str, MOUSE_MODE_SWAP, 2, g_mouse_state.drop_action };
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void handle_config_enum(FILE *rsp, struct token domain, struct token command,
+                               char **message, enum declarative_config_id id,
+                               const struct config_enum_spec *spec)
+{
+    struct token value = get_token(message);
+    if (!token_is_valid(value)) {
+        fprintf(rsp, "%s\n", spec->names[spec->current]);
+        return;
+    }
+    for (int i = spec->first; i < spec->first + spec->count; ++i) {
+        if (!token_equals(value, (char *) spec->names[i])) continue;
+        enum declarative_apply_result result = declarative_apply_runtime_setting(id,
+            &(struct declarative_value) { .present = true, .enumeration = i }, 0);
+        if (id == DECLARATIVE_CONFIG_FFM && result != DECLARATIVE_APPLY_OK) {
+            daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n",
+                        command.length, command.text);
+        }
+        return;
+    }
+    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                value.length, value.text, command.length, command.text,
+                domain.length, domain.text);
+}
+
 static void handle_domain_config(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
@@ -1510,186 +1726,29 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             return;
         }
 
-        if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_verbose]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DEBUG_OUTPUT, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DEBUG_OUTPUT, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+        if (config_id >= 0) {
+            enum declarative_value_kind kind = declarative_config_descriptors[config_id].kind;
+            if (kind == DECLARATIVE_VALUE_BOOL) {
+                handle_config_boolean(rsp, domain, command, &message, config_id);
+                continue;
             }
-        } else if (token_equals(command, COMMAND_CONFIG_MFF)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_mff]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MFF, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MFF, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            if (kind == DECLARATIVE_VALUE_INT) {
+                handle_config_integer(rsp, domain, command, &message, config_id,
+                                      sel_sid, selected_view);
+                continue;
             }
-        } else if (token_equals(command, COMMAND_CONFIG_MANAGE)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[!g_window_manager.disable_management]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MANAGE, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MANAGE, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            if (kind == DECLARATIVE_VALUE_FLOAT && config_float_is_generic(config_id)) {
+                handle_config_float(rsp, domain, command, &message, config_id);
+                continue;
             }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_SUBLAYER_AUTO)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[!g_window_manager.disable_window_sublayer_auto]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_SUBLAYER_AUTO, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_SUBLAYER_AUTO, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            struct config_enum_spec spec;
+            if (kind == DECLARATIVE_VALUE_ENUM && config_enum_spec(config_id, &spec)) {
+                handle_config_enum(rsp, domain, command, &message, config_id, &spec);
+                continue;
             }
-        } else if (token_equals(command, COMMAND_CONFIG_FFM)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", ffm_mode_str[g_window_manager.configured_ffm_mode]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_FFM, &(struct declarative_value) { .present = true, .enumeration = FFM_DISABLED }, 0) != DECLARATIVE_APPLY_OK) {
-                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
-                }
-            } else if (token_equals(value, ARGUMENT_CONFIG_FFM_AUTOFOCUS)) {
-                if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_FFM, &(struct declarative_value) { .present = true, .enumeration = FFM_AUTOFOCUS }, 0) != DECLARATIVE_APPLY_OK) {
-                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
-                }
-            } else if (token_equals(value, ARGUMENT_CONFIG_FFM_AUTORAISE)) {
-                if (declarative_apply_runtime_setting(DECLARATIVE_CONFIG_FFM, &(struct declarative_value) { .present = true, .enumeration = FFM_AUTORAISE }, 0) != DECLARATIVE_APPLY_OK) {
-                    daemon_fail(rsp, "could not reconfigure mouse event tap for command '%.*s'.\n", command.length, command.text);
-                }
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_DISPLAY_ORDER)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", display_arrangement_order_str[g_display_manager.order]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_DEFAULT)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DISPLAY_ORDER, &(struct declarative_value) { .present = true, .enumeration = DISPLAY_ARRANGEMENT_ORDER_DEFAULT }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_X)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DISPLAY_ORDER, &(struct declarative_value) { .present = true, .enumeration = DISPLAY_ARRANGEMENT_ORDER_X }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_DISPLAY_ORDER_Y)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DISPLAY_ORDER, &(struct declarative_value) { .present = true, .enumeration = DISPLAY_ARRANGEMENT_ORDER_Y }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_ORIGIN)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", window_origin_mode_str[g_window_manager.window_origin_mode]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_ORIGIN_DEFAULT)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ORIGIN, &(struct declarative_value) { .present = true, .enumeration = WINDOW_ORIGIN_DEFAULT }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_ORIGIN_FOCUSED)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ORIGIN, &(struct declarative_value) { .present = true, .enumeration = WINDOW_ORIGIN_FOCUSED }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_ORIGIN_CURSOR)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ORIGIN, &(struct declarative_value) { .present = true, .enumeration = WINDOW_ORIGIN_CURSOR }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_FOCUS_FALLBACK)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", window_focus_fallback_str[g_window_manager.window_focus_fallback]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, &(struct declarative_value) { .present = true, .enumeration = WINDOW_FOCUS_FALLBACK_OFF }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_FOCUS_FALLBACK_RECENT)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_FOCUS_FALLBACK, &(struct declarative_value) { .present = true, .enumeration = WINDOW_FOCUS_FALLBACK_RECENT }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_PLACEMENT)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", window_node_child_str[g_space_manager.window_placement]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_PLACEMENT_FST)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_PLACEMENT, &(struct declarative_value) { .present = true, .enumeration = CHILD_FIRST }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_PLACEMENT_SND)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_PLACEMENT, &(struct declarative_value) { .present = true, .enumeration = CHILD_SECOND }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_INSERT_POINT)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", window_insertion_point_str[g_space_manager.window_insertion_point]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_INSERT_FOCUSED)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_INSERT_POINT, &(struct declarative_value) { .present = true, .enumeration = INSERT_FOCUSED }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_INSERT_FIRST)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_INSERT_POINT, &(struct declarative_value) { .present = true, .enumeration = INSERT_FIRST }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_WINDOW_INSERT_LAST)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_INSERT_POINT, &(struct declarative_value) { .present = true, .enumeration = INSERT_LAST }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_ZOOM_PERSIST)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_space_manager.window_zoom_persist]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_DIRECT_SPACE_SWITCH)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_space_manager.direct_space_switch]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DIRECT_SPACE_SWITCH, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_DIRECT_SPACE_SWITCH, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_SKIP_SPACE_ANIMATION)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_space_manager.skip_window_focus_animation]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SKIP_SPACE_ANIMATION, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SKIP_SPACE_ANIMATION, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_OPACITY)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_window_opacity]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_OPACITY, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_OPACITY, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_OPACITY_DURATION)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%f\n", g_window_manager.window_opacity_duration);
-            } else if (token_value_to_float(value, &real) && real >= 0.0f &&
-                       sa_opacity_duration_is_safe(real)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_OPACITY_DURATION, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ANIMATION_DURATION)) {
+        }
+
+        if (token_equals(command, COMMAND_CONFIG_ANIMATION_DURATION)) {
             struct token_value value = token_to_value(get_token(&message));
             float real;
             if (value.type == TOKEN_TYPE_INVALID) {
@@ -1704,34 +1763,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 }
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ANIMATION_EASING)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", animation_easing_type_str[g_window_manager.window_animation_easing]);
-            } else {
-                bool match = false;
-                for (int i = 0; i < EASING_TYPE_COUNT; ++i) {
-                    if (token_equals(value, animation_easing_type_str[i])) {
-                        declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ANIMATION_EASING, &(struct declarative_value) { .present = true, .enumeration = i }, 0);
-                        match = true;
-                        break;
-                    }
-                }
-                if (!match) daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_SHADOW)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", purify_mode_str[g_window_manager.purify_mode]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SHADOW, &(struct declarative_value) { .present = true, .enumeration = PURIFY_ALWAYS }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_SHADOW_FLT)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SHADOW, &(struct declarative_value) { .present = true, .enumeration = PURIFY_MANAGED }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SHADOW, &(struct declarative_value) { .present = true, .enumeration = PURIFY_DISABLED }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_CONFIG_MENUBAR)) {
             struct token value = get_token(&message);
@@ -1783,73 +1814,12 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
-        } else if (token_equals(command, COMMAND_CONFIG_MENUBAR_OPACITY)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.4f\n", g_window_manager.menubar_opacity);
-            } else if (token_value_to_float(value, &real) && in_range_ii(real, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MENUBAR_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_OPACITY)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.4f\n", g_window_manager.active_window_opacity);
-            } else if (token_value_to_float(value, &real) && in_range_ei(real, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_NORMAL_WINDOW_OPACITY)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.4f\n", g_window_manager.normal_window_opacity);
-            } else if (token_value_to_float(value, &real) && in_range_ei(real, 0.0f, 1.0f)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NORMAL_WINDOW_OPACITY, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_active_window_highlight]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
         } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR)) {
             struct token_value value = token_to_value(get_token(&message));
             if (value.type == TOKEN_TYPE_INVALID) {
                 fprintf(rsp, "0x%x\n", g_window_manager.active_window_highlight_color.p);
             } else if (value.type == TOKEN_TYPE_U32 && value.u32_value) {
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_COLOR, &(struct declarative_value) { .present = true, .u32 = value.u32_value }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.9g\n", g_window_manager.active_window_highlight_radius);
-            } else if (token_value_to_float(value, &real) && real >= 0.0f && isfinite(real)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.9g\n", g_window_manager.active_window_highlight_width);
-            } else if (token_value_to_float(value, &real) && real > 0.0f && isfinite(real)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, &(struct declarative_value) { .present = true, .real = real }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
             }
@@ -1861,186 +1831,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_COLOR, &(struct declarative_value) { .present = true, .u32 = value.u32_value }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_INSERT_FEEDBACK_RADIUS)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.9g\n", g_window_manager.insert_feedback_radius);
-            } else if (token_value_to_float(value, &real) && real >= 0.0f && isfinite(real)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_RADIUS, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_INSERT_FEEDBACK_WIDTH)) {
-            struct token_value value = token_to_value(get_token(&message));
-            float real;
-            if (value.type == TOKEN_TYPE_INVALID) {
-                fprintf(rsp, "%.9g\n", g_window_manager.insert_feedback_width);
-            } else if (token_value_to_float(value, &real) && real > 0.0f && isfinite(real)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_INSERT_FEEDBACK_WIDTH, &(struct declarative_value) { .present = true, .real = real }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_TOP_PADDING)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->top_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_TOP_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.top_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_TOP_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_BOTTOM_PADDING)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->bottom_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_BOTTOM_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.bottom_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_BOTTOM_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_LEFT_PADDING)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->left_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_LEFT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.left_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_LEFT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_RIGHT_PADDING)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->right_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_RIGHT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.right_padding);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_RIGHT_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_GAP)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->window_gap);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_WINDOW_GAP, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.window_gap);
-                } else if (value.type == TOKEN_TYPE_INT) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_GAP, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_ACCORDION_PADDING)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->accordion_padding);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.accordion_padding);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_ACCORDION_PADDING, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_MAX_WIDTH)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->single_window_max_width);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.single_window_max_width);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SINGLE_WINDOW_MAX_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_MIN_WIDTH)) {
-            struct token_value value = token_to_value(get_token(&message));
-            if (sel_sid) {
-                struct view *view = selected_view;
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", view->single_window_min_width);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    apply_scoped_setting(rsp, selected_view, sel_sid, DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, false);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
-            } else {
-                if (value.type == TOKEN_TYPE_INVALID) {
-                    fprintf(rsp, "%d\n", g_space_manager.single_window_min_width);
-                } else if (value.type == TOKEN_TYPE_INT && value.int_value >= 0) {
-                    declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SINGLE_WINDOW_MIN_WIDTH, &(struct declarative_value) { .present = true, .integer = value.int_value }, 0);
-                } else {
-                    daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.token.length, value.token.text, command.length, command.text, domain.length, domain.text);
-                }
             }
         } else if (token_equals(command, COMMAND_CONFIG_SINGLE_WINDOW_WIDTH_RATIO)) {
             struct token_value value = token_to_value(get_token(&message));
@@ -2176,28 +1966,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
                 }
             }
-        } else if (token_equals(command, COMMAND_CONFIG_NATIVE_EDGE_RESIZE)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_mouse_state.native_edge_resize]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_NATIVE_EDGE_RESIZE, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_BSP_LIVE_RESIZE)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", bool_str[g_mouse_state.bsp_live_resize]);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_BSP_LIVE_RESIZE, &(struct declarative_value) { .present = true, .boolean = false }, 0);
-            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_BSP_LIVE_RESIZE, &(struct declarative_value) { .present = true, .boolean = true }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
         } else if (token_equals(command, COMMAND_CONFIG_MOUSE_MOD)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
@@ -2212,39 +1980,6 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_MOD, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MOD_CTRL }, 0);
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_MOD_FN)) {
                 declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_MOD, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MOD_FN }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_ACTION1)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", mouse_mode_str[g_mouse_state.action1]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_MOVE)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_ACTION1, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_MOVE }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_RESIZE)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_ACTION1, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_RESIZE }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_ACTION2)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", mouse_mode_str[g_mouse_state.action2]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_MOVE)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_ACTION2, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_MOVE }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_RESIZE)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_ACTION2, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_RESIZE }, 0);
-            } else {
-                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
-            }
-        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_DROP_ACTION)) {
-            struct token value = get_token(&message);
-            if (!token_is_valid(value)) {
-                fprintf(rsp, "%s\n", mouse_mode_str[g_mouse_state.drop_action]);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_SWAP)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_DROP_ACTION, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_SWAP }, 0);
-            } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_STACK)) {
-                declarative_apply_runtime_setting(DECLARATIVE_CONFIG_MOUSE_DROP_ACTION, &(struct declarative_value) { .present = true, .enumeration = MOUSE_MODE_STACK }, 0);
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
