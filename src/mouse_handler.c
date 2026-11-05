@@ -801,16 +801,6 @@ static void mouse_handler_remove_installed_resources(struct mouse_handler_resour
     mouse_handler_dispose_resources(resources);
 }
 
-static void mouse_handler_clear_resources(struct mouse_state *mouse_state)
-{
-    __atomic_store_n(&mouse_state->handle, NULL, __ATOMIC_RELEASE);
-    mouse_state->runloop_source = NULL;
-    mouse_state->runloop = NULL;
-    mouse_state->thread = (pthread_t) {0};
-    mouse_state->thread_started = false;
-    mouse_state->handler_context = NULL;
-}
-
 static void mouse_handler_install_resources(struct mouse_state *mouse_state, struct mouse_handler_resources resources)
 {
     __atomic_store_n(&mouse_state->handle, resources.handle, __ATOMIC_RELEASE);
@@ -845,84 +835,4 @@ bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask)
         result = mouse_handler_begin_on_main_thread(mouse_state, mask);
     });
     return result;
-}
-
-static bool mouse_handler_reconfigure_on_main_thread(struct mouse_state *mouse_state, uint32_t mask)
-{
-    struct mouse_handler_resources replacement = {0};
-    if (!mouse_handler_create_resources(mouse_state, mask, &replacement)) return false;
-    if (!mouse_handler_start_resources(&replacement)) {
-        mouse_handler_remove_installed_resources(replacement);
-        return false;
-    }
-
-    struct mouse_handler_resources previous = {
-        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
-        .runloop_source = mouse_state->runloop_source,
-        .runloop = mouse_state->runloop,
-        .thread = mouse_state->thread,
-        .thread_started = mouse_state->thread_started,
-        .context = mouse_state->handler_context
-    };
-
-    mouse_handler_stop_resources(&previous);
-
-    if (!mouse_handler_enable_resources(replacement)) {
-        mouse_handler_remove_installed_resources(replacement);
-
-        if (previous.handle && previous.runloop_source &&
-            mouse_handler_start_resources(&previous) &&
-            mouse_handler_enable_resources(previous)) {
-            mouse_handler_install_resources(mouse_state, previous);
-        } else {
-            mouse_handler_remove_installed_resources(previous);
-            mouse_handler_clear_resources(mouse_state);
-        }
-
-        return false;
-    }
-
-    mouse_handler_install_resources(mouse_state, replacement);
-    mouse_handler_dispose_resources(previous);
-    return true;
-}
-
-bool mouse_handler_reconfigure(struct mouse_state *mouse_state, uint32_t mask)
-{
-    if (pthread_main_np()) return mouse_handler_reconfigure_on_main_thread(mouse_state, mask);
-
-    __block bool result;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = mouse_handler_reconfigure_on_main_thread(mouse_state, mask);
-    });
-    return result;
-}
-
-static void mouse_handler_end_on_main_thread(struct mouse_state *mouse_state)
-{
-    struct mouse_handler_resources resources = {
-        .handle = __atomic_load_n(&mouse_state->handle, __ATOMIC_ACQUIRE),
-        .runloop_source = mouse_state->runloop_source,
-        .runloop = mouse_state->runloop,
-        .thread = mouse_state->thread,
-        .thread_started = mouse_state->thread_started,
-        .context = mouse_state->handler_context
-    };
-
-    mouse_handler_clear_resources(mouse_state);
-    mouse_handler_remove_installed_resources(resources);
-
-    mouse_click_state_release(&mouse_state->left_click);
-    mouse_click_state_release(&mouse_state->right_click);
-}
-
-void mouse_handler_end(struct mouse_state *mouse_state)
-{
-    if (pthread_main_np()) {
-        mouse_handler_end_on_main_thread(mouse_state);
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            mouse_handler_end_on_main_thread(mouse_state);
-        });
-    }
 }

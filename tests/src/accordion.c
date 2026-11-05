@@ -328,7 +328,7 @@ TEST_FUNC(accordion_membership_insertion_removal_and_focus_preserve_order,
     TEST_CHECK(root.window_list[1], 3U);
 
     struct window add = { .id = 4 };
-    TEST_CHECK(view_add_window_node(&view, &add), &root);
+    TEST_CHECK(view_add_window_node_with_insertion_point(&view, &add, 0), &root);
     TEST_CHECK(root.window_count, 3);
     TEST_CHECK(root.window_list[0], 1U);
     TEST_CHECK(root.window_list[1], 4U);

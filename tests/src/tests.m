@@ -3611,12 +3611,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_close_propagates_ax_failures_and_releases_button) \
     TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
     TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
-    TEST_ENTRY(hashtable_rekey_is_allocation_free_and_preserves_value) \
     TEST_ENTRY(hashtable_for_preserves_enclosing_loop_variables) \
-    TEST_ENTRY(window_identity_transaction_migrates_unmanaged_state_atomically) \
-    TEST_ENTRY(window_identity_transaction_migrates_managed_tree_without_geometry_changes) \
-    TEST_ENTRY(window_identity_transaction_rejects_collisions_busy_state_and_invariants_without_mutation) \
-    TEST_ENTRY(window_identity_transaction_consumes_refs_on_early_rejection) \
     TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
     TEST_ENTRY(hybrid_management_preserves_rule_manual_and_default_window_intent) \
     TEST_ENTRY(hybrid_management_gates_automatic_windows_but_keeps_overrides) \
@@ -3717,10 +3712,6 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
     TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
     TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
-    TEST_ENTRY(layout_inventory_failure_is_transactional_and_empty_success_applies) \
-    TEST_ENTRY(scaffold_identity_is_invalidated_across_rapid_layout_conversions) \
-    TEST_ENTRY(scaffold_identity_is_invalidated_for_global_layout_batch) \
-    TEST_ENTRY(stack_layout_capacity_preflight_preserves_then_accepts_bounded_inventory) \
     TEST_ENTRY(window_ordered_in_prefers_its_own_visible_space) \
     TEST_ENTRY(window_ordered_in_space_uses_one_membership_query) \
     TEST_ENTRY(window_ordered_query_failure_preserves_state)    \

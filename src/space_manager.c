@@ -325,50 +325,6 @@ void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, c
     }));
 }
 
-static bool space_manager_layout_inventory_is_valid(struct window_manager *wm, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded)
-{
-    if (layout == VIEW_FLOAT) return true;
-    if (!inventory_succeeded || window_count < 0 || window_count == INT_MAX || (window_count && !window_list)) return false;
-    if (view_layout_is_single_root(layout)) {
-        int manageable_count = 0;
-        for (int i = 0; i < window_count; ++i) {
-            struct window *window = window_manager_find_window(wm, window_list[i]);
-            if (window && window_manager_should_manage_window(window) && ++manageable_count > NODE_MAX_WINDOW_COUNT) return false;
-        }
-    }
-    return true;
-}
-
-static void space_manager_commit_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, struct view **mutated_views, int mutated_capacity)
-{
-    if (view->scaffold_fingerprint || view->scaffold_primary[0] ||
-        view->scaffold_primary[1] || view->scaffold_primary[2]) {
-        view->scaffold_fingerprint = 0;
-        memset(view->scaffold_primary, 0, sizeof(view->scaffold_primary));
-    }
-    view->layout = layout;
-    view_clear(view);
-    if (layout != VIEW_FLOAT) {
-        window_manager_reconcile_windows_on_space_with_storage(wm, view, window_list, window_count, true, mutated_views, mutated_capacity);
-    }
-}
-
-bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded)
-{
-    if (!space_manager_layout_inventory_is_valid(wm, layout, window_list, window_count, inventory_succeeded)) return false;
-    if (layout == VIEW_FLOAT) {
-        space_manager_commit_layout_with_inventory(wm, view, layout, NULL, 0, NULL, 0);
-        return true;
-    }
-
-    int capacity = window_count + 1;
-    struct view **mutated_views = calloc((size_t) capacity, sizeof(struct view *));
-    if (!mutated_views) return false;
-    space_manager_commit_layout_with_inventory(wm, view, layout, window_list, window_count, mutated_views, capacity);
-    free(mutated_views);
-    return true;
-}
-
 static void space_manager_layout_synthetic_uuid(char *buffer, size_t capacity, uint64_t sid)
 {
     snprintf(buffer, capacity, "imperative-space-%016llx", (unsigned long long) sid);
@@ -562,12 +518,6 @@ bool space_manager_set_layout_for_view(struct space_manager *sm, struct view *vi
 {
     if (!sm || !view || table_find(&sm->view, &view->sid) != view) return false;
     return space_manager_apply_layout_transaction(sm, view, layout, false);
-}
-
-bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type layout)
-{
-    struct view *view = space_manager_lookup_view(sm, sid);
-    return view && space_manager_set_layout_for_view(sm, view, layout);
 }
 
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap)
@@ -863,11 +813,6 @@ struct view *space_manager_tile_window_on_space_with_insertion_point(struct spac
     }
 
     return view;
-}
-
-struct view *space_manager_tile_window_on_space(struct space_manager *sm, struct window *window, uint64_t sid)
-{
-    return space_manager_tile_window_on_space_with_insertion_point(sm, window, sid, 0);
 }
 
 void space_manager_flush_tiled_window(struct view *view, struct window *window)
@@ -1620,23 +1565,6 @@ enum space_op_error space_manager_add_space(uint64_t sid)
     if (is_animating) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
 
     return scripting_addition_create_space(sid) ? SPACE_OP_ERROR_SUCCESS : SPACE_OP_ERROR_SCRIPTING_ADDITION;
-}
-
-void space_manager_assign_process_to_space(pid_t pid, uint64_t sid)
-{
-    SLSProcessAssignToSpace(g_connection, pid, sid);
-}
-
-void space_manager_assign_process_to_all_spaces(pid_t pid)
-{
-    SLSProcessAssignToAllSpaces(g_connection, pid);
-}
-
-bool space_manager_is_window_on_active_space(struct window *window)
-{
-    uint64_t sid = space_manager_active_space();
-    bool result = space_manager_is_window_on_space(sid, window);
-    return result;
 }
 
 bool space_manager_is_window_on_space(uint64_t sid, struct window *window)

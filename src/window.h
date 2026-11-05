@@ -220,7 +220,6 @@ bool window_is_on_space(uint32_t wid, uint64_t sid);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
 void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
                                          const struct window_serialization_context *context);
-void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
 void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t flags,
                                    const struct window_serialization_context *context);
 void window_serialize(FILE *rsp, struct window *window, uint64_t flags);

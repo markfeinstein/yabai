@@ -319,22 +319,6 @@ inline uint64_t display_space_id(uint32_t did)
     return sid;
 }
 
-int display_space_count(uint32_t did)
-{
-    int result = 0;
-    CFStringRef uuid = display_uuid(did);
-    if (!uuid) return 0;
-
-    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
-    if (topology) {
-        CFArrayRef spaces = managed_space_spaces_for_display(topology, uuid);
-        managed_space_count_valid_checked(spaces, &result);
-        CFRelease(topology);
-    }
-    CFRelease(uuid);
-    return result;
-}
-
 static uint64_t *display_space_list_from_spaces(CFArrayRef spaces, int *count)
 {
     if (count) *count = 0;

@@ -333,7 +333,6 @@ bool view_prepare_window_node_insertion(struct view *view, struct window *window
 struct window_node *view_commit_window_node_insertion(struct view *view, struct window *window, uint32_t insertion_point, struct view_insertion_plan *plan);
 void view_abort_window_node_insertion(struct view_insertion_plan *plan);
 struct window_node *view_add_window_node_with_insertion_point(struct view *view, struct window *window, uint32_t insertion_point);
-struct window_node *view_add_window_node(struct view *view, struct window *window);
 struct window_node *view_remove_window_node(struct view *view, struct window *window);
 uint32_t *view_find_window_list(struct view *view, int *window_count);
 

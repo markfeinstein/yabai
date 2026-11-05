@@ -753,14 +753,5 @@ bool scripting_addition_move_window_list_to_space(uint64_t sid, uint32_t *window
     return scripting_addition_send_payload(&builder);
 }
 
-bool scripting_addition_move_window_to_space(uint64_t sid, uint32_t wid)
-{
-    if (!sid || !wid) return false;
-    SA_PAYLOAD_BEGIN(SA_OPCODE_WINDOW_TO_SPACE);
-    SA_PAYLOAD_APPEND(sid);
-    SA_PAYLOAD_APPEND(wid);
-    return scripting_addition_send_payload(&builder);
-}
-
 #undef SA_PAYLOAD_BEGIN
 #undef SA_PAYLOAD_APPEND

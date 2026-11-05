@@ -123,7 +123,6 @@ struct rule
 };
 
 static inline bool rule_check_flag(struct rule *r, enum rule_flag x) { return r->flags & x; }
-static inline void rule_clear_flag(struct rule *r, enum rule_flag x) { r->flags &= ~x; }
 static inline void rule_set_flag(struct rule *r, enum rule_flag x) { r->flags |= x; }
 
 static inline bool rule_effects_check_flag(struct rule_effects *e, enum rule_effects_flag x) { return e->flags & x; }

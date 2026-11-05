@@ -749,7 +749,6 @@ TEST_FUNC(declarative_scoped_missing_view_rejects_all_runtime_settings_without_s
 
     TEST_CHECK(space_manager_lookup_view(&g_space_manager, sid) == NULL, true);
     TEST_CHECK(space_manager_query_view(&g_space_manager, sid) == NULL, true);
-    TEST_CHECK(space_manager_set_layout_for_space(&g_space_manager, sid, VIEW_BSP), false);
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         if (declarative_config_descriptors[i].scope != DECLARATIVE_SCOPE_SPACE) continue;
         struct declarative_value value = declarative_test_value(i);

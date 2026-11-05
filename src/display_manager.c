@@ -77,12 +77,6 @@ void display_manager_set_label_for_display(struct display_manager *dm, uint32_t 
     }));
 }
 
-CFStringRef display_manager_main_display_uuid(void)
-{
-    uint32_t did = display_manager_main_display_id();
-    return display_uuid(did);
-}
-
 uint32_t display_manager_main_display_id(void)
 {
     return CGMainDisplayID();
@@ -377,26 +371,6 @@ static bool display_manager_animation_query_is_supported(void)
     // transition. Newer releases are already excluded because the query is not
     // reliable there; retain the established Monterey and Ventura behavior.
     return workspace_is_macos_monterey() || workspace_is_macos_ventura();
-}
-
-bool display_manager_active_display_is_animating(void)
-{
-    if (display_manager_animation_query_is_supported())
-    {
-        CFStringRef uuid = display_manager_active_display_uuid();
-        if (!uuid) return false;
-        if (!cf_is_type(uuid, CFStringGetTypeID())) {
-            CFRelease(uuid);
-            return false;
-        }
-
-        bool result = SLSManagedDisplayIsAnimating(g_connection, uuid);
-        CFRelease(uuid);
-
-        return result;
-    }
-
-    return false; // This does not return a correct result on modern macOS versions.
 }
 
 bool display_manager_display_is_animating(uint32_t did)

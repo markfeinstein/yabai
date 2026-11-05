@@ -161,7 +161,5 @@ void mouse_state_set_modifier(struct mouse_state *mouse_state, uint8_t modifier)
 void mouse_state_set_action1(struct mouse_state *mouse_state, enum mouse_mode action);
 void mouse_state_set_action2(struct mouse_state *mouse_state, enum mouse_mode action);
 bool mouse_handler_begin(struct mouse_state *mouse_state, uint32_t mask);
-bool mouse_handler_reconfigure(struct mouse_state *mouse_state, uint32_t mask);
-void mouse_handler_end(struct mouse_state *mouse_state);
 
 #endif

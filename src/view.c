@@ -1136,11 +1136,6 @@ struct window_node *view_add_window_node_with_insertion_point(struct view *view,
     return node;
 }
 
-struct window_node *view_add_window_node(struct view *view, struct window *window)
-{
-    return view_add_window_node_with_insertion_point(view, window, 0);
-}
-
 uint32_t *view_find_window_list(struct view *view, int *window_count)
 {
     *window_count = 0;

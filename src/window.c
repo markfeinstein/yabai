@@ -731,11 +731,6 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     fprintf(rsp, "\n}");
 }
 
-void window_nonax_serialize(FILE *rsp, uint32_t wid, uint64_t flags)
-{
-    window_nonax_serialize_with_context(rsp, wid, flags, NULL);
-}
-
 static bool window_serialize_is_hidden(struct window *window)
 {
     return window->application ? window->application->is_hidden : false;

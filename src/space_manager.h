@@ -69,7 +69,6 @@ void space_manager_mark_view_invalid(struct space_manager *sm,  uint64_t sid);
 void space_manager_mark_view_dirty(struct space_manager *sm,  uint64_t sid);
 void space_manager_untile_window(struct view *view, struct window *window);
 struct view *space_manager_tile_window_on_space_with_insertion_point(struct space_manager *sm, struct window *window, uint64_t sid, uint32_t insertion_point);
-struct view *space_manager_tile_window_on_space(struct space_manager *sm, struct window *window, uint64_t sid);
 void space_manager_flush_tiled_window(struct view *view, struct window *window);
 bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
@@ -86,9 +85,7 @@ struct space_label *space_manager_get_label_for_space(struct space_manager *sm, 
 struct space_label *space_manager_get_space_for_label(struct space_manager *sm, char *label);
 bool space_manager_remove_label_for_space(struct space_manager *sm, uint64_t sid);
 void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, char *label);
-bool space_manager_apply_layout_with_inventory(struct window_manager *wm, struct view *view, enum view_type layout, uint32_t *window_list, int window_count, bool inventory_succeeded);
 bool space_manager_set_layout_for_view(struct space_manager *sm, struct view *view, enum view_type type);
-bool space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type type);
 bool space_manager_set_gap_for_space(struct space_manager *sm, uint64_t sid, int type, int gap);
 bool space_manager_toggle_gap_for_space(struct space_manager *sm, uint64_t sid);
 void space_manager_toggle_mission_control(uint64_t sid);
@@ -120,9 +117,6 @@ enum space_op_error space_manager_move_space_to_space(uint64_t acting_sid, uint6
 enum space_op_error space_manager_move_space_to_display(struct space_manager *sm, uint64_t sid, uint32_t did);
 enum space_op_error space_manager_destroy_space(uint64_t sid);
 enum space_op_error space_manager_add_space(uint64_t sid);
-void space_manager_assign_process_to_space(pid_t pid, uint64_t sid);
-void space_manager_assign_process_to_all_spaces(pid_t pid);
-bool space_manager_is_window_on_active_space(struct window *window);
 bool space_manager_is_window_on_space(uint64_t sid, struct window *window);
 void space_manager_mark_spaces_invalid_for_display(struct space_manager *sm, uint32_t did);
 void space_manager_mark_other_display_spaces_invalid(struct space_manager *sm, uint32_t did);
