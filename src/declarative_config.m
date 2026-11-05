@@ -1793,7 +1793,7 @@ enum declarative_file_result declarative_config_parse_optional_file(const char *
     }
     int fd;
     do
-        fd = file_ops->open_fn(path, O_RDONLY | O_CLOEXEC);
+        fd = file_ops->open_fn(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     while (fd < 0 && errno == EINTR);
     if (fd < 0) {
         if (errno == ENOENT)

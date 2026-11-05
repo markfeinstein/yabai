@@ -3797,6 +3797,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(declarative_window_focus_fallback_schema_is_strict_and_global_only) \
     TEST_ENTRY(declarative_follow_presence_is_validated)                   \
     TEST_ENTRY(declarative_model_allocator_is_transactional)               \
+    TEST_ENTRY(declarative_file_loader_opens_nonblocking_before_type_validation) \
     TEST_ENTRY(declarative_file_ops_cover_detectable_changes)              \
     TEST_ENTRY(declarative_public_paths_are_checked_and_escaped)           \
     TEST_ENTRY(declarative_rule_inventory_drives_runtime_surfaces)         \
