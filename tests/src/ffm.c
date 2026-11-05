@@ -411,6 +411,16 @@ TEST_FUNC(ffm_autoraise_occlusion_queries_target_levels_once,
     uint32_t level_only[] = { 4, 1 };
     TEST_CHECK(ffm_autoraise_occludes_floating_window(&target, level_only, array_count(level_only)), false);
 
+    // The local precheck finds contained floating windows and ignores tiled,
+    // non-contained, and the target itself.
+    TEST_CHECK(ffm_autoraise_has_floating_candidate(&target), true);
+    window_clear_flag(&other_level, WINDOW_FLOAT);
+    window_clear_flag(&covered, WINDOW_FLOAT);
+    TEST_CHECK(ffm_autoraise_has_floating_candidate(&target), false);
+    window_set_flag(&target, WINDOW_FLOAT);
+    TEST_CHECK(ffm_autoraise_has_floating_candidate(&target), false);
+    window_clear_flag(&target, WINDOW_FLOAT);
+
     ffm_autoraise_window_level = window_level;
     ffm_autoraise_window_sub_level = window_sub_level;
     for (size_t i = 0; i < array_count(windows); ++i) {

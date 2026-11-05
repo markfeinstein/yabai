@@ -3916,6 +3916,19 @@ static bool ffm_autoraise_occludes_floating_window(struct window *window, uint32
     return false;
 }
 
+// Returns whether any tracked floating window lies within `window`'s frame.
+// This local scan is a superset of the occlusion candidates on the current
+// Space, so when it finds none the WindowServer window-list capture is skipped.
+static bool ffm_autoraise_has_floating_candidate(struct window *window)
+{
+    table_for (struct window *sub_window, g_window_manager.window, {
+        if (sub_window == window) continue;
+        if (!window_check_flag(sub_window, WINDOW_FLOAT)) continue;
+        if (CGRectContainsRect(window->frame, sub_window->frame)) return true;
+    })
+    return false;
+}
+
 static EVENT_HANDLER(MOUSE_MOVED)
 {
     enum ffm_mode ffm_mode = window_manager_effective_ffm_mode(&g_window_manager);
@@ -3977,9 +3990,12 @@ static EVENT_HANDLER(MOUSE_MOVED)
             // smaller window that sits on top of the window we would otherwise raise.
             //
 
-            int window_count;
-            uint32_t *window_list = space_window_list(g_space_manager.current_space_id, &window_count, false);
-            bool occludes_window = window_list && ffm_autoraise_occludes_floating_window(window, window_list, window_count);
+            bool occludes_window = false;
+            if (ffm_autoraise_has_floating_candidate(window)) {
+                int window_count;
+                uint32_t *window_list = space_window_list(g_space_manager.current_space_id, &window_count, false);
+                occludes_window = window_list && ffm_autoraise_occludes_floating_window(window, window_list, window_count);
+            }
 
             if (!occludes_window) {
                 window_manager_focus_window_with_raise(&window->application->psn, window->id, window->ref);
