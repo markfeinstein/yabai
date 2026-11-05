@@ -119,7 +119,10 @@ The checks call real `SLSCopyManagedDisplays`, `SLSCopyManagedDisplaySpaces`,
 `SLSManagedDisplayGetCurrentSpace`, `SLSSpaceGetType`,
 `SLSCopyWindowsWithOptionsAndTags`, `SLSGetWindowBounds`, and
 `SLSWindowIsOrderedIn`, and exercise the production `window_server_snapshot`
-implementation against up to 32 existing windows. This is ABI/query-path smoke
+implementation against up to 32 existing windows. When the snapshot captures
+the optional alpha and Space-count fields, `snapshot_optional_fields` checks
+them against `SLSGetWindowAlpha` and `SLSCopySpacesForWindows`, which query
+serialization would otherwise call per window. This is ABI/query-path smoke
 coverage, **not** confirmation of tiling, focus, wake recovery, native tabs,
 resize, animations, scripting-addition behavior, or every window's optional
 constraint/corner metadata.

@@ -66,7 +66,7 @@ static void smoke_collect(NSMutableDictionary *report)
         window_server_snapshot_destroy(snapshot);
         return;
     }
-    bool records_valid = true, bounds_valid = true, ordered_valid = true;
+    bool records_valid = true, bounds_valid = true, ordered_valid = true, optional_valid = true;
     for (size_t i = 0; i < snapshot->count; ++i) {
         const struct window_server_window_record *record = snapshot->records + i;
         records_valid &= (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_BASE) == WINDOW_SERVER_WINDOW_FIELD_BASE &&
@@ -78,12 +78,25 @@ static void smoke_collect(NSMutableDictionary *report)
                         bounds.size.width >= 0 && bounds.size.height >= 0;
         uint8_t ordered = 0;
         ordered_valid &= SLSWindowIsOrderedIn(connection, record->id, &ordered) == kCGErrorSuccess && ordered <= 1;
+        // Optional snapshot fields must agree with their per-window queries.
+        if (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ALPHA) {
+            float alpha = -1.0f;
+            optional_valid &= SLSGetWindowAlpha(connection, record->id, &alpha) == kCGErrorSuccess &&
+                              alpha == record->alpha;
+        }
+        if (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT) {
+            NSArray *spaces = [(id) SLSCopySpacesForWindows(connection, 0x7,
+                                                            (CFArrayRef) @[ @(record->id) ]) autorelease];
+            optional_valid &= [spaces isKindOfClass:[NSArray class]] &&
+                              (int) spaces.count == record->space_count;
+        }
     }
     report[@"sample_count"] = @(snapshot->count);
     window_server_snapshot_destroy(snapshot);
     smoke_check(report, @"snapshot_records", records_valid);
     smoke_check(report, @"window_bounds", bounds_valid);
     smoke_check(report, @"window_order", ordered_valid);
+    smoke_check(report, @"snapshot_optional_fields", optional_valid);
 }
 
 int main(void)

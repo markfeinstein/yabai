@@ -19,6 +19,8 @@ struct window_server_snapshot_backend
     bool (*iterator_constraints)(CFTypeRef iterator, struct window_constraint_observation *observation);
     bool (*iterator_corner_geometry)(CFTypeRef iterator, uint32_t window_id,
                                      struct window_corner_geometry *geometry);
+    bool (*iterator_alpha)(CFTypeRef iterator, float *alpha);
+    bool (*iterator_space_count)(CFTypeRef iterator, int *space_count);
     void (*release)(CFTypeRef value);
     void *(*allocate)(size_t count, size_t size);
     void (*deallocate)(void *value);
@@ -55,6 +57,39 @@ static bool window_server_snapshot_constraints(CFTypeRef iterator,
     return true;
 }
 
+typedef float (*window_server_snapshot_alpha_getter)(CFTypeRef iterator);
+typedef int (*window_server_snapshot_space_count_getter)(CFTypeRef iterator);
+
+static window_server_snapshot_alpha_getter window_server_snapshot_alpha_impl;
+static window_server_snapshot_space_count_getter window_server_snapshot_space_count_impl;
+static pthread_once_t window_server_snapshot_optional_once = PTHREAD_ONCE_INIT;
+
+// Optional iterator fields are resolved at runtime so a WindowServer without
+// them leaves the fields invalid and callers keep their per-window queries.
+static void window_server_snapshot_resolve_optional(void)
+{
+    window_server_snapshot_alpha_impl = (window_server_snapshot_alpha_getter)
+        dlsym(RTLD_DEFAULT, "SLSWindowIteratorGetAlpha");
+    window_server_snapshot_space_count_impl = (window_server_snapshot_space_count_getter)
+        dlsym(RTLD_DEFAULT, "SLSWindowIteratorGetSpaceCount");
+}
+
+static bool window_server_snapshot_alpha(CFTypeRef iterator, float *alpha)
+{
+    pthread_once(&window_server_snapshot_optional_once, window_server_snapshot_resolve_optional);
+    if (!window_server_snapshot_alpha_impl || !alpha) return false;
+    *alpha = window_server_snapshot_alpha_impl(iterator);
+    return true;
+}
+
+static bool window_server_snapshot_space_count(CFTypeRef iterator, int *space_count)
+{
+    pthread_once(&window_server_snapshot_optional_once, window_server_snapshot_resolve_optional);
+    if (!window_server_snapshot_space_count_impl || !space_count) return false;
+    *space_count = window_server_snapshot_space_count_impl(iterator);
+    return *space_count >= 0;
+}
+
 static const struct window_server_snapshot_backend window_server_snapshot_production_backend = {
     .query_windows = SLSWindowQueryWindows,
     .copy_iterator = SLSWindowQueryResultCopyWindows,
@@ -67,6 +102,8 @@ static const struct window_server_snapshot_backend window_server_snapshot_produc
     .iterator_attributes = SLSWindowIteratorGetAttributes,
     .iterator_constraints = window_server_snapshot_constraints,
     .iterator_corner_geometry = window_corner_geometry_collect_resolved,
+    .iterator_alpha = window_server_snapshot_alpha,
+    .iterator_space_count = window_server_snapshot_space_count,
     .release = window_server_snapshot_release,
     .allocate = calloc,
     .deallocate = free
@@ -124,6 +161,12 @@ static void window_server_snapshot_copy_record(const struct window_server_snapsh
         backend->iterator_corner_geometry(iterator, record->id, &record->corner_geometry) &&
         window_corner_geometry_is_complete(&record->corner_geometry)) {
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY;
+    }
+    if (backend->iterator_alpha && backend->iterator_alpha(iterator, &record->alpha)) {
+        record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_ALPHA;
+    }
+    if (backend->iterator_space_count && backend->iterator_space_count(iterator, &record->space_count)) {
+        record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT;
     }
 }
 

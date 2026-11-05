@@ -9,7 +9,7 @@ SCHEMA = "yabai.private-api-smoke/v1"
 CHECKS = (
     "console_session", "connection", "managed_displays", "managed_spaces",
     "current_spaces", "space_types", "window_inventory", "production_snapshot",
-    "snapshot_records", "window_bounds", "window_order",
+    "snapshot_records", "window_bounds", "window_order", "snapshot_optional_fields",
 )
 COUNTS = ("display_count", "current_space_count", "window_count", "sample_count")
 

@@ -732,3 +732,74 @@ static bool window_server_snapshot_benchmark_run(void)
     valid &= window_server_snapshot_benchmark_case(200, true);
     return valid;
 }
+
+static bool window_server_snapshot_fake_alpha(CFTypeRef iterator, float *alpha)
+{
+    (void) iterator;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record) return false;
+    *alpha = record->id == 1000u ? 0.5f : 1.0f;
+    return true;
+}
+
+static bool window_server_snapshot_fake_space_count(CFTypeRef iterator, int *space_count)
+{
+    (void) iterator;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record) return false;
+    *space_count = record->id == 1000u ? 3 : 1;
+    return true;
+}
+
+TEST_FUNC(window_server_snapshot_alpha_and_space_count_are_optional,
+{
+    window_server_snapshot_fake_begin(2);
+    struct window_server_snapshot_backend with_optional = window_server_snapshot_fake_backend;
+    with_optional.iterator_alpha = window_server_snapshot_fake_alpha;
+    with_optional.iterator_space_count = window_server_snapshot_fake_space_count;
+    window_server_snapshot_test_backend = &with_optional;
+    CFArrayRef ids = window_server_snapshot_fake_window_ids(2);
+    struct window_server_snapshot *snapshot = window_server_snapshot_create(1, ids, 2);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        const uint64_t fields = WINDOW_SERVER_WINDOW_FIELD_ALPHA | WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT;
+        TEST_CHECK(snapshot->records[0].valid_fields & fields, fields);
+        TEST_CHECK(snapshot->records[0].alpha == 0.5f, true);
+        TEST_CHECK(snapshot->records[0].space_count, 3);
+        TEST_CHECK(snapshot->records[1].alpha == 1.0f, true);
+        TEST_CHECK(snapshot->records[1].space_count, 1);
+    }
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    // Backends without the optional getters leave the fields invalid.
+    window_server_snapshot_fake_begin(1);
+    ids = window_server_snapshot_fake_window_ids(1);
+    snapshot = window_server_snapshot_create(1, ids, 1);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields &
+                   (WINDOW_SERVER_WINDOW_FIELD_ALPHA | WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT), 0ULL);
+    }
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    // Serialization prefers record fields and falls back to live queries.
+    struct window_server_window_record record = {
+        .id = 5, .alpha = 0.25f, .space_count = 2,
+        .valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID | WINDOW_SERVER_WINDOW_FIELD_ALPHA |
+                        WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT
+    };
+    bool sticky = false;
+    TEST_CHECK(window_serialization_record_sticky(&record, &sticky), true);
+    TEST_CHECK(sticky, true);
+    record.space_count = 1;
+    TEST_CHECK(window_serialization_record_sticky(&record, &sticky), true);
+    TEST_CHECK(sticky, false);
+    TEST_CHECK(window_serialization_opacity(&record, 5) == 0.25f, true);
+    record.valid_fields = WINDOW_SERVER_WINDOW_FIELD_ID;
+    TEST_CHECK(window_serialization_record_sticky(&record, &sticky), false);
+    TEST_CHECK(window_serialization_record_sticky(NULL, &sticky), false);
+});

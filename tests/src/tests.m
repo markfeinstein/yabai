@@ -3447,6 +3447,7 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
     TEST_ENTRY(window_server_snapshot_corner_geometry_is_optional_owned_pod) \
     TEST_ENTRY(window_server_snapshot_constraints_are_optional_owned_pod) \
+    TEST_ENTRY(window_server_snapshot_alpha_and_space_count_are_optional) \
     TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
     TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
     TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \

@@ -864,10 +864,12 @@ TEST_FUNC(window_observe_retries_only_transient_failures,
     window_observe_add_notification = saved_add_notification;
 });
 
+static int window_test_ordered_in_calls;
 static CGError window_test_ordered_in_success(int connection, uint32_t wid, uint8_t *ordered_in)
 {
     (void) connection;
     (void) wid;
+    ++window_test_ordered_in_calls;
     *ordered_in = 1;
     return kCGErrorSuccess;
 }
@@ -934,6 +936,9 @@ static CFArrayRef window_test_invalid_screen_description(CFArrayRef windows)
     return result;
 }
 
+static bool window_test_serialization_visible_true(uint64_t sid) { (void) sid; return true; }
+static uint64_t window_test_serialization_space_one(uint32_t wid) { (void) wid; return 1; }
+
 TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
 {
     __auto_type saved_ordered = window_test_is_ordered_in;
@@ -991,7 +996,9 @@ TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
     FILE *file = tmpfile();
     TEST_CHECK(file != NULL, true);
     if (file) {
+        window_test_ordered_in_calls = 0;
         window_serialize(file, &window, WINDOW_PROPERTY_IS_ORDERED_IN | WINDOW_PROPERTY_IS_ON_SCREEN);
+        TEST_CHECK(window_test_ordered_in_calls, 1);
         rewind(file);
         char buffer[512] = {0};
         fread(buffer, 1, sizeof(buffer) - 1, file);
@@ -999,6 +1006,28 @@ TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
         TEST_CHECK(strstr(buffer, "\"is-ordered-in\":true") != NULL, true);
         TEST_CHECK(strstr(buffer, "\"is-on-screen\":true") != NULL, true);
     }
+
+    // is-ordered-in and is-visible share one WindowServer ordered-in query.
+    __auto_type saved_visible = window_test_serialization_space_is_visible;
+    __auto_type saved_space = window_test_serialization_space;
+    window_test_serialization_space_is_visible = window_test_serialization_visible_true;
+    window_test_serialization_space = window_test_serialization_space_one;
+    window_set_flag(&window, WINDOW_STICKY);
+    file = tmpfile();
+    TEST_CHECK(file != NULL, true);
+    if (file) {
+        window_test_ordered_in_calls = 0;
+        window_serialize(file, &window, WINDOW_PROPERTY_IS_ORDERED_IN | WINDOW_PROPERTY_IS_VISIBLE);
+        TEST_CHECK(window_test_ordered_in_calls, 1);
+        rewind(file);
+        char buffer[512] = {0};
+        fread(buffer, 1, sizeof(buffer) - 1, file);
+        fclose(file);
+        TEST_CHECK(strstr(buffer, "\"is-ordered-in\":true") != NULL, true);
+        TEST_CHECK(strstr(buffer, "\"is-visible\":true") != NULL, true);
+    }
+    window_test_serialization_space_is_visible = saved_visible;
+    window_test_serialization_space = saved_space;
 
     window_test_is_ordered_in = saved_ordered;
     window_test_description_from_array = saved_descriptions;

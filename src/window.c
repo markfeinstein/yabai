@@ -31,6 +31,7 @@ static bool (*window_test_serialization_shadow)(uint32_t) = window_shadow;
 static uint32_t (*window_test_space_display_id)(uint64_t) = space_display_id;
 static int (*window_test_display_id_arrangement)(uint32_t) = display_manager_display_id_arrangement;
 static bool (*window_test_serialization_space_is_visible)(uint64_t) = space_is_visible;
+static float (*window_test_serialization_opacity)(uint32_t) = window_opacity;
 #else
 #define window_observe_add_notification AXObserverAddNotification
 #define window_ax_snapshot_create_attributes CFArrayCreate
@@ -54,6 +55,7 @@ static bool (*window_test_serialization_space_is_visible)(uint64_t) = space_is_v
 #define window_test_space_display_id space_display_id
 #define window_test_display_id_arrangement display_manager_display_id_arrangement
 #define window_test_serialization_space_is_visible space_is_visible
+#define window_test_serialization_opacity window_opacity
 #endif
 
 bool window_observe(struct window *window, bool *retry)
@@ -287,6 +289,19 @@ static int window_serialization_space_index(const struct window_serialization_co
     return space_manager_mission_control_index(sid);
 }
 
+static bool window_serialization_record_sticky(const struct window_server_window_record *record, bool *is_sticky)
+{
+    if (!record || !(record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT)) return false;
+    *is_sticky = record->space_count > 1;
+    return true;
+}
+
+static float window_serialization_opacity(const struct window_server_window_record *record, uint32_t wid)
+{
+    if (record && (record->valid_fields & WINDOW_SERVER_WINDOW_FIELD_ALPHA)) return record->alpha;
+    return window_test_serialization_opacity(wid);
+}
+
 static bool window_serialization_space_is_visible(const struct window_serialization_context *context,
                                                   uint64_t sid)
 {
@@ -345,6 +360,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
                      (flags & WINDOW_PROPERTY_SPACE) ||
                      (flags & WINDOW_PROPERTY_IS_FULLSCREEN);
     bool needs_sticky = flags & WINDOW_PROPERTY_IS_STICKY;
+    if (needs_sticky && window_serialization_record_sticky(record, &is_sticky)) needs_sticky = false;
     if (needs_sid && needs_sticky) {
         window_test_serialization_membership(wid, &sid, &is_sticky);
     } else {
@@ -526,7 +542,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     if (flags & WINDOW_PROPERTY_OPACITY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        float opacity = window_opacity(wid);
+        float opacity = window_serialization_opacity(record, wid);
         fprintf(rsp, "\t\"opacity\":%.4f", opacity);
         did_output = true;
     }
@@ -707,14 +723,20 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
                      (flags & WINDOW_PROPERTY_IS_VISIBLE);
     bool needs_sticky = (flags & WINDOW_PROPERTY_IS_VISIBLE) ||
                         (flags & WINDOW_PROPERTY_IS_STICKY);
-    bool sticky_cached = window_check_flag(window, WINDOW_STICKY);
-    if (needs_sid && needs_sticky && !sticky_cached) {
+    // Stickiness is known without a WindowServer query when the window is
+    // flagged sticky or the snapshot record carries its Space count.
+    bool sticky_known = false;
+    if (window_check_flag(window, WINDOW_STICKY)) {
+        is_sticky = true;
+        sticky_known = true;
+    } else if (needs_sticky) {
+        sticky_known = window_serialization_record_sticky(record, &is_sticky);
+    }
+    if (needs_sid && needs_sticky && !sticky_known) {
         window_test_serialization_membership(window->id, &sid, &is_sticky);
     } else {
         if (needs_sid) sid = window_test_serialization_space(window->id);
-        if (needs_sticky) {
-            is_sticky = sticky_cached || window_test_serialization_is_sticky(window->id);
-        }
+        if (needs_sticky && !sticky_known) is_sticky = window_test_serialization_is_sticky(window->id);
     }
 
     if ((flags & WINDOW_PROPERTY_LEVEL) ||
@@ -759,6 +781,13 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if ((flags & WINDOW_PROPERTY_IS_VISIBLE) ||
         (flags & WINDOW_PROPERTY_IS_MINIMIZED)) {
         is_minimized = window_check_flag(window, WINDOW_MINIMIZE);
+    }
+
+    bool ordered_in = false;
+    bool ordered_in_known = false;
+    if ((flags & WINDOW_PROPERTY_IS_ORDERED_IN) ||
+        (flags & WINDOW_PROPERTY_IS_VISIBLE)) {
+        ordered_in = window_is_ordered_in(window->id, &ordered_in_known);
     }
 
     bool did_output = false;
@@ -902,7 +931,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_OPACITY) {
         if (did_output) fprintf(rsp, ",\n");
 
-        float opacity = window_opacity(window->id);
+        float opacity = window_serialization_opacity(record, window->id);
         fprintf(rsp, "\t\"opacity\":%.4f", opacity);
         did_output = true;
     }
@@ -991,9 +1020,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_IS_ORDERED_IN) {
         if (did_output) fprintf(rsp, ",\n");
 
-        bool known = false;
-        bool ordered_in = window_is_ordered_in(window->id, &known);
-        fprintf(rsp, "\t\"is-ordered-in\":%s", known ? json_bool(ordered_in) : "null");
+        fprintf(rsp, "\t\"is-ordered-in\":%s", ordered_in_known ? json_bool(ordered_in) : "null");
         did_output = true;
     }
 
@@ -1009,9 +1036,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     if (flags & WINDOW_PROPERTY_IS_VISIBLE) {
         if (did_output) fprintf(rsp, ",\n");
 
-        bool known = false;
-        bool ordered_in = window_is_ordered_in(window->id, &known);
-        bool visible = known && ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || window_serialization_space_is_visible(context, sid));
+        bool visible = ordered_in_known && ordered_in && !is_minimized && !window_serialize_is_hidden(window) && (is_sticky || window_serialization_space_is_visible(context, sid));
         fprintf(rsp, "\t\"is-visible\":%s", json_bool(visible));
         did_output = true;
     }

@@ -17,6 +17,8 @@ enum window_server_window_field
     WINDOW_SERVER_WINDOW_FIELD_ATTRIBUTES = 1u << 4,
     WINDOW_SERVER_WINDOW_FIELD_CONSTRAINTS = 1u << 5,
     WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY = 1u << 6,
+    WINDOW_SERVER_WINDOW_FIELD_ALPHA      = 1u << 7,
+    WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT = 1u << 8,
     WINDOW_SERVER_WINDOW_FIELD_BASE       = WINDOW_SERVER_WINDOW_FIELD_ID |
                                             WINDOW_SERVER_WINDOW_FIELD_PARENT_ID |
                                             WINDOW_SERVER_WINDOW_FIELD_LEVEL |
@@ -33,6 +35,8 @@ struct window_server_window_record
     uint64_t attributes;
     struct window_constraint_observation constraints;
     struct window_corner_geometry corner_geometry;
+    float alpha;
+    int space_count;
     uint64_t valid_fields;
 };
 
