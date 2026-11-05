@@ -39,6 +39,15 @@ Additional features of yabai include focus-follows-mouse, disabling animations f
 
 `make install` remains an optimized-build alias and does not copy files. `make archive` writes installer-compatible archives under `release/`, with an `archive/` top-level directory. Run `make sign` explicitly before `make deploy`; deploy never invokes the signer and instead requires the existing optimized artifact to satisfy an explicit trusted `DEPLOY_REQUIREMENT` that pins a cryptographic signing identity (for example, an exact requirement containing the leaf certificate hash). It then installs that verified artifact and reloads the scripting addition. There is no permissive requirement default. If scripting-addition reload or service restart fails after final verification, deploy reports failure but retains the verified binary.
 
+### Nix
+
+The flake supports `aarch64-darwin` and `x86_64-darwin`. It requires the Xcode command line tools because yabai links against macOS system and private frameworks.
+
+- `nix build` builds the optimized universal binary and man page.
+- `nix run . -- --version` runs the flake package.
+- `nix develop` enters a shell with the repository's build, test, and documentation tools.
+- `nix flake check` evaluates and builds the default package.
+
 ## Testing
 
 `make test` runs the ordinary, offline behavior suite. `make test-asan` and `make test-tsan` compile and execute the core and runtime-path suites with ASan+UBSan and TSan+UBSan respectively. `make test-arm64`, `make test-x86_64`, and `make test-architectures` build thin core binaries, verify their slices, and execute only when the native architecture or Rosetta is available. `make syntax` checks independently compiled pure modules and public headers. `make man-contract` is generator-independent and checks deterministic source/generated numeric-domain contracts. `make man-check` requires Asciidoctor and performs both the contract check and regeneration-parity comparison. `make test-all` combines the generator-independent offline gates. Build and test outputs are configuration-specific, so one target does not delete another target's artifacts.
