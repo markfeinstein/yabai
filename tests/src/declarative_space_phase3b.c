@@ -862,47 +862,21 @@ static bool declarative_space_phase3b_matrix_contains(const uint32_t *items, siz
 
 TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
 {
-    static const struct { const char *name; enum view_type from, to; } layouts[] = {
-        { "same-bsp", VIEW_BSP, VIEW_BSP }, { "same-stack", VIEW_STACK, VIEW_STACK },
-        { "bsp-to-stack", VIEW_BSP, VIEW_STACK }, { "stack-to-bsp", VIEW_STACK, VIEW_BSP },
-        { "bsp-to-float", VIEW_BSP, VIEW_FLOAT }, { "stack-to-float", VIEW_STACK, VIEW_FLOAT },
-        { "float-to-bsp", VIEW_FLOAT, VIEW_BSP }, { "float-to-stack", VIEW_FLOAT, VIEW_STACK },
-        { "same-accordion-horizontal", VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_HORIZONTAL },
-        { "same-accordion-vertical", VIEW_ACCORDION_VERTICAL, VIEW_ACCORDION_VERTICAL },
-        { "bsp-to-accordion-horizontal", VIEW_BSP, VIEW_ACCORDION_HORIZONTAL },
-        { "stack-to-accordion-vertical", VIEW_STACK, VIEW_ACCORDION_VERTICAL },
-        { "float-to-accordion-horizontal", VIEW_FLOAT, VIEW_ACCORDION_HORIZONTAL },
-        { "accordion-horizontal-to-bsp", VIEW_ACCORDION_HORIZONTAL, VIEW_BSP },
-        { "accordion-vertical-to-stack", VIEW_ACCORDION_VERTICAL, VIEW_STACK },
-        { "accordion-horizontal-to-vertical", VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_VERTICAL }
+    static const struct { enum view_type from, to; } layouts[] = {
+        { VIEW_BSP, VIEW_BSP }, { VIEW_STACK, VIEW_STACK },
+        { VIEW_BSP, VIEW_STACK }, { VIEW_STACK, VIEW_BSP },
+        { VIEW_BSP, VIEW_FLOAT }, { VIEW_STACK, VIEW_FLOAT },
+        { VIEW_FLOAT, VIEW_BSP }, { VIEW_FLOAT, VIEW_STACK },
+        { VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_HORIZONTAL },
+        { VIEW_ACCORDION_VERTICAL, VIEW_ACCORDION_VERTICAL },
+        { VIEW_BSP, VIEW_ACCORDION_HORIZONTAL },
+        { VIEW_STACK, VIEW_ACCORDION_VERTICAL },
+        { VIEW_FLOAT, VIEW_ACCORDION_HORIZONTAL },
+        { VIEW_ACCORDION_HORIZONTAL, VIEW_BSP },
+        { VIEW_ACCORDION_VERTICAL, VIEW_STACK },
+        { VIEW_ACCORDION_HORIZONTAL, VIEW_ACCORDION_VERTICAL }
     };
     static const size_t cardinalities[] = { 0, 1, NODE_MAX_WINDOW_COUNT };
-    static const char *row_names[] = {
-        "same-bsp-zero", "same-bsp-one", "same-bsp-max",
-        "same-stack-zero", "same-stack-one", "same-stack-max",
-        "bsp-to-stack-zero", "bsp-to-stack-one", "bsp-to-stack-max",
-        "stack-to-bsp-zero", "stack-to-bsp-one", "stack-to-bsp-max",
-        "bsp-to-float-zero", "bsp-to-float-one", "bsp-to-float-max",
-        "stack-to-float-zero", "stack-to-float-one", "stack-to-float-max",
-        "float-to-bsp-zero", "float-to-bsp-one", "float-to-bsp-max",
-        "float-to-stack-zero", "float-to-stack-one", "float-to-stack-max",
-        "same-accordion-horizontal-zero", "same-accordion-horizontal-one", "same-accordion-horizontal-max",
-        "same-accordion-vertical-zero", "same-accordion-vertical-one", "same-accordion-vertical-max",
-        "bsp-to-accordion-horizontal-zero", "bsp-to-accordion-horizontal-one", "bsp-to-accordion-horizontal-max",
-        "stack-to-accordion-vertical-zero", "stack-to-accordion-vertical-one", "stack-to-accordion-vertical-max",
-        "float-to-accordion-horizontal-zero", "float-to-accordion-horizontal-one", "float-to-accordion-horizontal-max",
-        "accordion-horizontal-to-bsp-zero", "accordion-horizontal-to-bsp-one", "accordion-horizontal-to-bsp-max",
-        "accordion-vertical-to-stack-zero", "accordion-vertical-to-stack-one", "accordion-vertical-to-stack-max",
-        "accordion-horizontal-to-vertical-zero", "accordion-horizontal-to-vertical-one", "accordion-horizontal-to-vertical-max",
-        "root-replace-landscape", "stack-to-bsp-landscape", "float-to-bsp-landscape",
-        "root-replace-portrait", "stack-to-bsp-portrait", "float-to-bsp-portrait",
-        "auto-descendant-gap-disabled", "auto-descendant-gap-enabled",
-        "same-stack-over-limit-input", "bsp-to-stack-over-limit-conversion",
-        "float-to-stack-over-limit-capture", "non-user-forced-float", "unknown-sid",
-        "cross-sid-duplicate", "missing-eligible-object", "ineligible-removal",
-        "mismatched-wid-object", "malformed-unchanged-root", "duplicate-final-owner"
-    };
-    TEST_CHECK(sizeof(row_names) / sizeof(row_names[0]), 67UL);
     size_t rows_run = 0;
     struct declarative_space_table_contract vc = { hash_wm, compare_wm, sizeof(uint64_t) };
     struct declarative_space_table_contract mc = { hash_wm, compare_wm, sizeof(uint32_t) };
@@ -940,7 +914,6 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
             struct declarative_space_defaults defaults = declarative_space_test_defaults();
             defaults.layout = layouts[layout_index].to;
             struct declarative_space_preparation preparation;
-            TEST_CHECK(strcmp(row_names[rows_run], row_names[layout_index * 3 + cardinality_index]), 0);
             TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
                                                  NULL, NULL, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME,
                                                  &ops, &preparation), true);
@@ -1048,7 +1021,6 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         defaults.layout = VIEW_BSP; defaults.split_type = SPLIT_AUTO; defaults.auto_balance = SPLIT_NONE;
         defaults.window_gap_enabled = true; defaults.window_gap = 10;
         struct declarative_space_preparation preparation;
-        TEST_CHECK(strcmp(row_names[rows_run], row_names[48 + geometry_case]), 0);
         TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
                                              NULL, NULL, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME,
                                              &ops, &preparation), true);
@@ -1095,7 +1067,6 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         defaults.layout = VIEW_BSP; defaults.split_type = SPLIT_AUTO; defaults.auto_balance = SPLIT_NONE;
         defaults.window_gap_enabled = true; defaults.window_gap = 10;
         struct declarative_space_preparation preparation;
-        TEST_CHECK(strcmp(row_names[rows_run], row_names[54 + gap_case]), 0);
         TEST_CHECK(declarative_space_prepare(&target, 1, &topology, 1, &views, &vc, &managed, &mc,
                                              NULL, NULL, &defaults, DECLARATIVE_SPACE_PRESERVE_RUNTIME,
                                              &ops, &preparation), true);
@@ -1204,7 +1175,7 @@ TEST_FUNC(declarative_space_phase3b_generated_production_scenario_matrix,
         TEST_CHECK(declarative_space_test_outstanding_allocations(), 0UL);
         table_free(&managed); table_free(&views); ++rows_run;
     }
-    TEST_CHECK(rows_run, sizeof(row_names) / sizeof(row_names[0]));
+    TEST_CHECK(rows_run, 67UL);
 })
 
 struct declarative_space_phase3b_e_case

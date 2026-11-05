@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static struct yb_menu_bar_test_state
+menu_bar_ui_state(YBMenuBarController *controller)
+{
+    struct yb_menu_bar_test_state state;
+    [controller testReadState:&state];
+    return state;
+}
+
 struct menu_bar_ui_action_log
 {
     size_t count;
@@ -475,11 +483,11 @@ test_teardown_balances_tracking_without_cancel_close(void)
     TEST_CHECK(log.type[1] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     TEST_CHECK(log.is_tracking[1] == false);
     TEST_CHECK(log.generation[1] == 10);
-    TEST_CHECK(![controller testIsTrackingMenu]);
-    TEST_CHECK([controller testTrackingGeneration] == 0);
-    TEST_CHECK(![controller testHasSnapshot]);
-    TEST_CHECK(![controller testHasDeferredSnapshot]);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).is_tracking_menu);
+    TEST_CHECK(menu_bar_ui_state(controller).tracking_generation == 0);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_deferred_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     [menu release];
     [controller release];
@@ -498,7 +506,7 @@ test_synchronous_and_late_close_are_suppressed_during_teardown(void)
     [controller testSetMenu:menu];
     [controller menuWillOpen:menu];
     [controller receiveSnapshot:menu_bar_ui_snapshot(21, MENU_BAR_ENABLED) clear:false];
-    TEST_CHECK([controller testHasDeferredSnapshot]);
+    TEST_CHECK(menu_bar_ui_state(controller).has_deferred_snapshot);
 
     [controller clearStatusItem];
     [controller menuDidClose:menu];
@@ -508,10 +516,10 @@ test_synchronous_and_late_close_are_suppressed_during_teardown(void)
     TEST_CHECK(log.generation[0] == 20);
     TEST_CHECK(log.is_tracking[1] == false);
     TEST_CHECK(log.generation[1] == 20);
-    TEST_CHECK(![controller testIsTrackingMenu]);
-    TEST_CHECK(![controller testHasSnapshot]);
-    TEST_CHECK(![controller testHasDeferredSnapshot]);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).is_tracking_menu);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_deferred_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     [menu release];
     [controller release];
@@ -529,7 +537,7 @@ test_deferred_snapshot_is_disposed_when_teardown_has_no_menu(void)
     [controller testSetSnapshot:menu_bar_ui_snapshot(30, MENU_BAR_ENABLED)];
     [controller menuWillOpen:menu];
     [controller receiveSnapshot:menu_bar_ui_snapshot(31, MENU_BAR_ENABLED) clear:false];
-    TEST_CHECK([controller testHasDeferredSnapshot]);
+    TEST_CHECK(menu_bar_ui_state(controller).has_deferred_snapshot);
 
     [controller clearStatusItem];
 
@@ -538,10 +546,10 @@ test_deferred_snapshot_is_disposed_when_teardown_has_no_menu(void)
     TEST_CHECK(log.generation[0] == 30);
     TEST_CHECK(log.is_tracking[1] == false);
     TEST_CHECK(log.generation[1] == 30);
-    TEST_CHECK(![controller testIsTrackingMenu]);
-    TEST_CHECK(![controller testHasSnapshot]);
-    TEST_CHECK(![controller testHasDeferredSnapshot]);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).is_tracking_menu);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_deferred_snapshot);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     [menu release];
     [controller release];
@@ -570,7 +578,7 @@ test_lifecycle_reinit_ignores_stale_delivery(void)
     menu_bar_delivery_main((void *)(uintptr_t) stale_epoch);
     TEST_CHECK(g_menu_bar_initialized);
     TEST_CHECK(g_menu_bar_controller == controller);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     uint64_t current_epoch = g_menu_bar_lifecycle_epoch;
     menu_bar_publish_snapshot(menu_bar_ui_snapshot(41, MENU_BAR_DISABLED));
@@ -578,7 +586,7 @@ test_lifecycle_reinit_ignores_stale_delivery(void)
     TEST_CHECK(g_menu_bar_initialized);
     TEST_CHECK(g_menu_bar_controller == controller);
     TEST_CHECK(!g_menu_bar_pending_has_value);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
     TEST_CHECK(log.count == 0);
 
     [controller release];
@@ -595,7 +603,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
 
     [controller testSetSnapshot:menu_bar_ui_detailed_snapshot(60)];
     [controller testRebuildMenu];
-    NSMenu *menu = [controller testMenu];
+    NSMenu *menu = menu_bar_ui_state(controller).menu;
 
     TEST_CHECK(menu != nil);
     TEST_CHECK([menu numberOfItems] == 8);
@@ -660,7 +668,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
                    log.type[i] == MENU_BAR_ACTION_SET_SPACE_FILTER ||
                    log.type[i] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     }
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     [controller release];
     return true;
@@ -834,8 +842,8 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     [controller testRebuildMenu];
     [controller ensureStatusItem];
     [controller renderExpandedStatusItem];
-    NSView *strip = [controller testStripView];
-    NSStatusBarButton *button = [controller testStatusButton];
+    NSView *strip = menu_bar_ui_state(controller).strip_view;
+    NSStatusBarButton *button = menu_bar_ui_state(controller).status_button;
     TEST_CHECK(strip != nil);
     TEST_CHECK(button != nil);
     TEST_CHECK([strip superview] == button);
@@ -962,23 +970,23 @@ test_expanded_render_uses_direct_actions_and_manual_menu(void)
     [controller ensureStatusItem];
     [controller renderExpandedStatusItem];
 
-    NSStatusBarButton *button = [controller testStatusButton];
-    TEST_CHECK([controller testStatusItemCount] == 1);
-    TEST_CHECK([controller testStatusButtonCount] == 4);
-    TEST_CHECK([controller testStatusButtonOwnsStripView]);
-    TEST_CHECK([controller testStatusViewsUseManualMenu]);
+    NSStatusBarButton *button = menu_bar_ui_state(controller).status_button;
+    TEST_CHECK(menu_bar_ui_state(controller).status_item_count == 1);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 4);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_owns_strip_view);
+    TEST_CHECK(menu_bar_ui_state(controller).status_views_use_manual_menu);
     TEST_CHECK(button != nil);
     TEST_CHECK([button menu] == nil);
-    TEST_CHECK([[controller testStripView] menu] == nil);
+    TEST_CHECK([menu_bar_ui_state(controller).strip_view menu] == nil);
     TEST_CHECK([button action] == @selector(showStatusMenu:));
     TEST_CHECK([button target] == controller);
     TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);
 
     [controller clearStatusItem];
-    TEST_CHECK([controller testStatusItemCount] == 0);
-    TEST_CHECK([controller testStatusButtonCount] == 0);
-    TEST_CHECK([controller testStatusButton] == nil);
+    TEST_CHECK(menu_bar_ui_state(controller).status_item_count == 0);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 0);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button == nil);
     TEST_CHECK(log.count == 0);
 
     [controller release];
@@ -996,16 +1004,16 @@ test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
     small->settings.style = MENU_BAR_STYLE_AUTOMATIC;
     [controller receiveSnapshot:small clear:false];
 
-    NSView *expanded = [controller testStripView];
-    NSStatusBarButton *button = [controller testStatusButton];
+    NSView *expanded = menu_bar_ui_state(controller).strip_view;
+    NSStatusBarButton *button = menu_bar_ui_state(controller).status_button;
     TEST_CHECK(expanded != nil);
     TEST_CHECK(NSWidth([expanded frame]) <= YB_MENU_BAR_MAX_AUTOMATIC_WIDTH);
-    TEST_CHECK([controller testStatusButtonCount] == 4);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 4);
     TEST_CHECK([[button accessibilityValue] containsString:@"Display 1"]);
     TEST_CHECK([[button accessibilityValue] containsString:@"visible space 5 focus"]);
     TEST_CHECK(![[button toolTip] containsString:@"space 5"]);
 
-    NSMenu *menu = [controller testMenu];
+    NSMenu *menu = menu_bar_ui_state(controller).menu;
     TEST_CHECK([menu numberOfItems] == 12);
     NSMenuItem *first_display = [menu itemAtIndex:2];
     NSMenuItem *second_display = [menu itemAtIndex:6];
@@ -1030,11 +1038,11 @@ test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
     large->settings.style = MENU_BAR_STYLE_AUTOMATIC;
     [controller receiveSnapshot:large clear:false];
 
-    NSView *compact = [controller testStripView];
-    button = [controller testStatusButton];
+    NSView *compact = menu_bar_ui_state(controller).strip_view;
+    button = menu_bar_ui_state(controller).status_button;
     TEST_CHECK(compact != nil);
     TEST_CHECK(NSWidth([compact frame]) < YB_MENU_BAR_MAX_AUTOMATIC_WIDTH);
-    TEST_CHECK([controller testStatusButtonCount] == 1);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 1);
     YBMenuBarScreenCell *cell = [[compact subviews] objectAtIndex:0];
     TEST_CHECK([cell isKindOfClass:[YBMenuBarScreenCell class]]);
     TEST_CHECK(cell->yb_index == 121);
@@ -1347,10 +1355,10 @@ test_accessibility_preference_redraw_preserves_live_menu_state(void)
     if (!controller) return false;
 
     [controller receiveSnapshot:menu_bar_ui_default_layout_snapshot(100) clear:false];
-    NSView *strip = [controller testStripView];
+    NSView *strip = menu_bar_ui_state(controller).strip_view;
     TEST_CHECK(strip != nil);
-    CGFloat length = [controller testStatusItemLength];
-    NSUInteger button_count = [controller testStatusButtonCount];
+    CGFloat length = menu_bar_ui_state(controller).status_item_length;
+    NSUInteger button_count = menu_bar_ui_state(controller).status_button_count;
     NSView *first = [[strip subviews] firstObject];
     NSPoint hit_point = NSMakePoint(NSMidX([first frame]), NSMidY([first frame]));
     TEST_CHECK([strip hitTest:hit_point] == strip);
@@ -1359,19 +1367,19 @@ test_accessibility_preference_redraw_preserves_live_menu_state(void)
     [controller testSetMenu:menu];
     [controller menuWillOpen:menu];
     [controller receiveSnapshot:menu_bar_ui_default_layout_snapshot(101) clear:false];
-    TEST_CHECK([controller testIsTrackingMenu]);
-    TEST_CHECK([controller testSnapshotGeneration] == 100);
-    TEST_CHECK([controller testDeferredSnapshotGeneration] == 101);
+    TEST_CHECK(menu_bar_ui_state(controller).is_tracking_menu);
+    TEST_CHECK(menu_bar_ui_state(controller).snapshot_generation == 100);
+    TEST_CHECK(menu_bar_ui_state(controller).deferred_snapshot_generation == 101);
 
-    NSUInteger redraw_count = [controller testAccessibilityRedrawCount];
+    NSUInteger redraw_count = menu_bar_ui_state(controller).accessibility_redraw_count;
     menu_bar_accessibility_preferences_changed();
 
-    TEST_CHECK([controller testAccessibilityRedrawCount] == redraw_count + 1);
-    TEST_CHECK([controller testSnapshotGeneration] == 100);
-    TEST_CHECK([controller testDeferredSnapshotGeneration] == 101);
-    TEST_CHECK([controller testStatusItemLength] == length);
-    TEST_CHECK([controller testStatusButtonCount] == button_count);
-    TEST_CHECK([controller testIsTrackingMenu]);
+    TEST_CHECK(menu_bar_ui_state(controller).accessibility_redraw_count == redraw_count + 1);
+    TEST_CHECK(menu_bar_ui_state(controller).snapshot_generation == 100);
+    TEST_CHECK(menu_bar_ui_state(controller).deferred_snapshot_generation == 101);
+    TEST_CHECK(menu_bar_ui_state(controller).status_item_length == length);
+    TEST_CHECK(menu_bar_ui_state(controller).status_button_count == button_count);
+    TEST_CHECK(menu_bar_ui_state(controller).is_tracking_menu);
     TEST_CHECK([strip hitTest:hit_point] == strip);
 
     [controller menuDidClose:menu];
@@ -1461,7 +1469,7 @@ test_overflow_keeps_active_and_nearest_source_neighbors(void)
     [controller ensureStatusItem];
     [controller renderExpandedStatusItem];
 
-    NSView *expanded = [controller testStripView];
+    NSView *expanded = menu_bar_ui_state(controller).strip_view;
     uint32_t indexes[40] = {0};
     size_t omitted_before = 0;
     size_t omitted_after = 0;
@@ -1557,7 +1565,7 @@ test_generation_ordering_without_status_item_delivery(void)
     TEST_CHECK(g_menu_bar_pending_snapshot->generation == 51);
     TEST_CHECK(g_menu_bar_pending_snapshot->settings.enabled == MENU_BAR_ENABLED);
     TEST_CHECK(g_menu_bar_latest_generation == 51);
-    TEST_CHECK(![controller testHasStatusItem]);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
 
     menu_bar_publish_snapshot(menu_bar_ui_snapshot(50, MENU_BAR_DISABLED));
     TEST_CHECK(g_menu_bar_pending_has_value);
@@ -1591,21 +1599,21 @@ test_expanded_panel_lifecycle_actions_and_deferred_snapshot(void)
     struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(200);
     snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
     [controller receiveSnapshot:snapshot clear:false];
-    TEST_CHECK([controller testWantsExpandedPanel]);
-    TEST_CHECK(![controller testStatusItemHasMenu]);
-    TEST_CHECK(![controller testStatusButtonOwnsStripView]);
-    TEST_CHECK([[controller testStatusItemButton] image] != nil);
+    TEST_CHECK(menu_bar_ui_state(controller).wants_expanded_panel);
+    TEST_CHECK(!menu_bar_ui_state(controller).status_item_has_menu);
+    TEST_CHECK(!menu_bar_ui_state(controller).status_button_owns_strip_view);
+    TEST_CHECK([menu_bar_ui_state(controller).status_button image] != nil);
 
     YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
     [controller testBeginExpandedInterfaceWithSession:session];
-    TEST_CHECK([controller testExpandedPanel] != nil);
-    TEST_CHECK([controller testExpandedSpaceCardCount] == 2);
+    TEST_CHECK(menu_bar_ui_state(controller).expanded_panel != nil);
+    TEST_CHECK(menu_bar_ui_state(controller).expanded_space_card_count == 2);
     TEST_CHECK(log.count == 1);
     TEST_CHECK(log.type[0] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     TEST_CHECK(log.is_tracking[0]);
     TEST_CHECK(log.generation[0] == 200);
     TEST_CHECK(log.focused_display_id[0] == 1);
-    TEST_CHECK(!menu_bar_ui_view_tree_contains_class([[controller testExpandedPanel] contentView], [NSImageView class]));
+    TEST_CHECK(!menu_bar_ui_view_tree_contains_class([menu_bar_ui_state(controller).expanded_panel contentView], [NSImageView class]));
 
     struct menu_bar_snapshot *deferred = menu_bar_ui_detailed_snapshot(201);
     deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
@@ -1613,8 +1621,8 @@ test_expanded_panel_lifecycle_actions_and_deferred_snapshot(void)
     deferred = menu_bar_ui_detailed_snapshot(202);
     deferred->settings.interface = MENU_BAR_INTERFACE_PANEL;
     [controller receiveSnapshot:deferred clear:false];
-    TEST_CHECK([controller testHasDeferredSnapshot]);
-    TEST_CHECK([controller testDeferredSnapshotGeneration] == 202);
+    TEST_CHECK(menu_bar_ui_state(controller).has_deferred_snapshot);
+    TEST_CHECK(menu_bar_ui_state(controller).deferred_snapshot_generation == 202);
 
     [controller performPanelFilterAction:nil];
     TEST_CHECK(session->cancel_count == 1);
@@ -1623,9 +1631,9 @@ test_expanded_panel_lifecycle_actions_and_deferred_snapshot(void)
     TEST_CHECK(log.generation[1] == 200);
     TEST_CHECK(log.filter[1] == MENU_BAR_SPACE_FILTER_ALL);
     [controller testEndExpandedInterface];
-    TEST_CHECK([controller testExpandedPanel] == nil);
-    TEST_CHECK(![controller testHasDeferredSnapshot]);
-    TEST_CHECK([controller testSnapshotGeneration] == 202);
+    TEST_CHECK(menu_bar_ui_state(controller).expanded_panel == nil);
+    TEST_CHECK(!menu_bar_ui_state(controller).has_deferred_snapshot);
+    TEST_CHECK(menu_bar_ui_state(controller).snapshot_generation == 202);
     TEST_CHECK(log.count == 3);
     TEST_CHECK(log.type[2] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     TEST_CHECK(!log.is_tracking[2]);
@@ -1675,11 +1683,11 @@ test_expanded_panel_modes_and_unavailable_fallback(void)
     struct menu_bar_snapshot *snapshot = menu_bar_ui_detailed_snapshot(300);
     snapshot->settings.interface = MENU_BAR_INTERFACE_PANEL;
     [controller receiveSnapshot:snapshot clear:false];
-    TEST_CHECK(![controller testWantsExpandedPanel]);
+    TEST_CHECK(!menu_bar_ui_state(controller).wants_expanded_panel);
     YBMenuBarTestExpandedSession *session = [YBMenuBarTestExpandedSession new];
     [controller testBeginExpandedInterfaceWithSession:session];
     TEST_CHECK(session->cancel_count == 1);
-    TEST_CHECK([controller testExpandedPanel] == nil);
+    TEST_CHECK(menu_bar_ui_state(controller).expanded_panel == nil);
     TEST_CHECK(log.count == 0);
     [session release];
 
@@ -1687,11 +1695,11 @@ test_expanded_panel_modes_and_unavailable_fallback(void)
     snapshot = menu_bar_ui_detailed_snapshot(301);
     snapshot->settings.interface = MENU_BAR_INTERFACE_MENU;
     [controller receiveSnapshot:snapshot clear:false];
-    TEST_CHECK(![controller testWantsExpandedPanel]);
+    TEST_CHECK(!menu_bar_ui_state(controller).wants_expanded_panel);
     snapshot = menu_bar_ui_detailed_snapshot(302);
     snapshot->settings.interface = MENU_BAR_INTERFACE_AUTO;
     [controller receiveSnapshot:snapshot clear:false];
-    TEST_CHECK([controller testWantsExpandedPanel]);
+    TEST_CHECK(menu_bar_ui_state(controller).wants_expanded_panel);
 
     [controller shutdown];
     [controller release];

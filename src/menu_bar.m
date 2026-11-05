@@ -218,34 +218,38 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)beginExpandedPanelWithSession:(id)session;
 - (void)endExpandedPanel;
 #if defined(YB_MENU_BAR_TEST)
+struct yb_menu_bar_test_state
+{
+    NSMenu *menu;
+    NSStatusBarButton *status_button;
+    NSView *strip_view;
+    NSPanel *expanded_panel;
+    bool has_snapshot;
+    bool has_deferred_snapshot;
+    bool has_status_item;
+    bool status_button_owns_strip_view;
+    bool status_views_use_manual_menu;
+    bool is_tracking_menu;
+    bool wants_expanded_panel;
+    bool status_item_has_menu;
+    uint64_t tracking_generation;
+    uint64_t snapshot_generation;
+    uint64_t deferred_snapshot_generation;
+    CGFloat status_item_length;
+    NSUInteger status_item_count;
+    NSUInteger status_button_count;
+    NSUInteger accessibility_redraw_count;
+    NSUInteger expanded_space_card_count;
+};
+
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
 - (void)testSetMenu:(NSMenu *)menu;
 - (void)testRebuildMenu;
-- (NSMenu *)testMenu;
-- (bool)testHasSnapshot;
-- (bool)testHasDeferredSnapshot;
-- (bool)testHasStatusItem;
-- (NSUInteger)testStatusItemCount;
-- (NSUInteger)testStatusButtonCount;
-- (bool)testStatusButtonOwnsStripView;
-- (bool)testStatusViewsUseManualMenu;
-- (NSStatusBarButton *)testStatusButton;
-- (NSView *)testStripView;
-- (bool)testIsTrackingMenu;
-- (uint64_t)testTrackingGeneration;
-- (uint64_t)testSnapshotGeneration;
-- (uint64_t)testDeferredSnapshotGeneration;
-- (CGFloat)testStatusItemLength;
-- (NSUInteger)testAccessibilityRedrawCount;
 - (NSView *)testBuildCompactStrip;
 - (NSView *)testBuildExpandedStrip;
-- (bool)testWantsExpandedPanel;
 - (void)testBeginExpandedInterfaceWithSession:(id)session;
 - (void)testEndExpandedInterface;
-- (NSPanel *)testExpandedPanel;
-- (NSUInteger)testExpandedSpaceCardCount;
-- (bool)testStatusItemHasMenu;
-- (NSStatusBarButton *)testStatusItemButton;
+- (void)testReadState:(struct yb_menu_bar_test_state *)state;
 #endif
 @end
 
@@ -1962,94 +1966,6 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [self rebuildMenu];
 }
 
-- (NSMenu *)testMenu
-{
-    return _menu;
-}
-
-- (bool)testHasSnapshot
-{
-    return _snapshot != NULL;
-}
-
-- (bool)testHasDeferredSnapshot
-{
-    return _deferred_snapshot != NULL;
-}
-
-- (bool)testHasStatusItem
-{
-    return _status_item != nil;
-}
-
-- (NSUInteger)testStatusItemCount
-{
-    return _status_item ? 1 : 0;
-}
-
-- (NSUInteger)testStatusButtonCount
-{
-    return [[_strip_view subviews] count];
-}
-
-- (bool)testStatusButtonOwnsStripView
-{
-    NSStatusBarButton *button = _status_item ? [_status_item button] : nil;
-    return button && [_status_item view] == nil && [_strip_view superview] == button;
-}
-
-- (bool)testStatusViewsUseManualMenu
-{
-    if (!_status_item || !_menu || [_status_item menu] != nil) return false;
-
-    NSStatusBarButton *button = [_status_item button];
-    if (!button || [button menu] != nil || [_strip_view menu] != nil) return false;
-    for (NSView *view in [_strip_view subviews]) {
-        if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != nil) return false;
-    }
-    return true;
-}
-
-- (NSStatusBarButton *)testStatusButton
-{
-    return _status_item ? [_status_item button] : nil;
-}
-
-- (NSView *)testStripView
-{
-    return _strip_view;
-}
-
-- (bool)testIsTrackingMenu
-{
-    return _is_tracking_menu;
-}
-
-- (uint64_t)testTrackingGeneration
-{
-    return _tracking_generation;
-}
-
-- (uint64_t)testSnapshotGeneration
-{
-    return _snapshot ? _snapshot->generation : 0;
-}
-
-- (uint64_t)testDeferredSnapshotGeneration
-{
-    return _deferred_snapshot ? _deferred_snapshot->generation : 0;
-}
-
-- (CGFloat)testStatusItemLength
-{
-    return _status_item ? [_status_item length] : 0.0;
-}
-
-- (NSUInteger)testAccessibilityRedrawCount
-{
-    return _test_accessibility_redraw_count;
-}
-
 - (NSView *)testBuildCompactStrip
 {
     return [self buildCompactStrip];
@@ -2058,11 +1974,6 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 - (NSView *)testBuildExpandedStrip
 {
     return [self buildExpandedStrip];
-}
-
-- (bool)testWantsExpandedPanel
-{
-    return [self wantsExpandedPanel];
 }
 
 - (void)testBeginExpandedInterfaceWithSession:(id)session
@@ -2075,34 +1986,51 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [self endExpandedPanel];
 }
 
-- (NSPanel *)testExpandedPanel
+- (void)testReadState:(struct yb_menu_bar_test_state *)state
 {
-    return _expanded_panel;
-}
+    memset(state, 0, sizeof(*state));
+    state->menu = _menu;
+    state->status_button = _status_item ? [_status_item button] : nil;
+    state->strip_view = _strip_view;
+    state->expanded_panel = _expanded_panel;
+    state->has_snapshot = _snapshot != NULL;
+    state->has_deferred_snapshot = _deferred_snapshot != NULL;
+    state->has_status_item = _status_item != nil;
+    state->status_item_count = _status_item ? 1 : 0;
+    state->status_button_count = [[_strip_view subviews] count];
+    state->status_button_owns_strip_view = state->status_button && [_status_item view] == nil &&
+                                           [_strip_view superview] == state->status_button;
+    state->is_tracking_menu = _is_tracking_menu;
+    state->tracking_generation = _tracking_generation;
+    state->snapshot_generation = _snapshot ? _snapshot->generation : 0;
+    state->deferred_snapshot_generation = _deferred_snapshot ? _deferred_snapshot->generation : 0;
+    state->status_item_length = _status_item ? [_status_item length] : 0.0;
+    state->accessibility_redraw_count = _test_accessibility_redraw_count;
+    state->wants_expanded_panel = [self wantsExpandedPanel];
+    state->status_item_has_menu = _status_item && [_status_item menu] != nil;
 
-- (bool)testStatusItemHasMenu
-{
-    return _status_item && [_status_item menu] != nil;
-}
-
-- (NSStatusBarButton *)testStatusItemButton
-{
-    return [_status_item button];
-}
-
-- (NSUInteger)testExpandedSpaceCardCount
-{
-    if (!_expanded_panel) return 0;
-    NSUInteger count = 0;
-    NSMutableArray *stack = [NSMutableArray arrayWithObject:[_expanded_panel contentView]];
-    while ([stack count]) {
-        NSView *view = [[stack lastObject] retain];
-        [stack removeLastObject];
-        if ([view isKindOfClass:[YBMenuBarSpaceCard class]]) ++count;
-        [stack addObjectsFromArray:[view subviews]];
-        [view release];
+    state->status_views_use_manual_menu = _status_item && _menu && [_status_item menu] == nil &&
+                                          state->status_button && [state->status_button menu] == nil &&
+                                          [_strip_view menu] == nil;
+    if (state->status_views_use_manual_menu) {
+        for (NSView *view in [_strip_view subviews]) {
+            if ([view isKindOfClass:[NSButton class]] && [(NSButton *) view menu] != nil) {
+                state->status_views_use_manual_menu = false;
+                break;
+            }
+        }
     }
-    return count;
+
+    if (_expanded_panel) {
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:[_expanded_panel contentView]];
+        while ([stack count]) {
+            NSView *view = [[stack lastObject] retain];
+            [stack removeLastObject];
+            if ([view isKindOfClass:[YBMenuBarSpaceCard class]]) ++state->expanded_space_card_count;
+            [stack addObjectsFromArray:[view subviews]];
+            [view release];
+        }
+    }
 }
 #endif
 
