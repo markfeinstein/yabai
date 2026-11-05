@@ -83,7 +83,82 @@ static uid_t test_runtime_effective_uid(void)
 #define TEST_SIG(name) bool test_##name(void)
 typedef TEST_SIG(function);
 
-#define TEST_FUNC(name, ...) static TEST_SIG(name) { char *test_name = #name; bool result = true; {__VA_ARGS__} return result; }
+struct test_entry
+{
+    const char *name;
+    test_function *func;
+};
+
+static struct test_entry tests[1024];
+static size_t test_count;
+
+static void test_register(const char *name, test_function *func)
+{
+    if (test_count == array_count(tests)) abort();
+    tests[test_count++] = (struct test_entry) { name, func };
+}
+
+#define TEST_REGISTER(name) \
+    static void __attribute__((constructor)) test_register_##name(void) \
+    { test_register(#name, test_##name); }
+
+struct test_restore
+{
+    struct test_restore *next;
+    void *target;
+    size_t size;
+    unsigned char value[];
+};
+
+struct test_restore_stack { struct test_restore *head; };
+
+static bool test_restore_save(struct test_restore_stack *stack, void *target, size_t size)
+{
+    struct test_restore *restore = malloc(sizeof(*restore) + size);
+    if (!restore) return false;
+    restore->next = stack->head;
+    restore->target = target;
+    restore->size = size;
+    memcpy(restore->value, target, size);
+    stack->head = restore;
+    return true;
+}
+
+static bool test_restore_now(struct test_restore_stack *stack, void *target, size_t size)
+{
+    for (struct test_restore **slot = &stack->head; *slot; slot = &(*slot)->next) {
+        struct test_restore *restore = *slot;
+        if (restore->target != target || restore->size != size) continue;
+        *slot = restore->next;
+        memcpy(restore->target, restore->value, restore->size);
+        free(restore);
+        return true;
+    }
+    return false;
+}
+
+static void test_restore_stack_cleanup(struct test_restore_stack *stack)
+{
+    while (stack->head) {
+        struct test_restore *restore = stack->head;
+        stack->head = restore->next;
+        memcpy(restore->target, restore->value, restore->size);
+        free(restore);
+    }
+}
+
+#define TEST_FUNC(name, ...) \
+    static TEST_SIG(name); \
+    TEST_REGISTER(name) \
+    static TEST_SIG(name) \
+    { \
+        char *test_name = #name; \
+        bool result = true; \
+        struct test_restore_stack test_restores \
+            __attribute__((cleanup(test_restore_stack_cleanup))) = {0}; \
+        {__VA_ARGS__} \
+        return result; \
+    }
 #define TEST_CHECK(r, e) do { \
     __auto_type test_actual = (r); \
     __auto_type test_expected = (e); \
@@ -91,6 +166,21 @@ typedef TEST_SIG(function);
         printf("                   \e[1;33m%s\e[m\e[1;31m#%d %s == %s\e[m\n", test_name, __LINE__, #r, #e); \
         result = false; \
     } \
+} while (0)
+
+#define TEST_SAVE(target) do { \
+    bool test_saved__ = test_restore_save(&test_restores, (void *) &(target), sizeof(target)); \
+    TEST_CHECK(test_saved__, true); \
+} while (0)
+
+#define TEST_OVERRIDE(target, ...) do { \
+    TEST_SAVE(target); \
+    (target) = (__VA_ARGS__); \
+} while (0)
+
+#define TEST_RESTORE(target) do { \
+    bool test_restored__ = test_restore_now(&test_restores, (void *) &(target), sizeof(target)); \
+    TEST_CHECK(test_restored__, true); \
 } while (0)
 
 static bool test_temp_storage_ensure(uint64_t size);
@@ -123,6 +213,13 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "window_ordered.c"
 #include "event_queue.c"
 #include "menu_bar_model.c"
+TEST_REGISTER(menu_bar_model_defaults_and_zero_counts)
+TEST_REGISTER(menu_bar_model_classification_cases)
+TEST_REGISTER(menu_bar_model_filter_focus_identity_and_failure_metadata)
+TEST_REGISTER(menu_bar_model_refocused_clone_preserves_inventory)
+TEST_REGISTER(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels)
+TEST_REGISTER(menu_bar_model_invalid_inputs_and_absent_focus_neutrality)
+TEST_REGISTER(menu_bar_model_exact_effective_equality_and_focus_only_changes)
 #include "menu_bar_manager.c"
 #include "snapshot_reuse.c"
 #include "message.c"
@@ -158,7 +255,6 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "animation_failure.c"
 #include "doctor.c"
 #include "config_file.c"
-#undef TEST_ENTRY
 
 static bool test_temp_storage_ensure(uint64_t size)
 {
@@ -679,11 +775,10 @@ TEST_FUNC(event_loop_begin_thread_creation_failure_is_atomic,
     struct event_loop event_loop;
     memset(&event_loop, 0xa5, sizeof(event_loop));
 
-    __auto_type saved_thread_create = event_loop_thread_create;
     g_event_loop_test_thread_create_calls = 0;
-    event_loop_thread_create = event_loop_test_fail_thread_create;
+    TEST_OVERRIDE(event_loop_thread_create, event_loop_test_fail_thread_create);
     bool began = event_loop_begin(&event_loop);
-    event_loop_thread_create = saved_thread_create;
+    TEST_RESTORE(event_loop_thread_create);
 
     TEST_CHECK(began, false);
     TEST_CHECK(g_event_loop_test_thread_create_calls, 1);
@@ -982,15 +1077,14 @@ TEST_FUNC(scripting_addition_helpers_propagate_failures_and_use_literal_paths,
         close(file_descriptor);
         TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), true);
 
-        __auto_type saved_write_stream = scripting_addition_write_stream;
         __auto_type saved_close_file = scripting_addition_close_file;
         scripting_addition_test_close_count = 0;
-        scripting_addition_write_stream = scripting_addition_test_write_failure;
+        TEST_OVERRIDE(scripting_addition_write_stream, scripting_addition_test_write_failure);
         scripting_addition_close_file = scripting_addition_test_close_success;
         TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), false);
         TEST_CHECK(scripting_addition_test_close_count, 1);
 
-        scripting_addition_write_stream = saved_write_stream;
+        TEST_RESTORE(scripting_addition_write_stream);
         scripting_addition_close_file = scripting_addition_test_close_failure;
         TEST_CHECK(scripting_addition_write_file("payload", 7, file_template, "wb"), false);
         scripting_addition_close_file = saved_close_file;
@@ -1124,7 +1218,7 @@ TEST_FUNC(utf8_validation_and_json_replacement_are_strict,
     TEST_CHECK(temp_storage_ready, true);
     if (!temp_storage_ready) return result;
 
-    uint64_t saved_temp_storage_used = g_temp_storage.used;
+    TEST_SAVE(g_temp_storage.used);
     ts_reset();
 
     char valid_string[] = { 'x', (char) 0xc2, (char) 0xa2, (char) 0xe2, (char) 0x82,
@@ -1151,7 +1245,6 @@ TEST_FUNC(utf8_validation_and_json_replacement_are_strict,
     TEST_CHECK([json_string isEqualToString:expected_string], true);
     [expected_string release];
 
-    g_temp_storage.used = saved_temp_storage_used;
 });
 
 TEST_FUNC(serialization_string_escaping_is_strict,
@@ -1160,7 +1253,7 @@ TEST_FUNC(serialization_string_escaping_is_strict,
     TEST_CHECK(temp_storage_ready, true);
     if (!temp_storage_ready) return result;
 
-    uint64_t saved_temp_storage_used = g_temp_storage.used;
+    TEST_SAVE(g_temp_storage.used);
     ts_reset();
 
     char xml_input[] = "amp& lt< gt> quote\" apos'";
@@ -1330,7 +1423,6 @@ TEST_FUNC(serialization_string_escaping_is_strict,
     buf_free(g_space_manager.labels);
     g_space_manager.labels = saved_space_labels;
 
-    g_temp_storage.used = saved_temp_storage_used;
 });
 
 TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_strings,
@@ -1339,7 +1431,7 @@ TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_string
     TEST_CHECK(temp_storage_ready, true);
     if (!temp_storage_ready) return result;
 
-    uint64_t saved_temp_storage_used = g_temp_storage.used;
+    TEST_SAVE(g_temp_storage.used);
     char *forms[] = {
         "ordinary-safe-value",
         "quote\" backslash\\ newline\n tab\t control\x01",
@@ -1411,7 +1503,6 @@ TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_string
 
     buf_free(g_space_manager.labels);
     g_space_manager.labels = saved_space_labels;
-    g_temp_storage.used = saved_temp_storage_used;
 });
 
 TEST_FUNC(view_stack_window_node_rejects_full_node_without_mutation,
@@ -1439,7 +1530,7 @@ TEST_FUNC(view_find_window_list_expands_for_full_stack_node,
     TEST_CHECK(temp_storage_ready, true);
     if (!temp_storage_ready) return result;
 
-    uint64_t saved_temp_storage_used = g_temp_storage.used;
+    TEST_SAVE(g_temp_storage.used);
     ts_reset();
 
     struct view view = {0};
@@ -1459,7 +1550,6 @@ TEST_FUNC(view_find_window_list_expands_for_full_stack_node,
     TEST_CHECK(window_list[0], 300);
     TEST_CHECK(window_list[NODE_MAX_WINDOW_COUNT - 1], 300 + NODE_MAX_WINDOW_COUNT - 1);
 
-    g_temp_storage.used = saved_temp_storage_used;
 });
 
 TEST_FUNC(mouse_click_state_ordinary_drag_does_not_poison_consumed_click,
@@ -2600,8 +2690,8 @@ TEST_FUNC(mouse_resize_managed_release_uses_synchronous_intended_geometry,
 TEST_FUNC(mouse_bsp_live_resize_reflows_incrementally_and_skips_release_adjustment,
 {
     struct mouse_state saved_mouse_state = g_mouse_state;
-    struct table saved_managed_window = g_window_manager.managed_window;
-    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    TEST_SAVE(g_window_manager.managed_window);
+    TEST_SAVE(g_mission_control_mode);
     __auto_type saved_live_callback = event_loop_test_mouse_bsp_live_resize;
     __auto_type saved_resize_callback = event_loop_test_mouse_drag_resize_window;
     __auto_type saved_time_callback = event_loop_test_mouse_drag_time;
@@ -2697,15 +2787,13 @@ TEST_FUNC(mouse_bsp_live_resize_reflows_incrementally_and_skips_release_adjustme
     g_mouse_bsp_live_resize_node = NULL;
     g_mouse_state = saved_mouse_state;
     table_free(&g_window_manager.managed_window);
-    g_window_manager.managed_window = saved_managed_window;
-    g_mission_control_mode = saved_mission_control_mode;
 });
 
 TEST_FUNC(mouse_bsp_live_resize_ignores_fenceless_steps_without_stretching,
 {
     struct mouse_state saved_mouse_state = g_mouse_state;
-    struct table saved_managed_window = g_window_manager.managed_window;
-    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    TEST_SAVE(g_window_manager.managed_window);
+    TEST_SAVE(g_mission_control_mode);
     __auto_type saved_live_callback = event_loop_test_mouse_bsp_live_resize;
     __auto_type saved_resize_callback = event_loop_test_mouse_drag_resize_window;
     __auto_type saved_time_callback = event_loop_test_mouse_drag_time;
@@ -2783,8 +2871,6 @@ TEST_FUNC(mouse_bsp_live_resize_ignores_fenceless_steps_without_stretching,
     g_mouse_bsp_live_resize_node = NULL;
     g_mouse_state = saved_mouse_state;
     table_free(&g_window_manager.managed_window);
-    g_window_manager.managed_window = saved_managed_window;
-    g_mission_control_mode = saved_mission_control_mode;
 });
 
 TEST_FUNC(mouse_dragged_unmanaged_window_preserves_owner_gesture,
@@ -2902,9 +2988,9 @@ TEST_FUNC(mouse_drag_owner_button_controls_events_and_reset,
 
 TEST_FUNC(mouse_drag_lost_release_is_owned_and_resets_safely,
 {
-    struct mouse_state saved_mouse_state = g_mouse_state;
-    struct table saved_managed_window = g_window_manager.managed_window;
-    enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
+    TEST_SAVE(g_mouse_state);
+    TEST_SAVE(g_window_manager.managed_window);
+    TEST_SAVE(g_mission_control_mode);
     struct table managed_window;
     table_init(&managed_window, 1, hash_wm, compare_wm);
 
@@ -2954,9 +3040,6 @@ TEST_FUNC(mouse_drag_lost_release_is_owned_and_resets_safely,
     TEST_CHECK(g_mouse_state.active_button, MOUSE_BUTTON_NONE);
 
     table_free(&g_window_manager.managed_window);
-    g_window_manager.managed_window = saved_managed_window;
-    g_mission_control_mode = saved_mission_control_mode;
-    g_mouse_state = saved_mouse_state;
 });
 
 TEST_FUNC(mouse_drag_reset_clears_feedback_window_action_and_button_state,
@@ -2965,8 +3048,8 @@ TEST_FUNC(mouse_drag_reset_clears_feedback_window_action_and_button_state,
     struct window grabbed_window = {0};
     struct window_node *saved_feedback_node = g_mouse_state.feedback_node;
     struct window *saved_window = g_mouse_state.window;
-    enum mouse_mode saved_action = g_mouse_state.current_action;
-    int64_t saved_active_button = g_mouse_state.active_button;
+    TEST_SAVE(g_mouse_state.current_action);
+    TEST_SAVE(g_mouse_state.active_button);
 
     g_mouse_state.feedback_node = &feedback_node;
     g_mouse_state.window = &grabbed_window;
@@ -2982,8 +3065,6 @@ TEST_FUNC(mouse_drag_reset_clears_feedback_window_action_and_button_state,
 
     g_mouse_state.feedback_node = saved_feedback_node;
     g_mouse_state.window = saved_window;
-    g_mouse_state.current_action = saved_action;
-    g_mouse_state.active_button = saved_active_button;
 });
 
 TEST_FUNC(mouse_drag_feedback_rejects_source_node_and_normalizes_stack_layout,
@@ -3402,690 +3483,6 @@ TEST_FUNC(display_cadence_core_json_is_redacted_and_machine_readable,
     }
 });
 
-#define TEST_ENTRY(name) { #name, test_##name },
-#define TEST_LIST                                              \
-    TEST_ENTRY(window_management_bridge_exact_abi_runs_only_allowlisted_read) \
-    TEST_ENTRY(window_management_bridge_missing_and_mismatched_abi_fails_closed) \
-    TEST_ENTRY(window_management_bridge_direct_space_switch_is_ordered_and_fail_closed) \
-    TEST_ENTRY(window_management_bridge_tile_membership_is_aggregate_read_only_and_fail_closed) \
-    TEST_ENTRY(window_management_bridge_read_results_are_validated_and_metadata_is_advisory) \
-    TEST_ENTRY(native_tile_diagnostic_json_is_stable_aggregate_and_redacted) \
-    TEST_ENTRY(native_tile_diagnostic_status_vocabulary_and_invalid_metadata_are_exact) \
-    TEST_ENTRY(test_runner_defaults_and_help_are_explicit) \
-    TEST_ENTRY(test_runner_list_and_filter_compose_in_either_order) \
-    TEST_ENTRY(test_runner_rejects_malformed_unknown_and_repeated_arguments) \
-    TEST_ENTRY(test_runner_matches_case_sensitive_literal_substrings) \
-    TEST_ENTRY(display_cadence_core_stats_are_deterministic) \
-    TEST_ENTRY(display_cadence_core_monotonicity_rejects_regressions_and_nonfinite) \
-    TEST_ENTRY(display_cadence_stress_json_is_bounded_and_redacted) \
-    TEST_ENTRY(display_cadence_core_json_is_redacted_and_machine_readable) \
-    TEST_ENTRY(doctor_healthy_fixture_returns_success)         \
-    TEST_ENTRY(scripting_addition_runtime_classification_is_nonmutating_and_versioned) \
-    TEST_ENTRY(doctor_failures_and_unknown_privileged_checks_are_classified) \
-    TEST_ENTRY(doctor_all_unknown_and_optional_warnings_return_success) \
-    TEST_ENTRY(doctor_screen_recording_report_is_conditional_nonfatal_and_ordered) \
-    TEST_ENTRY(doctor_window_management_rows_are_advisory_and_redacted) \
-    TEST_ENTRY(doctor_identity_uses_real_uid_or_valid_nonroot_sudo_uid) \
-    TEST_ENTRY(doctor_config_selection_stops_at_preferred_regular_candidate) \
-    TEST_ENTRY(doctor_screen_capture_requirement_uses_static_config_precedence_without_prompting) \
-    TEST_ENTRY(doctor_screen_capture_native_snapshot_failures_are_unknown) \
-    TEST_ENTRY(doctor_service_requires_canonical_fields_mode_and_executable) \
-    TEST_ENTRY(doctor_root_permission_checks_use_resolved_supplementary_groups) \
-    TEST_ENTRY(doctor_root_permission_checks_use_effective_target_access) \
-    TEST_ENTRY(doctor_effective_access_observes_acl_denies) \
-    TEST_ENTRY(doctor_runtime_orchestration_and_exact_cli_are_injectable) \
-    TEST_ENTRY(doctor_sa_bundle_absence_and_nested_metadata_are_distinct) \
-    TEST_ENTRY(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded) \
-    TEST_ENTRY(mission_control_observe_rejects_zero_pid_and_creation_failures) \
-    TEST_ENTRY(mission_control_observe_rolls_back_each_notification_failure) \
-    TEST_ENTRY(mission_control_observe_publishes_only_complete_success_and_is_repeatable) \
-    TEST_ENTRY(mission_control_unobserve_cleans_partial_state_without_boolean_gate) \
-    TEST_ENTRY(mission_control_observe_retries_after_transaction_failure) \
-    TEST_ENTRY(os_timer_elapsed_is_baseline_independent_and_regression_safe) \
-    TEST_ENTRY(mission_control_linearized_contexts_polls_and_side_effects) \
-    TEST_ENTRY(mission_control_ingress_epoch_ordering_and_observer_retry) \
-    TEST_ENTRY(mission_control_sample_tristate_is_defensive) \
-    TEST_ENTRY(mission_control_poll_reservation_and_inconclusive_backoff) \
-    TEST_ENTRY(mission_control_rejected_ingress_recovers_without_token_corruption) \
-    TEST_ENTRY(mission_control_initial_allocation_fallback_recovers_all_kinds) \
-    TEST_ENTRY(mission_control_shutdown_closes_retry_and_restart_admission) \
-    TEST_ENTRY(mission_control_real_event_loop_context_ownership) \
-    TEST_ENTRY(mission_control_show_a_show_b_delayed_exit_confirms_b) \
-    TEST_ENTRY(mission_control_fallback_ring_preserves_order_overflow_and_reuse) \
-    TEST_ENTRY(mission_control_fallback_concurrent_cancel_and_drain_is_owned) \
-    TEST_ENTRY(display_area_is_in_direction)                   \
-    TEST_ENTRY(closest_display_in_direction)                   \
-    TEST_ENTRY(display_identity_prefers_public_screen_display_id) \
-    TEST_ENTRY(display_identity_falls_back_to_legacy_screen_number) \
-    TEST_ENTRY(display_identity_treats_null_and_nonmatching_ids_as_unresolved) \
-    TEST_ENTRY(display_visible_frame_property_selection_and_serialization_are_explicit) \
-    TEST_ENTRY(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment) \
-    TEST_ENTRY(display_internal_constrained_bounds_cover_system_ui_and_external_bar) \
-    TEST_ENTRY(display_animation_query_excludes_bigsur_and_modern_releases) \
-    TEST_ENTRY(window_sub_level_message_id_tracks_tahoe_protocol) \
-    TEST_ENTRY(window_ax_snapshot_reads_and_owns_valid_batch_values) \
-    TEST_ENTRY(window_ax_snapshot_validates_slots_and_couples_frame_fallback) \
-    TEST_ENTRY(window_ax_snapshot_rejects_malformed_batch_shapes_and_types) \
-    TEST_ENTRY(window_ax_frame_status_uses_complete_validated_snapshots) \
-    TEST_ENTRY(window_ax_frame_and_fullscreen_share_one_batch_with_field_fallbacks) \
-    TEST_ENTRY(window_ax_snapshot_recovers_batch_failure_and_handles_allocation_failure) \
-    TEST_ENTRY(window_create_uses_one_complete_snapshot_and_independent_capabilities) \
-    TEST_ENTRY(window_create_preserves_partial_snapshot_root_and_space_fallbacks) \
-    TEST_ENTRY(window_create_reuses_matching_server_record_and_falls_back_by_field) \
-    TEST_ENTRY(window_constraints_normalize_validity_and_decoration_without_policy) \
-    TEST_ENTRY(window_constraints_reject_invalid_contradictory_and_out_of_range_fields) \
-    TEST_ENTRY(window_constraints_tolerance_and_absent_ax_are_explicit) \
-    TEST_ENTRY(accessibility_preferences_publish_all_combinations_and_missing_readers) \
-    TEST_ENTRY(accessibility_preferences_live_updates_are_coherent_and_teardown_is_final) \
-    TEST_ENTRY(accessibility_preferences_observer_failure_preserves_initial_snapshot) \
-    TEST_ENTRY(window_corner_geometry_rejects_nonarrays_counts_and_nonnumbers) \
-    TEST_ENTRY(window_corner_geometry_rejects_negative_nan_and_infinity) \
-    TEST_ENTRY(window_corner_geometry_preserves_zero_equal_and_asymmetric_source_order) \
-    TEST_ENTRY(window_corner_geometry_capability_is_resolved_but_production_paths_are_disabled) \
-    TEST_ENTRY(window_server_snapshot_index_preserves_order_and_linear_lookup_semantics) \
-    TEST_ENTRY(window_server_snapshot_copies_ordered_owned_records_and_empty_inventory) \
-    TEST_ENTRY(window_server_snapshot_valid_fields_distinguish_zero_from_unavailable) \
-    TEST_ENTRY(window_server_snapshot_rejects_invalid_inputs_and_backend_failures) \
-    TEST_ENTRY(window_server_snapshot_allocation_failures_are_atomic_and_generation_is_owned) \
-    TEST_ENTRY(window_server_snapshot_corner_geometry_is_optional_owned_pod) \
-    TEST_ENTRY(window_server_snapshot_constraints_are_optional_owned_pod) \
-    TEST_ENTRY(window_server_snapshot_alpha_and_space_count_are_optional) \
-    TEST_ENTRY(window_server_tag_names_masks_and_order_are_exact) \
-    TEST_ENTRY(window_server_tag_known_mask_preserves_unknown_bits) \
-    TEST_ENTRY(window_server_classifier_ordered_decision_table_is_conservative) \
-    TEST_ENTRY(window_server_classifier_attribute_and_bit58_are_diagnostic_only) \
-    TEST_ENTRY(window_server_classifier_names_and_reasons_are_stable) \
-    TEST_ENTRY(window_server_hit_test_relation_classification_is_conservative) \
-    TEST_ENTRY(window_server_hit_test_comparison_is_optional_and_legacy_authoritative) \
-    TEST_ENTRY(window_manager_hit_test_skips_multiple_owned_cosmetic_windows) \
-    TEST_ENTRY(window_server_hit_test_concurrent_comparison_is_race_free) \
-    TEST_ENTRY(window_server_tag_corpus_golden_jsonl_is_stable_redacted_and_parseable) \
-    TEST_ENTRY(window_server_tag_corpus_comparison_is_redacted_stable_and_labeled) \
-    TEST_ENTRY(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_files) \
-    TEST_ENTRY(native_tab_event_recorder_pairs_both_switch_event_orders_without_identity_decision) \
-    TEST_ENTRY(native_tab_event_recorder_separates_quiescent_inventory_episodes_and_tracks_reappearance) \
-    TEST_ENTRY(native_tab_event_recorder_classifies_reappearance_detach_and_lifecycle_explanations) \
-    TEST_ENTRY(native_tab_event_recorder_correlates_observed_lifecycle_with_control_marker) \
-    TEST_ENTRY(native_tab_event_recorder_enforces_deadlines_stale_events_capacity_and_stop) \
-    TEST_ENTRY(native_tab_event_recorder_marks_incomplete_inventory_and_secures_output) \
-    TEST_ENTRY(space_window_inventory_snapshot_predicate_preserves_options_order_and_ownership) \
-    TEST_ENTRY(space_window_inventory_named_tags_match_exhaustive_raw_mask_oracle) \
-    TEST_ENTRY(space_window_inventory_preserves_duplicates_empty_success_and_independent_output) \
-    TEST_ENTRY(space_window_inventory_fails_closed_for_candidates_snapshots_and_required_fields) \
-    TEST_ENTRY(space_window_inventory_fixed_seed_matches_frozen_legacy_filter) \
-    TEST_ENTRY(window_observe_retries_only_transient_failures) \
-    TEST_ENTRY(window_diagnostic_visibility_queries_preserve_unknown_state) \
-    TEST_ENTRY(window_serialization_prefers_snapshot_fields_and_falls_back_independently) \
-    TEST_ENTRY(window_serialization_reuses_space_membership_and_preserves_fallbacks) \
-    TEST_ENTRY(window_serialization_reports_singleton_fullscreen_zoom) \
-    TEST_ENTRY(process_create_allocation_failure_does_not_publish_owned_state) \
-    TEST_ENTRY(application_create_rejects_invalid_and_allocation_failure) \
-    TEST_ENTRY(application_create_copies_initial_window_inventory_context) \
-    TEST_ENTRY(window_create_allocation_failure_consumes_retained_reference) \
-    TEST_ENTRY(window_subrole_is_unknown)                      \
-    TEST_ENTRY(window_is_unknown_does_not_consume_cached_subrole) \
-    TEST_ENTRY(window_unobserve_without_application_clears_notifications) \
-    TEST_ENTRY(native_resize_shutdown_serializes_final_cancellation_and_restart_state) \
-    TEST_ENTRY(event_loop_batched_views_deduplicate_in_first_seen_order) \
-    TEST_ENTRY(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel) \
-    TEST_ENTRY(application_observation_retries_only_transient_required_failures) \
-    TEST_ENTRY(missed_focused_window_adoption_is_bounded_per_application_identity) \
-    TEST_ENTRY(window_created_replaces_only_same_id_window_elements) \
-    TEST_ENTRY(application_launch_and_startup_table_failures_retry_and_recover_through_callers) \
-    TEST_ENTRY(window_created_event_ax_ownership_matrix_is_exact) \
-    TEST_ENTRY(window_created_identity_retry_preserves_origin_and_falls_back_to_refresh) \
-    TEST_ENTRY(window_focus_reconciliation_is_per_space_coalesced_and_bounded) \
-    TEST_ENTRY(application_visibility_schedules_stale_window_reconciliation) \
-    TEST_ENTRY(application_termination_rejects_stale_pid_reuse_identity) \
-    TEST_ENTRY(inactive_space_launch_partial_inventory_reprobes_and_removes_real_queue_entry) \
-    TEST_ENTRY(inactive_space_launch_inventory_failure_is_deduplicated_and_retried) \
-    TEST_ENTRY(inactive_space_launch_invalid_snapshot_is_atomic_and_retried) \
-    TEST_ENTRY(inactive_space_launch_overlapping_reservations_are_application_owned) \
-    TEST_ENTRY(inactive_space_launch_reserved_one_shot_is_available_to_only_one_window) \
-    TEST_ENTRY(inactive_space_launch_reserved_rule_ignores_ordinary_window_created_cleanup) \
-    TEST_ENTRY(inactive_space_launch_refresh_cursor_tracks_swap_deleted_identity) \
-    TEST_ENTRY(inactive_space_launch_global_probe_budget_round_robins_queue) \
-    TEST_ENTRY(inactive_space_launch_retry_survives_finalization_and_rejects_stale_pid_reuse) \
-    TEST_ENTRY(inactive_space_launch_window_creation_defers_all_rule_effects_until_retry) \
-    TEST_ENTRY(inactive_space_launch_unreserved_one_shots_preserve_ordinary_semantics) \
-    TEST_ENTRY(inactive_space_launch_initial_reservation_failures_are_atomic_and_retried) \
-    TEST_ENTRY(inactive_space_launch_one_shot_handoff_is_cursor_ordered_and_psn_stable) \
-    TEST_ENTRY(inactive_space_launch_termination_cancels_reservation_and_real_queue_entry) \
-    TEST_ENTRY(event_loop_zero_initialized_state_rejects_without_queue_access) \
-    TEST_ENTRY(declarative_space_create_destroy_and_absent_event_coalesce_reconcile) \
-    TEST_ENTRY(declarative_scaffold_membership_add_remove_requests_one_reconcile) \
-    TEST_ENTRY(declarative_reconcile_reservation_token_cancellation_is_generation_safe) \
-    TEST_ENTRY(declarative_dock_restart_and_system_wake_coalesce_reconcile) \
-    TEST_ENTRY(declarative_reconcile_reserves_before_post_and_coalesces) \
-    TEST_ENTRY(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result) \
-    TEST_ENTRY(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close) \
-    TEST_ENTRY(event_loop_front_switch_helpers_preserve_monotonic_observation_on_delivery_failure) \
-    TEST_ENTRY(event_loop_late_pre_admission_post_after_cleanup_releases_context) \
-    TEST_ENTRY(event_loop_worker_guards_reject_sync_and_self_shutdown) \
-    TEST_ENTRY(event_loop_worker_identity_is_scoped_to_the_supplied_loop) \
-    TEST_ENTRY(event_loop_sync_during_thread_create_interval_completes_on_success_and_failure) \
-    TEST_ENTRY(event_loop_sync_submission_concurrent_with_shutdown_completes) \
-    TEST_ENTRY(event_loop_bootstrap_failure_drains_queued_daemon_messages) \
-    TEST_ENTRY(managed_window_correction_bounds_retries_and_rearms_from_signals) \
-    TEST_ENTRY(managed_window_correction_failed_reads_preserve_cache_and_advance_lease) \
-    TEST_ENTRY(mouse_drag_top_clamp_is_cached_per_display_for_a_drag) \
-    TEST_ENTRY(window_frames_toggle_enhanced_ui_once_per_application) \
-    TEST_ENTRY(window_removal_clears_focus_and_recycled_identity_state) \
-    TEST_ENTRY(window_minimize_events_resolve_stable_ids)       \
-    TEST_ENTRY(display_change_rejects_invalid_pairs_before_commit) \
-    TEST_ENTRY(duplicate_display_change_does_not_reserve_topology_recovery) \
-    TEST_ENTRY(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_without_direct_animation_transition) \
-    TEST_ENTRY(window_focus_preserves_bookkeeping_without_direct_animation_transition) \
-    TEST_ENTRY(window_resize_debounce_preserves_fullscreen_state_transitions) \
-    TEST_ENTRY(mouse_follows_focus_ignores_ineligible_auxiliary_transitions) \
-    TEST_ENTRY(update_window_notifications_append_grows_past_fixed_boundary) \
-    TEST_ENTRY(window_focus_fallback_trigger_policy_and_behavior_are_deterministic) \
-    TEST_ENTRY(window_focus_fallback_queue_reservation_coalesces_retries_and_clears) \
-    TEST_ENTRY(window_focus_fallback_selector_matches_public_recent_helper) \
-    TEST_ENTRY(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse) \
-    TEST_ENTRY(bsp_split_areas_preserve_truncation_and_handle_extreme_geometry) \
-    TEST_ENTRY(single_window_width_ratio_scales_and_combines_with_absolute_ceiling) \
-    TEST_ENTRY(single_window_zoom_bypasses_and_restores_responsive_width) \
-    TEST_ENTRY(single_window_width_ratio_reconciles_stack_membership_transitions) \
-    TEST_ENTRY(single_window_width_ratio_reconciles_bsp_split_and_collapse) \
-    TEST_ENTRY(single_window_auto_split_uses_ordinary_root_geometry) \
-    TEST_ENTRY(insert_feedback_refresh_visits_each_active_node_once) \
-    TEST_ENTRY(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles) \
-    TEST_ENTRY(active_window_highlight_geometry_is_bounded_and_outset) \
-    TEST_ENTRY(active_window_highlight_redraws_when_only_origin_changes) \
-    TEST_ENTRY(active_window_highlight_pending_geometry_rejects_stale_server_frame) \
-    TEST_ENTRY(active_window_highlight_manager_routes_enable_refresh_and_hide) \
-    TEST_ENTRY(active_window_highlight_fast_path_reuses_space_visibility_until_topology_event) \
-    TEST_ENTRY(managed_space_visibility_resolves_from_topology_or_reports_unknown) \
-    TEST_ENTRY(legacy_view_and_split_allocations_are_transactional) \
-    TEST_ENTRY(space_manager_begin_reports_and_cleans_initialization_failures) \
-    TEST_ENTRY(display_topology_refresh_recomputes_centered_singleton_on_existing_display) \
-    TEST_ENTRY(view_find_min_depth_leaf_node_handles_complete_tree_boundary) \
-    TEST_ENTRY(view_remove_promotes_internal_sibling_geometry)             \
-    TEST_ENTRY(view_insertion_preparation_enforces_single_root_capacity_and_layout) \
-    TEST_ENTRY(scratchpad_ordered_query_failure_preserves_automatic_mode) \
-    TEST_ENTRY(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot) \
-    TEST_ENTRY(rule_scratchpad_application_copy_failure_is_atomic) \
-    TEST_ENTRY(startup_inventory_moves_rule_targets_without_following_space) \
-    TEST_ENTRY(window_manager_checked_publications_reject_bucket_failures) \
-    TEST_ENTRY(window_close_propagates_ax_failures_and_releases_button) \
-    TEST_ENTRY(stale_ax_reference_refreshes_and_retries_once) \
-    TEST_ENTRY(window_manager_invalidates_all_constraint_caches) \
-    TEST_ENTRY(hashtable_for_preserves_enclosing_loop_variables) \
-    TEST_ENTRY(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules) \
-    TEST_ENTRY(hybrid_management_preserves_rule_manual_and_default_window_intent) \
-    TEST_ENTRY(hybrid_management_gates_automatic_windows_but_keeps_overrides) \
-    TEST_ENTRY(automatic_sublayer_control_preserves_explicit_layers_and_reapplies_auto_windows) \
-    TEST_ENTRY(window_selector_area_comparison_preserves_fractional_and_zero_geometry) \
-    TEST_ENTRY(space_move_pair_stops_rolls_back_and_reports_partial_commit) \
-    TEST_ENTRY(window_space_move_sa_requires_observed_postcondition) \
-    TEST_ENTRY(window_space_move_prefers_observable_sa_then_verified_fallbacks) \
-    TEST_ENTRY(cross_space_node_move_rolls_back_before_tree_mutation) \
-    TEST_ENTRY(cross_display_space_swap_is_transactional) \
-    TEST_ENTRY(window_animation_policy_honors_reduce_motion_without_mutating_configuration) \
-    TEST_ENTRY(window_animation_direct_refresh_uses_capture_geometry) \
-    TEST_ENTRY(managed_tiling_reserves_publication_before_tree_mutation) \
-    TEST_ENTRY(window_reconciliation_prepares_destination_before_detaching_source) \
-    TEST_ENTRY(window_reconciliation_preserves_transient_fullscreen_exit_membership) \
-    TEST_ENTRY(mouse_no_target_cross_space_transfer_prepares_before_source_mutation) \
-    TEST_ENTRY(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits) \
-    TEST_ENTRY(window_manager_warp_preparation_failure_preserves_trees) \
-    TEST_ENTRY(window_manager_warp_success_state_and_reconcile_matrix) \
-    TEST_ENTRY(window_inventory_compares_membership_not_cardinality) \
-    TEST_ENTRY(window_manager_remaps_both_stacked_nodes_after_cross_space_swap) \
-    TEST_ENTRY(process_table_failures_recover_through_launch_and_startup_callers) \
-    TEST_ENTRY(process_ignored_processes_do_not_schedule_discovery_retries) \
-    TEST_ENTRY(process_front_switch_observation_publishes_identity_before_missing_process_discovery) \
-    TEST_ENTRY(process_discovery_retry_generation_rejects_stale_callbacks) \
-    TEST_ENTRY(process_discovery_retry_registry_deduplicates_bounds_and_recovers_rejected_slots) \
-    TEST_ENTRY(window_node_toggle_zoom_parent_switches_siblings) \
-    TEST_ENTRY(config_file_discovery_rejects_truncated_paths) \
-    TEST_ENTRY(config_file_execution_preserves_literal_path)     \
-    TEST_ENTRY(safe_exec_reports_child_outcomes)                 \
-    TEST_ENTRY(socket_open_sets_cloexec)                         \
-    TEST_ENTRY(socket_cloexec_helper_sets_flag_and_rejects_invalid_fd) \
-    TEST_ENTRY(socket_address_initializer_enforces_unix_path_boundaries) \
-    TEST_ENTRY(scripting_addition_socket_identity_requires_strict_nonroot_uid) \
-    TEST_ENTRY(scripting_addition_helpers_propagate_failures_and_use_literal_paths) \
-    TEST_ENTRY(plist_xml_validator_accepts_xml_characters_and_rejects_invalid_text) \
-    TEST_ENTRY(service_install_publishes_complete_plist_atomically) \
-    TEST_ENTRY(utf8_validation_and_json_replacement_are_strict)   \
-    TEST_ENTRY(serialization_string_escaping_is_strict)          \
-    TEST_ENTRY(window_and_space_serializers_round_trip_safe_escaped_and_absent_strings) \
-    TEST_ENTRY(view_stack_window_node_rejects_full_node_without_mutation) \
-    TEST_ENTRY(view_find_window_list_expands_for_full_stack_node) \
-    TEST_ENTRY(accordion_geometry_matrix_is_bounded_overlapping_and_focus_stable) \
-    TEST_ENTRY(accordion_geometry_handles_fractional_and_degenerate_axes) \
-    TEST_ENTRY(accordion_single_window_normalizes_only_invalid_selected_axis) \
-    TEST_ENTRY(accordion_geometry_large_origins_keep_equal_finite_frames) \
-    TEST_ENTRY(accordion_focus_change_updates_and_flushes_once_without_reordering) \
-    TEST_ENTRY(accordion_batched_lifecycle_recomputes_before_visibility_and_deduplicates) \
-    TEST_ENTRY(accordion_swap_flush_defers_only_when_focus_notification_will_recompute) \
-    TEST_ENTRY(accordion_membership_insertion_removal_and_focus_preserve_order) \
-    TEST_ENTRY(mouse_click_state_ordinary_drag_does_not_poison_consumed_click) \
-    TEST_ENTRY(mouse_click_state_tracks_chorded_buttons_independently) \
-    TEST_ENTRY(mouse_action_classifies_buttons_and_modifiers) \
-    TEST_ENTRY(mouse_queued_action_is_immutable_across_configuration_changes) \
-    TEST_ENTRY(mouse_unclassified_action_does_not_begin_gesture) \
-    TEST_ENTRY(mouse_resize_latches_live_bsp_policy_for_the_gesture) \
-    TEST_ENTRY(native_edge_resize_suppresses_highlight_until_completion) \
-    TEST_ENTRY(native_edge_resize_accepts_mouse_up_before_and_between_geometry_events) \
-    TEST_ENTRY(native_edge_resize_live_setting_remains_release_only) \
-    TEST_ENTRY(native_edge_resize_adapts_post_release_quiescence_to_geometry_state) \
-    TEST_ENTRY(native_edge_resize_finalizer_reconciles_newer_live_ax_geometry) \
-    TEST_ENTRY(native_edge_resize_strict_live_ax_frame_validation_restores_failures) \
-    TEST_ENTRY(native_edge_resize_partial_snapshots_settle_only_after_matching_components) \
-    TEST_ENTRY(native_edge_resize_later_partial_components_never_commit_stale_settled_frame) \
-    TEST_ENTRY(native_edge_resize_rejects_center_unrelated_and_expired_geometry) \
-    TEST_ENTRY(native_edge_resize_all_edges_and_corners_preserve_directional_geometry) \
-    TEST_ENTRY(native_edge_resize_reschedules_inactivity_and_invalidates_on_config_change) \
-    TEST_ENTRY(native_edge_resize_plain_mouse_events_pass_through_unchanged) \
-    TEST_ENTRY(mouse_resize_hybrid_policy_uses_latest_absolute_fractional_geometry) \
-    TEST_ENTRY(mouse_resize_managed_release_uses_synchronous_intended_geometry) \
-    TEST_ENTRY(mouse_bsp_live_resize_reflows_incrementally_and_skips_release_adjustment) \
-    TEST_ENTRY(mouse_bsp_live_resize_ignores_fenceless_steps_without_stretching) \
-    TEST_ENTRY(mouse_dragged_unmanaged_window_preserves_owner_gesture) \
-    TEST_ENTRY(mouse_drag_owner_button_controls_events_and_reset) \
-    TEST_ENTRY(mouse_drag_lost_release_is_owned_and_resets_safely) \
-    TEST_ENTRY(mouse_drag_reset_clears_feedback_window_action_and_button_state) \
-    TEST_ENTRY(mouse_drag_feedback_rejects_source_node_and_normalizes_stack_layout) \
-    TEST_ENTRY(insert_feedback_destroy_clears_mouse_reference) \
-    TEST_ENTRY(insert_feedback_invalid_direction_and_no_action_cleanup) \
-    TEST_ENTRY(insert_feedback_rekeys_on_stack_order_mutations) \
-    TEST_ENTRY(insert_feedback_rekeys_collapsed_child_before_free) \
-    TEST_ENTRY(view_remove_window_node_sibling_collapse_requires_destination_reresolve) \
-    TEST_ENTRY(mouse_drop_action_restore_insertion_point_prefers_sibling_for_singleton_source) \
-    TEST_ENTRY(mouse_drop_action_warp_capture_includes_added_root_after_source_collapse) \
-    TEST_ENTRY(mouse_drop_action_warp_capacity_preflight_rejects_full_stack_destinations) \
-    TEST_ENTRY(mouse_drop_action_warp_capacity_preflight_rejects_full_stack_insert_nodes) \
-    TEST_ENTRY(mouse_drop_action_rollback_failstop_exits) \
-    TEST_ENTRY(space_gesture_encoding)                          \
-    TEST_ENTRY(space_manager_direct_focus_uses_owned_display_identity) \
-    TEST_ENTRY(mouse_handler_direct_space_swipe_suppresses_only_horizontal_gestures) \
-    TEST_ENTRY(space_gesture_invalid_request)                   \
-    TEST_ENTRY(view_padding_sum_widens_before_addition)         \
-    TEST_ENTRY(view_bsp_insertion_and_equalization_use_the_space_split_ratio) \
-    TEST_ENTRY(window_visibility_diagnostics_reuse_snapshot_with_independent_fallbacks) \
-    TEST_ENTRY(window_visibility_handlers_query_order_before_snapshot_diagnostics) \
-    TEST_ENTRY(imperative_layout_transaction_exhausts_preparation_faults_without_publication) \
-    TEST_ENTRY(imperative_layout_transaction_synthesizes_identity_for_empty_uuid) \
-    TEST_ENTRY(imperative_float_layout_uses_no_external_inventory_and_removes_mappings) \
-    TEST_ENTRY(imperative_global_layout_commits_detached_roots_and_runtime_ownership) \
-    TEST_ENTRY(window_inventory_failure_preserves_and_empty_success_clears_membership) \
-    TEST_ENTRY(window_ordered_in_prefers_its_own_visible_space) \
-    TEST_ENTRY(window_ordered_in_space_uses_one_membership_query) \
-    TEST_ENTRY(window_ordered_query_failure_preserves_state)    \
-    TEST_ENTRY(window_ordered_out_leaves_the_tree)              \
-    TEST_ENTRY(window_ordered_out_stays_unmanaged)              \
-    TEST_ENTRY(window_ordered_in_is_tiled_again)                \
-    TEST_ENTRY(window_ordered_in_keeps_float)                   \
-    TEST_ENTRY(window_reordered_stays_tiled)                    \
-    TEST_ENTRY(window_visible_event_while_still_ordered_out)    \
-    TEST_ENTRY(macos_version_classifies_named_and_future_releases) \
-    TEST_ENTRY(managed_space_topology_parsing_is_type_safe_and_ordered) \
-    TEST_ENTRY(managed_space_ids_require_positive_signed_64_bit_values) \
-    TEST_ENTRY(managed_display_space_extraction_skips_malformed_entries) \
-    TEST_ENTRY(active_display_enumeration_rejects_errors_and_unstable_samples) \
-    TEST_ENTRY(temporary_storage_checked_allocation_is_fallible_and_atomic) \
-    TEST_ENTRY(stretch_buffers_use_full_capacity_before_growth)             \
-    TEST_ENTRY(temporary_stretch_buffer_growth_charges_only_capacity)       \
-    TEST_ENTRY(core_foundation_constructors_fail_conservatively) \
-    TEST_ENTRY(cfstring_copy_replaces_unpaired_surrogates) \
-    TEST_ENTRY(display_selection_helpers_are_null_and_type_safe) \
-    TEST_ENTRY(display_space_empty_allocation_preserves_flattened_adjacency) \
-    TEST_ENTRY(add_and_clamp_to_zero_saturates)                 \
-    TEST_ENTRY(event_loop_begin_thread_creation_failure_is_atomic) \
-    TEST_ENTRY(event_queue_normal_and_hard_cap_reserve_is_bounded) \
-    TEST_ENTRY(event_loop_topology_retry_chain_is_single_and_generation_bound) \
-    TEST_ENTRY(event_queue_all_destructive_events_use_hard_reserve) \
-    TEST_ENTRY(event_queue_topology_rejections_coalesce_and_rearm_without_admission) \
-    TEST_ENTRY(event_loop_topology_recovery_is_transactional_complete_and_retryable) \
-    TEST_ENTRY(event_loop_topology_recovery_preserves_identity_through_sid_cycles) \
-    TEST_ENTRY(event_loop_topology_double_capture_uuidless_stability_failures_and_ownership) \
-    TEST_ENTRY(event_loop_accepted_space_creation_failure_reserves_and_recovers_topology) \
-    TEST_ENTRY(event_queue_grows_past_512k_fifo_and_release_once) \
-    TEST_ENTRY(event_queue_wrapped_growth_preserves_fifo_and_release_once) \
-    TEST_ENTRY(event_queue_merge_releases_replaced_mouse_move_once) \
-    TEST_ENTRY(event_queue_adjacent_mouse_drags_coalesce_and_release_replaced_context) \
-    TEST_ENTRY(event_queue_different_mouse_button_drags_preserve_fifo) \
-    TEST_ENTRY(event_queue_mouse_up_boundary_preserves_drag_fifo) \
-    TEST_ENTRY(event_queue_full_releases_owned_context_once)    \
-    TEST_ENTRY(window_created_retry_rejection_consumes_context_and_ax_reference_once) \
-    TEST_ENTRY(event_queue_full_closes_daemon_message_fd_once)  \
-    TEST_ENTRY(event_queue_full_failstops_destructive_events)    \
-    TEST_ENTRY(event_queue_binary_wake_converges_after_merges)   \
-    TEST_ENTRY(focus_pending_accounting_is_saturating_and_owned) \
-    TEST_ENTRY(producer_pending_state_rolls_back_and_retries_after_rejection) \
-    TEST_ENTRY(animation_payload_packers_bound_batches_and_preserve_order) \
-    TEST_ENTRY(animation_clock_cv_setup_stop_and_destroy_states_are_exact) \
-    TEST_ENTRY(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread) \
-    TEST_ENTRY(animation_clock_synthetic_refresh_traces_match_direct_formula) \
-    TEST_ENTRY(animation_null_frame_transaction_still_claims_terminal_completion) \
-    TEST_ENTRY(animation_proxy_creation_faults_are_non_active_and_unwound) \
-    TEST_ENTRY(animation_replacement_proxy_preserves_corner_geometry) \
-    TEST_ENTRY(animation_alpha_restoration_handles_partial_simd_tail) \
-    TEST_ENTRY(animation_display_link_setup_stages_propagate_failures) \
-    TEST_ENTRY(animation_final_frames_and_failed_owner_pruning) \
-    TEST_ENTRY(animation_context_setup_allocation_and_connection_failures_cleanup) \
-    TEST_ENTRY(animation_teardown_has_single_non_callback_owner) \
-    TEST_ENTRY(animation_teardown_order_stops_before_updates_and_releases_clock_before_connection) \
-    TEST_ENTRY(animation_out_failure_retains_resources_until_confirmed) \
-    TEST_ENTRY(animation_teardown_skips_replaced_ownership) \
-    TEST_ENTRY(daemon_message_admission_bounds_and_reuses_slots) \
-    TEST_ENTRY(menu_bar_model_defaults_and_zero_counts)          \
-    TEST_ENTRY(menu_bar_model_classification_cases)              \
-    TEST_ENTRY(menu_bar_model_filter_focus_identity_and_failure_metadata) \
-    TEST_ENTRY(menu_bar_model_refocused_clone_preserves_inventory) \
-    TEST_ENTRY(menu_bar_model_deep_copy_clone_independence_unicode_and_long_labels) \
-    TEST_ENTRY(menu_bar_model_invalid_inputs_and_absent_focus_neutrality) \
-    TEST_ENTRY(menu_bar_model_exact_effective_equality_and_focus_only_changes) \
-    TEST_ENTRY(menu_bar_manager_config_value_parsing)                  \
-    TEST_ENTRY(menu_bar_manager_reuses_collected_window_and_space_state) \
-    TEST_ENTRY(menu_bar_manager_topology_snapshot_drives_space_metadata) \
-    TEST_ENTRY(menu_bar_manager_snapshot_reuses_native_metadata_per_window) \
-    TEST_ENTRY(menu_bar_manager_samples_each_space_type_once)          \
-    TEST_ENTRY(menu_bar_manager_app_summary_growth_is_geometric)       \
-    TEST_ENTRY(menu_bar_manager_focus_only_refresh_reuses_inventory)   \
-    TEST_ENTRY(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh) \
-    TEST_ENTRY(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers) \
-    TEST_ENTRY(menu_bar_manager_startup_staging_seal_reports_refresh_rejection) \
-    TEST_ENTRY(menu_bar_manager_application_inventory_lifecycle_boundaries) \
-    TEST_ENTRY(window_manager_scratchpad_refresh_routes_inventory_changes) \
-    TEST_ENTRY(menu_bar_manager_focus_action_switches_space) \
-    TEST_ENTRY(menu_bar_manager_focus_action_reports_failures_and_rejects_missing_spaces) \
-    TEST_ENTRY(menu_bar_manager_ignores_setting_actions_after_disable) \
-    TEST_ENTRY(menu_bar_manager_rejects_old_lifecycle_but_accepts_valid_setting_generation) \
-    TEST_ENTRY(menu_bar_manager_preserves_action_focus_during_async_menu_open) \
-    TEST_ENTRY(menu_bar_manager_late_close_after_disable_does_not_overemit) \
-    TEST_ENTRY(menu_bar_manager_raw_membership_is_captured_once_per_space) \
-    TEST_ENTRY(menu_bar_manager_raw_and_window_membership_disagreement_is_unknown) \
-    TEST_ENTRY(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown) \
-    TEST_ENTRY(message_utf8_ingress_validation)                            \
-    TEST_ENTRY(message_scratchpad_recover_requires_no_window)             \
-    TEST_ENTRY(message_rule_and_signal_allocation_failures_are_atomic)    \
-    TEST_ENTRY(message_rule_and_signal_reject_duplicate_fields)           \
-    TEST_ENTRY(message_regex_compilation_is_bounded)                       \
-    TEST_ENTRY(message_query_rejects_trailing_arguments)                   \
-    TEST_ENTRY(message_query_backend_failures_are_reported)                \
-    TEST_ENTRY(message_space_query_reuses_topology_across_serialization)  \
-    TEST_ENTRY(message_window_query_reuses_topology_across_serialization)  \
-    TEST_ENTRY(message_window_visibility_uses_topology_snapshot_before_live_query) \
-    TEST_ENTRY(message_window_query_reuses_inventory_snapshot_for_serialization) \
-    TEST_ENTRY(message_rule_filter_diagnostic_lists_all_matchers)          \
-    TEST_ENTRY(message_mode_domain_is_exclusive_strict_and_json_safe)      \
-    TEST_ENTRY(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation) \
-    TEST_ENTRY(message_space_create_destroy_success_requests_one_reconcile) \
-    TEST_ENTRY(declarative_inventory_is_canonical)                         \
-    TEST_ENTRY(declarative_jsonc_normalization_preserves_source)           \
-    TEST_ENTRY(declarative_jsonc_rejects_encoding_duplicates_and_surrogates) \
-    TEST_ENTRY(declarative_json_numeric_domain_table_matches_documented_contract) \
-    TEST_ENTRY(declarative_numeric_conversions_are_checked)                \
-    TEST_ENTRY(declarative_exact_schema_builds_owned_model)                \
-    TEST_ENTRY(declarative_split_ratio_is_valid_globally_and_in_space_policy) \
-    TEST_ENTRY(declarative_native_matcher_regex_compilation_is_bounded) \
-    TEST_ENTRY(declarative_scaffold_schema_is_strict_and_owned)            \
-    TEST_ENTRY(declarative_modes_v1_compatibility_and_v2_schema)            \
-    TEST_ENTRY(declarative_modes_schema_errors_and_limits)                  \
-    TEST_ENTRY(declarative_modes_composition_is_pure_stable_and_transactional) \
-    TEST_ENTRY(declarative_file_loader_enforces_descriptor_contract)       \
-    TEST_ENTRY(declarative_primary_action_classifier_is_exclusive)         \
-    TEST_ENTRY(declarative_startup_paths_are_absolute_lexical_and_bounded)  \
-    TEST_ENTRY(declarative_check_subprocess_has_exact_streams_and_grammar)  \
-    TEST_ENTRY(declarative_help_lists_native_jsonc_actions)                 \
-    TEST_ENTRY(declarative_daemon_flags_preserve_legacy_and_native_independence) \
-    TEST_ENTRY(declarative_startup_selection_obeys_discovery_and_missing_policy) \
-    TEST_ENTRY(declarative_enums_are_runtime_values)                       \
-    TEST_ENTRY(declarative_window_focus_fallback_schema_is_strict_and_global_only) \
-    TEST_ENTRY(declarative_follow_presence_is_validated)                   \
-    TEST_ENTRY(declarative_model_allocator_is_transactional)               \
-    TEST_ENTRY(declarative_file_loader_opens_nonblocking_before_type_validation) \
-    TEST_ENTRY(declarative_file_ops_cover_detectable_changes)              \
-    TEST_ENTRY(declarative_public_paths_are_checked_and_escaped)           \
-    TEST_ENTRY(declarative_rule_inventory_drives_runtime_surfaces)         \
-    TEST_ENTRY(declarative_generated_limit_boundaries)                     \
-    TEST_ENTRY(declarative_schema_paths_are_exact_and_redacted)            \
-    TEST_ENTRY(declarative_exact_integral_lexemes_are_enforced)            \
-    TEST_ENTRY(declarative_numeric_offsets_scale_with_bounded_traversals)  \
-    TEST_ENTRY(declarative_signed_integer_boundaries_are_overflow_safe)     \
-    TEST_ENTRY(declarative_positive_integer_boundaries_are_overflow_safe)   \
-    TEST_ENTRY(declarative_source_positions_handle_cr_and_crlf)            \
-    TEST_ENTRY(declarative_numeric_field_matrix)                           \
-    TEST_ENTRY(declarative_phase1_boundary_matrix)                         \
-    TEST_ENTRY(declarative_runtime_preparation_covers_all_settings_without_live_mutation) \
-    TEST_ENTRY(declarative_command_matrix_covers_all_settings_query_invalid_and_mutation_paths) \
-    TEST_ENTRY(focus_follows_mouse_query_is_canonical_and_round_trips)       \
-    TEST_ENTRY(declarative_imperative_numeric_settings_accept_signed_ints_and_integer_floats) \
-    TEST_ENTRY(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes) \
-    TEST_ENTRY(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space) \
-    TEST_ENTRY(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup) \
-    TEST_ENTRY(space_manager_global_split_ratio_preserves_runtime_space_ownership) \
-    TEST_ENTRY(declarative_scoped_mixed_batch_preflights_before_space_mutation) \
-    TEST_ENTRY(declarative_scoped_missing_view_rejects_all_runtime_settings_without_side_effects) \
-    TEST_ENTRY(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_mutation) \
-    TEST_ENTRY(declarative_runtime_live_matrix_covers_all_typed_setters)   \
-    TEST_ENTRY(imperative_numeric_domain_table_matches_documented_contract)  \
-    TEST_ENTRY(documented_numeric_domains_match_runtime_boundaries)           \
-    TEST_ENTRY(declarative_animation_preparation_never_prompts_and_preserves_candidate) \
-    TEST_ENTRY(declarative_runtime_scalar_application_records_ownership_after_success) \
-    TEST_ENTRY(declarative_runtime_operation_failures_do_not_publish_targets_or_ownership) \
-    TEST_ENTRY(declarative_space_layout_message_surfaces_use_single_authority_and_preserve_failures) \
-    TEST_ENTRY(declarative_accordion_layouts_round_trip_through_imperative_surfaces) \
-    TEST_ENTRY(declarative_non_user_space_layout_boundary_preserves_target_and_ownership) \
-    TEST_ENTRY(declarative_imperative_failures_preserve_target_and_ownership_with_exact_errors) \
-    TEST_ENTRY(declarative_imperative_animation_denial_requests_permission_with_exact_error) \
-    TEST_ENTRY(declarative_per_space_ownership_follows_retained_view_identity) \
-    TEST_ENTRY(declarative_menu_startup_staging_is_silent_and_sealed)      \
-    TEST_ENTRY(declarative_space_resolver_is_fieldwise_and_mode_explicit) \
-    TEST_ENTRY(declarative_space_index_policy_is_dormant_until_target_appears) \
-    TEST_ENTRY(declarative_split_ratio_resolver_preserves_all_precedence_layers_and_mode_overlay) \
-    TEST_ENTRY(declarative_space_resolver_retains_view_ownership_and_preserves_non_user_scalars) \
-    TEST_ENTRY(declarative_mode_policy_order_scaffold_inheritance_clear_and_stable_hash) \
-    TEST_ENTRY(declarative_scaffold_preparation_bounds_each_compiled_slot) \
-    TEST_ENTRY(declarative_scaffold_compacts_subsets_and_ignores_opening_order) \
-    TEST_ENTRY(declarative_scaffold_uses_effective_ratio_only_for_its_root_split) \
-    TEST_ENTRY(declarative_scaffold_ratio_change_rebuilds_existing_canonical_root) \
-    TEST_ENTRY(declarative_scaffold_primary_selection_and_overflow_stability) \
-    TEST_ENTRY(declarative_space_capture_is_per_sid_once_owned_and_rejects_duplicates) \
-    TEST_ENTRY(declarative_space_root_validation_rejects_shape_order_parent_and_zoom_corruption) \
-    TEST_ENTRY(declarative_space_root_validation_accepts_retained_split_child_and_rejects_invalid_domain) \
-    TEST_ENTRY(declarative_space_preparation_classifies_removals_and_owns_clear_images_without_live_writes) \
-    TEST_ENTRY(declarative_space_target_and_old_table_validation_is_bijective) \
-    TEST_ENTRY(declarative_space_before_image_zero_topology_and_window_identity_guards) \
-    TEST_ENTRY(declarative_space_heap_root_and_table_topology_negatives) \
-    TEST_ENTRY(declarative_space_generated_precedence_matrix_covers_all_fields_and_layer_pairs) \
-    TEST_ENTRY(declarative_space_generated_full_chain_and_native_overlap_are_fieldwise) \
-    TEST_ENTRY(declarative_space_generated_ownership_matrix_preserves_clears_and_detects_each_mutation) \
-    TEST_ENTRY(declarative_space_generated_multi_target_allocator_matrix_is_transactional) \
-    TEST_ENTRY(declarative_space_phase3b_same_layout_reconciles_detached_and_preserves_structure) \
-    TEST_ENTRY(declarative_space_phase3b_zero_view_insertion_uses_focused_leaf) \
-    TEST_ENTRY(declarative_space_phase3b_empty_leaf_collapse_matches_live_parent_semantics) \
-    TEST_ENTRY(declarative_space_phase3b_internal_collapse_reparents_and_remaps_zoom) \
-    TEST_ENTRY(declarative_space_phase3b_auto_balance_uses_effective_axis_after_same_layout_split) \
-    TEST_ENTRY(declarative_space_phase3b_converted_bsp_balances_each_constructed_split) \
-    TEST_ENTRY(declarative_space_phase3b_cross_view_owner_table_and_scalar_only_reuse) \
-    TEST_ENTRY(declarative_space_phase3b_capacity_is_positive_and_overflow_checked) \
-    TEST_ENTRY(declarative_space_phase3b_bsp_split_matches_captured_live_semantics) \
-    TEST_ENTRY(declarative_space_phase3b_dynamic_capture_supports_maximum_and_detects_limit_plus_one_duplicate) \
-    TEST_ENTRY(declarative_space_phase3b_complete_pipeline_has_indexed_operation_bound) \
-    TEST_ENTRY(declarative_space_phase3b_large_changed_layout_is_index_bounded) \
-    TEST_ENTRY(declarative_space_phase3b_large_same_layout_reconciliation_is_index_bounded) \
-    TEST_ENTRY(declarative_space_phase3b_replacement_table_collision_matrix) \
-    TEST_ENTRY(declarative_space_phase3b_detached_destructor_isolation_matrix) \
-    TEST_ENTRY(declarative_space_phase3b_large_inventory_has_indexed_operation_bound) \
-    TEST_ENTRY(declarative_space_phase3b_generated_production_scenario_matrix) \
-    TEST_ENTRY(declarative_space_phase3b_allocation_ordinal_matrix_e) \
-    TEST_ENTRY(declarative_space_phase3c_publication_postcommit_and_retirement_are_ordered) \
-    TEST_ENTRY(declarative_space_phase3c_stale_scalar_and_event_turn_reject_before_publication) \
-    TEST_ENTRY(declarative_space_phase3c_rejects_shared_empty_roots_across_views) \
-    TEST_ENTRY(declarative_space_phase3c_generated_stale_before_image_matrix) \
-    TEST_ENTRY(declarative_space_phase3c_generated_postcommit_outcome_matrix) \
-    TEST_ENTRY(declarative_space_phase3c_ownership_modes_zero_one_multi_view_matrix) \
-    TEST_ENTRY(declarative_space_phase3c_lifecycle_rejects_every_repeated_transition) \
-    TEST_ENTRY(declarative_space_phase3c_default_view_flush_visible_and_hidden) \
-    TEST_ENTRY(declarative_space_phase3c_aliasing_and_retirement_guards) \
-    TEST_ENTRY(declarative_space_phase3c_foreign_thread_precommit_is_rejected) \
-    TEST_ENTRY(ffm_configured_and_effective_state_handles_nested_suspension_and_latest_updates) \
-    TEST_ENTRY(declarative_topology_capture_is_owned_strict_and_coherent) \
-    TEST_ENTRY(declarative_topology_uuidless_remap_is_never_admitted) \
-    TEST_ENTRY(declarative_topology_uuidless_live_shape_has_private_stable_identity) \
-    TEST_ENTRY(declarative_topology_uuidless_swap_keeps_identity_with_logical_space) \
-    TEST_ENTRY(declarative_topology_rejects_malformed_incomplete_zero_and_ambiguous_observations) \
-    TEST_ENTRY(declarative_topology_active_pair_is_strict_parented_and_stable) \
-    TEST_ENTRY(declarative_topology_query_failures_leave_no_partial_capture) \
-    TEST_ENTRY(declarative_topology_rejects_duplicates_and_changed_second_observation) \
-    TEST_ENTRY(declarative_topology_system_active_display_count_fill_contract_is_strict) \
-    TEST_ENTRY(declarative_topology_system_active_pair_is_preinventory_safe) \
-    TEST_ENTRY(declarative_topology_candidate_bounds_wrapper_preserves_platform_constraints) \
-    TEST_ENTRY(declarative_topology_candidate_external_bar_bounds_match_view_constraints) \
-    TEST_ENTRY(declarative_detached_views_use_only_capture_identity_bounds_kind_and_defaults) \
-    TEST_ENTRY(declarative_topology_startup_preparation_is_worker_confined_and_transactional) \
-    TEST_ENTRY(declarative_topology_production_bootstrap_retains_no_early_candidate) \
-    TEST_ENTRY(declarative_topology_allocation_failures_leave_no_owned_state) \
-    TEST_ENTRY(declarative_view_adoption_is_atomic_at_every_registry_allocation) \
-    TEST_ENTRY(declarative_startup_install_candidate_mapping_covers_all_settings) \
-    TEST_ENTRY(declarative_startup_install_retains_unavailable_rules_and_dormant_policy) \
-    TEST_ENTRY(declarative_startup_space_policy_count_mismatch_releases_snapshot) \
-    TEST_ENTRY(declarative_startup_install_publishes_owned_generation_atomically) \
-    TEST_ENTRY(declarative_startup_install_failure_preserves_live_managers) \
-    TEST_ENTRY(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable) \
-    TEST_ENTRY(declarative_reconcile_omits_floating_windows_from_published_management) \
-    TEST_ENTRY(declarative_reload_omits_skylight_only_windows_until_discovery) \
-    TEST_ENTRY(declarative_native_edge_resize_reload_defaults_and_failures_are_transactional) \
-    TEST_ENTRY(declarative_reload_stage_failure_matrix_preserves_installed_state) \
-    TEST_ENTRY(declarative_reload_success_is_synchronous_atomic_and_rearms_rules) \
-    TEST_ENTRY(declarative_reload_reserves_fresh_native_one_shots_for_pending_refreshes) \
-    TEST_ENTRY(declarative_reload_accepts_unavailable_native_targets_atomically) \
-    TEST_ENTRY(declarative_reconcile_refreshes_stale_rule_context_without_retargeting) \
-    TEST_ENTRY(declarative_reconcile_uuidless_tuple_drift_stales_rules_without_space_transfer) \
-    TEST_ENTRY(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_lifecycle_triggers) \
-    TEST_ENTRY(declarative_preserve_runtime_topology_uses_effective_external_bar) \
-    TEST_ENTRY(declarative_modes_runtime_worker_transaction_and_topology_gate) \
-    TEST_ENTRY(declarative_mode_messages_classify_typed_failures_without_spurious_reconcile) \
-    TEST_ENTRY(declarative_modes_runtime_stale_topology_matrix) \
-    TEST_ENTRY(declarative_reload_teardown_joins_reconcile_before_clearing_test_state) \
-    TEST_ENTRY(declarative_modes_runtime_second_topology_gate_and_recovery) \
-    TEST_ENTRY(declarative_reconcile_failure_class_diagnostics_are_durable_and_exact) \
-    TEST_ENTRY(declarative_reconcile_second_topology_gate_and_recovery) \
-    TEST_ENTRY(declarative_modes_runtime_allocation_failure_publication_matrix) \
-    TEST_ENTRY(declarative_reconcile_retry_backoff_terminal_and_recovery) \
-    TEST_ENTRY(declarative_reload_generation_zero_rediscovers_then_pins_installed_path) \
-    TEST_ENTRY(declarative_reporter_bounds_redacts_and_escapes_structural_fields) \
-    TEST_ENTRY(declarative_reporter_isolates_sinks_and_uses_literal_bounded_payloads) \
-    TEST_ENTRY(declarative_reporter_client_marker_is_inside_the_primary_bound) \
-    TEST_ENTRY(declarative_stale_warning_acknowledges_after_sink_failure_and_rearms_by_generation) \
-    TEST_ENTRY(declarative_startup_completion_orders_inventory_notifications_menu_socket_and_legacy) \
-    TEST_ENTRY(declarative_startup_production_ops_observe_bootstrap_install_before_inventory) \
-    TEST_ENTRY(declarative_startup_completion_failure_cutoffs_are_exact) \
-    TEST_ENTRY(declarative_rule_topology_is_strict_and_cross_linked) \
-    TEST_ENTRY(declarative_rule_maximum_topology_validates_once_and_folds_are_bounded) \
-    TEST_ENTRY(declarative_rule_preparation_resolves_orders_fingerprints_and_effects) \
-    TEST_ENTRY(declarative_rule_unavailable_targets_preserve_rules_precedence_and_independent_effects) \
-    TEST_ENTRY(declarative_rule_preparation_supports_each_matcher_independently) \
-    TEST_ENTRY(declarative_rule_preparation_rejects_labels_regex_and_preserves_manager) \
-    TEST_ENTRY(declarative_rule_preparation_bounds_every_matcher_before_compilation) \
-    TEST_ENTRY(declarative_rule_preparation_cleans_every_allocator_failure) \
-    TEST_ENTRY(declarative_rule_fold_context_creation_cleans_every_allocator_failure) \
-    TEST_ENTRY(declarative_rule_maximum_preparation_and_destruction_tracks_every_allocation) \
-    TEST_ENTRY(declarative_native_one_shot_template_survives_live_destruction_and_rearms) \
-    TEST_ENTRY(declarative_rule_folding_is_provenance_aware_and_warns_once) \
-    TEST_ENTRY(declarative_rule_warning_state_survives_rearm_acknowledges_and_fails_closed) \
-    TEST_ENTRY(declarative_rule_apply_warns_only_after_first_matching_root) \
-    TEST_ENTRY(declarative_rule_reapply_without_matching_roots_does_not_transition_warning) \
-    TEST_ENTRY(declarative_rule_owned_context_is_immutable_and_rejects_stale_targets) \
-    TEST_ENTRY(rule_protected_label_messages_are_exact_and_ordered) \
-    TEST_ENTRY(rule_label_ownership_results_preserve_runtime_order_and_protect_native) \
-    TEST_ENTRY(ffm_menu_suspension_saturates_and_extra_close_is_safe) \
-    TEST_ENTRY(ffm_application_menu_termination_releases_only_owned_suspensions) \
-    TEST_ENTRY(ffm_config_query_reports_configured_mode_while_effective_is_suspended) \
-    TEST_ENTRY(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change) \
-    TEST_ENTRY(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves) \
-    TEST_ENTRY(ffm_autoraise_occlusion_queries_target_levels_once) \
-    TEST_ENTRY(ffm_menu_bar_tracking_transitions_count_once_without_derived_events) \
-    TEST_ENTRY(ffm_mouse_callback_suppresses_disabled_moves_and_posts_enabled_moves_once) \
-    TEST_ENTRY(message_numeric_token_boundaries)                          \
-    TEST_ENTRY(event_signal_pool_drops_records_when_full_without_overwriting) \
-    TEST_ENTRY(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors) \
-    TEST_ENTRY(event_signal_spawn_reports_validation_setup_and_spawn_errors) \
-    TEST_ENTRY(event_signal_flush_warns_without_private_data_and_continues) \
-    TEST_ENTRY(message_hexadecimal_token_boundaries)                      \
-    TEST_ENTRY(message_duration_values_must_be_finite_and_nonnegative)    \
-    TEST_ENTRY(message_window_grid_numeric_validation)                    \
-    TEST_ENTRY(message_rule_grid_numeric_validation)                      \
-    TEST_ENTRY(message_direct_opacity_numeric_validation)                 \
-    TEST_ENTRY(message_rule_opacity_numeric_validation)                   \
-    TEST_ENTRY(message_external_bar_parser_is_strict)                     \
-    TEST_ENTRY(message_space_padding_parser_is_strict)                    \
-    TEST_ENTRY(message_space_gap_parser_is_strict)                        \
-    TEST_ENTRY(message_window_float_commands_are_strict)                 \
-    TEST_ENTRY(daemon_message_signed_boundaries_and_suffixes)             \
-    TEST_ENTRY(daemon_message_incomplete_frame_has_failure_response)      \
-    TEST_ENTRY(daemon_message_complete_invalid_frames_have_failure_responses) \
-    TEST_ENTRY(daemon_identity_macho_uuid_bounds_are_strict)                \
-    TEST_ENTRY(daemon_identity_json_contains_protocol_identity)             \
-    TEST_ENTRY(daemon_response_buffer_preserves_exact_bytes)              \
-    TEST_ENTRY(daemon_response_buffer_accepts_empty_and_boundary_responses) \
-    TEST_ENTRY(daemon_response_buffer_overflow_selects_failure_response)  \
-    TEST_ENTRY(daemon_io_partial_worker_initialization_rolls_back)       \
-    TEST_ENTRY(daemon_io_post_rejection_consumes_owned_job_once)         \
-    TEST_ENTRY(daemon_io_all_startup_failures_are_idempotent_and_restartable) \
-    TEST_ENTRY(daemon_io_rejects_shutdown_from_event_and_transport_workers) \
-    TEST_ENTRY(daemon_io_open_peer_read_and_writer_stalls_observe_injected_deadlines) \
-    TEST_ENTRY(daemon_io_response_failures_skip_or_preserve_handler_and_static_fallback) \
-    TEST_ENTRY(daemon_io_stale_generation_is_discarded_after_event_loop_restart) \
-    TEST_ENTRY(daemon_io_queue_growth_rejection_finalizes_once)            \
-    TEST_ENTRY(daemon_io_shutdown_times_out_without_event_progress_then_recovers_after_drain) \
-    TEST_ENTRY(daemon_io_concurrent_end_has_single_teardown_owner)          \
-    TEST_ENTRY(daemon_io_immediate_reader_finalize_cannot_create_phantom_active_job) \
-    TEST_ENTRY(daemon_io_enqueue_lease_blocks_teardown_until_transfer_or_release) \
-    TEST_ENTRY(message_loop_accept_errors_retry_backoff_fail_and_recover)   \
-    TEST_ENTRY(message_loop_lifecycle_unblocks_accept_and_recovers_from_thread_failure) \
-    TEST_ENTRY(message_loop_admission_caps_at_32_and_excess_gets_overload_wire) \
-    TEST_ENTRY(daemon_io_allocation_reserve_and_submit_failures_finalize_cleanly) \
-    TEST_ENTRY(daemon_io_writer_submit_failure_finalizes_static_fallback_once) \
-    TEST_ENTRY(daemon_io_partial_body_never_blocks_event_worker)         \
-    TEST_ENTRY(daemon_io_nonreading_peer_never_blocks_event_worker_and_handler_is_event_thread) \
-    TEST_ENTRY(daemon_io_invalid_frame_is_rejected_before_handler)       \
-    TEST_ENTRY(socket_io_fragmented_exact_read)                           \
-    TEST_ENTRY(socket_io_read_retries_interrupted_poll)                   \
-    TEST_ENTRY(socket_io_write_all_delivers_fragmented_buffer)            \
-    TEST_ENTRY(daemon_response_large_buffer_reaches_draining_peer)        \
-    TEST_ENTRY(daemon_response_stalled_peer_has_bounded_write_failure)    \
-    TEST_ENTRY(socket_io_write_all_times_out_with_blocking_descriptor_and_stalled_peer) \
-    TEST_ENTRY(socket_io_write_all_rejects_peer_close_without_sigpipe)    \
-    TEST_ENTRY(socket_io_rejects_early_eof_and_total_timeout)             \
-    TEST_ENTRY(client_response_stalled_peer_times_out)                    \
-    TEST_ENTRY(client_response_fragmented_stream_refreshes_inactivity_deadline) \
-    TEST_ENTRY(client_response_fragmented_failure_routes_everything_to_stderr) \
-    TEST_ENTRY(client_response_later_failure_marker_and_embedded_nul_remain_stdout) \
-    TEST_ENTRY(client_response_requires_complete_frame_and_payload)       \
-    TEST_ENTRY(sa_handshake_accepts_fragmented_version_and_attributes)    \
-    TEST_ENTRY(sa_handshake_accepts_empty_version)                        \
-    TEST_ENTRY(sa_handshake_rejects_missing_terminator_at_capacity)       \
-    TEST_ENTRY(sa_handshake_rejects_truncated_attributes)                 \
-    TEST_ENTRY(sa_handshake_rejects_early_eof)                            \
-    TEST_ENTRY(sa_handshake_observes_total_timeout)                       \
-    TEST_ENTRY(sa_request_without_status_observes_total_timeout)          \
-    TEST_ENTRY(sa_operation_response_has_separate_bounded_budget)         \
-    TEST_ENTRY(sa_payload_builder_boundaries_and_variable_counts)         \
-    TEST_ENTRY(sa_legacy_hashtable_init_fails_stop_on_allocation_failure) \
-    TEST_ENTRY(sa_checked_hashtable_insert_rehashes_and_rolls_back_failures) \
-    TEST_ENTRY(sa_message_fixed_sender_layouts_are_strict)                \
-    TEST_ENTRY(sa_message_opacity_fade_duration_is_validated)             \
-    TEST_ENTRY(sa_sender_validation_precedes_transport_and_valid_boundaries_dispatch_once) \
-    TEST_ENTRY(sa_message_layer_and_order_modes_are_exact)                \
-    TEST_ENTRY(sa_fade_generation_retries_stale_blocked_getter_failure)   \
-    TEST_ENTRY(sa_fade_generation_retries_stale_blocked_setter_failure)   \
-    TEST_ENTRY(sa_message_scale_geometry_and_derived_boundaries)          \
-    TEST_ENTRY(sa_message_swap_sparse_and_mixed_records_are_strict)       \
-    TEST_ENTRY(sa_message_variable_counts_and_entries_are_strict)
-
-static struct {
-    char *name;
-    test_function *func;
-} tests[] = {
-    TEST_LIST
-};
-
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--benchmark-window-ax-frame") == 0) {
@@ -4132,7 +3529,7 @@ int main(int argc, char **argv)
         return parsed == TEST_RUNNER_PARSE_HELP ? EXIT_SUCCESS : 2;
     }
     int total = 0;
-    for (int i = 0; i < array_count(tests); ++i) {
+    for (size_t i = 0; i < test_count; ++i) {
         if (test_runner_matches(&options, tests[i].name)) ++total;
     }
     if (!total) {
@@ -4140,7 +3537,7 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     if (options.list) {
-        for (int i = 0; i < array_count(tests); ++i) {
+        for (size_t i = 0; i < test_count; ++i) {
             if (test_runner_matches(&options, tests[i].name)) puts(tests[i].name);
         }
         return EXIT_SUCCESS;
@@ -4169,7 +3566,7 @@ int main(int argc, char **argv)
     uint64_t cpu_freq  = read_cpu_freq();
     uint64_t begin_tsc = read_cpu_timer();
 
-    for (int i = 0; i < array_count(tests); ++i) {
+    for (size_t i = 0; i < test_count; ++i) {
         if (!test_runner_matches(&options, tests[i].name)) continue;
         uint64_t tsc = read_cpu_timer();
         bool result;

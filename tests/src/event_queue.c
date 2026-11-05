@@ -530,8 +530,8 @@ static void event_queue_retry_release(CFTypeRef value)
 }
 
 TEST_FUNC(window_created_retry_rejection_consumes_context_and_ax_reference_once, {
-    __auto_type saved_retain = window_manager_test_retry_retain;
-    __auto_type saved_release = window_manager_test_retry_release;
+    TEST_SAVE(window_manager_test_retry_retain);
+    TEST_SAVE(window_manager_test_retry_release);
     window_manager_test_retry_retain = event_queue_retry_retain;
     window_manager_test_retry_release = event_queue_retry_release;
     struct application application = { .pid = 42, .psn = { .highLongOfPSN = 4, .lowLongOfPSN = 2 } };
@@ -571,8 +571,6 @@ TEST_FUNC(window_created_retry_rejection_consumes_context_and_ax_reference_once,
         event_queue_destroy(&event_loop.queue);
     }
 
-    window_manager_test_retry_retain = saved_retain;
-    window_manager_test_retry_release = saved_release;
 });
 
 TEST_FUNC(event_queue_normal_and_hard_cap_reserve_is_bounded, {
@@ -1113,10 +1111,10 @@ TEST_FUNC(event_loop_topology_recovery_is_transactional_complete_and_retryable, 
 #undef CHECK_TOPOLOGY_FAILURE_UNCHANGED
 
 TEST_FUNC(event_loop_topology_recovery_preserves_identity_through_sid_cycles, {
-    struct space_manager saved_space = g_space_manager;
-    struct window_manager saved_window = g_window_manager;
-    struct display_manager saved_display = g_display_manager;
-    struct event_loop saved_loop = g_event_loop;
+    TEST_SAVE(g_space_manager);
+    TEST_SAVE(g_window_manager);
+    TEST_SAVE(g_display_manager);
+    TEST_SAVE(g_event_loop);
     struct view_test_platform_ops platform = {
         .copy_space_uuid = topology_fixture_view_uuid,
         .space_is_user = topology_fixture_view_user,
@@ -1199,10 +1197,6 @@ TEST_FUNC(event_loop_topology_recovery_preserves_identity_through_sid_cycles, {
     event_loop_topology_postcommit_hook = NULL;
     event_loop_topology_capture_test = NULL;
     view_test_set_platform_ops(NULL);
-    g_space_manager = saved_space;
-    g_window_manager = saved_window;
-    g_display_manager = saved_display;
-    g_event_loop = saved_loop;
 });
 
 TEST_FUNC(event_loop_topology_double_capture_uuidless_stability_failures_and_ownership, {
@@ -1342,10 +1336,10 @@ TEST_FUNC(event_loop_topology_double_capture_uuidless_stability_failures_and_own
 });
 
 TEST_FUNC(event_loop_accepted_space_creation_failure_reserves_and_recovers_topology, {
-    struct space_manager saved_space = g_space_manager;
-    struct window_manager saved_window = g_window_manager;
-    struct display_manager saved_display = g_display_manager;
-    struct event_loop saved_loop = g_event_loop;
+    TEST_SAVE(g_space_manager);
+    TEST_SAVE(g_window_manager);
+    TEST_SAVE(g_display_manager);
+    TEST_SAVE(g_event_loop);
     struct view_test_platform_ops platform = {
         .copy_space_uuid = topology_fixture_view_uuid,
         .space_is_user = topology_fixture_view_user,
@@ -1386,10 +1380,6 @@ TEST_FUNC(event_loop_accepted_space_creation_failure_reserves_and_recovers_topol
     event_loop_topology_postcommit_hook = NULL;
     event_loop_topology_capture_test = NULL;
     view_test_set_platform_ops(NULL);
-    g_space_manager = saved_space;
-    g_window_manager = saved_window;
-    g_display_manager = saved_display;
-    g_event_loop = saved_loop;
 });
 
 TEST_FUNC(event_queue_grows_past_512k_fifo_and_release_once, {

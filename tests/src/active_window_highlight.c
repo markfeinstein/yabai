@@ -121,12 +121,11 @@ TEST_FUNC(active_window_highlight_pending_geometry_rejects_stale_server_frame,
 TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,
 {
     __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
-    __auto_type saved_hide = window_manager_test_active_window_highlight_hide_observer;
     bool saved_enabled = g_window_manager.enable_active_window_highlight;
     active_window_highlight_refresh_calls = 0;
     active_window_highlight_hide_calls = 0;
     window_manager_test_active_window_highlight_refresh_observer = active_window_highlight_test_refresh_observer;
-    window_manager_test_active_window_highlight_hide_observer = active_window_highlight_test_hide_observer;
+    TEST_OVERRIDE(window_manager_test_active_window_highlight_hide_observer, active_window_highlight_test_hide_observer);
 
     window_manager_set_active_window_highlight_enabled(&g_window_manager, true);
     TEST_CHECK(g_window_manager.enable_active_window_highlight, true);
@@ -151,7 +150,7 @@ TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,
     g_window_manager.focused_window_id = saved_focused_window_id;
     g_window_manager.enable_active_window_highlight = saved_enabled;
     window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
-    window_manager_test_active_window_highlight_hide_observer = saved_hide;
+    TEST_RESTORE(window_manager_test_active_window_highlight_hide_observer);
 });
 
 static int active_window_highlight_space_visible_calls;
@@ -176,9 +175,9 @@ TEST_FUNC(active_window_highlight_fast_path_reuses_space_visibility_until_topolo
         initialized_animations = true;
     }
     struct window_manager saved = g_window_manager;
-    __auto_type saved_visible = window_manager_test_highlight_space_is_visible;
-    __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
-    __auto_type saved_hide = window_manager_test_active_window_highlight_hide_observer;
+    TEST_SAVE(window_manager_test_highlight_space_is_visible);
+    TEST_SAVE(window_manager_test_active_window_highlight_refresh_observer);
+    TEST_SAVE(window_manager_test_active_window_highlight_hide_observer);
     window_manager_test_active_window_highlight_refresh_observer = NULL;
     window_manager_test_active_window_highlight_hide_observer = active_window_highlight_test_hide_observer;
     window_manager_test_highlight_space_is_visible = active_window_highlight_test_space_visible;
@@ -243,9 +242,6 @@ TEST_FUNC(active_window_highlight_fast_path_reuses_space_visibility_until_topolo
     g_window_manager.window_animations_table = animations_table;
     if (initialized_window) { table_free(&g_window_manager.window); memset(&g_window_manager.window, 0, sizeof(g_window_manager.window)); }
     if (initialized_animations) { table_free(&g_window_manager.window_animations_table); memset(&g_window_manager.window_animations_table, 0, sizeof(g_window_manager.window_animations_table)); }
-    window_manager_test_highlight_space_is_visible = saved_visible;
-    window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
-    window_manager_test_active_window_highlight_hide_observer = saved_hide;
 });
 
 TEST_FUNC(managed_space_visibility_resolves_from_topology_or_reports_unknown,

@@ -147,7 +147,7 @@ TEST_FUNC(display_animation_query_excludes_bigsur_and_modern_releases,
 
 TEST_FUNC(display_visible_frame_property_selection_and_serialization_are_explicit,
 {
-    struct display_manager saved_display_manager = g_display_manager;
+    TEST_SAVE(g_display_manager);
     struct display_visible_frame_fixture fixture = display_visible_frame_test_fixture();
     fixture.bounds = CGRectMake(0, 0, 2056, 1329);
     fixture.appkit_frame = CGRectMake(0, 0, 2056, 1329);
@@ -203,12 +203,11 @@ TEST_FUNC(display_visible_frame_property_selection_and_serialization_are_explici
     }
 
     display_bounds_test_ops = (struct display_bounds_platform_ops) {0};
-    g_display_manager = saved_display_manager;
 });
 
 TEST_FUNC(display_internal_constrained_bounds_retain_menu_bar_placement_adjustment,
 {
-    struct display_manager saved_display_manager = g_display_manager;
+    TEST_SAVE(g_display_manager);
     struct display_visible_frame_fixture fixture = display_visible_frame_test_fixture();
     fixture.bounds = CGRectMake(0, 0, 2056, 1329);
     fixture.menu = CGRectMake(0, 0, 2056, 40);
@@ -222,12 +221,11 @@ TEST_FUNC(display_internal_constrained_bounds_retain_menu_bar_placement_adjustme
     TEST_CHECK(CGRectEqualToRect(frame, CGRectMake(0, 40, 2056, 1289)), true);
 
     display_bounds_test_ops = (struct display_bounds_platform_ops) {0};
-    g_display_manager = saved_display_manager;
 });
 
 TEST_FUNC(display_internal_constrained_bounds_cover_system_ui_and_external_bar,
 {
-    struct display_manager saved_display_manager = g_display_manager;
+    TEST_SAVE(g_display_manager);
     struct display_visible_frame_fixture fixture = display_visible_frame_test_fixture();
     display_visible_frame_test_install(&fixture);
     g_display_manager.mode = EXTERNAL_BAR_ALL;
@@ -268,5 +266,4 @@ TEST_FUNC(display_internal_constrained_bounds_cover_system_ui_and_external_bar,
     TEST_CHECK(CGRectEqualToRect(external_bar_frame, CGRectMake(100, 265, 1000, 725)), true);
 
     display_bounds_test_ops = (struct display_bounds_platform_ops) {0};
-    g_display_manager = saved_display_manager;
 });

@@ -285,8 +285,8 @@ TEST_FUNC(menu_bar_manager_topology_snapshot_drives_space_metadata,
         @{ @"Display Identifier": @"display-one",
            @"Spaces": @[ @{ @"id64": @42 }, @{ @"id64": @84 } ] }
     ];
-    __auto_type saved_display_space_list = g_menu_bar_manager_native.display_space_list;
-    __auto_type saved_mission_control_index = g_menu_bar_manager_native.mission_control_index;
+    TEST_SAVE(g_menu_bar_manager_native.display_space_list);
+    TEST_SAVE(g_menu_bar_manager_native.mission_control_index);
     g_menu_bar_manager_native.display_space_list = NULL;
     g_menu_bar_manager_native.mission_control_index = NULL;
 
@@ -303,8 +303,6 @@ TEST_FUNC(menu_bar_manager_topology_snapshot_drives_space_metadata,
     TEST_CHECK(menu_bar_manager_native_mission_control_index((CFArrayRef) topology, 42), 1);
     TEST_CHECK(menu_bar_manager_native_mission_control_index((CFArrayRef) topology, 84), 2);
 
-    g_menu_bar_manager_native.display_space_list = saved_display_space_list;
-    g_menu_bar_manager_native.mission_control_index = saved_mission_control_index;
 });
 
 TEST_FUNC(menu_bar_manager_snapshot_reuses_native_metadata_per_window,
@@ -585,8 +583,8 @@ static bool menu_bar_manager_test_live_noop(void *context)
 
 TEST_FUNC(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refresh,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct display_manager saved_display_manager = g_display_manager;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_display_manager);
     g_event_loop = (struct event_loop) {0};
     g_display_manager.current_display_id = 0;
     menu_bar_manager_test_reset();
@@ -615,8 +613,6 @@ TEST_FUNC(menu_bar_manager_live_worker_startup_seal_is_ordered_and_single_refres
 
     event_loop_end(&g_event_loop);
     menu_bar_manager_test_reset();
-    g_event_loop = saved_event_loop;
-    g_display_manager = saved_display_manager;
 });
 
 TEST_FUNC(menu_bar_manager_startup_staging_coalesces_until_sealed_and_recovers,
@@ -780,7 +776,7 @@ static bool menu_bar_manager_test_scratchpad_refresh_application_windows(struct 
 
 TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     long saved_macos_version = workspace_macos_major_version();
-    int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
+    TEST_SAVE(g_window_notification_rebuild_count);
     __auto_type saved_window_list = window_manager_scratchpad_existing_application_window_list;
     __auto_type saved_order_window_in = window_manager_scratchpad_order_window_in;
     __auto_type saved_refresh_application_windows = window_manager_scratchpad_refresh_application_windows;
@@ -860,7 +856,6 @@ TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
     workspace_set_macos_version(saved_macos_version);
-    g_window_notification_rebuild_count = saved_window_notification_rebuild_count;
 });
 
 TEST_FUNC(menu_bar_manager_focus_action_switches_space, {
@@ -1058,8 +1053,7 @@ TEST_FUNC(menu_bar_manager_raw_membership_is_captured_once_per_space,
 {
     menu_bar_manager_test_reset();
     g_menu_bar_manager_native.space_window_list = menu_bar_manager_test_two_raw_windows;
-    struct table saved_windows = g_window_manager.window;
-    g_window_manager.window = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.window, (struct table) {0});
     table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
 
     struct application application = { .name = "Editor" };
@@ -1126,7 +1120,7 @@ TEST_FUNC(menu_bar_manager_raw_membership_is_captured_once_per_space,
     free(builder.windows);
 
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_windows;
+    TEST_RESTORE(g_window_manager.window);
     menu_bar_manager_test_reset();
 });
 
@@ -1165,8 +1159,7 @@ TEST_FUNC(menu_bar_manager_raw_and_window_membership_disagreement_is_unknown,
 TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
     menu_bar_manager_test_reset();
     menu_bar_manager_test_install_native_seams();
-    struct table saved_managed_window = g_window_manager.managed_window;
-    g_window_manager.managed_window = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.managed_window, (struct table) {0});
     table_init(&g_window_manager.managed_window, 8, hash_wm, compare_wm);
 
     struct application application;
@@ -1236,6 +1229,6 @@ TEST_FUNC(menu_bar_manager_tracked_membership_failure_uses_raw_or_unknown, {
     free(builders[0].windows);
     table_free(&g_window_manager.managed_window);
     memset(&g_window_manager.managed_window, 0, sizeof(g_window_manager.managed_window));
-    g_window_manager.managed_window = saved_managed_window;
+    TEST_RESTORE(g_window_manager.managed_window);
     menu_bar_manager_test_reset();
 });

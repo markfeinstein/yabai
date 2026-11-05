@@ -34,12 +34,9 @@ static void window_close_test_release(CFTypeRef value)
 
 TEST_FUNC(window_close_propagates_ax_failures_and_releases_button,
 {
-    __auto_type saved_copy = window_manager_close_copy_attribute;
-    __auto_type saved_press = window_manager_close_perform_action;
-    __auto_type saved_release = window_manager_close_release;
-    window_manager_close_copy_attribute = window_close_test_copy;
-    window_manager_close_perform_action = window_close_test_press;
-    window_manager_close_release = window_close_test_release;
+    TEST_OVERRIDE(window_manager_close_copy_attribute, window_close_test_copy);
+    TEST_OVERRIDE(window_manager_close_perform_action, window_close_test_press);
+    TEST_OVERRIDE(window_manager_close_release, window_close_test_release);
     struct window window = { .id = 4242, .ref = (AXUIElementRef) CFSTR("close-test-window") };
     const struct {
         AXError copy_result;
@@ -68,9 +65,9 @@ TEST_FUNC(window_close_propagates_ax_failures_and_releases_button,
         TEST_CHECK(window_close_test.release_calls, cases[i].provide_button ? 1 : 0);
         TEST_CHECK(window_close_test.arguments_valid, true);
     }
-    window_manager_close_copy_attribute = saved_copy;
-    window_manager_close_perform_action = saved_press;
-    window_manager_close_release = saved_release;
+    TEST_RESTORE(window_manager_close_copy_attribute);
+    TEST_RESTORE(window_manager_close_perform_action);
+    TEST_RESTORE(window_manager_close_release);
 });
 
 static CGError window_manager_test_ordered_result;
@@ -136,7 +133,7 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     __auto_type saved_set = window_manager_test_set_attribute_value;
     __auto_type saved_observe = window_manager_test_window_observe;
     __auto_type saved_unobserve = window_manager_test_window_unobserve;
-    struct table saved_managed = g_window_manager.managed_window;
+    TEST_SAVE(g_window_manager.managed_window);
     g_window_manager.managed_window = (struct table) {0};
     table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
 
@@ -186,7 +183,6 @@ TEST_FUNC(stale_ax_reference_refreshes_and_retries_once,
     window_manager_test_window_observe = saved_observe;
     window_manager_test_window_unobserve = saved_unobserve;
     table_free(&g_window_manager.managed_window);
-    g_window_manager.managed_window = saved_managed;
 });
 
 TEST_FUNC(window_manager_invalidates_all_constraint_caches,
@@ -237,8 +233,7 @@ TEST_FUNC(hashtable_for_preserves_enclosing_loop_variables,
 
 TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
 {
-    __auto_type saved_query = window_manager_window_is_ordered_in;
-    window_manager_window_is_ordered_in = window_manager_test_window_is_ordered_in;
+    TEST_OVERRIDE(window_manager_window_is_ordered_in, window_manager_test_window_is_ordered_in);
     struct window window = { .id = 42 };
     uint8_t ordered_in = 0;
 
@@ -258,7 +253,7 @@ TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
     TEST_CHECK(ordered_in, 1);
     TEST_CHECK(window_manager_test_ordered_calls, 1);
 
-    window_manager_window_is_ordered_in = saved_query;
+    TEST_RESTORE(window_manager_window_is_ordered_in);
 });
 
 static char *window_manager_test_string_copy_failure(char *value)
@@ -269,7 +264,7 @@ static char *window_manager_test_string_copy_failure(char *value)
 
 TEST_FUNC(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot,
 {
-    __auto_type saved_copy = rule_effects_string_copy;
+    TEST_SAVE(rule_effects_string_copy);
     rule_effects_string_copy = window_manager_test_string_copy_failure;
 
     struct rule_effects effects = { .manage = RULE_PROP_ON, .scratchpad = "next" };
@@ -301,7 +296,6 @@ TEST_FUNC(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot,
 
     free(prior);
     buf_free(wm.rules);
-    rule_effects_string_copy = saved_copy;
 });
 
 TEST_FUNC(rule_scratchpad_application_copy_failure_is_atomic,
@@ -373,11 +367,11 @@ static enum space_op_error startup_rule_focus(uint64_t sid)
 
 TEST_FUNC(startup_inventory_moves_rule_targets_without_following_space,
 {
-    __auto_type saved_window_fullscreen = window_manager_rule_window_is_fullscreen;
-    __auto_type saved_window_space = window_manager_rule_window_space;
-    __auto_type saved_space_fullscreen = window_manager_rule_space_is_fullscreen;
-    __auto_type saved_move = window_manager_rule_send_window_to_space;
-    __auto_type saved_focus = window_manager_rule_focus_space;
+    TEST_SAVE(window_manager_rule_window_is_fullscreen);
+    TEST_SAVE(window_manager_rule_window_space);
+    TEST_SAVE(window_manager_rule_space_is_fullscreen);
+    TEST_SAVE(window_manager_rule_send_window_to_space);
+    TEST_SAVE(window_manager_rule_focus_space);
     window_manager_rule_window_is_fullscreen = startup_rule_not_fullscreen;
     window_manager_rule_window_space = startup_rule_window_space;
     window_manager_rule_space_is_fullscreen = startup_rule_space_not_fullscreen;
@@ -404,11 +398,6 @@ TEST_FUNC(startup_inventory_moves_rule_targets_without_following_space,
     TEST_CHECK(startup_rule_focus_count, 1);
     TEST_CHECK(startup_rule_last_sid, 9U);
 
-    window_manager_rule_window_is_fullscreen = saved_window_fullscreen;
-    window_manager_rule_window_space = saved_window_space;
-    window_manager_rule_space_is_fullscreen = saved_space_fullscreen;
-    window_manager_rule_send_window_to_space = saved_move;
-    window_manager_rule_focus_space = saved_focus;
 });
 
 TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
@@ -624,9 +613,9 @@ static bool sublayer_control_test_set_window_layer(struct window *window, int la
 
 TEST_FUNC(automatic_sublayer_control_preserves_explicit_layers_and_reapplies_auto_windows,
 {
-    bool saved_disabled = g_window_manager.disable_window_sublayer_auto;
-    __auto_type saved_observer = window_manager_test_layer_observer;
-    __auto_type saved_set_layer = window_manager_sublayer_set_window_layer;
+    TEST_SAVE(g_window_manager.disable_window_sublayer_auto);
+    TEST_SAVE(window_manager_test_layer_observer);
+    TEST_SAVE(window_manager_sublayer_set_window_layer);
     struct window automatic = { .id = 121, .layer = LAYER_AUTO };
     struct window explicit = { .id = 122, .layer = LAYER_BELOW };
 
@@ -662,9 +651,6 @@ TEST_FUNC(automatic_sublayer_control_preserves_explicit_layers_and_reapplies_aut
     TEST_CHECK(sublayer_control_test_calls, 2);
 
     table_free(&wm.window);
-    window_manager_sublayer_set_window_layer = saved_set_layer;
-    window_manager_test_layer_observer = saved_observer;
-    g_window_manager.disable_window_sublayer_auto = saved_disabled;
 });
 
 TEST_FUNC(window_selector_area_comparison_preserves_fractional_and_zero_geometry,
@@ -814,8 +800,8 @@ static int window_move_wait_without_sleep(useconds_t interval)
 TEST_FUNC(window_space_move_sa_requires_observed_postcondition,
 {
     bool (*saved_transport)(char *, size_t) = scripting_addition_transport;
-    __auto_type saved_window_space = space_manager_test_window_space;
-    __auto_type saved_wait = space_manager_test_move_wait;
+    TEST_SAVE(space_manager_test_window_space);
+    TEST_SAVE(space_manager_test_move_wait);
     scripting_addition_transport = window_move_sa_transport_acknowledges;
     space_manager_test_window_space = window_move_observe_space;
     space_manager_test_move_wait = window_move_wait_without_sleep;
@@ -838,8 +824,6 @@ TEST_FUNC(window_space_move_sa_requires_observed_postcondition,
     TEST_CHECK(window_move_wait_calls, 2);
 
     scripting_addition_transport = saved_transport;
-    space_manager_test_window_space = saved_window_space;
-    space_manager_test_move_wait = saved_wait;
 });
 
 TEST_FUNC(window_space_move_prefers_observable_sa_then_verified_fallbacks,
@@ -1089,10 +1073,10 @@ static void window_manager_animation_test_highlight_refresh(struct window_manage
 
 TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configuration,
 {
-    __auto_type saved_preferences = window_manager_animation_preferences;
-    __auto_type saved_async = window_manager_animation_async_route;
-    __auto_type saved_direct = window_manager_animation_direct_route;
-    float saved_duration = g_window_manager.window_animation_duration;
+    TEST_SAVE(window_manager_animation_preferences);
+    TEST_SAVE(window_manager_animation_async_route);
+    TEST_SAVE(window_manager_animation_direct_route);
+    TEST_SAVE(g_window_manager.window_animation_duration);
     window_manager_animation_preferences = window_manager_animation_test_preferences;
     window_manager_animation_async_route = window_manager_animation_test_async;
     window_manager_animation_direct_route = window_manager_animation_test_direct;
@@ -1138,19 +1122,15 @@ TEST_FUNC(window_animation_policy_honors_reduce_motion_without_mutating_configur
     TEST_CHECK(window_manager_animation_test_direct_calls, 3);
     TEST_CHECK(g_window_manager.window_animation_duration, 0.25f);
 
-    g_window_manager.window_animation_duration = saved_duration;
-    window_manager_animation_preferences = saved_preferences;
-    window_manager_animation_async_route = saved_async;
-    window_manager_animation_direct_route = saved_direct;
 });
 
 TEST_FUNC(window_animation_direct_refresh_uses_capture_geometry,
 {
-    __auto_type saved_preferences = window_manager_animation_preferences;
-    __auto_type saved_direct = window_manager_animation_direct_route;
-    __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
-    float saved_duration = g_window_manager.window_animation_duration;
-    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
+    TEST_SAVE(window_manager_animation_preferences);
+    TEST_SAVE(window_manager_animation_direct_route);
+    TEST_SAVE(window_manager_test_active_window_highlight_refresh_observer);
+    TEST_SAVE(g_window_manager.window_animation_duration);
+    TEST_SAVE(g_window_manager.focused_window_id);
     window_manager_animation_preferences = window_manager_animation_test_preferences;
     window_manager_animation_direct_route = window_manager_animation_test_direct;
     window_manager_test_active_window_highlight_refresh_observer = window_manager_animation_test_highlight_refresh;
@@ -1189,11 +1169,6 @@ TEST_FUNC(window_animation_direct_refresh_uses_capture_geometry,
     TEST_CHECK(CGRectEqualToRect(window_manager_animation_test_highlight_frame,
                                  CGRectMake(1, 2, 3, 4)), true);
 
-    g_window_manager.focused_window_id = saved_focused_window_id;
-    g_window_manager.window_animation_duration = saved_duration;
-    window_manager_animation_preferences = saved_preferences;
-    window_manager_animation_direct_route = saved_direct;
-    window_manager_test_active_window_highlight_refresh_observer = saved_refresh;
 });
 
 TEST_FUNC(managed_tiling_reserves_publication_before_tree_mutation,
@@ -1663,7 +1638,7 @@ TEST_FUNC(window_manager_warp_success_state_and_reconcile_matrix,
     struct table saved_windows = g_window_manager.window;
     struct table saved_managed = g_window_manager.managed_window;
     struct table saved_feedback = g_window_manager.insert_feedback;
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     enum purify_mode saved_purify = g_window_manager.purify_mode;
     enum window_node_child saved_placement = g_space_manager.window_placement;
     uint64_t saved_generation = declarative_installed.generation;
@@ -1981,7 +1956,6 @@ TEST_FUNC(window_manager_warp_success_state_and_reconcile_matrix,
     pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
     if (g_event_loop.semaphore != SEM_FAILED) sem_close(g_event_loop.semaphore);
-    g_event_loop = saved_event_loop;
 })
 
 TEST_FUNC(window_inventory_compares_membership_not_cardinality,
@@ -2090,9 +2064,9 @@ static AXUIElementRef eui_test_app_for_window(AXUIElementRef window_ref)
 
 TEST_FUNC(window_frames_toggle_enhanced_ui_once_per_application,
 {
-    __auto_type saved_enabled = window_manager_test_enhanced_ui_enabled;
-    __auto_type saved_toggle = window_manager_test_set_enhanced_ui;
-    __auto_type saved_set = window_manager_test_set_attribute_value;
+    TEST_SAVE(window_manager_test_enhanced_ui_enabled);
+    TEST_SAVE(window_manager_test_set_enhanced_ui);
+    TEST_SAVE(window_manager_test_set_attribute_value);
     window_manager_test_enhanced_ui_enabled = eui_test_enabled;
     window_manager_test_set_enhanced_ui = eui_test_set;
     window_manager_test_set_attribute_value = eui_test_set_attribute;
@@ -2140,7 +2114,4 @@ TEST_FUNC(window_frames_toggle_enhanced_ui_once_per_application,
     window_manager_set_window_frames(captures, 0);
     TEST_CHECK(eui_test_reads, 1);
 
-    window_manager_test_enhanced_ui_enabled = saved_enabled;
-    window_manager_test_set_enhanced_ui = saved_toggle;
-    window_manager_test_set_attribute_value = saved_set;
 });

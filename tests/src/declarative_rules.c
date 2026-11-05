@@ -555,8 +555,7 @@ TEST_FUNC(declarative_rule_apply_warns_only_after_first_matching_root,
     TEST_CHECK(declarative_prepare_rules(&model, 1, &declarative_rule_test_topology,
                                         DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 23, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
 
-    struct table saved_windows = g_window_manager.window;
-    g_window_manager.window = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.window, (struct table) {0});
     table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
     struct application application = { .name = "Other" };
     struct window window = { .id = 9001, .application = &application, .is_root = true };
@@ -573,7 +572,7 @@ TEST_FUNC(declarative_rule_apply_warns_only_after_first_matching_root,
     TEST_CHECK(prepared.warning_states[0].emitted_generation, 23ULL);
 
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_windows;
+    TEST_RESTORE(g_window_manager.window);
     declarative_prepared_rules_destroy(&prepared);
 });
 

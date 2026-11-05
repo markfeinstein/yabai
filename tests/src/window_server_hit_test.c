@@ -148,8 +148,7 @@ static OSStatus hit_test_sequence_fake(int cid, int filter, int flags, int reser
 
 TEST_FUNC(window_manager_hit_test_skips_multiple_owned_cosmetic_windows,
 {
-    __auto_type saved_legacy = window_server_hit_test_legacy_impl;
-    window_server_hit_test_legacy_impl = hit_test_sequence_fake;
+    TEST_OVERRIDE(window_server_hit_test_legacy_impl, hit_test_sequence_fake);
     struct window_manager wm = {0}; table_init(&wm.window, 4, hash_wm, compare_wm);
     struct window target = { .id = 30 }; table_add(&wm.window, &target.id, &target);
     int saved_connection = g_connection; g_connection = 55;
@@ -173,7 +172,7 @@ TEST_FUNC(window_manager_hit_test_skips_multiple_owned_cosmetic_windows,
     TEST_CHECK(hit_test_sequence_filters[2], 12U); TEST_CHECK(hit_test_sequence_flags[2], -1);
 
     g_connection = saved_connection; table_free(&wm.window);
-    window_server_hit_test_legacy_impl = saved_legacy;
+    TEST_RESTORE(window_server_hit_test_legacy_impl);
 });
 
 static OSStatus hit_test_thread_legacy(int cid, int filter, int flags, int reserved,

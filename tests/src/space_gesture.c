@@ -226,8 +226,8 @@ TEST_FUNC(space_gesture_encoding,
 
 TEST_FUNC(space_manager_direct_focus_uses_owned_display_identity,
 {
-    __auto_type saved_display_uuid = space_manager_test_display_uuid;
-    __auto_type saved_direct_switch = space_manager_test_direct_space_switch;
+    TEST_SAVE(space_manager_test_display_uuid);
+    TEST_SAVE(space_manager_test_direct_space_switch);
     space_manager_test_display_uuid = test_space_direct_display_uuid;
     space_manager_test_direct_space_switch = test_space_direct_switch;
 
@@ -252,17 +252,14 @@ TEST_FUNC(space_manager_direct_focus_uses_owned_display_identity,
     TEST_CHECK(space_manager_focus_space_direct(9, 31, 32), WM_SPACE_SWITCH_UNAVAILABLE);
     TEST_CHECK(g_space_direct_test_call_count, 2);
 
-    space_manager_test_display_uuid = saved_display_uuid;
-    space_manager_test_direct_space_switch = saved_direct_switch;
 });
 
 TEST_FUNC(mouse_handler_direct_space_swipe_suppresses_only_horizontal_gestures,
 {
-    __auto_type saved_post = mouse_handler_test_post_direct_space_swipe;
     bool saved_direct = g_space_manager.direct_space_switch;
     bool saved_pending = __atomic_load_n(&__pending_gesture, __ATOMIC_ACQUIRE);
     uint64_t saved_last = __atomic_load_n(&__last_gesture_time, __ATOMIC_ACQUIRE);
-    mouse_handler_test_post_direct_space_swipe = test_space_swipe_post;
+    TEST_OVERRIDE(mouse_handler_test_post_direct_space_swipe, test_space_swipe_post);
     g_space_manager.direct_space_switch = true;
     __atomic_store_n(&__pending_gesture, false, __ATOMIC_RELEASE);
 
@@ -389,7 +386,7 @@ TEST_FUNC(mouse_handler_direct_space_swipe_suppresses_only_horizontal_gestures,
         CFRelease(synthetic);
     }
 
-    mouse_handler_test_post_direct_space_swipe = saved_post;
+    TEST_RESTORE(mouse_handler_test_post_direct_space_swipe);
     g_space_manager.direct_space_switch = saved_direct;
     __atomic_store_n(&__pending_gesture, saved_pending, __ATOMIC_RELEASE);
     __atomic_store_n(&__last_gesture_time, saved_last, __ATOMIC_RELEASE);

@@ -11,8 +11,8 @@ static void daemon_io_test_reset_counters(void)
 
 TEST_FUNC(daemon_io_post_rejection_consumes_owned_job_once,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     daemon_io_test_reset_counters();
@@ -41,14 +41,11 @@ TEST_FUNC(daemon_io_post_rejection_consumes_owned_job_once,
     TEST_CHECK(strstr(response + 1, "not dispatched") != NULL, true);
     close(pair[1]);
     TEST_CHECK(daemon_io_end(), true);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(daemon_io_all_startup_failures_are_idempotent_and_restartable,
 {
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
-    g_daemon_message_admission = (struct daemon_message_admission) {0};
+    TEST_OVERRIDE(g_daemon_message_admission, (struct daemon_message_admission) {0});
     for (int failure = 0; failure < 4; ++failure) {
         daemon_io_queue_init_fail_after = failure;
         daemon_io_queue_init_attempt = 0;
@@ -66,7 +63,7 @@ TEST_FUNC(daemon_io_all_startup_failures_are_idempotent_and_restartable,
     daemon_io_thread_create_fail_after = -1;
     TEST_CHECK(daemon_io_begin(1), true);
     TEST_CHECK(daemon_io_end(), true);
-    g_daemon_message_admission = saved_admission;
+    TEST_RESTORE(g_daemon_message_admission);
 });
 
 static bool daemon_io_test_end_from_handler_result;

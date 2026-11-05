@@ -110,7 +110,7 @@ static void daemon_io_test_after_publish_gate(void)
 
 TEST_FUNC(daemon_io_immediate_reader_finalize_cannot_create_phantom_active_job,
 {
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_daemon_message_admission);
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(daemon_io_begin(1), true);
     int pair[2] = {-1, -1};
@@ -153,12 +153,11 @@ TEST_FUNC(daemon_io_immediate_reader_finalize_cannot_create_phantom_active_job,
     char response[64];
     TEST_CHECK(read(pair[1], response, sizeof(response)) > 1, true);
     close(pair[1]);
-    g_daemon_message_admission = saved_admission;
 });
 
 TEST_FUNC(daemon_io_enqueue_lease_blocks_teardown_until_transfer_or_release,
 {
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_daemon_message_admission);
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(daemon_io_begin(1), true);
     int pair[2] = {-1, -1};
@@ -199,5 +198,4 @@ TEST_FUNC(daemon_io_enqueue_lease_blocks_teardown_until_transfer_or_release,
     close(pair[1]);
     daemon_message_admission_release(&g_daemon_message_admission);
     TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 0U);
-    g_daemon_message_admission = saved_admission;
 });

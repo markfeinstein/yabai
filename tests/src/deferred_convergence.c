@@ -177,10 +177,9 @@ TEST_FUNC(focus_pending_accounting_is_saturating_and_owned,
 
 TEST_FUNC(producer_pending_state_rolls_back_and_retries_after_rejection,
 {
-    struct event_loop saved_event_loop = g_event_loop;
     struct menu_bar_manager_state saved_menu_bar_manager = g_menu_bar_manager;
     uint32_t saved_pending_focus = __pending_window_focus;
-    g_event_loop = (struct event_loop) { 0 };
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) { 0 });
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
     pthread_mutex_init(&g_event_loop.producer_lock, NULL);
     pthread_cond_init(&g_event_loop.producer_cond, NULL);
@@ -237,7 +236,7 @@ TEST_FUNC(producer_pending_state_rolls_back_and_retries_after_rejection,
     pthread_cond_destroy(&g_event_loop.producer_cond);
     pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
     g_menu_bar_manager = saved_menu_bar_manager;
     __atomic_store_n(&__pending_window_focus, saved_pending_focus, __ATOMIC_RELEASE);
 });

@@ -652,8 +652,7 @@ static CGError declarative_topology_test_active_display_list(uint32_t capacity, 
 
 TEST_FUNC(declarative_topology_system_active_display_count_fill_contract_is_strict,
 {
-    __auto_type saved_active_display_list = declarative_topology_active_display_list;
-    declarative_topology_active_display_list = declarative_topology_test_active_display_list;
+    TEST_OVERRIDE(declarative_topology_active_display_list, declarative_topology_test_active_display_list);
 
     for (int scenario = 0; scenario < 4; ++scenario) {
         declarative_topology_test_reset_allocator();
@@ -703,7 +702,7 @@ TEST_FUNC(declarative_topology_system_active_display_count_fill_contract_is_stri
 
     declarative_topology_test_reset_allocator();
     declarative_topology_active_display_list_fixture = NULL;
-    declarative_topology_active_display_list = saved_active_display_list;
+    TEST_RESTORE(declarative_topology_active_display_list);
 });
 
 struct declarative_topology_active_pair_fixture
@@ -732,10 +731,8 @@ static uint64_t declarative_topology_test_display_space_id(uint32_t did)
 
 TEST_FUNC(declarative_topology_system_active_pair_is_preinventory_safe,
 {
-    __auto_type saved_active_display_id = declarative_topology_active_display_id;
-    __auto_type saved_display_space_id = declarative_topology_display_space_id;
-    declarative_topology_active_display_id = declarative_topology_test_active_display_id;
-    declarative_topology_display_space_id = declarative_topology_test_display_space_id;
+    TEST_OVERRIDE(declarative_topology_active_display_id, declarative_topology_test_active_display_id);
+    TEST_OVERRIDE(declarative_topology_display_space_id, declarative_topology_test_display_space_id);
 
     struct declarative_topology_active_pair_fixture valid = { .did = 7, .sid = 77 };
     declarative_topology_active_pair_fixture = &valid;
@@ -775,8 +772,8 @@ TEST_FUNC(declarative_topology_system_active_pair_is_preinventory_safe,
     TEST_CHECK(zero_sid.display_space_calls, 1U);
 
     declarative_topology_active_pair_fixture = NULL;
-    declarative_topology_active_display_id = saved_active_display_id;
-    declarative_topology_display_space_id = saved_display_space_id;
+    TEST_RESTORE(declarative_topology_active_display_id);
+    TEST_RESTORE(declarative_topology_display_space_id);
 });
 
 struct declarative_display_bounds_fixture
@@ -824,7 +821,7 @@ static void declarative_display_bounds_test_install(struct declarative_display_b
 
 TEST_FUNC(declarative_topology_candidate_bounds_wrapper_preserves_platform_constraints,
 {
-    struct display_manager saved_display_manager = g_display_manager;
+    TEST_SAVE(g_display_manager);
     struct declarative_display_bounds_fixture fixture = {
         .bounds = CGRectMake(0, 0, 1000, 800),
         .main_did = 1,
@@ -894,7 +891,6 @@ TEST_FUNC(declarative_topology_candidate_bounds_wrapper_preserves_platform_const
                                  display_bounds_constrained_with_external_bar(2, EXTERNAL_BAR_OFF, 30, 10)), true);
 
     display_bounds_test_ops = (struct display_bounds_platform_ops) {0};
-    g_display_manager = saved_display_manager;
 });
 
 TEST_FUNC(declarative_topology_candidate_external_bar_bounds_match_view_constraints,
@@ -1143,7 +1139,7 @@ TEST_FUNC(declarative_topology_startup_preparation_is_worker_confined_and_transa
 
 TEST_FUNC(declarative_topology_production_bootstrap_retains_no_early_candidate,
 {
-    struct event_loop saved_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     struct declarative_startup_state state = { .present = false };
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, declarative_startup_bootstrap, &state), true);
@@ -1152,7 +1148,6 @@ TEST_FUNC(declarative_topology_production_bootstrap_retains_no_early_candidate,
     TEST_CHECK(state.detached_views.views == NULL, true);
     event_loop_end(&g_event_loop);
     declarative_startup_destroy(&state);
-    g_event_loop = saved_loop;
 });
 
 TEST_FUNC(declarative_topology_allocation_failures_leave_no_owned_state,

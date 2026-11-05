@@ -1,7 +1,7 @@
 TEST_FUNC(message_loop_admission_caps_at_32_and_excess_gets_overload_wire,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(event_loop_begin(&g_event_loop), true);
@@ -38,6 +38,4 @@ TEST_FUNC(message_loop_admission_caps_at_32_and_excess_gets_overload_wire,
     TEST_CHECK(daemon_message_admission_count(&g_daemon_message_admission), 0U);
     rmdir(root);
     event_loop_end(&g_event_loop);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });

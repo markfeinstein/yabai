@@ -122,10 +122,8 @@ static bool message_test_empty_scratchpad_inventory(struct application *applicat
 
 TEST_FUNC(message_scratchpad_recover_requires_no_window,
 {
-    uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
-    __auto_type saved_inventory = window_manager_scratchpad_existing_application_window_list;
-    window_manager_scratchpad_existing_application_window_list = message_test_empty_scratchpad_inventory;
-    g_window_manager.focused_window_id = 0;
+    TEST_OVERRIDE(window_manager_scratchpad_existing_application_window_list, message_test_empty_scratchpad_inventory);
+    TEST_OVERRIDE(g_window_manager.focused_window_id, 0);
     char message[] = "--scratchpad\0recover\0";
     FILE *response = tmpfile();
     TEST_CHECK(response != NULL, true);
@@ -135,8 +133,8 @@ TEST_FUNC(message_scratchpad_recover_requires_no_window,
         TEST_CHECK(ftell(response), 0L);
         fclose(response);
     }
-    window_manager_scratchpad_existing_application_window_list = saved_inventory;
-    g_window_manager.focused_window_id = saved_focused_window_id;
+    TEST_RESTORE(window_manager_scratchpad_existing_application_window_list);
+    TEST_RESTORE(g_window_manager.focused_window_id);
 });
 
 static char *message_test_string_copy_failure(char *value)
@@ -147,7 +145,7 @@ static char *message_test_string_copy_failure(char *value)
 
 TEST_FUNC(message_rule_and_signal_allocation_failures_are_atomic,
 {
-    __auto_type saved_copy = message_string_copy;
+    TEST_SAVE(message_string_copy);
     message_string_copy = message_test_string_copy_failure;
 
     char rule_wire[] = "app=^App$\0\0";
@@ -186,7 +184,6 @@ TEST_FUNC(message_rule_and_signal_allocation_failures_are_atomic,
         g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = NULL;
     }
 
-    message_string_copy = saved_copy;
 });
 
 TEST_FUNC(message_rule_and_signal_reject_duplicate_fields,
@@ -313,7 +310,7 @@ static bool message_test_reload_on_worker(void *context)
 
 TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mutation,
 {
-    bool saved_verbose = g_verbose;
+    TEST_SAVE(g_verbose);
     int saved_window_gap = g_space_manager.window_gap;
     enum ffm_mode saved_ffm = g_window_manager.configured_ffm_mode;
     struct rule *saved_rules = g_window_manager.rules;
@@ -389,7 +386,7 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
     buf_free(g_space_manager.labels);
     g_space_manager.labels = saved_labels;
 
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     declarative_install_test_set_generation(UINT64_MAX);
     FILE *exact_response = tmpfile();
@@ -406,14 +403,12 @@ TEST_FUNC(declarative_reload_grammar_rejects_scoped_trailing_and_mixed_before_mu
     }
     TEST_CHECK(declarative_installed_generation(), UINT64_MAX);
     declarative_install_test_set_generation(0);
-    g_event_loop = saved_event_loop;
-    g_verbose = saved_verbose;
 });
 
 TEST_FUNC(message_space_create_destroy_success_requests_one_reconcile,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct menu_bar_manager_state saved_menu_manager = g_menu_bar_manager;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_menu_bar_manager);
     __auto_type saved_active = message_space_active;
     __auto_type saved_add = message_space_add;
     __auto_type saved_destroy = message_space_destroy;
@@ -456,8 +451,6 @@ TEST_FUNC(message_space_create_destroy_success_requests_one_reconcile,
     message_space_add = saved_add;
     message_space_destroy = saved_destroy;
     declarative_install_test_set_generation(0);
-    g_menu_bar_manager = saved_menu_manager;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(message_numeric_token_boundaries,
@@ -610,16 +603,11 @@ static int signal_spawn_test_spawn(pid_t *child, const char *path, const posix_s
 
 TEST_FUNC(event_signal_spawn_reports_validation_setup_and_spawn_errors,
 {
-    __auto_type saved_actions_init = event_signal_actions_init;
-    __auto_type saved_attributes_init = event_signal_attributes_init;
-    __auto_type saved_adddup2 = event_signal_actions_adddup2;
-    __auto_type saved_setflags = event_signal_attributes_setflags;
-    __auto_type saved_spawn = event_signal_spawn;
-    event_signal_actions_init = signal_spawn_test_actions_init;
-    event_signal_attributes_init = signal_spawn_test_attributes_init;
-    event_signal_actions_adddup2 = signal_spawn_test_adddup2;
-    event_signal_attributes_setflags = signal_spawn_test_setflags;
-    event_signal_spawn = signal_spawn_test_spawn;
+    TEST_OVERRIDE(event_signal_actions_init, signal_spawn_test_actions_init);
+    TEST_OVERRIDE(event_signal_attributes_init, signal_spawn_test_attributes_init);
+    TEST_OVERRIDE(event_signal_actions_adddup2, signal_spawn_test_adddup2);
+    TEST_OVERRIDE(event_signal_attributes_setflags, signal_spawn_test_setflags);
+    TEST_OVERRIDE(event_signal_spawn, signal_spawn_test_spawn);
 
     const int errors[] = { ENOMEM, ENOMEM, EBADF, EBADF, EBADF, EINVAL, EAGAIN };
     for (int i = 0; i < array_count(errors); ++i) {
@@ -646,11 +634,11 @@ TEST_FUNC(event_signal_spawn_reports_validation_setup_and_spawn_errors,
     TEST_CHECK(child, -1);
     TEST_CHECK(signal_spawn_test_calls, 0);
 
-    event_signal_actions_init = saved_actions_init;
-    event_signal_attributes_init = saved_attributes_init;
-    event_signal_actions_adddup2 = saved_adddup2;
-    event_signal_attributes_setflags = saved_setflags;
-    event_signal_spawn = saved_spawn;
+    TEST_RESTORE(event_signal_actions_init);
+    TEST_RESTORE(event_signal_attributes_init);
+    TEST_RESTORE(event_signal_actions_adddup2);
+    TEST_RESTORE(event_signal_attributes_setflags);
+    TEST_RESTORE(event_signal_spawn);
 });
 
 static int signal_dispatch_test_spawn(pid_t *child, const char *path, const posix_spawn_file_actions_t *actions,
@@ -679,10 +667,10 @@ TEST_FUNC(event_signal_flush_warns_without_private_data_and_continues,
     if (redirected < 0) { close(saved_stderr); fclose(diagnostic); return result; }
 
     enum signal_type type = SIGNAL_DOCK_DID_RESTART;
-    struct memory_pool saved_storage = g_signal_storage;
+    TEST_SAVE(g_signal_storage);
     struct signal *saved_signals = g_signal_event[type];
-    __auto_type saved_spawn = event_signal_spawn;
-    bool saved_verbose = g_verbose;
+    TEST_SAVE(event_signal_spawn);
+    TEST_SAVE(g_verbose);
     struct event_signal event = {
         .type = type,
         .arg_name = { "PRIVATE_ENV" },
@@ -719,9 +707,6 @@ TEST_FUNC(event_signal_flush_warns_without_private_data_and_continues,
     TEST_CHECK(strstr(output, "PRIVATE_ENV") == NULL, true);
     buf_free(g_signal_event[type]);
     g_signal_event[type] = saved_signals;
-    g_signal_storage = saved_storage;
-    event_signal_spawn = saved_spawn;
-    g_verbose = saved_verbose;
 });
 
 TEST_FUNC(message_hexadecimal_token_boundaries,
@@ -1168,8 +1153,7 @@ TEST_FUNC(message_query_backend_failures_are_reported,
     }
     display_manager_test_set_active_display_list_fn(NULL);
 
-    __auto_type saved_query_window_list = window_manager_query_window_list;
-    window_manager_query_window_list = message_query_window_inventory_failure;
+    TEST_OVERRIDE(window_manager_query_window_list, message_query_window_inventory_failure);
     uint64_t sid = 1;
     FILE *response = tmpfile();
     TEST_CHECK(response != NULL, true);
@@ -1178,7 +1162,7 @@ TEST_FUNC(message_query_backend_failures_are_reported,
         TEST_CHECK(ftell(response), 0L);
         fclose(response);
     }
-    window_manager_query_window_list = saved_query_window_list;
+    TEST_RESTORE(window_manager_query_window_list);
 
     __auto_type saved_window_space_list = space_manager_test_query_window_space_list;
     struct window window = { .id = 42 };
@@ -1249,8 +1233,7 @@ TEST_FUNC(message_space_query_reuses_topology_across_serialization,
     __auto_type saved_topology = space_manager_query_managed_display_spaces;
     __auto_type saved_ordered_displays = space_manager_query_ordered_display_uuids;
     __auto_type saved_display_spaces = space_manager_query_display_space_list;
-    struct table saved_views = g_space_manager.view;
-    g_space_manager.view = (struct table) {0};
+    TEST_OVERRIDE(g_space_manager.view, (struct table) {0});
     table_init(&g_space_manager.view, 8, hash_view, compare_view);
     struct window_node root_a = {0};
     struct window_node root_b = {0};
@@ -1304,7 +1287,7 @@ TEST_FUNC(message_space_query_reuses_topology_across_serialization,
     space_manager_query_ordered_display_uuids = saved_ordered_displays;
     space_manager_query_display_space_list = saved_display_spaces;
     table_free(&g_space_manager.view);
-    g_space_manager.view = saved_views;
+    TEST_RESTORE(g_space_manager.view);
     ts_reset();
 });
 
@@ -1322,8 +1305,7 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
     __auto_type saved_serialization_space = window_test_serialization_space;
     __auto_type saved_space_display_id = window_test_space_display_id;
     __auto_type saved_display_id_arrangement = window_test_display_id_arrangement;
-    struct table saved_windows = g_window_manager.window;
-    g_window_manager.window = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.window, (struct table) {0});
     table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
     struct window tracked = { .id = UINT32_C(0x7ffffffd), .is_root = true };
     table_add(&g_window_manager.window, &tracked.id, &tracked);
@@ -1503,7 +1485,7 @@ TEST_FUNC(message_window_query_reuses_topology_across_serialization,
     window_test_space_display_id = saved_space_display_id;
     window_test_display_id_arrangement = saved_display_id_arrangement;
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_windows;
+    TEST_RESTORE(g_window_manager.window);
     message_query_topology_fails = false;
     message_query_display_space_list_failure_did = 0;
     ts_reset();
@@ -1771,14 +1753,10 @@ static void message_mode_test_run(char *message, size_t message_length,
 #define MESSAGE_MODE_REJECT(frame) do { MESSAGE_MODE_RUN(frame); TEST_CHECK((unsigned char) output[0], (unsigned char) FAILURE_MESSAGE[0]); } while (0)
 TEST_FUNC(message_mode_domain_is_exclusive_strict_and_json_safe,
 {
-    __auto_type saved_activate = message_mode_activate;
-    __auto_type saved_deactivate = message_mode_deactivate;
-    __auto_type saved_snapshot = message_mode_snapshot_create;
-    __auto_type saved_destroy = message_mode_snapshot_destroy;
-    message_mode_activate = message_mode_test_activate;
-    message_mode_deactivate = message_mode_test_deactivate;
-    message_mode_snapshot_create = message_mode_test_snapshot;
-    message_mode_snapshot_destroy = message_mode_test_snapshot_destroy;
+    TEST_OVERRIDE(message_mode_activate, message_mode_test_activate);
+    TEST_OVERRIDE(message_mode_deactivate, message_mode_test_deactivate);
+    TEST_OVERRIDE(message_mode_snapshot_create, message_mode_test_snapshot);
+    TEST_OVERRIDE(message_mode_snapshot_destroy, message_mode_test_snapshot_destroy);
     message_mode_test_activate_calls = 0;
     message_mode_test_deactivate_calls = 0;
     message_mode_test_error = DECLARATIVE_MODES_ERROR_NONE;
@@ -1851,10 +1829,10 @@ TEST_FUNC(message_mode_domain_is_exclusive_strict_and_json_safe,
     MESSAGE_MODE_RUN(deactivate_failure);
     TEST_CHECK(strstr(output, "runtime resource is unavailable") != NULL, true);
     TEST_CHECK(message_mode_test_deactivate_calls, 2UL);
-    message_mode_activate = saved_activate;
-    message_mode_deactivate = saved_deactivate;
-    message_mode_snapshot_create = saved_snapshot;
-    message_mode_snapshot_destroy = saved_destroy;
+    TEST_RESTORE(message_mode_activate);
+    TEST_RESTORE(message_mode_deactivate);
+    TEST_RESTORE(message_mode_snapshot_create);
+    TEST_RESTORE(message_mode_snapshot_destroy);
 });
 #undef MESSAGE_MODE_REJECT
 #undef MESSAGE_MODE_RUN
@@ -1869,7 +1847,7 @@ static bool message_serialization_visible_fallback(uint64_t sid)
 
 TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
 {
-    __auto_type saved_visible = window_test_serialization_space_is_visible;
+    TEST_SAVE(window_test_serialization_space_is_visible);
     window_test_serialization_space_is_visible = message_serialization_visible_fallback;
     NSArray *topology = @[
         @{ @"Display Identifier": @"one", @"Current Space": @{ @"id64": @3 },
@@ -1899,5 +1877,4 @@ TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
     TEST_CHECK(window_manager_query_needs_topology(WINDOW_PROPERTY_IS_VISIBLE), true);
     TEST_CHECK(window_manager_query_needs_topology(WINDOW_PROPERTY_ID), false);
 
-    window_test_serialization_space_is_visible = saved_visible;
 });

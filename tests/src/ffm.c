@@ -80,10 +80,8 @@ TEST_FUNC(ffm_application_menu_termination_releases_only_owned_suspensions,
 
 TEST_FUNC(ffm_config_query_reports_configured_mode_while_effective_is_suspended,
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
-    uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
-    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
-    g_window_manager.ffm_menu_suspend_count = 0;
-    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
+    TEST_OVERRIDE(g_window_manager.ffm_menu_suspend_count, 0);
+    TEST_OVERRIDE(g_window_manager.ffm_anonymous_menu_suspend_count, 0);
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTORAISE);
     window_manager_ffm_menu_opened(&g_window_manager);
     char *output = declarative_test_run_config("focus_follows_mouse", NULL);
@@ -91,8 +89,8 @@ TEST_FUNC(ffm_config_query_reports_configured_mode_while_effective_is_suspended,
     TEST_CHECK(window_manager_effective_ffm_mode(&g_window_manager), FFM_DISABLED);
     free(output);
     g_window_manager.configured_ffm_mode = saved_configured_mode;
-    g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
-    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
+    TEST_RESTORE(g_window_manager.ffm_menu_suspend_count);
+    TEST_RESTORE(g_window_manager.ffm_anonymous_menu_suspend_count);
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -108,10 +106,8 @@ static void ffm_test_change_mode_after_snapshot(enum ffm_mode mode)
 TEST_FUNC(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change,
     enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
-    uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
-    uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
-    g_window_manager.ffm_menu_suspend_count = 0;
-    g_window_manager.ffm_anonymous_menu_suspend_count = 0;
+    TEST_OVERRIDE(g_window_manager.ffm_menu_suspend_count, 0);
+    TEST_OVERRIDE(g_window_manager.ffm_anonymous_menu_suspend_count, 0);
     window_manager_set_focus_follows_mouse(&g_window_manager, FFM_AUTOFOCUS);
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
     ffm_test_handler_snapshot_loads = 0;
@@ -127,8 +123,8 @@ TEST_FUNC(ffm_moved_handler_uses_one_atomic_snapshot_during_mode_change,
     TEST_CHECK(window_manager_effective_ffm_mode(&g_window_manager), FFM_AUTORAISE);
     g_mission_control_mode = saved_mission_control_mode;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
-    g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
-    g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;
+    TEST_RESTORE(g_window_manager.ffm_menu_suspend_count);
+    TEST_RESTORE(g_window_manager.ffm_anonymous_menu_suspend_count);
     window_manager_recompute_effective_ffm_mode(&g_window_manager);
 )
 
@@ -141,14 +137,13 @@ static void ffm_test_record_ordered_move_mode(enum ffm_mode mode)
 }
 
 TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
-    struct event_loop saved_event_loop = g_event_loop;
     enum mission_control_mode saved_mission_control_mode = g_mission_control_mode;
     struct mouse_state saved_mouse_state = g_mouse_state;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
     uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
 
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();
     menu_bar_manager_test_set_enabled_snapshot(11, 11);
@@ -217,7 +212,7 @@ TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
     g_mission_control_mode = saved_mission_control_mode;
     g_mouse_state = saved_mouse_state;
     g_window_manager.configured_ffm_mode = saved_configured_mode;
@@ -227,12 +222,11 @@ TEST_FUNC(ffm_menu_bar_actions_apply_before_causally_queued_mouse_moves,
 )
 
 TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
-    struct event_loop saved_event_loop = g_event_loop;
     enum ffm_mode saved_configured_mode = g_window_manager.configured_ffm_mode;
     uint32_t saved_suspend_count = g_window_manager.ffm_menu_suspend_count;
     uint32_t saved_anonymous_count = g_window_manager.ffm_anonymous_menu_suspend_count;
 
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();
     menu_bar_manager_test_set_enabled_snapshot(21, 21);
@@ -292,7 +286,7 @@ TEST_FUNC(ffm_menu_bar_tracking_transitions_count_once_without_derived_events,
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
     g_window_manager.configured_ffm_mode = saved_configured_mode;
     g_window_manager.ffm_menu_suspend_count = saved_suspend_count;
     g_window_manager.ffm_anonymous_menu_suspend_count = saved_anonymous_count;

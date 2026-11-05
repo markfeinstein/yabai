@@ -20,8 +20,8 @@ static int message_loop_accept_test_backoff(const struct timespec *delay, struct
 
 TEST_FUNC(message_loop_accept_errors_retry_backoff_fail_and_recover,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(event_loop_begin(&g_event_loop), true);
@@ -49,6 +49,4 @@ TEST_FUNC(message_loop_accept_errors_retry_backoff_fail_and_recover,
     TEST_CHECK(access(path, F_OK), -1);
     rmdir(root);
     event_loop_end(&g_event_loop);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });

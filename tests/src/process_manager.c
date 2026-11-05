@@ -106,15 +106,15 @@ static int process_caller_test_retry_index(void)
 
 TEST_FUNC(process_table_failures_recover_through_launch_and_startup_callers,
 {
-    __auto_type saved_create = process_manager_test_create_process;
-    __auto_type saved_pid = process_manager_test_pid_for_psn;
-    __auto_type saved_debugged = process_manager_test_is_debugged;
-    __auto_type saved_event_psn = process_manager_test_event_psn;
-    __auto_type saved_event_kind = process_manager_test_event_kind;
-    __auto_type saved_next = process_manager_test_next_process;
-    __auto_type saved_destroy = process_manager_test_destroy_observer;
-    __auto_type saved_schedule = process_manager_test_schedule_discovery_callback;
-    __auto_type saved_launch_retry = event_loop_test_application_retry_scheduler;
+    TEST_SAVE(process_manager_test_create_process);
+    TEST_SAVE(process_manager_test_pid_for_psn);
+    TEST_SAVE(process_manager_test_is_debugged);
+    TEST_SAVE(process_manager_test_event_psn);
+    TEST_SAVE(process_manager_test_event_kind);
+    TEST_SAVE(process_manager_test_next_process);
+    TEST_SAVE(process_manager_test_destroy_observer);
+    TEST_SAVE(process_manager_test_schedule_discovery_callback);
+    TEST_SAVE(event_loop_test_application_retry_scheduler);
     process_manager_test_create_process = process_caller_test_create;
     process_manager_test_pid_for_psn = process_caller_test_pid;
     process_manager_test_is_debugged = process_caller_test_not_debugged;
@@ -175,26 +175,17 @@ TEST_FUNC(process_table_failures_recover_through_launch_and_startup_callers,
     }
 
     memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
-    process_manager_test_create_process = saved_create;
-    process_manager_test_pid_for_psn = saved_pid;
-    process_manager_test_is_debugged = saved_debugged;
-    process_manager_test_event_psn = saved_event_psn;
-    process_manager_test_event_kind = saved_event_kind;
-    process_manager_test_next_process = saved_next;
-    process_manager_test_destroy_observer = saved_destroy;
-    process_manager_test_schedule_discovery_callback = saved_schedule;
-    event_loop_test_application_retry_scheduler = saved_launch_retry;
 });
 
 TEST_FUNC(process_ignored_processes_do_not_schedule_discovery_retries,
 {
-    __auto_type saved_create = process_manager_test_create_process;
-    __auto_type saved_pid = process_manager_test_pid_for_psn;
-    __auto_type saved_debugged = process_manager_test_is_debugged;
-    __auto_type saved_event_psn = process_manager_test_event_psn;
-    __auto_type saved_event_kind = process_manager_test_event_kind;
-    __auto_type saved_next = process_manager_test_next_process;
-    __auto_type saved_schedule = process_manager_test_schedule_discovery_callback;
+    TEST_SAVE(process_manager_test_create_process);
+    TEST_SAVE(process_manager_test_pid_for_psn);
+    TEST_SAVE(process_manager_test_is_debugged);
+    TEST_SAVE(process_manager_test_event_psn);
+    TEST_SAVE(process_manager_test_event_kind);
+    TEST_SAVE(process_manager_test_next_process);
+    TEST_SAVE(process_manager_test_schedule_discovery_callback);
     process_manager_test_create_process = process_caller_test_create_ignored;
     process_manager_test_pid_for_psn = process_caller_test_pid;
     process_manager_test_is_debugged = process_caller_test_not_debugged;
@@ -241,21 +232,14 @@ TEST_FUNC(process_ignored_processes_do_not_schedule_discovery_retries,
     table_free(&manager.process);
 
     memset(process_discovery_retries, 0, sizeof(process_discovery_retries));
-    process_manager_test_create_process = saved_create;
-    process_manager_test_pid_for_psn = saved_pid;
-    process_manager_test_is_debugged = saved_debugged;
-    process_manager_test_event_psn = saved_event_psn;
-    process_manager_test_event_kind = saved_event_kind;
-    process_manager_test_next_process = saved_next;
-    process_manager_test_schedule_discovery_callback = saved_schedule;
 });
 
 TEST_FUNC(process_front_switch_observation_publishes_identity_before_missing_process_discovery,
 {
-    __auto_type saved_pid = process_manager_test_pid_for_psn;
-    __auto_type saved_event_psn = process_manager_test_event_psn;
-    __auto_type saved_event_kind = process_manager_test_event_kind;
-    __auto_type saved_schedule = process_manager_test_schedule_discovery_callback;
+    TEST_SAVE(process_manager_test_pid_for_psn);
+    TEST_SAVE(process_manager_test_event_psn);
+    TEST_SAVE(process_manager_test_event_kind);
+    TEST_SAVE(process_manager_test_schedule_discovery_callback);
     struct table saved_process_table = g_process_manager.process;
     uint64_t saved_generation = g_process_manager.front_switch_generation;
     uint64_t saved_front_switch_psn = g_process_manager.front_switch_psn;
@@ -292,10 +276,6 @@ TEST_FUNC(process_front_switch_observation_publishes_identity_before_missing_pro
     g_process_manager.front_psn = saved_front_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_switch_psn, __ATOMIC_RELEASE);
-    process_manager_test_pid_for_psn = saved_pid;
-    process_manager_test_event_psn = saved_event_psn;
-    process_manager_test_event_kind = saved_event_kind;
-    process_manager_test_schedule_discovery_callback = saved_schedule;
 });
 
 TEST_FUNC(process_discovery_retry_generation_rejects_stale_callbacks,

@@ -397,8 +397,8 @@ TEST_FUNC(declarative_runtime_preparation_covers_all_settings_without_live_mutat
 
 TEST_FUNC(declarative_command_matrix_covers_all_settings_query_invalid_and_mutation_paths,
     TEST_CHECK(sizeof(declarative_command_cases) / sizeof(declarative_command_cases[0]), DECLARATIVE_CONFIG_COUNT);
-    bool saved_disable_management = g_window_manager.disable_management;
-    bool saved_disable_window_sublayer_auto = g_window_manager.disable_window_sublayer_auto;
+    TEST_SAVE(g_window_manager.disable_management);
+    TEST_SAVE(g_window_manager.disable_window_sublayer_auto);
     struct declarative_animation_permission_ops permissions = { declarative_test_permission_yes, declarative_test_permission_yes, declarative_test_permission_request };
     declarative_runtime_set_animation_permission_ops(&permissions);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
@@ -442,8 +442,6 @@ TEST_FUNC(declarative_command_matrix_covers_all_settings_query_invalid_and_mutat
     }
     declarative_runtime_reset_operation_ops();
     declarative_runtime_reset_animation_permission_ops();
-    g_window_manager.disable_management = saved_disable_management;
-    g_window_manager.disable_window_sublayer_auto = saved_disable_window_sublayer_auto;
 )
 
 TEST_FUNC(focus_follows_mouse_query_is_canonical_and_round_trips,
@@ -536,7 +534,7 @@ TEST_FUNC(declarative_imperative_numeric_settings_accept_signed_ints_and_integer
 )
 
 TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_before_changes,
-    uint64_t saved_last_space_id = g_space_manager.last_space_id;
+    TEST_SAVE(g_space_manager.last_space_id);
     int saved_effects[DECLARATIVE_TEST_EFFECT_COUNT];
     memcpy(saved_effects, declarative_test_effects, sizeof(saved_effects));
     bool initialized_view_table = false;
@@ -580,7 +578,6 @@ TEST_FUNC(declarative_all_global_commands_reject_scoped_queries_and_mutations_be
         memset(&g_space_manager.view, 0, sizeof(g_space_manager.view));
     }
     memcpy(declarative_test_effects, saved_effects, sizeof(saved_effects));
-    g_space_manager.last_space_id = saved_last_space_id;
 )
 
 TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selected_space,
@@ -593,8 +590,7 @@ TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selecte
     uint64_t sid = UINT64_MAX - 62;
     struct view view = { .sid = sid, .split_ratio = 0.5f, .scaffold_fingerprint = 99 };
     table_add(&g_space_manager.view, &sid, &view);
-    uint64_t saved_last_space_id = g_space_manager.last_space_id;
-    g_space_manager.last_space_id = sid;
+    TEST_OVERRIDE(g_space_manager.last_space_id, sid);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
 
     char *output = declarative_test_run_scoped_config("split_ratio", NULL);
@@ -612,7 +608,7 @@ TEST_FUNC(declarative_scoped_split_ratio_query_and_mutation_own_only_the_selecte
     TEST_CHECK(view.scaffold_fingerprint, 0ULL);
 
     declarative_runtime_reset_operation_ops();
-    g_space_manager.last_space_id = saved_last_space_id;
+    TEST_RESTORE(g_space_manager.last_space_id);
     table_remove(&g_space_manager.view, &sid);
     if (initialized_view_table) {
         table_free(&g_space_manager.view);
@@ -630,8 +626,7 @@ TEST_FUNC(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup,
     uint64_t sid = UINT64_MAX - 65;
     struct view view = { .sid = sid, .top_padding = 10, .bottom_padding = 20 };
     table_add(&g_space_manager.view, &sid, &view);
-    uint64_t saved_last_space_id = g_space_manager.last_space_id;
-    g_space_manager.last_space_id = sid;
+    TEST_OVERRIDE(g_space_manager.last_space_id, sid);
     declarative_runtime_set_operation_ops(&declarative_test_operation_ops);
     declarative_test_last_space_pointer = NULL;
     space_manager_test_lookup_count = 0;
@@ -652,7 +647,7 @@ TEST_FUNC(declarative_scoped_mixed_batch_uses_one_admitted_pointer_lookup,
     TEST_CHECK(view.top_padding, 41);
 
     declarative_runtime_reset_operation_ops();
-    g_space_manager.last_space_id = saved_last_space_id;
+    TEST_RESTORE(g_space_manager.last_space_id);
     table_remove(&g_space_manager.view, &sid);
     if (initialized_view_table) {
         table_free(&g_space_manager.view);
@@ -824,9 +819,8 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
     }
     space_manager_remove_label_for_space(&g_space_manager, sid);
 
-    __auto_type saved_index_resolver = message_space_for_mission_control_index;
     declarative_test_missing_index_sid = sid;
-    message_space_for_mission_control_index = declarative_test_space_for_index;
+    TEST_OVERRIDE(message_space_for_mission_control_index, declarative_test_space_for_index);
     char index_message[] = "--space\0" "7\0top_padding\0";
     output = NULL; output_length = 0;
     rsp = open_memstream(&output, &output_length);
@@ -837,7 +831,7 @@ TEST_FUNC(declarative_scoped_missing_view_fails_before_query_preflight_or_batch_
         TEST_CHECK(strcmp(output, FAILURE_MESSAGE "could not locate managed view for selected space.\n"), 0);
         free(output);
     }
-    message_space_for_mission_control_index = saved_index_resolver;
+    TEST_RESTORE(message_space_for_mission_control_index);
 
     char mixed[] = "--space\0recent\0top_padding\0" "41\0bottom_padding\0" "42\0";
     output = NULL; output_length = 0;

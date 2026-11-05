@@ -13,10 +13,8 @@ static void animation_test_terminal_schedule(struct window_animation_context *co
 
 TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
 {
-    __auto_type saved_create = window_manager_animation_transaction_create;
-    __auto_type saved_scheduler = window_manager_animation_teardown_scheduler;
-    window_manager_animation_transaction_create = animation_test_null_transaction;
-    window_manager_animation_teardown_scheduler = animation_test_terminal_schedule;
+    TEST_OVERRIDE(window_manager_animation_transaction_create, animation_test_null_transaction);
+    TEST_OVERRIDE(window_manager_animation_teardown_scheduler, animation_test_terminal_schedule);
     animation_test_terminal_schedule_count = 0;
 
     struct window_animation animation = {
@@ -54,8 +52,8 @@ TEST_FUNC(animation_null_frame_transaction_still_claims_terminal_completion,
     window_manager_animation_tick(&context, &terminal);
     TEST_CHECK(animation_test_terminal_schedule_count, 1);
 
-    window_manager_animation_transaction_create = saved_create;
-    window_manager_animation_teardown_scheduler = saved_scheduler;
+    TEST_RESTORE(window_manager_animation_transaction_create);
+    TEST_RESTORE(window_manager_animation_teardown_scheduler);
 });
 
 static bool animation_test_send_result;
@@ -154,7 +152,6 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     __auto_type saved_empty = window_manager_proxy_empty_region;
     __auto_type saved_window = window_manager_proxy_new_window;
     __auto_type saved_context = window_manager_proxy_new_context;
-    __auto_type saved_release = window_manager_proxy_release_window;
     __auto_type saved_shadow = window_manager_proxy_disable_shadow;
     __auto_type saved_opacity = window_manager_proxy_set_opacity;
     __auto_type saved_resolution = window_manager_proxy_set_resolution;
@@ -162,7 +159,7 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     __auto_type saved_level = window_manager_proxy_set_level;
     __auto_type saved_sub_level = window_manager_proxy_set_sub_level;
     __auto_type saved_corner_renderer = window_corner_geometry_proxy_renderer;
-    window_manager_proxy_release_window = animation_test_release_window;
+    TEST_OVERRIDE(window_manager_proxy_release_window, animation_test_release_window);
 
     if (image) {
         struct window_proxy proxy = { .image = (CGImageRef) CFRetain(image), .frame = CGRectMake(0, 0, 1, 1) };
@@ -255,7 +252,7 @@ TEST_FUNC(animation_proxy_creation_faults_are_non_active_and_unwound,
     window_manager_proxy_empty_region = saved_empty;
     window_manager_proxy_new_window = saved_window;
     window_manager_proxy_new_context = saved_context;
-    window_manager_proxy_release_window = saved_release;
+    TEST_RESTORE(window_manager_proxy_release_window);
     window_manager_proxy_disable_shadow = saved_shadow;
     window_manager_proxy_set_opacity = saved_opacity;
     window_manager_proxy_set_resolution = saved_resolution;
@@ -358,10 +355,8 @@ static CGError animation_test_update(int cid);
 
 TEST_FUNC(animation_display_link_setup_stages_propagate_failures,
 {
-    __auto_type saved_disable = window_manager_animation_disable_update;
-    __auto_type saved_reenable = window_manager_animation_reenable_update;
-    window_manager_animation_disable_update = animation_test_update;
-    window_manager_animation_reenable_update = animation_test_update;
+    TEST_OVERRIDE(window_manager_animation_disable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_reenable_update, animation_test_update);
 
     for (int stage = 1; stage <= 3; ++stage) {
         animation_clock_test_begin();
@@ -389,8 +384,8 @@ TEST_FUNC(animation_display_link_setup_stages_propagate_failures,
     context.clock = NULL;
     animation_clock_test_end();
 
-    window_manager_animation_disable_update = saved_disable;
-    window_manager_animation_reenable_update = saved_reenable;
+    TEST_RESTORE(window_manager_animation_disable_update);
+    TEST_RESTORE(window_manager_animation_reenable_update);
 });
 
 static int animation_test_connection_release_count;
@@ -424,34 +419,29 @@ static void animation_test_set_frame(struct window *window, float x, float y, fl
 
 TEST_FUNC(animation_final_frames_and_failed_owner_pruning,
 {
-    __auto_type saved_set_frame = window_manager_animation_set_frame;
-    window_manager_animation_set_frame = animation_test_set_frame;
+    TEST_OVERRIDE(window_manager_animation_set_frame, animation_test_set_frame);
     struct window_animation animation = { .wid = 7, .x = 1, .y = 2, .w = 3, .h = 4, .skip = true };
     struct window_animation_context context = { .animation_list = &animation, .animation_count = 1 };
     animation_test_set_frame_count = 0;
     window_manager_animation_apply_final_frames(&context);
     TEST_CHECK(animation_test_set_frame_count, 1);
     TEST_CHECK(CGRectEqualToRect(animation_test_last_frame, CGRectMake(1, 2, 3, 4)), true);
-    window_manager_animation_set_frame = saved_set_frame;
+    TEST_RESTORE(window_manager_animation_set_frame);
 
-    struct table saved_table = g_window_manager.window_animations_table;
+    TEST_SAVE(g_window_manager.window_animations_table);
     g_window_manager.window_animations_table = (struct table) { 0 };
     table_init(&g_window_manager.window_animations_table, 4, hash_wm, compare_wm);
     table_add(&g_window_manager.window_animations_table, &animation.wid, &animation);
     window_manager_animation_prune_failed_locked(&context);
     TEST_CHECK(table_find(&g_window_manager.window_animations_table, &animation.wid) == NULL, true);
     table_free(&g_window_manager.window_animations_table);
-    g_window_manager.window_animations_table = saved_table;
 });
 
 TEST_FUNC(animation_context_setup_allocation_and_connection_failures_cleanup,
 {
-    __auto_type saved_allocate = window_manager_animation_allocate;
-    __auto_type saved_connection = window_manager_animation_new_connection;
-    __auto_type saved_release = window_manager_animation_release_connection;
-    window_manager_animation_allocate = animation_test_allocate;
-    window_manager_animation_new_connection = animation_test_new_connection;
-    window_manager_animation_release_connection = animation_test_connection_release;
+    TEST_OVERRIDE(window_manager_animation_allocate, animation_test_allocate);
+    TEST_OVERRIDE(window_manager_animation_new_connection, animation_test_new_connection);
+    TEST_OVERRIDE(window_manager_animation_release_connection, animation_test_connection_release);
 
     animation_test_allocation_call = 0;
     animation_test_allocation_fail_call = 1;
@@ -479,9 +469,9 @@ TEST_FUNC(animation_context_setup_allocation_and_connection_failures_cleanup,
         free(context);
     }
 
-    window_manager_animation_allocate = saved_allocate;
-    window_manager_animation_new_connection = saved_connection;
-    window_manager_animation_release_connection = saved_release;
+    TEST_RESTORE(window_manager_animation_allocate);
+    TEST_RESTORE(window_manager_animation_new_connection);
+    TEST_RESTORE(window_manager_animation_release_connection);
 });
 
 static struct window_animation_context *animation_test_scheduled_context;
@@ -513,18 +503,12 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(window_manager_retry_delay_ms(6), 6400ULL);
     TEST_CHECK(window_manager_retry_delay_ms(UINT8_MAX), 6400ULL);
 
-    __auto_type saved_stop = window_manager_animation_clock_stop;
-    __auto_type saved_link_release = window_manager_animation_clock_destroy;
-    __auto_type saved_connection_release = window_manager_animation_release_connection;
-    __auto_type saved_disable = window_manager_animation_disable_update;
-    __auto_type saved_reenable = window_manager_animation_reenable_update;
-    __auto_type saved_scheduler = window_manager_animation_retry_scheduler;
-    window_manager_animation_clock_stop = animation_test_clock_stop;
-    window_manager_animation_clock_destroy = animation_test_clock_destroy;
-    window_manager_animation_release_connection = animation_test_connection_release;
-    window_manager_animation_disable_update = animation_test_update;
-    window_manager_animation_reenable_update = animation_test_update;
-    window_manager_animation_retry_scheduler = animation_test_retry_schedule;
+    TEST_OVERRIDE(window_manager_animation_clock_stop, animation_test_clock_stop);
+    TEST_OVERRIDE(window_manager_animation_clock_destroy, animation_test_clock_destroy);
+    TEST_OVERRIDE(window_manager_animation_release_connection, animation_test_connection_release);
+    TEST_OVERRIDE(window_manager_animation_disable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_reenable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_retry_scheduler, animation_test_retry_schedule);
     struct window_animation_context saturated = { .teardown_attempts = UINT8_MAX };
     window_manager_animation_retry(&saturated);
     TEST_CHECK(saturated.teardown_attempts, UINT8_MAX);
@@ -552,12 +536,12 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_CHECK(animation_test_link_release_count, 1);
     TEST_CHECK(animation_test_connection_release_count, 1);
 
-    window_manager_animation_clock_stop = saved_stop;
-    window_manager_animation_clock_destroy = saved_link_release;
-    window_manager_animation_release_connection = saved_connection_release;
-    window_manager_animation_disable_update = saved_disable;
-    window_manager_animation_reenable_update = saved_reenable;
-    window_manager_animation_retry_scheduler = saved_scheduler;
+    TEST_RESTORE(window_manager_animation_clock_stop);
+    TEST_RESTORE(window_manager_animation_clock_destroy);
+    TEST_RESTORE(window_manager_animation_release_connection);
+    TEST_RESTORE(window_manager_animation_disable_update);
+    TEST_RESTORE(window_manager_animation_reenable_update);
+    TEST_RESTORE(window_manager_animation_retry_scheduler);
 });
 
 static int animation_test_teardown_order[8];
@@ -608,12 +592,12 @@ static void animation_test_order_retry(struct window_animation_context *context,
 
 TEST_FUNC(animation_teardown_order_stops_before_updates_and_releases_clock_before_connection,
 {
-    __auto_type saved_stop = window_manager_animation_clock_stop;
-    __auto_type saved_destroy = window_manager_animation_clock_destroy;
-    __auto_type saved_disable = window_manager_animation_disable_update;
-    __auto_type saved_reenable = window_manager_animation_reenable_update;
-    __auto_type saved_release = window_manager_animation_release_connection;
-    __auto_type saved_retry = window_manager_animation_retry_scheduler;
+    TEST_SAVE(window_manager_animation_clock_stop);
+    TEST_SAVE(window_manager_animation_clock_destroy);
+    TEST_SAVE(window_manager_animation_disable_update);
+    TEST_SAVE(window_manager_animation_reenable_update);
+    TEST_SAVE(window_manager_animation_release_connection);
+    TEST_SAVE(window_manager_animation_retry_scheduler);
     window_manager_animation_clock_stop = animation_test_order_stop;
     window_manager_animation_clock_destroy = animation_test_order_destroy;
     window_manager_animation_disable_update = animation_test_order_disable;
@@ -641,17 +625,11 @@ TEST_FUNC(animation_teardown_order_stops_before_updates_and_releases_clock_befor
     TEST_CHECK(animation_test_teardown_order[1], 6);
     free(context);
 
-    window_manager_animation_clock_stop = saved_stop;
-    window_manager_animation_clock_destroy = saved_destroy;
-    window_manager_animation_disable_update = saved_disable;
-    window_manager_animation_reenable_update = saved_reenable;
-    window_manager_animation_release_connection = saved_release;
-    window_manager_animation_retry_scheduler = saved_retry;
 });
 
 TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
 {
-    struct table saved_table = g_window_manager.window_animations_table;
+    TEST_SAVE(g_window_manager.window_animations_table);
     g_window_manager.window_animations_table = (struct table) { 0 };
     table_init(&g_window_manager.window_animations_table, 4, hash_wm, compare_wm);
 
@@ -665,22 +643,14 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     context->animation_list[0].proxy.id = 88;
     table_add(&g_window_manager.window_animations_table, &context->animation_list[0].wid, &context->animation_list[0]);
 
-    __auto_type saved_sender = scripting_addition_swap_send_payload;
-    __auto_type saved_scheduler = window_manager_animation_retry_scheduler;
-    __auto_type saved_release_window = window_manager_proxy_release_window;
-    __auto_type saved_connection_release = window_manager_animation_release_connection;
-    __auto_type saved_disable = window_manager_animation_disable_update;
-    __auto_type saved_reenable = window_manager_animation_reenable_update;
-    __auto_type saved_stop = window_manager_animation_clock_stop;
-    __auto_type saved_link_release = window_manager_animation_clock_destroy;
-    scripting_addition_swap_send_payload = animation_test_swap_sender;
-    window_manager_animation_retry_scheduler = animation_test_retry_schedule;
-    window_manager_proxy_release_window = animation_test_release_window;
-    window_manager_animation_release_connection = animation_test_connection_release;
-    window_manager_animation_disable_update = animation_test_update;
-    window_manager_animation_reenable_update = animation_test_update;
-    window_manager_animation_clock_stop = animation_test_clock_stop;
-    window_manager_animation_clock_destroy = animation_test_clock_destroy;
+    TEST_OVERRIDE(scripting_addition_swap_send_payload, animation_test_swap_sender);
+    TEST_OVERRIDE(window_manager_animation_retry_scheduler, animation_test_retry_schedule);
+    TEST_OVERRIDE(window_manager_proxy_release_window, animation_test_release_window);
+    TEST_OVERRIDE(window_manager_animation_release_connection, animation_test_connection_release);
+    TEST_OVERRIDE(window_manager_animation_disable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_reenable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_clock_stop, animation_test_clock_stop);
+    TEST_OVERRIDE(window_manager_animation_clock_destroy, animation_test_clock_destroy);
 
     animation_test_stop_result = kCVReturnSuccess;
     animation_test_stop_count = 0;
@@ -703,21 +673,20 @@ TEST_FUNC(animation_out_failure_retains_resources_until_confirmed,
     TEST_CHECK(animation_test_connection_release_count, 1);
     TEST_CHECK(animation_test_stop_count, 1);
 
-    scripting_addition_swap_send_payload = saved_sender;
-    window_manager_animation_retry_scheduler = saved_scheduler;
-    window_manager_proxy_release_window = saved_release_window;
-    window_manager_animation_release_connection = saved_connection_release;
-    window_manager_animation_disable_update = saved_disable;
-    window_manager_animation_reenable_update = saved_reenable;
-    window_manager_animation_clock_stop = saved_stop;
-    window_manager_animation_clock_destroy = saved_link_release;
+    TEST_RESTORE(scripting_addition_swap_send_payload);
+    TEST_RESTORE(window_manager_animation_retry_scheduler);
+    TEST_RESTORE(window_manager_proxy_release_window);
+    TEST_RESTORE(window_manager_animation_release_connection);
+    TEST_RESTORE(window_manager_animation_disable_update);
+    TEST_RESTORE(window_manager_animation_reenable_update);
+    TEST_RESTORE(window_manager_animation_clock_stop);
+    TEST_RESTORE(window_manager_animation_clock_destroy);
     table_free(&g_window_manager.window_animations_table);
-    g_window_manager.window_animations_table = saved_table;
 });
 
 TEST_FUNC(animation_teardown_skips_replaced_ownership,
 {
-    struct table saved_table = g_window_manager.window_animations_table;
+    TEST_SAVE(g_window_manager.window_animations_table);
     g_window_manager.window_animations_table = (struct table) { 0 };
     table_init(&g_window_manager.window_animations_table, 4, hash_wm, compare_wm);
     struct window_animation replacement = { .wid = 77, .proxy = { .id = 99 } };
@@ -731,27 +700,21 @@ TEST_FUNC(animation_teardown_skips_replaced_ownership,
     context->animation_list[0].wid = 77;
     context->animation_list[0].proxy.id = 88;
 
-    __auto_type saved_sender = scripting_addition_swap_send_payload;
-    __auto_type saved_release_window = window_manager_proxy_release_window;
-    __auto_type saved_connection_release = window_manager_animation_release_connection;
-    __auto_type saved_disable = window_manager_animation_disable_update;
-    __auto_type saved_reenable = window_manager_animation_reenable_update;
-    scripting_addition_swap_send_payload = animation_test_swap_sender;
-    window_manager_proxy_release_window = animation_test_release_window;
-    window_manager_animation_release_connection = animation_test_connection_release;
-    window_manager_animation_disable_update = animation_test_update;
-    window_manager_animation_reenable_update = animation_test_update;
+    TEST_OVERRIDE(scripting_addition_swap_send_payload, animation_test_swap_sender);
+    TEST_OVERRIDE(window_manager_proxy_release_window, animation_test_release_window);
+    TEST_OVERRIDE(window_manager_animation_release_connection, animation_test_connection_release);
+    TEST_OVERRIDE(window_manager_animation_disable_update, animation_test_update);
+    TEST_OVERRIDE(window_manager_animation_reenable_update, animation_test_update);
     animation_test_send_result = true;
     animation_test_release_window_count = 0;
     window_manager_animation_teardown_attempt(context);
     TEST_CHECK(animation_test_release_window_count, 0);
     TEST_CHECK(table_find(&g_window_manager.window_animations_table, &replacement.wid) == &replacement, true);
 
-    scripting_addition_swap_send_payload = saved_sender;
-    window_manager_proxy_release_window = saved_release_window;
-    window_manager_animation_release_connection = saved_connection_release;
-    window_manager_animation_disable_update = saved_disable;
-    window_manager_animation_reenable_update = saved_reenable;
+    TEST_RESTORE(scripting_addition_swap_send_payload);
+    TEST_RESTORE(window_manager_proxy_release_window);
+    TEST_RESTORE(window_manager_animation_release_connection);
+    TEST_RESTORE(window_manager_animation_disable_update);
+    TEST_RESTORE(window_manager_animation_reenable_update);
     table_free(&g_window_manager.window_animations_table);
-    g_window_manager.window_animations_table = saved_table;
 });

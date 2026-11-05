@@ -276,8 +276,7 @@ TEST_FUNC(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_fil
         stream, &metadata, windows, 3, &wrong_count), false);
     fclose(stream);
 
-    uint32_t saved_id = windows[1].window_id;
-    windows[1].window_id = windows[0].window_id;
+    TEST_OVERRIDE(windows[1].window_id, windows[0].window_id);
     char root[] = "/private/tmp/yabai-tag-corpus-test.XXXXXX";
     TEST_CHECK(mkdtemp(root) != NULL, true);
     char path[PATH_MAX];
@@ -285,7 +284,7 @@ TEST_FUNC(window_server_tag_corpus_rejects_invalid_inputs_and_cleans_partial_fil
     TEST_CHECK(window_server_tag_corpus_write_file(
         path, &metadata, windows, 3, &snapshot), false);
     TEST_CHECK(access(path, F_OK), -1);
-    windows[1].window_id = saved_id;
+    TEST_RESTORE(windows[1].window_id);
 
     TEST_CHECK(window_server_tag_corpus_write_file(
         path, &metadata, windows, 3, &snapshot), true);

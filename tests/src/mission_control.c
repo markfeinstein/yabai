@@ -363,36 +363,27 @@ static void mission_control_effect_schedule(uint64_t generation, uint64_t token,
 }
 
 TEST_FUNC(mission_control_linearized_contexts_polls_and_side_effects,
-    uint64_t saved_generation = g_mission_control_generation;
-    uint64_t saved_notification_generation = g_mission_control_notification_token;
-    g_mission_control_generation = UINT64_MAX;
-    g_mission_control_notification_token = UINT64_MAX;
+    TEST_OVERRIDE(g_mission_control_generation, UINT64_MAX);
+    TEST_OVERRIDE(g_mission_control_notification_token, UINT64_MAX);
     TEST_CHECK(mission_control_next_generation(), 1ULL);
     TEST_CHECK(mission_control_next_nonzero(&g_mission_control_notification_token), 1ULL);
-    g_mission_control_generation = saved_generation;
-    g_mission_control_notification_token = saved_notification_generation;
+    TEST_RESTORE(g_mission_control_generation);
+    TEST_RESTORE(g_mission_control_notification_token);
     struct mission_control_session_state saved_session = g_mission_control_session;
     enum mission_control_mode saved_mode = g_mission_control_mode;
-    float saved_opacity = g_window_manager.menubar_opacity;
-    __auto_type saved_signal = event_loop_test_mission_control_signal;
-    __auto_type saved_correct = event_loop_test_mission_control_correct;
-    __auto_type saved_dirty = event_loop_test_mission_control_menu_dirty;
-    __auto_type saved_alpha = event_loop_test_mission_control_menu_alpha;
-    __auto_type saved_reconcile = event_loop_test_mission_control_reconcile;
-    __auto_type saved_schedule = event_loop_test_mission_control_schedule;
     __auto_type saved_copy = event_loop_test_window_list_copy;
 
     mission_control_effect_enter = mission_control_effect_exit = 0;
     mission_control_effect_correct = mission_control_effect_dirty = mission_control_effect_reconcile = 0;
     mission_control_effect_menu_alpha = 0;
     mission_control_effect_schedule_count = 0;
-    event_loop_test_mission_control_signal = mission_control_effect_signal;
-    event_loop_test_mission_control_correct = mission_control_effect_correct_fn;
-    event_loop_test_mission_control_menu_dirty = mission_control_effect_dirty_fn;
-    event_loop_test_mission_control_menu_alpha = mission_control_effect_menu_alpha_fn;
-    event_loop_test_mission_control_reconcile = mission_control_effect_reconcile_fn;
-    event_loop_test_mission_control_schedule = mission_control_effect_schedule;
-    g_window_manager.menubar_opacity = 0.5f;
+    TEST_OVERRIDE(event_loop_test_mission_control_signal, mission_control_effect_signal);
+    TEST_OVERRIDE(event_loop_test_mission_control_correct, mission_control_effect_correct_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_menu_dirty, mission_control_effect_dirty_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_menu_alpha, mission_control_effect_menu_alpha_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_reconcile, mission_control_effect_reconcile_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_schedule, mission_control_effect_schedule);
+    TEST_OVERRIDE(g_window_manager.menubar_opacity, 0.5f);
     __atomic_store_n(&g_mission_control_observer.epoch, 7, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mission_control_observer.notification_token, 11, __ATOMIC_RELEASE);
 
@@ -432,16 +423,16 @@ TEST_FUNC(mission_control_linearized_contexts_polls_and_side_effects,
     CFRelease(mission_control_samples[0]);
     mission_control_samples[0] = NULL;
 
-    event_loop_test_mission_control_signal = saved_signal;
-    event_loop_test_mission_control_correct = saved_correct;
-    event_loop_test_mission_control_menu_dirty = saved_dirty;
-    event_loop_test_mission_control_menu_alpha = saved_alpha;
-    event_loop_test_mission_control_reconcile = saved_reconcile;
-    event_loop_test_mission_control_schedule = saved_schedule;
+    TEST_RESTORE(event_loop_test_mission_control_signal);
+    TEST_RESTORE(event_loop_test_mission_control_correct);
+    TEST_RESTORE(event_loop_test_mission_control_menu_dirty);
+    TEST_RESTORE(event_loop_test_mission_control_menu_alpha);
+    TEST_RESTORE(event_loop_test_mission_control_reconcile);
+    TEST_RESTORE(event_loop_test_mission_control_schedule);
     event_loop_test_window_list_copy = saved_copy;
     g_mission_control_session = saved_session;
     g_mission_control_mode = saved_mode;
-    g_window_manager.menubar_opacity = saved_opacity;
+    TEST_RESTORE(g_window_manager.menubar_opacity);
 )
 
 static struct mission_control_ingress_item *mission_control_barrier_item;
@@ -566,15 +557,11 @@ static CFArrayRef mission_control_always_null(CGWindowListOption option, CGWindo
 }
 
 TEST_FUNC(mission_control_poll_reservation_and_inconclusive_backoff,
-    struct mission_control_session_state saved_session = g_mission_control_session;
-    enum mission_control_mode saved_mode = g_mission_control_mode;
-    __auto_type saved_schedule = event_loop_test_mission_control_schedule;
-    __auto_type saved_copy = event_loop_test_window_list_copy;
-    event_loop_test_mission_control_schedule = mission_control_effect_schedule;
-    event_loop_test_window_list_copy = mission_control_always_null;
+    TEST_OVERRIDE(event_loop_test_mission_control_schedule, mission_control_effect_schedule);
+    TEST_OVERRIDE(event_loop_test_window_list_copy, mission_control_always_null);
     mission_control_effect_schedule_count = 0;
-    g_mission_control_session = (struct mission_control_session_state) { .generation = 90, .active = true };
-    g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
+    TEST_OVERRIDE(g_mission_control_session, (struct mission_control_session_state) { .generation = 90, .active = true });
+    TEST_OVERRIDE(g_mission_control_mode, MISSION_CONTROL_MODE_SHOW);
 
     mission_control_schedule_poll(0.1);
     mission_control_schedule_poll(0.1);
@@ -591,10 +578,10 @@ TEST_FUNC(mission_control_poll_reservation_and_inconclusive_backoff,
     TEST_CHECK(mission_control_effect_schedule_count, 11);
     TEST_CHECK(mission_control_effect_delay, 1.0);
 
-    event_loop_test_mission_control_schedule = saved_schedule;
-    event_loop_test_window_list_copy = saved_copy;
-    g_mission_control_session = saved_session;
-    g_mission_control_mode = saved_mode;
+    TEST_RESTORE(event_loop_test_mission_control_schedule);
+    TEST_RESTORE(event_loop_test_window_list_copy);
+    TEST_RESTORE(g_mission_control_session);
+    TEST_RESTORE(g_mission_control_mode);
 )
 
 static int mission_control_reject_remaining;
@@ -850,10 +837,10 @@ TEST_FUNC(mission_control_shutdown_closes_retry_and_restart_admission,
 )
 
 TEST_FUNC(mission_control_real_event_loop_context_ownership,
-    int saved_event_allocated = mission_control_test_event_allocated;
-    int saved_event_freed = mission_control_test_event_freed;
-    int saved_poll_allocated = event_loop_test_mission_control_poll_allocated;
-    int saved_poll_freed = event_loop_test_mission_control_poll_freed;
+    TEST_SAVE(mission_control_test_event_allocated);
+    TEST_SAVE(mission_control_test_event_freed);
+    TEST_SAVE(event_loop_test_mission_control_poll_allocated);
+    TEST_SAVE(event_loop_test_mission_control_poll_freed);
     mission_control_test_event_allocated = mission_control_test_event_freed = 0;
     event_loop_test_mission_control_poll_allocated = event_loop_test_mission_control_poll_freed = 0;
 
@@ -910,10 +897,6 @@ TEST_FUNC(mission_control_real_event_loop_context_ownership,
     TEST_CHECK(event_loop_test_mission_control_poll_allocated, 2);
     TEST_CHECK(event_loop_test_mission_control_poll_freed, 2);
 
-    mission_control_test_event_allocated = saved_event_allocated;
-    mission_control_test_event_freed = saved_event_freed;
-    event_loop_test_mission_control_poll_allocated = saved_poll_allocated;
-    event_loop_test_mission_control_poll_freed = saved_poll_freed;
 )
 
 TEST_FUNC(mission_control_show_a_show_b_delayed_exit_confirms_b,

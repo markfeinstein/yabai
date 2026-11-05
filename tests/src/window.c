@@ -1052,10 +1052,8 @@ TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
     }
 
     // is-ordered-in and is-visible share one WindowServer ordered-in query.
-    __auto_type saved_visible = window_test_serialization_space_is_visible;
-    __auto_type saved_space = window_test_serialization_space;
-    window_test_serialization_space_is_visible = window_test_serialization_visible_true;
-    window_test_serialization_space = window_test_serialization_space_one;
+    TEST_OVERRIDE(window_test_serialization_space_is_visible, window_test_serialization_visible_true);
+    TEST_OVERRIDE(window_test_serialization_space, window_test_serialization_space_one);
     window_set_flag(&window, WINDOW_STICKY);
     file = tmpfile();
     TEST_CHECK(file != NULL, true);
@@ -1070,8 +1068,8 @@ TEST_FUNC(window_diagnostic_visibility_queries_preserve_unknown_state,
         TEST_CHECK(strstr(buffer, "\"is-ordered-in\":true") != NULL, true);
         TEST_CHECK(strstr(buffer, "\"is-visible\":true") != NULL, true);
     }
-    window_test_serialization_space_is_visible = saved_visible;
-    window_test_serialization_space = saved_space;
+    TEST_RESTORE(window_test_serialization_space_is_visible);
+    TEST_RESTORE(window_test_serialization_space);
 
     window_test_is_ordered_in = saved_ordered;
     window_test_description_from_array = saved_descriptions;
@@ -1157,14 +1155,10 @@ static void window_serialization_snapshot_render(char *buffer, size_t buffer_siz
 
 TEST_FUNC(window_serialization_prefers_snapshot_fields_and_falls_back_independently,
 {
-    __auto_type saved_parent = window_test_serialization_parent;
-    __auto_type saved_level = window_test_serialization_level;
-    __auto_type saved_tags = window_test_serialization_tags;
-    __auto_type saved_shadow = window_test_serialization_shadow;
-    window_test_serialization_parent = window_serialization_snapshot_parent;
-    window_test_serialization_level = window_serialization_snapshot_level;
-    window_test_serialization_tags = window_serialization_snapshot_tags;
-    window_test_serialization_shadow = window_serialization_snapshot_shadow;
+    TEST_OVERRIDE(window_test_serialization_parent, window_serialization_snapshot_parent);
+    TEST_OVERRIDE(window_test_serialization_level, window_serialization_snapshot_level);
+    TEST_OVERRIDE(window_test_serialization_tags, window_serialization_snapshot_tags);
+    TEST_OVERRIDE(window_test_serialization_shadow, window_serialization_snapshot_shadow);
     window_serialization_snapshot_parent_success = true;
     window_serialization_snapshot_tags_success = true;
     window_serialization_snapshot_parent_value = 91;
@@ -1259,10 +1253,10 @@ TEST_FUNC(window_serialization_prefers_snapshot_fields_and_falls_back_independen
     TEST_CHECK(strstr(output, "\"parent\":null") != NULL, true);
     TEST_CHECK(window_serialization_snapshot_parent_calls, 1);
 
-    window_test_serialization_parent = saved_parent;
-    window_test_serialization_level = saved_level;
-    window_test_serialization_tags = saved_tags;
-    window_test_serialization_shadow = saved_shadow;
+    TEST_RESTORE(window_test_serialization_parent);
+    TEST_RESTORE(window_test_serialization_level);
+    TEST_RESTORE(window_test_serialization_tags);
+    TEST_RESTORE(window_test_serialization_shadow);
 });
 
 static int window_serialization_membership_copy_calls;
@@ -1330,11 +1324,11 @@ static void window_serialization_membership_reset_counts(void)
 
 TEST_FUNC(window_serialization_reuses_space_membership_and_preserves_fallbacks,
 {
-    __auto_type saved_copy_spaces = window_test_serialization_copy_spaces;
-    __auto_type saved_display_space = window_test_serialization_display_space;
-    __auto_type saved_membership = window_test_serialization_membership;
-    __auto_type saved_space = window_test_serialization_space;
-    __auto_type saved_sticky = window_test_serialization_is_sticky;
+    TEST_SAVE(window_test_serialization_copy_spaces);
+    TEST_SAVE(window_test_serialization_display_space);
+    TEST_SAVE(window_test_serialization_membership);
+    TEST_SAVE(window_test_serialization_space);
+    TEST_SAVE(window_test_serialization_is_sticky);
     window_test_serialization_copy_spaces = window_serialization_membership_copy_spaces;
     window_test_serialization_display_space = window_serialization_membership_fallback;
 
@@ -1457,11 +1451,6 @@ TEST_FUNC(window_serialization_reuses_space_membership_and_preserves_fallbacks,
     TEST_CHECK(window_serialization_membership_space_calls, 1);
     TEST_CHECK(window_serialization_membership_sticky_calls, 0);
 
-    window_test_serialization_copy_spaces = saved_copy_spaces;
-    window_test_serialization_display_space = saved_display_space;
-    window_test_serialization_membership = saved_membership;
-    window_test_serialization_space = saved_space;
-    window_test_serialization_is_sticky = saved_sticky;
 });
 
 TEST_FUNC(window_serialization_reports_singleton_fullscreen_zoom,
@@ -1538,12 +1527,11 @@ TEST_FUNC(process_create_allocation_failure_does_not_publish_owned_state,
     legacy_allocation_test_reset();
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 
-    __auto_type saved_copy = process_create_cfstring_copy;
-    process_create_cfstring_copy = lifecycle_test_cfstring_copy_failure;
+    TEST_OVERRIDE(process_create_cfstring_copy, lifecycle_test_cfstring_copy_failure);
     bool ignored = true;
     TEST_CHECK(process_create(psn, getpid(), &ignored) == NULL, true);
     TEST_CHECK(ignored, false);
-    process_create_cfstring_copy = saved_copy;
+    TEST_RESTORE(process_create_cfstring_copy);
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 });
 
@@ -1556,19 +1544,16 @@ TEST_FUNC(application_create_rejects_invalid_and_allocation_failure,
     legacy_allocation_test_reset();
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 
-    __auto_type saved_create = application_create_ax_element;
-    application_create_ax_element = lifecycle_test_ax_application_failure;
+    TEST_OVERRIDE(application_create_ax_element, lifecycle_test_ax_application_failure);
     TEST_CHECK(application_create(&process) == NULL, true);
-    application_create_ax_element = saved_create;
+    TEST_RESTORE(application_create_ax_element);
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 });
 
 TEST_FUNC(application_create_copies_initial_window_inventory_context,
 {
-    __auto_type saved_hidden = application_create_is_hidden;
-    __auto_type saved_connection = application_create_connection;
-    application_create_is_hidden = lifecycle_test_application_visible;
-    application_create_connection = lifecycle_test_application_connection;
+    TEST_OVERRIDE(application_create_is_hidden, lifecycle_test_application_visible);
+    TEST_OVERRIDE(application_create_connection, lifecycle_test_application_connection);
 
     struct process process = { .pid = getpid(), .name = "startup" };
     process_initial_window_inventory_store(&process, true);
@@ -1587,8 +1572,8 @@ TEST_FUNC(application_create_copies_initial_window_inventory_context,
         application_destroy(application);
     }
 
-    application_create_is_hidden = saved_hidden;
-    application_create_connection = saved_connection;
+    TEST_RESTORE(application_create_is_hidden);
+    TEST_RESTORE(application_create_connection);
     TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
 });
 

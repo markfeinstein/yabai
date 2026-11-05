@@ -889,8 +889,7 @@ static CFArrayRef ordered_in_membership_copy(int cid, int selector, CFArrayRef w
 TEST_FUNC(window_ordered_in_space_uses_one_membership_query,
 {
     struct window window = { .id = TEST_ORDERED_WID_A };
-    __auto_type saved_copy = window_test_membership_copy_spaces;
-    window_test_membership_copy_spaces = ordered_in_membership_copy;
+    TEST_OVERRIDE(window_test_membership_copy_spaces, ordered_in_membership_copy);
     event_loop_test_order_in_space_visible = ordered_in_test_space_visible;
     space_manager_test_active_space_id = TEST_ORDERED_OTHER_SID;
     ordered_in_window_sid = TEST_ORDERED_SID;
@@ -923,7 +922,7 @@ TEST_FUNC(window_ordered_in_space_uses_one_membership_query,
     TEST_CHECK(window_is_on_space(TEST_ORDERED_WID_A, TEST_ORDERED_SID), true);
     TEST_CHECK(window_is_on_space(TEST_ORDERED_WID_A, 0), false);
 
-    window_test_membership_copy_spaces = saved_copy;
+    TEST_RESTORE(window_test_membership_copy_spaces);
     event_loop_test_order_in_space_visible = NULL;
     space_manager_test_active_space_id = 0;
 });

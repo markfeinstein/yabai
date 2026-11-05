@@ -381,12 +381,10 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     snprintf(startup.path, sizeof(startup.path), "%s", "/tmp/install.jsonc");
     TEST_CHECK(startup.model != NULL, true);
     struct declarative_install_test_context context = { .startup = &startup, .ops = &ops };
-    __auto_type saved_mutex_init = declarative_install_mutex_init;
-    __auto_type saved_mutex_destroy = declarative_install_mutex_destroy;
     declarative_install_test_mutex_init_calls = 0;
     declarative_install_test_mutex_destroy_calls = 0;
-    declarative_install_mutex_init = declarative_install_test_mutex_init_counting;
-    declarative_install_mutex_destroy = declarative_install_test_mutex_destroy_counting;
+    TEST_OVERRIDE(declarative_install_mutex_init, declarative_install_test_mutex_init_counting);
+    TEST_OVERRIDE(declarative_install_mutex_destroy, declarative_install_test_mutex_destroy_counting);
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, declarative_install_test_bootstrap, &context), true);
 
     declarative_install_test_success_allocations = declarative_install_test_allocation_count();
@@ -479,8 +477,8 @@ TEST_FUNC(declarative_startup_install_publishes_owned_generation_atomically,
     event_loop_end(&g_event_loop);
     declarative_install_test_reset();
     TEST_CHECK(declarative_install_test_mutex_destroy_calls, 1U);
-    declarative_install_mutex_init = saved_mutex_init;
-    declarative_install_mutex_destroy = saved_mutex_destroy;
+    TEST_RESTORE(declarative_install_mutex_init);
+    TEST_RESTORE(declarative_install_mutex_destroy);
     declarative_startup_destroy(&startup);
     declarative_topology_test_fixture_destroy(&fixture);
     menu_bar_manager_startup_staging_abort();
@@ -649,8 +647,7 @@ TEST_FUNC(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable,
     struct declarative_mode_snapshot off_worker = {0};
     TEST_CHECK(declarative_mode_snapshot_create(&off_worker), false);
 
-    struct event_loop saved_event_loop = g_event_loop;
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     struct declarative_mode_snapshot_test_context context = {0};
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, declarative_mode_snapshot_test_worker, &context), true);
     event_loop_end(&g_event_loop);
@@ -668,6 +665,6 @@ TEST_FUNC(declarative_mode_snapshot_is_worker_only_fresh_owned_and_destroyable,
     TEST_CHECK(context.snapshot.names == NULL, true);
     TEST_CHECK(context.snapshot.count, 0UL);
     TEST_CHECK(context.snapshot.active_name == NULL, true);
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
     declarative_install_test_reset();
 });

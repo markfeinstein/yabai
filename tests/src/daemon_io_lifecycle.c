@@ -14,8 +14,8 @@ static void daemon_io_generation_reader_gate(void)
 
 TEST_FUNC(daemon_io_stale_generation_is_discarded_after_event_loop_restart,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(event_loop_begin(&g_event_loop), true);
@@ -51,16 +51,12 @@ TEST_FUNC(daemon_io_stale_generation_is_discarded_after_event_loop_restart,
     close(pair[1]);
     TEST_CHECK(daemon_io_end(), true);
     event_loop_end(&g_event_loop);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(daemon_io_queue_growth_rejection_finalizes_once,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
-    g_event_loop = (struct event_loop) {0};
-    g_daemon_message_admission = (struct daemon_message_admission) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
+    TEST_OVERRIDE(g_daemon_message_admission, (struct daemon_message_admission) {0});
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
     TEST_CHECK(pthread_mutex_init(&g_event_loop.producer_lock, NULL), 0);
     TEST_CHECK(pthread_cond_init(&g_event_loop.producer_cond, NULL), 0);
@@ -98,8 +94,8 @@ TEST_FUNC(daemon_io_queue_growth_rejection_finalizes_once,
     TEST_CHECK(daemon_io_end(), true);
     g_event_queue_test_fail_allocation = false;
     event_loop_cleanup(&g_event_loop);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_daemon_message_admission);
+    TEST_RESTORE(g_event_loop);
 });
 
 static uint32_t daemon_io_test_event_queue_count(struct event_loop *event_loop)
@@ -112,10 +108,8 @@ static uint32_t daemon_io_test_event_queue_count(struct event_loop *event_loop)
 
 TEST_FUNC(daemon_io_shutdown_times_out_without_event_progress_then_recovers_after_drain,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
-    g_event_loop = (struct event_loop) {0};
-    g_daemon_message_admission = (struct daemon_message_admission) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
+    TEST_OVERRIDE(g_daemon_message_admission, (struct daemon_message_admission) {0});
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
     TEST_CHECK(pthread_mutex_init(&g_event_loop.producer_lock, NULL), 0);
     TEST_CHECK(pthread_cond_init(&g_event_loop.producer_cond, NULL), 0);
@@ -154,8 +148,8 @@ TEST_FUNC(daemon_io_shutdown_times_out_without_event_progress_then_recovers_afte
     TEST_CHECK(daemon_io_end(), true);
     daemon_io_shutdown_timeout_ms = DAEMON_IO_READ_TIMEOUT_MS + DAEMON_IO_WRITE_TIMEOUT_MS + DAEMON_IO_SHUTDOWN_GRACE_MS;
     close(pair[1]);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_daemon_message_admission);
+    TEST_RESTORE(g_event_loop);
 });
 
 static int message_loop_test_fail_thread(pthread_t *thread, const pthread_attr_t *attr,
@@ -167,8 +161,8 @@ static int message_loop_test_fail_thread(pthread_t *thread, const pthread_attr_t
 
 TEST_FUNC(message_loop_lifecycle_unblocks_accept_and_recovers_from_thread_failure,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     TEST_CHECK(event_loop_begin(&g_event_loop), true);
@@ -187,6 +181,4 @@ TEST_FUNC(message_loop_lifecycle_unblocks_accept_and_recovers_from_thread_failur
     TEST_CHECK(access(path, F_OK), -1);
     rmdir(root);
     event_loop_end(&g_event_loop);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });

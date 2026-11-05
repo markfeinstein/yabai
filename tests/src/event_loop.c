@@ -255,9 +255,9 @@ static void replacement_window_test_unobserve(struct window *window)
 
 TEST_FUNC(missed_focused_window_adoption_is_bounded_per_application_identity,
 {
-    __auto_type saved_list = window_manager_test_application_window_list;
-    __auto_type saved_id = window_manager_test_ax_window_id;
-    __auto_type saved_created = event_loop_test_adopt_created;
+    TEST_SAVE(window_manager_test_application_window_list);
+    TEST_SAVE(window_manager_test_ax_window_id);
+    TEST_SAVE(event_loop_test_adopt_created);
     struct application application = { .name = "missed-window" };
     missed_window_test_ref = (AXUIElementRef) CFStringCreateCopy(NULL, CFSTR("missed-window-ref"));
     missed_window_test_id = 7001;
@@ -279,15 +279,12 @@ TEST_FUNC(missed_focused_window_adoption_is_bounded_per_application_identity,
 
     CFRelease(missed_window_test_ref);
     missed_window_test_ref = NULL;
-    window_manager_test_application_window_list = saved_list;
-    window_manager_test_ax_window_id = saved_id;
-    event_loop_test_adopt_created = saved_created;
 });
 
 TEST_FUNC(window_created_replaces_only_same_id_window_elements,
 {
-    struct table saved_windows = g_window_manager.window;
-    struct table saved_managed = g_window_manager.managed_window;
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(g_window_manager.managed_window);
     __auto_type saved_id = window_manager_test_ax_window_id;
     __auto_type saved_role = event_loop_test_window_ref_is_window;
     __auto_type saved_observe = window_manager_test_window_observe;
@@ -327,8 +324,6 @@ TEST_FUNC(window_created_replaces_only_same_id_window_elements,
     window_manager_test_window_unobserve = saved_unobserve;
     table_free(&g_window_manager.managed_window);
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_windows;
-    g_window_manager.managed_window = saved_managed;
 });
 
 TEST_FUNC(window_resize_debounce_preserves_fullscreen_state_transitions,
@@ -357,9 +352,9 @@ TEST_FUNC(mouse_follows_focus_ignores_ineligible_auxiliary_transitions,
 
 TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals,
 {
-    struct table saved_applications = g_window_manager.application;
-    struct table saved_windows = g_window_manager.window;
-    struct table saved_managed = g_window_manager.managed_window;
+    TEST_SAVE(g_window_manager.application);
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(g_window_manager.managed_window);
     struct mouse_state saved_mouse_state = g_mouse_state;
     bool saved_running = g_event_loop.is_running;
     uint64_t saved_generation = g_event_loop.generation;
@@ -714,15 +709,12 @@ TEST_FUNC(managed_window_correction_bounds_retries_and_rearms_from_signals,
     table_free(&g_window_manager.application);
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.managed_window);
-    g_window_manager.application = saved_applications;
-    g_window_manager.window = saved_windows;
-    g_window_manager.managed_window = saved_managed;
 });
 
 TEST_FUNC(managed_window_correction_failed_reads_preserve_cache_and_advance_lease,
 {
-    struct table saved_windows = g_window_manager.window;
-    struct table saved_managed = g_window_manager.managed_window;
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(g_window_manager.managed_window);
     struct mouse_state saved_mouse_state = g_mouse_state;
     __auto_type saved_live_frame = event_loop_test_managed_window_correction_live_frame;
     __auto_type saved_flush = event_loop_test_managed_window_correction_flush;
@@ -789,17 +781,14 @@ TEST_FUNC(managed_window_correction_failed_reads_preserve_cache_and_advance_leas
     g_mouse_state = saved_mouse_state;
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.managed_window);
-    g_window_manager.window = saved_windows;
-    g_window_manager.managed_window = saved_managed;
 });
 
 TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state,
 {
-    struct event_loop saved_event_loop = g_event_loop;
     struct mouse_state saved_mouse_state = g_mouse_state;
     __auto_type saved_restore = event_loop_test_native_resize_restore;
     bool saved_fail_allocation = g_event_queue_test_fail_allocation;
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     memset(&g_mouse_state.native_resize, 0, sizeof(g_mouse_state.native_resize));
     native_resize_shutdown_restored_window_id = 0;
     native_resize_shutdown_restore_count = 0;
@@ -824,7 +813,7 @@ TEST_FUNC(native_resize_shutdown_serializes_final_cancellation_and_restart_state
     event_loop_test_native_resize_restore = saved_restore;
     g_event_queue_test_fail_allocation = saved_fail_allocation;
     g_mouse_state = saved_mouse_state;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
 });
 
 static struct view *event_loop_batched_view_updates[4];
@@ -871,9 +860,9 @@ static void event_loop_batched_view_fill_large(struct view **views, int count,
 
 TEST_FUNC(event_loop_batched_views_deduplicate_in_first_seen_order,
 {
-    __auto_type saved_calloc = event_loop_batched_view_calloc;
-    __auto_type saved_update = event_loop_batched_view_update;
-    __auto_type saved_flush = event_loop_batched_view_flush;
+    TEST_SAVE(event_loop_batched_view_calloc);
+    TEST_SAVE(event_loop_batched_view_update);
+    TEST_SAVE(event_loop_batched_view_flush);
     struct view first = { .layout = VIEW_ACCORDION_HORIZONTAL, .flags = VIEW_IS_DIRTY };
     struct view second = { .layout = VIEW_BSP, .flags = VIEW_IS_DIRTY };
     struct view third = { .layout = VIEW_BSP };
@@ -930,16 +919,13 @@ TEST_FUNC(event_loop_batched_views_deduplicate_in_first_seen_order,
     TEST_CHECK(event_loop_batched_view_operations[2].operation, 'F');
     TEST_CHECK(event_loop_batched_view_operations[2].view, &first);
 
-    event_loop_batched_view_calloc = saved_calloc;
-    event_loop_batched_view_update = saved_update;
-    event_loop_batched_view_flush = saved_flush;
 });
 
 TEST_FUNC(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct mouse_state saved_mouse_state = g_mouse_state;
-    __auto_type saved_restore = event_loop_test_native_resize_restore;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_mouse_state);
+    TEST_SAVE(event_loop_test_native_resize_restore);
     __auto_type saved_admitted = event_loop_shutdown_admitted_test_hook;
     __auto_type saved_owner = event_loop_shutdown_owner_test_hook;
     g_event_loop = (struct event_loop) {0};
@@ -986,9 +972,6 @@ TEST_FUNC(event_loop_concurrent_shutdown_has_one_owner_and_one_final_cancel,
     event_loop_end(&g_event_loop);
     pthread_cond_destroy(&end.cond);
     pthread_mutex_destroy(&end.mutex);
-    event_loop_test_native_resize_restore = saved_restore;
-    g_mouse_state = saved_mouse_state;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(application_observation_retries_only_transient_required_failures,
@@ -997,12 +980,9 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     TEST_CHECK(application_notification_is_frame_recovery(kAXValueChangedNotification), true);
     TEST_CHECK(application_notification_is_frame_recovery(kAXTitleChangedNotification), false);
 
-    __auto_type saved_create = application_observer_create;
-    __auto_type saved_add_notification = application_observer_add_notification;
-    __auto_type saved_add_source = application_observer_add_run_loop_source;
-    application_observer_create = application_test_observer_create;
-    application_observer_add_notification = application_test_observer_add_notification;
-    application_observer_add_run_loop_source = application_test_add_run_loop_source;
+    TEST_OVERRIDE(application_observer_create, application_test_observer_create);
+    TEST_OVERRIDE(application_observer_add_notification, application_test_observer_add_notification);
+    TEST_OVERRIDE(application_observer_add_run_loop_source, application_test_add_run_loop_source);
 
     struct application application = { .name = "test" };
     application_test_reset(kAXErrorSuccess);
@@ -1043,9 +1023,9 @@ TEST_FUNC(application_observation_retries_only_transient_required_failures,
     TEST_CHECK(application_test_notification_index, 0);
     TEST_CHECK(application_test_source_count, 0);
 
-    application_observer_create = saved_create;
-    application_observer_add_notification = saved_add_notification;
-    application_observer_add_run_loop_source = saved_add_source;
+    TEST_RESTORE(application_observer_create);
+    TEST_RESTORE(application_observer_add_notification);
+    TEST_RESTORE(application_observer_add_run_loop_source);
 });
 
 static int launch_path_create_count;
@@ -1183,47 +1163,29 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     struct table saved_processes = g_process_manager.process;
     struct application **saved_refresh = g_window_manager.applications_to_refresh;
     uint64_t saved_front_generation = g_process_manager.front_switch_generation;
-    __auto_type saved_ax_create = application_create_ax_element;
-    __auto_type saved_hidden = application_create_is_hidden;
-    __auto_type saved_connection = application_create_connection;
-    __auto_type saved_destroy = application_destroy_observer;
-    __auto_type saved_observer_create = application_observer_create;
-    __auto_type saved_observer_add = application_observer_add_notification;
-    __auto_type saved_observer_remove = application_observer_remove_notification;
-    __auto_type saved_add_source = application_observer_add_run_loop_source;
-    __auto_type saved_invalidate = application_observer_invalidate;
-    __auto_type saved_observer_release = application_observer_release;
-    __auto_type saved_finished = event_loop_test_application_finished;
-    __auto_type saved_observable = event_loop_test_application_observable;
-    __auto_type saved_retry = event_loop_test_application_retry_scheduler;
-    __auto_type saved_signal = event_signal_test_push_observer;
-    __auto_type saved_replay = event_loop_test_post_replayed_front_switched;
-    __auto_type saved_list = window_manager_test_application_window_list;
-    __auto_type saved_inventory = window_manager_test_existing_application_window_list;
-    __auto_type saved_startup_observable = window_manager_test_application_is_observable;
 
     g_window_manager.application = (struct table) {0};
     g_window_manager.application_lost_front_switched_event = (struct table) {0};
     g_process_manager.process = (struct table) {0};
     g_window_manager.applications_to_refresh = NULL;
-    application_create_ax_element = launch_path_create_element;
-    application_create_is_hidden = launch_path_not_hidden;
-    application_create_connection = launch_path_connection;
-    application_destroy_observer = launch_path_destroy;
-    application_observer_create = launch_path_observer_create;
-    application_observer_add_notification = application_test_observer_add_notification;
-    application_observer_remove_notification = launch_path_remove;
-    application_observer_add_run_loop_source = launch_path_unobserve_source;
-    application_observer_invalidate = launch_path_invalidate;
-    application_observer_release = launch_path_observer_release;
-    event_loop_test_application_finished = launch_path_true;
-    event_loop_test_application_observable = launch_path_true;
-    event_loop_test_application_retry_scheduler = launch_path_retry;
-    event_signal_test_push_observer = launch_path_signal;
-    event_loop_test_post_replayed_front_switched = launch_path_post_replay;
-    window_manager_test_application_window_list = launch_path_empty_window_list;
-    window_manager_test_existing_application_window_list = launch_path_empty_inventory;
-    window_manager_test_application_is_observable = launch_path_true;
+    TEST_OVERRIDE(application_create_ax_element, launch_path_create_element);
+    TEST_OVERRIDE(application_create_is_hidden, launch_path_not_hidden);
+    TEST_OVERRIDE(application_create_connection, launch_path_connection);
+    TEST_OVERRIDE(application_destroy_observer, launch_path_destroy);
+    TEST_OVERRIDE(application_observer_create, launch_path_observer_create);
+    TEST_OVERRIDE(application_observer_add_notification, application_test_observer_add_notification);
+    TEST_OVERRIDE(application_observer_remove_notification, launch_path_remove);
+    TEST_OVERRIDE(application_observer_add_run_loop_source, launch_path_unobserve_source);
+    TEST_OVERRIDE(application_observer_invalidate, launch_path_invalidate);
+    TEST_OVERRIDE(application_observer_release, launch_path_observer_release);
+    TEST_OVERRIDE(event_loop_test_application_finished, launch_path_true);
+    TEST_OVERRIDE(event_loop_test_application_observable, launch_path_true);
+    TEST_OVERRIDE(event_loop_test_application_retry_scheduler, launch_path_retry);
+    TEST_OVERRIDE(event_signal_test_push_observer, launch_path_signal);
+    TEST_OVERRIDE(event_loop_test_post_replayed_front_switched, launch_path_post_replay);
+    TEST_OVERRIDE(window_manager_test_application_window_list, launch_path_empty_window_list);
+    TEST_OVERRIDE(window_manager_test_existing_application_window_list, launch_path_empty_inventory);
+    TEST_OVERRIDE(window_manager_test_application_is_observable, launch_path_true);
     application_test_reset(kAXErrorSuccess);
 
     struct process process = { .pid = 5151, .psn = { .highLongOfPSN = 51, .lowLongOfPSN = 52 },
@@ -1309,8 +1271,7 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     }
     process_initial_window_inventory_store(&process, false);
 
-    struct event_loop saved_event_loop = g_event_loop;
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     TEST_CHECK(event_queue_init(&g_event_loop.queue, 1), true);
     char launch_semaphore_name[64];
     snprintf(launch_semaphore_name, sizeof(launch_semaphore_name), "/yabai_launch_retry_%d", getpid());
@@ -1349,7 +1310,7 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     pthread_mutex_destroy(&g_event_loop.producer_lock);
     event_queue_destroy(&g_event_loop.queue);
     if (g_event_loop.semaphore != SEM_FAILED) sem_close(g_event_loop.semaphore);
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
 
     process.launch_retries = APPLICATION_LAUNCH_RETRY_LIMIT - 1;
     launch_path_retry_count = 0;
@@ -1366,24 +1327,24 @@ TEST_FUNC(application_launch_and_startup_table_failures_retry_and_recover_throug
     g_process_manager.process = saved_processes;
     g_process_manager.front_switch_generation = saved_front_generation;
     g_window_manager.applications_to_refresh = saved_refresh;
-    application_create_ax_element = saved_ax_create;
-    application_create_is_hidden = saved_hidden;
-    application_create_connection = saved_connection;
-    application_destroy_observer = saved_destroy;
-    application_observer_create = saved_observer_create;
-    application_observer_add_notification = saved_observer_add;
-    application_observer_remove_notification = saved_observer_remove;
-    application_observer_add_run_loop_source = saved_add_source;
-    application_observer_invalidate = saved_invalidate;
-    application_observer_release = saved_observer_release;
-    event_loop_test_application_finished = saved_finished;
-    event_loop_test_application_observable = saved_observable;
-    event_loop_test_application_retry_scheduler = saved_retry;
-    event_signal_test_push_observer = saved_signal;
-    event_loop_test_post_replayed_front_switched = saved_replay;
-    window_manager_test_application_window_list = saved_list;
-    window_manager_test_existing_application_window_list = saved_inventory;
-    window_manager_test_application_is_observable = saved_startup_observable;
+    TEST_RESTORE(application_create_ax_element);
+    TEST_RESTORE(application_create_is_hidden);
+    TEST_RESTORE(application_create_connection);
+    TEST_RESTORE(application_destroy_observer);
+    TEST_RESTORE(application_observer_create);
+    TEST_RESTORE(application_observer_add_notification);
+    TEST_RESTORE(application_observer_remove_notification);
+    TEST_RESTORE(application_observer_add_run_loop_source);
+    TEST_RESTORE(application_observer_invalidate);
+    TEST_RESTORE(application_observer_release);
+    TEST_RESTORE(event_loop_test_application_finished);
+    TEST_RESTORE(event_loop_test_application_observable);
+    TEST_RESTORE(event_loop_test_application_retry_scheduler);
+    TEST_RESTORE(event_signal_test_push_observer);
+    TEST_RESTORE(event_loop_test_post_replayed_front_switched);
+    TEST_RESTORE(window_manager_test_application_window_list);
+    TEST_RESTORE(window_manager_test_existing_application_window_list);
+    TEST_RESTORE(window_manager_test_application_is_observable);
 })
 
 static int ax_owner_observe_count;
@@ -1527,19 +1488,19 @@ TEST_FUNC(window_created_event_ax_ownership_matrix_is_exact,
     struct table saved_lost = g_window_manager.window_lost_focused_event;
     struct rule *saved_rules = g_window_manager.rules;
     struct application **saved_refresh = g_window_manager.applications_to_refresh;
-    __auto_type saved_rule_window = window_manager_test_rule_window;
-    __auto_type saved_id = window_manager_test_ax_window_id;
-    __auto_type saved_pid = event_loop_test_ax_window_pid;
-    __auto_type saved_observe = window_manager_test_window_observe;
-    __auto_type saved_unobserve = window_manager_test_window_unobserve;
-    __auto_type saved_retain = window_manager_test_retry_retain;
-    __auto_type saved_retry_release = window_manager_test_retry_release;
-    __auto_type saved_allocate = window_manager_test_retry_allocate;
-    __auto_type saved_post = window_manager_test_retry_post;
-    __auto_type saved_ref_release = window_test_ref_release;
-    __auto_type saved_signal = event_signal_test_push_observer;
-    __auto_type saved_list = window_manager_test_application_window_list;
-    __auto_type saved_inventory = window_manager_test_existing_application_window_list;
+    TEST_SAVE(window_manager_test_rule_window);
+    TEST_SAVE(window_manager_test_ax_window_id);
+    TEST_SAVE(event_loop_test_ax_window_pid);
+    TEST_SAVE(window_manager_test_window_observe);
+    TEST_SAVE(window_manager_test_window_unobserve);
+    TEST_SAVE(window_manager_test_retry_retain);
+    TEST_SAVE(window_manager_test_retry_release);
+    TEST_SAVE(window_manager_test_retry_allocate);
+    TEST_SAVE(window_manager_test_retry_post);
+    TEST_SAVE(window_test_ref_release);
+    TEST_SAVE(event_signal_test_push_observer);
+    TEST_SAVE(window_manager_test_application_window_list);
+    TEST_SAVE(window_manager_test_existing_application_window_list);
 
     g_window_manager.application = (struct table) {0};
     g_window_manager.window = (struct table) {0};
@@ -1711,19 +1672,6 @@ TEST_FUNC(window_created_event_ax_ownership_matrix_is_exact,
     g_window_manager.window_lost_focused_event = saved_lost;
     g_window_manager.rules = saved_rules;
     g_window_manager.applications_to_refresh = saved_refresh;
-    window_manager_test_rule_window = saved_rule_window;
-    window_manager_test_ax_window_id = saved_id;
-    event_loop_test_ax_window_pid = saved_pid;
-    window_manager_test_window_observe = saved_observe;
-    window_manager_test_window_unobserve = saved_unobserve;
-    window_manager_test_retry_retain = saved_retain;
-    window_manager_test_retry_release = saved_retry_release;
-    window_manager_test_retry_allocate = saved_allocate;
-    window_manager_test_retry_post = saved_post;
-    window_test_ref_release = saved_ref_release;
-    event_signal_test_push_observer = saved_signal;
-    window_manager_test_application_window_list = saved_list;
-    window_manager_test_existing_application_window_list = saved_inventory;
 })
 
 TEST_FUNC(window_created_identity_retry_preserves_origin_and_falls_back_to_refresh,
@@ -1893,19 +1841,19 @@ static void window_reconcile_test_dispatch(uint64_t sid, uint64_t token)
 
 TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
 {
-    struct table saved_views = g_space_manager.view;
-    struct table saved_windows = g_window_manager.window;
-    __auto_type saved_space = event_loop_test_window_reconcile_space;
-    __auto_type saved_schedule = event_loop_test_window_reconcile_schedule;
-    __auto_type saved_visible = event_loop_test_window_reconcile_visible;
-    __auto_type saved_user = event_loop_test_window_reconcile_user;
-    __auto_type saved_ordered_query = event_loop_test_window_reconcile_ordered_query;
-    __auto_type saved_minimized_query = event_loop_test_window_reconcile_minimized_query;
-    __auto_type saved_window_on_space = event_loop_test_window_reconcile_window_on_space;
-    __auto_type saved_refresh_deminimized = event_loop_test_window_reconcile_refresh_deminimized;
-    __auto_type saved_restore_window = event_loop_test_window_reconcile_restore_window;
-    __auto_type saved_validate = event_loop_test_window_reconcile_validate;
-    __auto_type saved_refresh_highlight = event_loop_test_window_reconcile_refresh_highlight;
+    TEST_SAVE(g_space_manager.view);
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(event_loop_test_window_reconcile_space);
+    TEST_SAVE(event_loop_test_window_reconcile_schedule);
+    TEST_SAVE(event_loop_test_window_reconcile_visible);
+    TEST_SAVE(event_loop_test_window_reconcile_user);
+    TEST_SAVE(event_loop_test_window_reconcile_ordered_query);
+    TEST_SAVE(event_loop_test_window_reconcile_minimized_query);
+    TEST_SAVE(event_loop_test_window_reconcile_window_on_space);
+    TEST_SAVE(event_loop_test_window_reconcile_refresh_deminimized);
+    TEST_SAVE(event_loop_test_window_reconcile_restore_window);
+    TEST_SAVE(event_loop_test_window_reconcile_validate);
+    TEST_SAVE(event_loop_test_window_reconcile_refresh_highlight);
 
     g_space_manager.view = (struct table) {0};
     g_window_manager.window = (struct table) {0};
@@ -2023,26 +1971,13 @@ TEST_FUNC(window_focus_reconciliation_is_per_space_coalesced_and_bounded,
     pthread_mutex_unlock(&window_reconcile_lock);
     table_free(&g_space_manager.view);
     table_free(&g_window_manager.window);
-    g_space_manager.view = saved_views;
-    g_window_manager.window = saved_windows;
-    event_loop_test_window_reconcile_space = saved_space;
-    event_loop_test_window_reconcile_schedule = saved_schedule;
-    event_loop_test_window_reconcile_visible = saved_visible;
-    event_loop_test_window_reconcile_user = saved_user;
-    event_loop_test_window_reconcile_ordered_query = saved_ordered_query;
-    event_loop_test_window_reconcile_minimized_query = saved_minimized_query;
-    event_loop_test_window_reconcile_window_on_space = saved_window_on_space;
-    event_loop_test_window_reconcile_refresh_deminimized = saved_refresh_deminimized;
-    event_loop_test_window_reconcile_restore_window = saved_restore_window;
-    event_loop_test_window_reconcile_validate = saved_validate;
-    event_loop_test_window_reconcile_refresh_highlight = saved_refresh_highlight;
 });
 
 TEST_FUNC(application_visibility_schedules_stale_window_reconciliation,
 {
-    struct table saved_windows = g_window_manager.window;
-    __auto_type saved_space = event_loop_test_window_reconcile_space;
-    __auto_type saved_schedule = event_loop_test_window_reconcile_schedule;
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(event_loop_test_window_reconcile_space);
+    TEST_SAVE(event_loop_test_window_reconcile_schedule);
 
     g_window_manager.window = (struct table) {0};
     table_init(&g_window_manager.window, 8, hash_wm, compare_wm);
@@ -2087,9 +2022,6 @@ TEST_FUNC(application_visibility_schedules_stale_window_reconciliation,
     memset(window_reconcile_slots, 0, sizeof(window_reconcile_slots));
     pthread_mutex_unlock(&window_reconcile_lock);
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_windows;
-    event_loop_test_window_reconcile_space = saved_space;
-    event_loop_test_window_reconcile_schedule = saved_schedule;
 });
 
 TEST_FUNC(application_termination_rejects_stale_pid_reuse_identity,
@@ -2150,8 +2082,6 @@ static uint64_t test_publish_tracked_front_switch(ProcessSerialNumber psn)
 
 TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and_pid_reuse,
 {
-    struct table saved_application_table = g_window_manager.application;
-    struct table saved_lost_event_table = g_window_manager.application_lost_front_switched_event;
     struct event_loop saved_event_loop = g_event_loop;
     pid_t saved_front_pid = g_process_manager.front_pid;
     pid_t saved_last_front_pid = g_process_manager.last_front_pid;
@@ -2160,8 +2090,8 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     uint64_t saved_generation = g_process_manager.front_switch_generation;
     uint64_t saved_committed_generation = g_process_manager.committed_front_switch_generation;
     uint64_t saved_front_psn = g_process_manager.front_switch_psn;
-    g_window_manager.application = (struct table) {0};
-    g_window_manager.application_lost_front_switched_event = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.application, (struct table) {0});
+    TEST_OVERRIDE(g_window_manager.application_lost_front_switched_event, (struct table) {0});
     table_init(&g_window_manager.application, 4, hash_wm, compare_wm);
     table_init(&g_window_manager.application_lost_front_switched_event, 4, hash_psn, compare_psn);
 
@@ -2359,8 +2289,8 @@ TEST_FUNC(application_front_switched_owned_identity_rejects_stale_generation_and
     g_event_loop = saved_event_loop;
     table_free(&g_window_manager.application);
     table_free(&g_window_manager.application_lost_front_switched_event);
-    g_window_manager.application = saved_application_table;
-    g_window_manager.application_lost_front_switched_event = saved_lost_event_table;
+    TEST_RESTORE(g_window_manager.application);
+    TEST_RESTORE(g_window_manager.application_lost_front_switched_event);
     g_process_manager.front_pid = saved_front_pid;
     g_process_manager.last_front_pid = saved_last_front_pid;
     g_process_manager.front_psn = saved_processed_front_psn;
@@ -2644,7 +2574,7 @@ static int event_loop_test_interval_thread_create(pthread_t *thread, const pthre
 
 TEST_FUNC(event_loop_zero_initialized_state_rejects_without_queue_access,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
 
     CFMutableArrayRef rejected_context = CFArrayCreateMutable(NULL, 0, NULL);
@@ -2661,15 +2591,12 @@ TEST_FUNC(event_loop_zero_initialized_state_rejects_without_queue_access,
     TEST_CHECK(g_event_loop.semaphore == NULL, true);
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
 
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(declarative_space_create_destroy_and_absent_event_coalesce_reconcile,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct space_manager saved_space_manager = g_space_manager;
-    g_event_loop = (struct event_loop) {0};
-    g_space_manager = (struct space_manager) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
+    TEST_OVERRIDE(g_space_manager, (struct space_manager) {0});
     table_init(&g_space_manager.view, 4, hash_view, compare_view);
     declarative_install_test_set_generation(1);
 
@@ -2709,8 +2636,8 @@ TEST_FUNC(declarative_space_create_destroy_and_absent_event_coalesce_reconcile,
     event_queue_destroy(&g_event_loop.queue);
     declarative_install_test_set_generation(0);
     table_free(&g_space_manager.view);
-    g_space_manager = saved_space_manager;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_space_manager);
+    TEST_RESTORE(g_event_loop);
 });
 
 static uint32_t declarative_reconcile_entry_test_reserved;
@@ -2746,14 +2673,13 @@ TEST_FUNC(declarative_reconcile_reservation_token_cancellation_is_generation_saf
 
 TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct table saved_window_table = g_window_manager.window;
+    TEST_SAVE(g_event_loop);
     uint32_t saved_focused_window_id = g_window_manager.focused_window_id;
     bool saved_menu_bar_initialized = g_menu_bar_manager.initialized;
     long saved_macos_version = workspace_macos_major_version();
 
     g_event_loop = (struct event_loop) {0};
-    g_window_manager.window = (struct table) {0};
+    TEST_OVERRIDE(g_window_manager.window, (struct table) {0});
     table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
     g_window_manager.focused_window_id = 0;
     g_menu_bar_manager.initialized = false;
@@ -2803,16 +2729,15 @@ TEST_FUNC(declarative_dock_restart_and_system_wake_coalesce_reconcile,
     event_queue_destroy(&g_event_loop.queue);
     declarative_install_test_set_generation(0);
     table_free(&g_window_manager.window);
-    g_window_manager.window = saved_window_table;
+    TEST_RESTORE(g_window_manager.window);
     g_window_manager.focused_window_id = saved_focused_window_id;
     g_menu_bar_manager.initialized = saved_menu_bar_initialized;
     workspace_set_macos_version(saved_macos_version);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(declarative_reconcile_reserves_before_post_and_coalesces,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     declarative_install_test_set_generation(1);
 
@@ -2856,12 +2781,11 @@ TEST_FUNC(declarative_reconcile_reserves_before_post_and_coalesces,
 
     pthread_cond_destroy(&bootstrap.cond);
     pthread_mutex_destroy(&bootstrap.mutex);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     struct event_loop_bootstrap_test_state bootstrap = {
         .mutex = PTHREAD_MUTEX_INITIALIZER,
@@ -2913,13 +2837,11 @@ TEST_FUNC(event_loop_bootstrap_is_first_worker_turn_and_barrier_reports_result,
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
     pthread_cond_destroy(&bootstrap.cond);
     pthread_mutex_destroy(&bootstrap.mutex);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    g_event_loop = (struct event_loop) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
     uint64_t saved_installed_generation = declarative_installed.generation;
     uint64_t pre_shutdown_generation = g_event_loop.generation;
@@ -2992,7 +2914,7 @@ TEST_FUNC(event_loop_shutdown_waits_for_inflight_posters_and_rejects_after_close
     event_loop_end(&g_event_loop);
     TEST_CHECK(declarative_reload_test_reconcile_reservation(), 0U);
     declarative_installed.generation = saved_installed_generation;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
 });
 
 static void *event_loop_front_switch_test_allocation_failure(size_t size)
@@ -3003,7 +2925,7 @@ static void *event_loop_front_switch_test_allocation_failure(size_t size)
 
 TEST_FUNC(event_loop_front_switch_helpers_preserve_monotonic_observation_on_delivery_failure,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     pid_t saved_front_pid = g_process_manager.front_pid;
     uint64_t saved_generation = g_process_manager.front_switch_generation;
     uint64_t saved_front_psn = g_process_manager.front_switch_psn;
@@ -3064,12 +2986,11 @@ TEST_FUNC(event_loop_front_switch_helpers_preserve_monotonic_observation_on_deli
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_front_psn, __ATOMIC_RELEASE);
     event_loop_application_front_switched_alloc = saved_alloc;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_late_pre_admission_post_after_cleanup_releases_context,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
 
@@ -3111,12 +3032,11 @@ TEST_FUNC(event_loop_late_pre_admission_post_after_cleanup_releases_context,
     event_loop_paused_admission_test = NULL;
     pthread_cond_destroy(&paused.cond);
     pthread_mutex_destroy(&paused.mutex);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_worker_guards_reject_sync_and_self_shutdown,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
 
@@ -3132,7 +3052,6 @@ TEST_FUNC(event_loop_worker_guards_reject_sync_and_self_shutdown,
     TEST_CHECK(g_event_loop.semaphore == NULL, true);
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
     TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_worker_identity_is_scoped_to_the_supplied_loop,
@@ -3163,7 +3082,7 @@ TEST_FUNC(event_loop_worker_identity_is_scoped_to_the_supplied_loop,
 
 TEST_FUNC(event_loop_sync_during_thread_create_interval_completes_on_success_and_failure,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     __auto_type saved_thread_create = event_loop_thread_create;
 
     for (int fail_create = 0; fail_create <= 1; ++fail_create) {
@@ -3187,12 +3106,11 @@ TEST_FUNC(event_loop_sync_during_thread_create_interval_completes_on_success_and
 
     event_loop_thread_create = saved_thread_create;
     event_loop_thread_create_interval_test = NULL;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_sync_submission_concurrent_with_shutdown_completes,
 {
-    struct event_loop saved_event_loop = g_event_loop;
+    TEST_SAVE(g_event_loop);
     g_event_loop = (struct event_loop) {0};
     TEST_CHECK(event_loop_begin_bootstrap(&g_event_loop, NULL, NULL), true);
 
@@ -3214,13 +3132,12 @@ TEST_FUNC(event_loop_sync_submission_concurrent_with_shutdown_completes,
     TEST_CHECK(g_event_loop.semaphore == NULL, true);
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
     TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(event_loop_bootstrap_failure_drains_queued_daemon_messages,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_daemon_message_admission);
     g_event_loop = (struct event_loop) {0};
     g_daemon_message_admission = (struct daemon_message_admission) {0};
 
@@ -3268,14 +3185,12 @@ TEST_FUNC(event_loop_bootstrap_failure_drains_queued_daemon_messages,
     event_loop_test_close_fd_if_open(pair[1]);
     pthread_cond_destroy(&bootstrap.cond);
     pthread_mutex_destroy(&bootstrap.mutex);
-    g_daemon_message_admission = saved_admission;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(window_minimize_events_resolve_stable_ids,
 {
-    struct table saved_window_table = g_window_manager.window;
-    struct table saved_lost_event_table = g_window_manager.window_lost_focused_event;
+    TEST_SAVE(g_window_manager.window);
+    TEST_SAVE(g_window_manager.window_lost_focused_event);
     g_window_manager.window = (struct table) {0};
     g_window_manager.window_lost_focused_event = (struct table) {0};
     table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
@@ -3289,8 +3204,6 @@ TEST_FUNC(window_minimize_events_resolve_stable_ids,
 
     table_free(&g_window_manager.window);
     table_free(&g_window_manager.window_lost_focused_event);
-    g_window_manager.window = saved_window_table;
-    g_window_manager.window_lost_focused_event = saved_lost_event_table;
 });
 
 TEST_FUNC(display_change_rejects_invalid_pairs_before_commit,
@@ -3398,7 +3311,7 @@ TEST_FUNC(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_wit
     ProcessSerialNumber saved_last_front_psn = g_process_manager.last_front_psn;
     uint64_t saved_generation = __atomic_load_n(&g_process_manager.front_switch_generation, __ATOMIC_ACQUIRE);
     uint64_t saved_tracked_psn = __atomic_load_n(&g_process_manager.front_switch_psn, __ATOMIC_ACQUIRE);
-    bool saved_skip_window_focus_animation = g_space_manager.skip_window_focus_animation;
+    TEST_SAVE(g_space_manager.skip_window_focus_animation);
     struct application application = {
         .name = "passive-front",
         .pid = 42,
@@ -3462,7 +3375,6 @@ TEST_FUNC(ordinary_application_front_switch_no_refresh_preserves_bookkeeping_wit
     g_process_manager.last_front_psn = saved_last_front_psn;
     __atomic_store_n(&g_process_manager.front_switch_generation, saved_generation, __ATOMIC_RELEASE);
     __atomic_store_n(&g_process_manager.front_switch_psn, saved_tracked_psn, __ATOMIC_RELEASE);
-    g_space_manager.skip_window_focus_animation = saved_skip_window_focus_animation;
 });
 
 TEST_FUNC(window_focus_preserves_bookkeeping_without_direct_animation_transition,
@@ -3624,14 +3536,14 @@ static void focus_fallback_test_close_queue(void)
 
 TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
-    __auto_type saved_focused = event_loop_focus_fallback_find_focused;
-    __auto_type saved_recent = event_loop_focus_fallback_find_recent;
-    __auto_type saved_on_active_space = event_loop_focus_fallback_is_on_active_space;
-    __auto_type saved_focus = event_loop_focus_fallback_focus;
-    __auto_type saved_hook = event_loop_focus_fallback_entry_test_hook;
-    __auto_type saved_rejection_hook = event_loop_focus_fallback_rejection_test_hook;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_window_manager.window_focus_fallback);
+    TEST_SAVE(event_loop_focus_fallback_find_focused);
+    TEST_SAVE(event_loop_focus_fallback_find_recent);
+    TEST_SAVE(event_loop_focus_fallback_is_on_active_space);
+    TEST_SAVE(event_loop_focus_fallback_focus);
+    TEST_SAVE(event_loop_focus_fallback_entry_test_hook);
+    TEST_SAVE(event_loop_focus_fallback_rejection_test_hook);
     struct application focused_app = { .name = "focused" };
     struct application recent_app = { .name = "recent" };
     struct window focused = { .application = &focused_app, .ref = (AXUIElementRef)(intptr_t)1, .id = 41, .is_root = true, .rule_flags = WINDOW_RULE_MANAGED };
@@ -3735,25 +3647,17 @@ TEST_FUNC(window_focus_fallback_trigger_policy_and_behavior_are_deterministic,
     }
 
     focus_fallback_test_close_queue();
-    event_loop_focus_fallback_find_focused = saved_focused;
-    event_loop_focus_fallback_find_recent = saved_recent;
-    event_loop_focus_fallback_is_on_active_space = saved_on_active_space;
-    event_loop_focus_fallback_focus = saved_focus;
-    event_loop_focus_fallback_entry_test_hook = saved_hook;
-    event_loop_focus_fallback_rejection_test_hook = saved_rejection_hook;
-    g_window_manager.window_focus_fallback = saved_policy;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(window_focus_fallback_queue_reservation_coalesces_retries_and_clears,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    enum window_focus_fallback saved_policy = g_window_manager.window_focus_fallback;
-    __auto_type saved_focused = event_loop_focus_fallback_find_focused;
-    __auto_type saved_recent = event_loop_focus_fallback_find_recent;
-    __auto_type saved_focus = event_loop_focus_fallback_focus;
-    __auto_type saved_hook = event_loop_focus_fallback_entry_test_hook;
-    __auto_type saved_rejection_hook = event_loop_focus_fallback_rejection_test_hook;
+    TEST_SAVE(g_event_loop);
+    TEST_SAVE(g_window_manager.window_focus_fallback);
+    TEST_SAVE(event_loop_focus_fallback_find_focused);
+    TEST_SAVE(event_loop_focus_fallback_find_recent);
+    TEST_SAVE(event_loop_focus_fallback_focus);
+    TEST_SAVE(event_loop_focus_fallback_entry_test_hook);
+    TEST_SAVE(event_loop_focus_fallback_rejection_test_hook);
     g_window_manager.window_focus_fallback = WINDOW_FOCUS_FALLBACK_RECENT;
     event_loop_focus_fallback_find_focused = focus_fallback_test_find_focused;
     event_loop_focus_fallback_find_recent = focus_fallback_test_find_recent;
@@ -3817,13 +3721,6 @@ TEST_FUNC(window_focus_fallback_queue_reservation_coalesces_retries_and_clears,
     TEST_CHECK(g_event_loop.queue.events == NULL, true);
     printf("                   focus fallback queue accepted=5 skipped=2 rejected=2 discarded=2 shutdown=1 followup=1 aba_retry=1 owned_contexts=0 owned_sockets=0\n");
 
-    event_loop_focus_fallback_find_focused = saved_focused;
-    event_loop_focus_fallback_find_recent = saved_recent;
-    event_loop_focus_fallback_focus = saved_focus;
-    event_loop_focus_fallback_entry_test_hook = saved_hook;
-    event_loop_focus_fallback_rejection_test_hook = saved_rejection_hook;
-    g_window_manager.window_focus_fallback = saved_policy;
-    g_event_loop = saved_event_loop;
 });
 
 TEST_FUNC(window_focus_fallback_selector_matches_public_recent_helper,
@@ -3853,12 +3750,10 @@ TEST_FUNC(window_focus_fallback_selector_matches_public_recent_helper,
 
 TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
 {
-    struct event_loop saved_event_loop = g_event_loop;
-    struct table saved_managed = g_window_manager.managed_window;
     bool saved_has_scaffold = declarative_installed.has_scaffold;
     uint64_t saved_generation = declarative_installed.generation;
-    g_event_loop = (struct event_loop) {0};
-    g_window_manager.managed_window = (struct table) {0};
+    TEST_OVERRIDE(g_event_loop, (struct event_loop) {0});
+    TEST_OVERRIDE(g_window_manager.managed_window, (struct table) {0});
     table_init(&g_window_manager.managed_window, 4, hash_wm, compare_wm);
     declarative_installed.has_scaffold = true;
     declarative_installed.generation = 1;
@@ -3903,10 +3798,10 @@ TEST_FUNC(declarative_scaffold_membership_add_remove_requests_one_reconcile,
     sem_close(g_event_loop.semaphore);
     event_queue_destroy(&g_event_loop.queue);
     table_free(&g_window_manager.managed_window);
-    g_window_manager.managed_window = saved_managed;
+    TEST_RESTORE(g_window_manager.managed_window);
     declarative_installed.has_scaffold = saved_has_scaffold;
     declarative_installed.generation = saved_generation;
-    g_event_loop = saved_event_loop;
+    TEST_RESTORE(g_event_loop);
 })
 
 static int mouse_drag_clamp_test_display_calls;

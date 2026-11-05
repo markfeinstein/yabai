@@ -58,7 +58,7 @@ static void daemon_io_test_stop(struct event_loop saved_event_loop,
 
 TEST_FUNC(daemon_io_partial_worker_initialization_rolls_back,
 {
-    struct daemon_message_admission saved_admission = g_daemon_message_admission;
+    TEST_SAVE(g_daemon_message_admission);
     g_daemon_message_admission = (struct daemon_message_admission) {0};
     daemon_io_thread_create_attempt = 0;
     daemon_io_thread_create_fail_after = 2;
@@ -69,7 +69,6 @@ TEST_FUNC(daemon_io_partial_worker_initialization_rolls_back,
     TEST_CHECK(g_daemon_io.writers.mutex_initialized, false);
     daemon_io_thread_create_fail_after = -1;
     daemon_io_thread_create_attempt = 0;
-    g_daemon_message_admission = saved_admission;
 });
 
 TEST_FUNC(daemon_io_partial_body_never_blocks_event_worker,
