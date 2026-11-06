@@ -6,6 +6,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Changed
+- Drive window animations from the destination display's refresh cadence instead of the aggregate active-display clock.
 - Require meaningful horizontal progress or terminal velocity before committing a direct trackpad Space switch, so small or cancelled swipes do not change Spaces.
 - Add opt-in direct native Space switching through the validated WindowManagement set-and-hide bridge, including animation-free explicit focus and horizontal trackpad swipe interception with native fallback when the private ABI is unavailable.
 - Add a `manage` policy that can float windows by default while preserving rule-managed and manually tiled windows across runtime changes and native configuration reloads.

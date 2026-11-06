@@ -2,6 +2,7 @@
 #define ANIMATION_CLOCK_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 struct animation_clock;
 
@@ -21,6 +22,9 @@ enum animation_clock_stop_result
 };
 
 struct animation_clock *animation_clock_create(animation_clock_tick_fn tick_fn, void *context);
+struct animation_clock *animation_clock_create_for_display(uint32_t did,
+                                                            animation_clock_tick_fn tick_fn,
+                                                            void *context);
 bool animation_clock_start(struct animation_clock *clock);
 enum animation_clock_stop_result animation_clock_stop(struct animation_clock *clock);
 void animation_clock_destroy(struct animation_clock *clock);

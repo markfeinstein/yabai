@@ -352,6 +352,18 @@ static bool animation_test_clock_quiesced;
 static enum animation_clock_stop_result animation_test_clock_stop(struct animation_clock *clock);
 static void animation_test_clock_destroy(struct animation_clock *clock);
 static CGError animation_test_update(int cid);
+static uint32_t animation_test_clock_display;
+static uint32_t animation_test_display_for_point(CGPoint point)
+{
+    (void)point;
+    return 42;
+}
+static struct animation_clock *animation_test_clock_create_for_display(
+    uint32_t did, animation_clock_tick_fn tick_fn, void *context)
+{
+    animation_test_clock_display = did;
+    return animation_clock_create(tick_fn, context);
+}
 
 TEST_FUNC(animation_display_link_setup_stages_propagate_failures,
 {
@@ -376,12 +388,19 @@ TEST_FUNC(animation_display_link_setup_stages_propagate_failures,
     }
 
     animation_clock_test_begin();
-    struct window_animation_context context = {0};
+    TEST_OVERRIDE(window_manager_animation_clock_create, animation_test_clock_create_for_display);
+    TEST_OVERRIDE(window_manager_animation_display_for_point, animation_test_display_for_point);
+    struct window_animation animation = {.x = 10.0f, .y = 20.0f, .w = 30.0f, .h = 40.0f};
+    struct window_animation_context context = {.animation_list = &animation, .animation_count = 1};
+    animation_test_clock_display = 0;
     TEST_CHECK(window_manager_animation_start_clock(&context), true);
+    TEST_CHECK(animation_test_clock_display, 42U);
     TEST_CHECK(context.clock != NULL, true);
     TEST_CHECK(animation_clock_stop(context.clock), ANIMATION_CLOCK_STOP_QUIESCED);
     animation_clock_destroy(context.clock);
     context.clock = NULL;
+    TEST_RESTORE(window_manager_animation_clock_create);
+    TEST_RESTORE(window_manager_animation_display_for_point);
     animation_clock_test_end();
 
     TEST_RESTORE(window_manager_animation_disable_update);

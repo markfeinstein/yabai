@@ -163,7 +163,8 @@ TEST_FUNC(animation_clock_cv_tick_preserves_origin_target_frequency_and_thread,
 {
     animation_clock_test_begin();
     animation_clock_test_tick_calls = 0;
-    struct animation_clock *clock = animation_clock_create(animation_clock_test_record_tick, NULL);
+    struct animation_clock *clock = animation_clock_create_for_display(42, animation_clock_test_record_tick, NULL);
+    TEST_CHECK(clock->did, 42U);
     TEST_CHECK(animation_clock_start(clock), true);
     TEST_CHECK(animation_clock_test_callback != NULL, true);
     pthread_t invoking_thread = pthread_self();

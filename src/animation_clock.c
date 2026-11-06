@@ -17,6 +17,7 @@ struct animation_clock
     animation_clock_tick_fn tick_fn;
     void *context;
     CVDisplayLinkRef cv_link;
+    uint32_t did;
     uint64_t origin_host_time;
     double host_clock_frequency;
     enum animation_clock_state state;
@@ -34,7 +35,6 @@ static double (*animation_clock_cv_frequency)(void) = CVGetHostClockFrequency;
 static void *(*animation_clock_allocate)(size_t, size_t) = calloc;
 static void (*animation_clock_deallocate)(void *) = free;
 #else
-#define animation_clock_cv_create CVDisplayLinkCreateWithActiveCGDisplays
 #define animation_clock_cv_set_callback CVDisplayLinkSetOutputCallback
 #define animation_clock_cv_start CVDisplayLinkStart
 #define animation_clock_cv_stop CVDisplayLinkStop
@@ -67,22 +67,41 @@ static CVReturn animation_clock_cv_tick(CVDisplayLinkRef link, const CVTimeStamp
     return kCVReturnSuccess;
 }
 
-struct animation_clock *animation_clock_create(animation_clock_tick_fn tick_fn, void *context)
+static CVReturn animation_clock_create_link(struct animation_clock *clock)
+{
+#ifdef TESTS
+    return animation_clock_cv_create(&clock->cv_link);
+#else
+    return clock->did
+         ? CVDisplayLinkCreateWithCGDisplay(clock->did, &clock->cv_link)
+         : CVDisplayLinkCreateWithActiveCGDisplays(&clock->cv_link);
+#endif
+}
+
+struct animation_clock *animation_clock_create_for_display(uint32_t did,
+                                                            animation_clock_tick_fn tick_fn,
+                                                            void *context)
 {
     if (!tick_fn) return NULL;
     struct animation_clock *clock = animation_clock_allocate(1, sizeof(*clock));
     if (!clock) return NULL;
     clock->tick_fn = tick_fn;
     clock->context = context;
+    clock->did = did;
     clock->host_clock_frequency = animation_clock_cv_frequency();
     clock->state = ANIMATION_CLOCK_NEW;
     return clock;
 }
 
+struct animation_clock *animation_clock_create(animation_clock_tick_fn tick_fn, void *context)
+{
+    return animation_clock_create_for_display(0, tick_fn, context);
+}
+
 bool animation_clock_start(struct animation_clock *clock)
 {
     if (!clock || clock->state != ANIMATION_CLOCK_NEW) return false;
-    if (animation_clock_cv_create(&clock->cv_link) != kCVReturnSuccess || !clock->cv_link) return false;
+    if (animation_clock_create_link(clock) != kCVReturnSuccess || !clock->cv_link) return false;
     clock->state = ANIMATION_CLOCK_LINK_CREATED;
     if (animation_clock_cv_set_callback(clock->cv_link, animation_clock_cv_tick, clock) != kCVReturnSuccess) {
         return false;

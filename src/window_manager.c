@@ -1021,8 +1021,9 @@ static void window_manager_animation_tick(void *data, const struct animation_clo
 #ifdef TESTS
 static void *(*window_manager_animation_allocate)(size_t) = malloc;
 static CGError (*window_manager_animation_new_connection)(int, int *) = SLSNewConnection;
-static struct animation_clock *(*window_manager_animation_clock_create)(animation_clock_tick_fn, void *) =
-    animation_clock_create;
+static struct animation_clock *(*window_manager_animation_clock_create)(uint32_t, animation_clock_tick_fn, void *) =
+    animation_clock_create_for_display;
+static uint32_t (*window_manager_animation_display_for_point)(CGPoint) = display_manager_point_display_id;
 static bool (*window_manager_animation_clock_start)(struct animation_clock *) = animation_clock_start;
 static enum animation_clock_stop_result (*window_manager_animation_clock_stop)(struct animation_clock *) =
     animation_clock_stop;
@@ -1034,7 +1035,8 @@ static void (*window_manager_animation_set_frame)(struct window *, float, float,
 #else
 #define window_manager_animation_allocate malloc
 #define window_manager_animation_new_connection SLSNewConnection
-#define window_manager_animation_clock_create animation_clock_create
+#define window_manager_animation_clock_create animation_clock_create_for_display
+#define window_manager_animation_display_for_point display_manager_point_display_id
 #define window_manager_animation_clock_start animation_clock_start
 #define window_manager_animation_clock_stop animation_clock_stop
 #define window_manager_animation_clock_destroy animation_clock_destroy
@@ -1068,7 +1070,14 @@ static struct window_animation_context *window_manager_animation_create_context(
 
 static bool window_manager_animation_start_clock(struct window_animation_context *context)
 {
-    context->clock = window_manager_animation_clock_create(window_manager_animation_tick, context);
+    uint32_t did = 0;
+    if (context->animation_list && context->animation_count > 0) {
+        struct window_animation *first = &context->animation_list[0];
+        CGPoint target_center = CGPointMake(first->x + first->w / 2.0f,
+                                            first->y + first->h / 2.0f);
+        did = window_manager_animation_display_for_point(target_center);
+    }
+    context->clock = window_manager_animation_clock_create(did, window_manager_animation_tick, context);
     return context->clock && window_manager_animation_clock_start(context->clock);
 }
 
