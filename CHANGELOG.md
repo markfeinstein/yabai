@@ -8,6 +8,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 - Expand native keyboard workflows with layout-aware key names, F-key/navigation/keypad names, Fn/Hyper and sided modifiers, idle mode timeouts, mode query/menu/signal status, cross-display robust focus, and in-process `yabai_command` actions.
 
+### Fixed
+- Reject the impossible zero value returned by the optional WindowServer iterator Space-count getter on macOS 27.2, preserving the authoritative per-window Space-membership fallback.
+
 ### Changed
 - Track WindowServer app-unresponsive/app-responsive notifications on macOS 14 and 15, avoiding Accessibility reads and writes while an application is hung and refreshing it after recovery; newer WindowServer generations retain the existing bounded behavior pending ABI evidence.
 - Drive window animations from the destination display's refresh cadence instead of the aggregate active-display clock.

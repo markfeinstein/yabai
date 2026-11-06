@@ -751,6 +751,14 @@ static bool window_server_snapshot_fake_space_count(CFTypeRef iterator, int *spa
     return true;
 }
 
+TEST_FUNC(window_server_snapshot_space_count_rejects_impossible_zero_sentinel,
+{
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(-1), false);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(0), false);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(1), true);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(INT_MAX), true);
+})
+
 TEST_FUNC(window_server_snapshot_alpha_and_space_count_are_optional,
 {
     window_server_snapshot_fake_begin(2);

@@ -82,12 +82,21 @@ static bool window_server_snapshot_alpha(CFTypeRef iterator, float *alpha)
     return true;
 }
 
+static bool window_server_snapshot_space_count_value_valid(int space_count)
+{
+    /* Every WindowServer window belongs to at least one Space. Newer
+     * WindowServer builds still export the optional getter but can return zero for every
+     * record; treat that sentinel as unavailable so callers use the
+     * authoritative SLSCopySpacesForWindows fallback. */
+    return space_count > 0;
+}
+
 static bool window_server_snapshot_space_count(CFTypeRef iterator, int *space_count)
 {
     pthread_once(&window_server_snapshot_optional_once, window_server_snapshot_resolve_optional);
     if (!window_server_snapshot_space_count_impl || !space_count) return false;
     *space_count = window_server_snapshot_space_count_impl(iterator);
-    return *space_count >= 0;
+    return window_server_snapshot_space_count_value_valid(*space_count);
 }
 
 static const struct window_server_snapshot_backend window_server_snapshot_production_backend = {
