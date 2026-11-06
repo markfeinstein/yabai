@@ -48,6 +48,8 @@ struct doctor_facts {
     enum doctor_probe translated;
     enum doctor_probe arm64_slice;
     enum doctor_probe accessibility;
+    enum doctor_probe keyboard_capture_required;
+    enum doctor_probe secure_input;
     enum doctor_probe sip_available;
     uint32_t sip_config;
     enum doctor_probe arm64e_applicable;

@@ -270,7 +270,7 @@ Each keyboard mode is an exact object with unique nonempty `name`, optional bool
 
 Synthetic key events carry a private event-source tag and bypass matching, preventing recursive remaps. The event tap re-enables itself after timeout or user-input disablement. `restart_service` runs `/bin/launchctl kickstart -k` for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
 
-Enabling the keyboard engine requires Input Monitoring permission for the stable signed yabai application identity. Accessibility remains required for window operations and synthetic event posting. The scripting addition is not required. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
+The active keyboard engine uses the stable signed yabai application's Accessibility grant; it does not require the separate Input Monitoring grant used for listen-only event access. Accessibility is also required for window operations and synthetic event posting. The scripting addition is not required. Secure Input temporarily suspends global keyboard taps, and `yabai --doctor` reports its current state. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
 
 Managed scaffold
 ~~~~~~~~~~~~~~~~

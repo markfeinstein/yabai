@@ -808,7 +808,7 @@ Each keyboard mode is an exact object with unique nonempty \f(CRname\fP, optiona
 .sp
 Synthetic key events carry a private event\-source tag and bypass matching, preventing recursive remaps. The event tap re\-enables itself after timeout or user\-input disablement. \f(CRrestart_service\fP runs \f(CR/bin/launchctl kickstart \-k\fP for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
 .sp
-Enabling the keyboard engine requires Input Monitoring permission for the stable signed yabai application identity. Accessibility remains required for window operations and synthetic event posting. The scripting addition is not required. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
+The active keyboard engine uses the stable signed yabai application\(cqs Accessibility grant; it does not require the separate Input Monitoring grant used for listen\-only event access. Accessibility is also required for window operations and synthetic event posting. The scripting addition is not required. Secure Input temporarily suspends global keyboard taps, and \f(CRyabai \-\-doctor\fP reports its current state. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
 .SS "Managed scaffold"
 .sp
 An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.

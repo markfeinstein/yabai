@@ -175,6 +175,7 @@ bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode
                        struct hotkey_match_result *result);
 int hotkey_test_active_mode(void);
 void hotkey_test_set_action_executor(bool (*executor)(const struct hotkey_action *, void *), void *context);
+void hotkey_test_set_action_poster(bool (*poster)(void *));
 #endif
 
 #endif

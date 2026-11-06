@@ -490,7 +490,7 @@ int main(int argc, char **argv)
     }
 
     if (!hotkey_manager_begin()) {
-        error("yabai: could not start keyboard event tap; grant Yabai Input Monitoring permission! abort..\n");
+        warn("yabai: native keyboard shortcuts are unavailable; verify Accessibility permission and secure-input state\n");
     }
 
     if (!mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK_FFM)) {

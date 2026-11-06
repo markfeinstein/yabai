@@ -53,6 +53,32 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
                     "check Privacy & Security > Accessibility");
     }
 
+    if (facts->keyboard_capture_required == DOCTOR_PROBE_NO) {
+        doctor_emit(stream, "PASS", "keyboard capture",
+                    "native keyboard handling is disabled by the selected static configuration",
+                    "no action required");
+    } else if (facts->keyboard_capture_required == DOCTOR_PROBE_YES &&
+               facts->secure_input == DOCTOR_PROBE_NO &&
+               facts->accessibility == DOCTOR_PROBE_YES) {
+        doctor_emit(stream, "PASS", "keyboard capture",
+                    "native keyboard handling is enabled, Accessibility is trusted, and Secure Input is inactive",
+                    "no action required");
+    } else if (facts->keyboard_capture_required == DOCTOR_PROBE_YES &&
+               facts->secure_input == DOCTOR_PROBE_YES) {
+        doctor_emit(stream, "WARN", "keyboard capture",
+                    "macOS Secure Input is active and temporarily suspends global keyboard taps",
+                    "leave the password or secure-input field and rerun doctor if shortcuts remain unavailable");
+    } else if (facts->keyboard_capture_required == DOCTOR_PROBE_YES &&
+               facts->accessibility == DOCTOR_PROBE_NO) {
+        doctor_emit(stream, "WARN", "keyboard capture",
+                    "native keyboard handling is enabled but Accessibility is not trusted",
+                    "enable yabai in System Settings > Privacy & Security > Accessibility");
+    } else {
+        doctor_emit(stream, "UNKNOWN", "keyboard capture",
+                    "static configuration or Secure Input state could not be determined",
+                    "validate yabai.jsonc and retry outside password fields");
+    }
+
     doctor_emit(stream, "PASS", "SIP (core)",
                 "core window management does not require disabling SIP",
                 "keep SIP enabled unless optional scripting-addition features are needed");
@@ -765,43 +791,56 @@ static __attribute__((unused)) enum doctor_probe doctor_classify_arm64e_bootargs
     return DOCTOR_PROBE_NO;
 }
 
-static enum doctor_probe doctor_native_screen_capture_requirement(
+static void doctor_native_config_requirements(
     const struct doctor_collect_ops *ops, const struct doctor_identity *identity,
-    const char *path, enum doctor_config_result result)
+    const char *path, enum doctor_config_result result,
+    enum doctor_probe *screen_capture, enum doctor_probe *keyboard_capture)
 {
-    if (result == DOCTOR_CONFIG_ABSENT) return DOCTOR_PROBE_NO;
-    if (result != DOCTOR_CONFIG_OK || !path) return DOCTOR_PROBE_UNKNOWN;
+    *screen_capture = DOCTOR_PROBE_UNKNOWN;
+    *keyboard_capture = DOCTOR_PROBE_UNKNOWN;
+    if (result == DOCTOR_CONFIG_ABSENT) {
+        *screen_capture = DOCTOR_PROBE_NO;
+        *keyboard_capture = DOCTOR_PROBE_NO;
+        return;
+    }
+    if (result != DOCTOR_CONFIG_OK || !path) return;
 
     char canonical[PATH_MAX];
-    if (doctor_target_path_traversal(ops, identity, path, canonical, NULL) != DOCTOR_PROBE_YES) {
-        return DOCTOR_PROBE_UNKNOWN;
-    }
+    if (doctor_target_path_traversal(ops, identity, path, canonical, NULL) != DOCTOR_PROBE_YES) return;
     struct stat st;
     if (ops->stat_fn(canonical, &st) != 0 || !S_ISREG(st.st_mode) ||
-        doctor_target_permission(ops, identity, canonical, &st, R_OK) != DOCTOR_PROBE_YES) {
-        return DOCTOR_PROBE_UNKNOWN;
-    }
+        doctor_target_permission(ops, identity, canonical, &st, R_OK) != DOCTOR_PROBE_YES) return;
 
     NSData *data = nil;
     if (doctor_read_regular_snapshot(ops, canonical, &st, DECLARATIVE_CONFIG_MAX_FILE_SIZE,
-                                     &data, NULL) != DOCTOR_PROBE_YES) {
-        return DOCTOR_PROBE_UNKNOWN;
-    }
+                                     &data, NULL) != DOCTOR_PROBE_YES) return;
 
     struct declarative_config_model *model = NULL;
     struct declarative_error error = {0};
     if (!declarative_config_parse_bytes([data bytes], [data length], path, &model, &error) || !model) {
         declarative_config_destroy(model);
-        return DOCTOR_PROBE_UNKNOWN;
+        return;
     }
 
     struct declarative_value animation = model->config[DECLARATIVE_CONFIG_ANIMATION_DURATION];
-    enum doctor_probe required = animation.present && animation.real > 0.0
-                               ? DOCTOR_PROBE_YES
-                               : DOCTOR_PROBE_NO;
+    *screen_capture = animation.present && animation.real > 0.0
+                    ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
+    *keyboard_capture = model->keyboard.present && model->keyboard.enabled
+                      ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
     declarative_config_destroy(model);
-    return required;
 }
+
+#ifdef TESTS
+static enum doctor_probe doctor_native_screen_capture_requirement(
+    const struct doctor_collect_ops *ops, const struct doctor_identity *identity,
+    const char *path, enum doctor_config_result result)
+{
+    enum doctor_probe screen_capture, keyboard_capture;
+    doctor_native_config_requirements(ops, identity, path, result,
+                                      &screen_capture, &keyboard_capture);
+    return screen_capture;
+}
+#endif
 
 static enum doctor_probe doctor_screen_capture_requirement(enum doctor_probe native_requirement,
                                                             enum doctor_config_result legacy_result)
@@ -854,8 +893,9 @@ static void doctor_collect_paths(struct doctor_facts *facts, const struct doctor
     doctor_merge_config_result(facts, native_result);
     doctor_merge_config_result(facts, legacy_result);
 
-    enum doctor_probe native_capture = doctor_native_screen_capture_requirement(
-        ops, identity, native_path, native_result);
+    enum doctor_probe native_capture;
+    doctor_native_config_requirements(ops, identity, native_path, native_result,
+                                      &native_capture, &facts->keyboard_capture_required);
     facts->screen_capture_required = doctor_screen_capture_requirement(native_capture, legacy_result);
     facts->screen_capture_access = DOCTOR_PROBE_UNKNOWN;
     if (facts->screen_capture_required == DOCTOR_PROBE_YES &&
@@ -999,6 +1039,7 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
     else facts->translated = errno == ENOENT ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
 
     facts->accessibility = AXIsProcessTrusted() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
+    facts->secure_input = IsSecureEventInputEnabled() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
     facts->sip_available = csr_get_active_config(&facts->sip_config) == 0 ? DOCTOR_PROBE_YES : DOCTOR_PROBE_UNKNOWN;
 #ifdef __arm64__
     facts->arm64e_applicable = doctor_arm64e_applicability(true, facts->translated);
@@ -1024,8 +1065,8 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
         facts->identity = DOCTOR_PROBE_UNKNOWN;
         facts->service_plist = DOCTOR_SERVICE_UNKNOWN;
         facts->legacy_service_collision = facts->config_present = facts->config_readable =
-            facts->screen_capture_required = facts->screen_capture_access = facts->sa_socket =
-                DOCTOR_PROBE_UNKNOWN;
+            facts->keyboard_capture_required = facts->screen_capture_required =
+            facts->screen_capture_access = facts->sa_socket = DOCTOR_PROBE_UNKNOWN;
     }
 
     facts->sa_install = doctor_inspect_sa(&doctor_production_ops,

@@ -84,6 +84,37 @@ TEST_FUNC(hotkey_callback_transitions_modes_consumes_unbound_and_ignores_synthet
     }
 })
 
+static int hotkey_rejected_post_count;
+
+static bool hotkey_test_reject_and_consume_action(void *context)
+{
+    ++hotkey_rejected_post_count;
+    hotkey_action_job_destroy(context);
+    return false;
+}
+
+TEST_FUNC(hotkey_callback_does_not_reclaim_a_rejected_consumed_job,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"j\",\"cases\":[{"
+      "\"disposition\":\"consume\",\"action\":{\"type\":\"focus_window\",\"direction\":\"south\"}}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "post.jsonc", &model, &error), true);
+    if (model) {
+        hotkey_manager_install_config(&model->keyboard);
+        hotkey_rejected_post_count = 0;
+        hotkey_test_set_action_poster(hotkey_test_reject_and_consume_action);
+        CGEventRef key = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_J, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, key, NULL) == NULL, true);
+        TEST_CHECK(hotkey_rejected_post_count, 1);
+        CFRelease(key);
+        hotkey_test_set_action_poster(NULL);
+        hotkey_manager_install_config(NULL);
+        declarative_config_destroy(model);
+    }
+})
+
 struct hotkey_sequence_test_context { int count; enum hotkey_action_type types[4]; int fail_at; };
 static bool hotkey_sequence_test_execute(const struct hotkey_action *action, void *context)
 {

@@ -193,20 +193,22 @@ wraparound.
 
 ## Permissions and lifecycle
 
-The keyboard tap adds an **Input Monitoring** requirement for the same stable,
-signed `/Applications/Yabai.app` identity that already owns yabai's
-**Accessibility** grant. Accessibility is also needed to post synthetic events
-and operate windows. No scripting addition is required.
+The active keyboard tap uses the same stable, signed
+`/Applications/Yabai.app` identity and **Accessibility** grant required for
+window operations and synthetic event posting. It does not require the separate
+Input Monitoring grant, which applies to listen-only event access. No scripting
+addition is required.
 
-On first use, enable Yabai in:
-
-- System Settings → Privacy & Security → Accessibility;
-- System Settings → Privacy & Security → Input Monitoring.
+On first use, enable Yabai in System Settings → Privacy & Security →
+Accessibility.
 
 The tap is created only when `keyboard.enabled` is true. It is installed and
 removed with yabai's application lifecycle. Reload can replace a live keymap,
 disable input handling, or enable it without a daemon restart. If a newly
-enabled tap cannot be created, yabai reports an Input Monitoring diagnostic.
+enabled tap cannot be created, yabai warns and keeps window management running.
+Check the Accessibility grant and whether macOS Secure Input is active. Secure
+Input temporarily suspends global keyboard taps, commonly while a password
+field is focused; `yabai --doctor` reports its current state.
 
 `restart_service` delegates replacement to the configured launchd label. The
 current daemon never attempts to exec its own successor. launchd's single job

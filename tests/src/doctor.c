@@ -6,6 +6,8 @@ static struct doctor_facts doctor_test_healthy_facts(void)
         .translated = DOCTOR_PROBE_NO,
         .arm64_slice = DOCTOR_PROBE_YES,
         .accessibility = DOCTOR_PROBE_YES,
+        .keyboard_capture_required = DOCTOR_PROBE_NO,
+        .secure_input = DOCTOR_PROBE_NO,
         .sip_available = DOCTOR_PROBE_YES,
         .sip_config = DOCTOR_REQUIRED_SIP,
         .arm64e_applicable = DOCTOR_PROBE_YES,
@@ -65,6 +67,22 @@ TEST_FUNC(doctor_healthy_fixture_returns_success,
         fclose(stream);
     }
 });
+
+TEST_FUNC(doctor_keyboard_capture_reports_secure_input_without_failing_core,
+{
+    struct doctor_facts facts = doctor_test_healthy_facts();
+    facts.keyboard_capture_required = DOCTOR_PROBE_YES;
+    facts.secure_input = DOCTOR_PROBE_YES;
+    FILE *stream = tmpfile();
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        TEST_CHECK(doctor_report(&facts, stream), EXIT_SUCCESS);
+        TEST_CHECK(doctor_test_output_contains(stream, "WARN keyboard capture"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "Secure Input is active"), true);
+        TEST_CHECK(doctor_test_output_contains(stream, "SUMMARY 0 failures"), true);
+        fclose(stream);
+    }
+})
 
 TEST_FUNC(scripting_addition_runtime_classification_is_nonmutating_and_versioned,
 {

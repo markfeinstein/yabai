@@ -92,6 +92,18 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
 }
 
 #ifdef TESTS
+static bool hotkey_post_action_production(void *context)
+{
+    return event_loop_try_post(&g_event_loop, HOTKEY_ACTION, context, 0);
+}
+
+static bool (*hotkey_test_post_action)(void *) = hotkey_post_action_production;
+
+void hotkey_test_set_action_poster(bool (*poster)(void *))
+{
+    hotkey_test_post_action = poster ? poster : hotkey_post_action_production;
+}
+
 bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
                        uint16_t keycode, uint8_t modifiers,
                        const char *bundle_id, const char *name,
@@ -179,8 +191,13 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
     }
     pthread_mutex_unlock(&hotkey_manager.lock);
 
-    if (job && !event_loop_try_post(&g_event_loop, HOTKEY_ACTION, job, 0)) {
-        hotkey_action_job_destroy(job);
+    if (job) {
+#ifdef TESTS
+        (void)hotkey_test_post_action(job);
+#else
+        /* event_loop_try_post consumes the context on every outcome. */
+        (void)event_loop_try_post(&g_event_loop, HOTKEY_ACTION, job, 0);
+#endif
     }
     if (!matched) return match.capture_unbound ? NULL : event;
     return match.disposition == HOTKEY_DISPOSITION_PASS_THROUGH ? event : NULL;
@@ -188,7 +205,6 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
 
 static bool hotkey_manager_add_event_tap(void)
 {
-    if (!CGPreflightListenEventAccess()) (void)CGRequestListenEventAccess();
     CGEventMask mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp);
     hotkey_manager.event_tap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
                                                 kCGEventTapOptionDefault, mask,
@@ -234,7 +250,7 @@ void hotkey_manager_install_config(const struct hotkey_config_model *config)
     if (started) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!hotkey_manager_reconcile_event_tap()) {
-                warn("yabai: could not update the keyboard event tap; verify Input Monitoring permission\n");
+                warn("yabai: could not update the keyboard event tap; verify Accessibility permission and secure-input state\n");
             }
         });
     }

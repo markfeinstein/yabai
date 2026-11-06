@@ -38,7 +38,7 @@ check_contract() {
     grep -Fq '`uuid` (the Mach-O UUID' "$source_doc"
     grep -Fq 'Version 3 additionally accepts `keyboard`' "$source_doc"
     grep -Fq 'Native keyboard control' "$source_doc"
-    grep -Fq 'Input Monitoring permission' "$source_doc"
+    grep -Fq 'does not require the separate Input Monitoring grant' "$source_doc"
 
     require_man 'UNIT_SEL\&             := 0.0 <= <value> <= 1.0'
     require_man 'POSITIVE_UNIT_SEL\&    := 0.0 < <value> <= 1.0'
@@ -66,7 +66,7 @@ check_contract() {
     grep -Fq '\f(CRuuid\fP' "$generated_doc"
     grep -Fq 'Version 3 additionally accepts' "$generated_doc"
     grep -Fq 'Native keyboard control' "$generated_doc"
-    grep -Fq 'Input Monitoring permission' "$generated_doc"
+    grep -Fq 'does not require the separate Input Monitoring grant' "$generated_doc"
 
     ! grep -Fq 'FLOAT_SEL' "$source_doc"
     ! grep -Fq 'FLOAT_SEL' "$generated_doc"

@@ -76,7 +76,6 @@ Make sure you fulfil all of them before filing an issue.
 |Operating&nbsp;System&nbsp;Intel x86-64|Sonoma 14.0.0+, Sequoia 15.0+, Tahoe 26.0+, and Golden Gate 27.0+ are supported.|
 |Operating&nbsp;System&nbsp;Apple Silicon|Sonoma 14.0.0+, Sequoia 15.0+, Tahoe 26.0+, and Golden Gate 27.0+ are supported.|
 |Accessibility&nbsp;API|yabai must be given permission to utilize the Accessibility API and will request access upon launch. The application must be restarted after access has been granted.|
-|Input&nbsp;Monitoring|yabai must be given Input Monitoring permission when `keyboard.enabled` is true. Keep a stable signed application identity and restart after granting access.|
 |Screen Recording|yabai must be given Screen Recording permission if and only if you want to enable window animations, and will request access when necessary. The application must be restarted after access has been granted.|
 |System&nbsp;Settings&nbsp;(macOS 14.x, 15.x, 26.x, 27.x)|In the Desktop & Dock tab, inside the Mission Control pane, the setting "Displays have separate Spaces" must be enabled.|
 
@@ -86,6 +85,7 @@ Please also take note of the following caveats.
 |-:|:-|
 |System&nbsp;Integrity&nbsp;Protection (Optional)|System Integrity Protection can be (partially) disabled for yabai to inject a scripting addition into Dock.app for controlling windows with functions that require elevated privileges. This enables control of the window server, which is the sole owner of all window connections, and enables additional features of yabai.|
 |Code&nbsp;Signing|When building from source (or installing from HEAD), it is necessary to codesign the binary so it retains its accessibility and automation privileges when updated or rebuilt.|
+|Secure&nbsp;Input|macOS suspends global keyboard taps while Secure Input is active (for example, in some password fields). Native shortcuts resume when Secure Input is released; `yabai --doctor` reports the current state.|
 |Finder&nbsp;Desktop|Some people disable the Finder Desktop window using an undocumented defaults write command. This breaks focusing of empty spaces and should be avoided when using yabai. To re-activate the Finder Desktop, run: "defaults write com.apple.finder CreateDesktop -bool true".|
 |NSDocument-based&nbsp;Applications|Windows that utilize native macOS tabs such as Terminal and Finder, [do not behave correctly when creating tabs](https://github.com/asmvik/yabai/issues/68). Avoid creating tabs in these applications, consider alternatives that do not use NSDocument's tab system, or make these windows float using rules.|
 |System&nbsp;Settings&nbsp;(macOS 14.x, 15.x, 26.x, 27.x)|In the Desktop & Dock tab, inside the Mission Control pane, the setting "Automatically rearrange Spaces based on most recent use" should be disabled for commands that rely on the ordering of spaces to work reliably.|
