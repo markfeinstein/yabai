@@ -82,6 +82,7 @@
 #include "event_signal.h"
 #include "workspace.h"
 #include "rule.h"
+#include "hotkey.h"
 #include "declarative_config.h"
 #include "declarative_modes.h"
 #include "declarative_startup.h"

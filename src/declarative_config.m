@@ -203,7 +203,11 @@ static bool parse_structural_value(struct structural_parser *p, const char *path
 static bool schema_known_key(const uint8_t *key, size_t length) {
     static const char *fixed[] = {"version", "config",  "spaces",   "modes",    "active_mode", "name",
                                   "rules",   "match",   "settings", "scaffold", "effects",     "index",
-                                  "uuid",    "pattern", "exclude",  "mode",     "top_padding", "bottom_padding"};
+                                  "uuid",    "pattern", "exclude",  "mode",     "top_padding", "bottom_padding",
+                                  "keyboard", "enabled", "bindings", "capture_unbound", "key", "keycode",
+                                  "modifiers", "repeat", "cases", "application", "bundle_id", "disposition",
+                                  "action", "transition", "type", "direction", "robust", "handle", "dx", "dy",
+                                  "delta", "degrees", "layout", "label"};
     for (size_t i = 0; i < sizeof(fixed) / sizeof(*fixed); ++i)
         if (strlen(fixed[i]) == length && !memcmp(key, fixed[i], length))
             return true;
@@ -951,6 +955,528 @@ static int enum_value(NSString *s, const char **values, size_t count) {
             return (int)i;
     return -1;
 }
+static bool hotkey_dictionary_has_only_keys(struct model_builder *b, NSDictionary *dictionary,
+                                            const char *const *keys, size_t key_count, const char *path)
+{
+    for (NSString *key in dictionary) {
+        bool known = false;
+        for (size_t i = 0; i < key_count; ++i) {
+            if ([key isEqualToString:@(keys[i])]) { known = true; break; }
+        }
+        if (!known) {
+            char unknown[256];
+            snprintf(unknown, sizeof(unknown), "%s.<unknown>", path);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, unknown, "unknown keyboard field");
+        }
+    }
+    return true;
+}
+
+static int hotkey_keycode_for_name(NSString *name)
+{
+    if (![name isKindOfClass:[NSString class]]) return -1;
+    NSString *key = [name lowercaseString];
+    if ([key isEqualToString:@"space"]) return kVK_Space;
+    if ([key isEqualToString:@"return"]) return kVK_Return;
+    if ([key isEqualToString:@"escape"]) return kVK_Escape;
+    if ([key isEqualToString:@"backspace"]) return kVK_Delete;
+    if ([key isEqualToString:@"left"]) return kVK_LeftArrow;
+    if ([key isEqualToString:@"right"]) return kVK_RightArrow;
+    if ([key isEqualToString:@"up"]) return kVK_UpArrow;
+    if ([key isEqualToString:@"down"]) return kVK_DownArrow;
+    if ([key length] != 1) return -1;
+    switch ([key characterAtIndex:0]) {
+    case 'a': return kVK_ANSI_A; case 'b': return kVK_ANSI_B; case 'c': return kVK_ANSI_C;
+    case 'd': return kVK_ANSI_D; case 'e': return kVK_ANSI_E; case 'f': return kVK_ANSI_F;
+    case 'g': return kVK_ANSI_G; case 'h': return kVK_ANSI_H; case 'i': return kVK_ANSI_I;
+    case 'j': return kVK_ANSI_J; case 'k': return kVK_ANSI_K; case 'l': return kVK_ANSI_L;
+    case 'm': return kVK_ANSI_M; case 'n': return kVK_ANSI_N; case 'o': return kVK_ANSI_O;
+    case 'p': return kVK_ANSI_P; case 'q': return kVK_ANSI_Q; case 'r': return kVK_ANSI_R;
+    case 's': return kVK_ANSI_S; case 't': return kVK_ANSI_T; case 'u': return kVK_ANSI_U;
+    case 'v': return kVK_ANSI_V; case 'w': return kVK_ANSI_W; case 'x': return kVK_ANSI_X;
+    case 'y': return kVK_ANSI_Y; case 'z': return kVK_ANSI_Z;
+    case '0': return kVK_ANSI_0; case '1': return kVK_ANSI_1; case '2': return kVK_ANSI_2;
+    case '3': return kVK_ANSI_3; case '4': return kVK_ANSI_4; case '5': return kVK_ANSI_5;
+    case '6': return kVK_ANSI_6; case '7': return kVK_ANSI_7; case '8': return kVK_ANSI_8;
+    case '9': return kVK_ANSI_9; case '-': return kVK_ANSI_Minus; case '=': return kVK_ANSI_Equal;
+    default: return -1;
+    }
+}
+
+static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictionary, const char *path,
+                                   struct hotkey_keystroke *out)
+{
+    id key = dictionary[@"key"];
+    id raw = dictionary[@"keycode"];
+    if (!!key == !!raw) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path,
+                                              "exactly one of key or keycode is required");
+    int keycode = -1;
+    char value_path[256];
+    if (key) {
+        snprintf(value_path, sizeof(value_path), "%s.key", path);
+        keycode = hotkey_keycode_for_name(key);
+        if (keycode < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "unknown keyboard key");
+    } else if ([raw isKindOfClass:[NSString class]]) {
+        snprintf(value_path, sizeof(value_path), "%s.keycode", path);
+        const char *text = [raw UTF8String];
+        char *end = NULL;
+        if (!text || strncmp(text, "0x", 2) || !text[2])
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "keycode must be an integer or 0x-prefixed string");
+        errno = 0;
+        long value = strtol(text + 2, &end, 16);
+        if (errno || !end || *end || value < 0 || value > UINT16_MAX)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "invalid hardware keycode");
+        keycode = (int)value;
+    } else {
+        snprintf(value_path, sizeof(value_path), "%s.keycode", path);
+        if (!declarative_number_to_int(raw, 0, UINT16_MAX, &keycode))
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "invalid hardware keycode");
+    }
+    out->keycode = (uint16_t)keycode;
+
+    id modifiers = dictionary[@"modifiers"];
+    if (!modifiers) return true;
+    snprintf(value_path, sizeof(value_path), "%s.modifiers", path);
+    if (![modifiers isKindOfClass:[NSArray class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "modifiers must be an array");
+    for (size_t i = 0; i < [modifiers count]; ++i) {
+        id modifier = modifiers[i];
+        uint8_t flag = 0;
+        if ([modifier isEqualToString:@"cmd"]) flag = HOTKEY_MODIFIER_COMMAND;
+        else if ([modifier isEqualToString:@"ctrl"]) flag = HOTKEY_MODIFIER_CONTROL;
+        else if ([modifier isEqualToString:@"alt"]) flag = HOTKEY_MODIFIER_OPTION;
+        else if ([modifier isEqualToString:@"shift"]) flag = HOTKEY_MODIFIER_SHIFT;
+        else {
+            char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "unknown keyboard modifier");
+        }
+        if (out->modifiers & flag) {
+            char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "duplicate keyboard modifier");
+        }
+        out->modifiers |= flag;
+    }
+    return true;
+}
+
+static int hotkey_direction_value(id value)
+{
+    static const char *values[] = {"west", "south", "north", "east"};
+    return enum_value(value, values, sizeof(values) / sizeof(*values));
+}
+
+static bool hotkey_service_label_valid(NSString *label)
+{
+    if (![label isKindOfClass:[NSString class]]) return false;
+    const char *value = [label UTF8String];
+    size_t length = value ? strlen(value) : 0;
+    if (!length || length > HOTKEY_MAX_SERVICE_LABEL_BYTES) return false;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)value[i];
+        if (!(isalnum(c) || c == '.' || c == '_' || c == '-')) return false;
+    }
+    return true;
+}
+
+static bool convert_hotkey_action(struct model_builder *b, id object, struct hotkey_action *out, const char *base)
+{
+    if (![object isKindOfClass:[NSDictionary class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "action must be an object");
+    NSDictionary *action = object;
+    id type = action[@"type"];
+    char path[256]; snprintf(path, sizeof(path), "%s.type", base);
+    if (![type isKindOfClass:[NSString class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "missing or invalid action type");
+
+    const char *common_keys[] = {"type"};
+    if ([type isEqualToString:@"focus_window"]) {
+        const char *keys[] = {"type", "direction", "robust"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 3, base)) return false;
+        snprintf(path, sizeof(path), "%s.direction", base);
+        int direction = hotkey_direction_value(action[@"direction"]);
+        if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid focus direction");
+        out->type = HOTKEY_ACTION_FOCUS_WINDOW;
+        out->data.focus_window.direction = direction;
+        id robust = action[@"robust"];
+        if (robust && CFGetTypeID((CFTypeRef)robust) != CFBooleanGetTypeID()) {
+            snprintf(path, sizeof(path), "%s.robust", base);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "robust must be boolean");
+        }
+        out->data.focus_window.robust = robust ? [robust boolValue] : false;
+    } else if ([type isEqualToString:@"warp_window"]) {
+        const char *keys[] = {"type", "direction"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        snprintf(path, sizeof(path), "%s.direction", base);
+        int direction = hotkey_direction_value(action[@"direction"]);
+        if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid warp direction");
+        out->type = HOTKEY_ACTION_WARP_WINDOW;
+        out->data.warp_window.direction = direction;
+    } else if ([type isEqualToString:@"resize_window"]) {
+        const char *keys[] = {"type", "handle", "dx", "dy"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 4, base)) return false;
+        static const struct enum_mapping handles[] = {
+            {"top", HANDLE_TOP}, {"bottom", HANDLE_BOTTOM}, {"left", HANDLE_LEFT}, {"right", HANDLE_RIGHT},
+            {"top_left", HANDLE_TOP | HANDLE_LEFT}, {"top_right", HANDLE_TOP | HANDLE_RIGHT},
+            {"bottom_left", HANDLE_BOTTOM | HANDLE_LEFT}, {"bottom_right", HANDLE_BOTTOM | HANDLE_RIGHT}
+        };
+        snprintf(path, sizeof(path), "%s.handle", base);
+        int handle = enum_mapped_value(action[@"handle"], handles, sizeof(handles) / sizeof(*handles));
+        if (handle < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize handle");
+        float dx, dy;
+        snprintf(path, sizeof(path), "%s.dx", base);
+        if (!declarative_number_to_float(action[@"dx"], true, &dx) || fabsf(dx) > 10000.0f)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize delta");
+        snprintf(path, sizeof(path), "%s.dy", base);
+        if (!declarative_number_to_float(action[@"dy"], true, &dy) || fabsf(dy) > 10000.0f)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize delta");
+        out->type = HOTKEY_ACTION_RESIZE_WINDOW;
+        out->data.resize_window.handle = (uint8_t)handle;
+        out->data.resize_window.dx = dx;
+        out->data.resize_window.dy = dy;
+    } else if ([type isEqualToString:@"change_window_ratio"]) {
+        const char *keys[] = {"type", "delta"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        float delta;
+        snprintf(path, sizeof(path), "%s.delta", base);
+        if (!declarative_number_to_float(action[@"delta"], false, &delta) || fabsf(delta) > 1.0f)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid ratio delta");
+        out->type = HOTKEY_ACTION_CHANGE_WINDOW_RATIO;
+        out->data.change_window_ratio.delta = delta;
+    } else if ([type isEqualToString:@"adaptive_resize"]) {
+        const char *keys[] = {"type", "direction"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        static const char *values[] = {"shrink", "grow", "west", "south", "north", "east"};
+        snprintf(path, sizeof(path), "%s.direction", base);
+        int direction = enum_value(action[@"direction"], values, sizeof(values) / sizeof(*values));
+        if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid adaptive resize direction");
+        out->type = HOTKEY_ACTION_ADAPTIVE_RESIZE;
+        out->data.adaptive_resize.direction = direction;
+    } else if ([type isEqualToString:@"toggle_floating"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_TOGGLE_FLOATING;
+    } else if ([type isEqualToString:@"toggle_zoom_fullscreen"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_TOGGLE_ZOOM_FULLSCREEN;
+    } else if ([type isEqualToString:@"rotate_space"]) {
+        const char *keys[] = {"type", "degrees"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        int degrees;
+        snprintf(path, sizeof(path), "%s.degrees", base);
+        if (!declarative_number_to_int(action[@"degrees"], 90, 270, &degrees) || degrees % 90)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "degrees must be 90, 180, or 270");
+        out->type = HOTKEY_ACTION_ROTATE_SPACE;
+        out->data.rotate_space.degrees = degrees;
+    } else if ([type isEqualToString:@"set_space_layout"]) {
+        const char *keys[] = {"type", "layout"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        static const char *values[] = {"bsp", "stack", "float", "accordion_horizontal", "accordion_vertical"};
+        snprintf(path, sizeof(path), "%s.layout", base);
+        int layout = enum_value(action[@"layout"], values, sizeof(values) / sizeof(*values));
+        if (layout < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid Space layout");
+        out->type = HOTKEY_ACTION_SET_SPACE_LAYOUT;
+        out->data.set_space_layout.layout = layout;
+    } else if ([type isEqualToString:@"balance_space"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_BALANCE_SPACE;
+    } else if ([type isEqualToString:@"focus_space"] || [type isEqualToString:@"move_window_to_space"]) {
+        const char *keys[] = {"type", "index"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        int index;
+        snprintf(path, sizeof(path), "%s.index", base);
+        if (!declarative_number_to_int(action[@"index"], 1, INT_MAX, &index))
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid Space index");
+        out->type = [type isEqualToString:@"focus_space"] ? HOTKEY_ACTION_FOCUS_SPACE : HOTKEY_ACTION_MOVE_WINDOW_TO_SPACE;
+        out->data.space.index = index;
+    } else if ([type isEqualToString:@"focus_occupied_space"]) {
+        const char *keys[] = {"type", "direction"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        static const char *values[] = {"previous", "next"};
+        snprintf(path, sizeof(path), "%s.direction", base);
+        int direction = enum_value(action[@"direction"], values, 2);
+        if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid occupied-Space direction");
+        out->type = HOTKEY_ACTION_FOCUS_OCCUPIED_SPACE;
+        out->data.occupied_space.direction = direction;
+    } else if ([type isEqualToString:@"close_window"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_CLOSE_WINDOW;
+    } else if ([type isEqualToString:@"close_other_windows"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_CLOSE_OTHER_WINDOWS;
+    } else if ([type isEqualToString:@"cycle_space_layout"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_CYCLE_SPACE_LAYOUT;
+    } else if ([type isEqualToString:@"reload_configuration"]) {
+        if (!hotkey_dictionary_has_only_keys(b, action, common_keys, 1, base)) return false;
+        out->type = HOTKEY_ACTION_RELOAD_CONFIGURATION;
+    } else if ([type isEqualToString:@"restart_service"]) {
+        const char *keys[] = {"type", "label"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        snprintf(path, sizeof(path), "%s.label", base);
+        if (!hotkey_service_label_valid(action[@"label"]))
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid launchd service label");
+        out->type = HOTKEY_ACTION_RESTART_SERVICE;
+        snprintf(out->data.restart_service.label, sizeof(out->data.restart_service.label), "%s",
+                 [action[@"label"] UTF8String]);
+    } else if ([type isEqualToString:@"synthesize_key"]) {
+        const char *keys[] = {"type", "key", "keycode", "modifiers"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 4, base)) return false;
+        out->type = HOTKEY_ACTION_SYNTHESIZE_KEY;
+        if (!convert_hotkey_keycode(b, action, base, &out->data.synthesize_key)) return false;
+    } else {
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "unknown keyboard action");
+    }
+    return true;
+}
+
+static bool convert_hotkey_actions(struct model_builder *b, id object, struct hotkey_binding_case *out,
+                                   const char *path)
+{
+    NSArray *actions = nil;
+    if ([object isKindOfClass:[NSArray class]]) actions = object;
+    else if ([object isKindOfClass:[NSDictionary class]]) actions = @[object];
+    else return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "action must be an object or array");
+    if (![actions count] || [actions count] > HOTKEY_MAX_ACTIONS)
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "action sequence must contain 1 to 16 actions");
+    out->action_count = [actions count];
+    out->actions = model_alloc(b, sizeof(*out->actions) * out->action_count);
+    if (!out->actions) return false;
+    for (size_t i = 0; i < out->action_count; ++i) {
+        char item[256];
+        if ([object isKindOfClass:[NSArray class]]) snprintf(item, sizeof(item), "%s[%zu]", path, i);
+        else snprintf(item, sizeof(item), "%s", path);
+        if (!convert_hotkey_action(b, actions[i], &out->actions[i], item)) return false;
+    }
+    return true;
+}
+
+static bool hotkey_application_condition_equal(const struct hotkey_application_condition *a,
+                                               const struct hotkey_application_condition *b)
+{
+    bool bundle_equal = (!a->bundle_id && !b->bundle_id) ||
+                        (a->bundle_id && b->bundle_id && !strcmp(a->bundle_id, b->bundle_id));
+    bool name_equal = (!a->name && !b->name) || (a->name && b->name && !strcmp(a->name, b->name));
+    return bundle_equal && name_equal;
+}
+
+static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotkey_binding *binding,
+                                 const char *path)
+{
+    if (![object isKindOfClass:[NSArray class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "cases must be an array");
+    NSArray *cases = object;
+    if (![cases count] || [cases count] > HOTKEY_MAX_CASES)
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "binding must contain 1 to 16 cases");
+    binding->case_count = [cases count];
+    binding->cases = model_alloc(b, sizeof(*binding->cases) * binding->case_count);
+    if (!binding->cases) return false;
+    bool wildcard_seen = false;
+    for (size_t i = 0; i < binding->case_count; ++i) {
+        char base[256]; snprintf(base, sizeof(base), "%s[%zu]", path, i);
+        id object = cases[i];
+        if (![object isKindOfClass:[NSDictionary class]])
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding case must be an object");
+        NSDictionary *item = object;
+        const char *keys[] = {"application", "disposition", "action", "transition"};
+        if (!hotkey_dictionary_has_only_keys(b, item, keys, 4, base)) return false;
+        struct hotkey_binding_case *out = &binding->cases[i];
+        out->transition_mode = HOTKEY_TRANSITION_NONE;
+        id application = item[@"application"];
+        if (application) {
+            char app_path[256]; snprintf(app_path, sizeof(app_path), "%s.application", base);
+            if (![application isKindOfClass:[NSDictionary class]])
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, app_path, "application condition must be an object");
+            const char *app_keys[] = {"bundle_id", "name"};
+            if (!hotkey_dictionary_has_only_keys(b, application, app_keys, 2, app_path)) return false;
+            if (!application[@"bundle_id"] && !application[@"name"])
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, app_path, "application condition must not be empty");
+            if (application[@"bundle_id"]) {
+                char member[256]; snprintf(member, sizeof(member), "%s.bundle_id", app_path);
+                out->application.bundle_id = model_string(b, application[@"bundle_id"],
+                                                          DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
+                if (!out->application.bundle_id)
+                    return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid bundle identifier");
+            }
+            if (application[@"name"]) {
+                char member[256]; snprintf(member, sizeof(member), "%s.name", app_path);
+                out->application.name = model_string(b, application[@"name"],
+                                                     DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
+                if (!out->application.name)
+                    return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid application name");
+            }
+        } else {
+            if (wildcard_seen || i + 1 != binding->case_count)
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "default application case must be unique and last");
+            wildcard_seen = true;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (hotkey_application_condition_equal(&binding->cases[j].application, &out->application))
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "duplicate application case");
+        }
+        static const char *dispositions[] = {"consume", "consume_only", "pass_through", "remap"};
+        char disposition_path[256]; snprintf(disposition_path, sizeof(disposition_path), "%s.disposition", base);
+        int disposition = enum_value(item[@"disposition"], dispositions, 4);
+        if (disposition < 0)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, disposition_path, "invalid event disposition");
+        out->disposition = disposition;
+        if (item[@"action"]) {
+            char action_path[256]; snprintf(action_path, sizeof(action_path), "%s.action", base);
+            if (!convert_hotkey_actions(b, item[@"action"], out, action_path)) return false;
+        }
+        if (item[@"transition"]) {
+            char transition_path[256]; snprintf(transition_path, sizeof(transition_path), "%s.transition", base);
+            out->transition_name = model_string(b, item[@"transition"], DECLARATIVE_CONFIG_MAX_KEY_BYTES, true);
+            if (!out->transition_name)
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, transition_path, "invalid input mode transition");
+        }
+        bool has_effect = out->action_count || out->transition_name;
+        if (out->disposition == HOTKEY_DISPOSITION_CONSUME && !has_effect)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "consume disposition requires an action or transition");
+        if ((out->disposition == HOTKEY_DISPOSITION_CONSUME_ONLY ||
+             out->disposition == HOTKEY_DISPOSITION_PASS_THROUGH) && has_effect)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "disposition does not allow an action or transition");
+        if (out->disposition == HOTKEY_DISPOSITION_REMAP &&
+            (out->action_count != 1 || out->actions[0].type != HOTKEY_ACTION_SYNTHESIZE_KEY || out->transition_name))
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "remap requires exactly one synthesize_key action");
+    }
+    return true;
+}
+
+static bool convert_hotkey_bindings(struct model_builder *b, id object, struct hotkey_binding **out_bindings,
+                                    size_t *out_count, size_t *total, const char *path)
+{
+    if (![object isKindOfClass:[NSArray class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "bindings must be an array");
+    NSArray *bindings = object;
+    if ([bindings count] > HOTKEY_MAX_BINDINGS || *total > HOTKEY_MAX_BINDINGS - [bindings count])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "keyboard binding limit exceeded");
+    *out_count = [bindings count];
+    *total += *out_count;
+    if (!*out_count) return true;
+    *out_bindings = model_alloc(b, sizeof(**out_bindings) * *out_count);
+    if (!*out_bindings) return false;
+    for (size_t i = 0; i < *out_count; ++i) {
+        char base[256]; snprintf(base, sizeof(base), "%s[%zu]", path, i);
+        id object = bindings[i];
+        if (![object isKindOfClass:[NSDictionary class]])
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding must be an object");
+        NSDictionary *item = object;
+        const char *keys[] = {"key", "keycode", "modifiers", "repeat", "cases"};
+        if (!hotkey_dictionary_has_only_keys(b, item, keys, 5, base)) return false;
+        struct hotkey_binding *binding = &(*out_bindings)[i];
+        if (!convert_hotkey_keycode(b, item, base, &binding->keystroke)) return false;
+        id repeat = item[@"repeat"];
+        if (repeat && CFGetTypeID((CFTypeRef)repeat) != CFBooleanGetTypeID()) {
+            char repeat_path[256]; snprintf(repeat_path, sizeof(repeat_path), "%s.repeat", base);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, repeat_path, "repeat must be boolean");
+        }
+        binding->repeat = repeat ? [repeat boolValue] : true;
+        char cases_path[256]; snprintf(cases_path, sizeof(cases_path), "%s.cases", base);
+        if (!item[@"cases"]) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, cases_path, "missing binding cases");
+        if (!convert_hotkey_cases(b, item[@"cases"], binding, cases_path)) return false;
+        for (size_t j = 0; j < i; ++j) {
+            struct hotkey_binding *previous = &(*out_bindings)[j];
+            if (previous->keystroke.keycode == binding->keystroke.keycode &&
+                previous->keystroke.modifiers == binding->keystroke.modifiers)
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "conflicting keyboard binding");
+        }
+    }
+    return true;
+}
+
+static int hotkey_mode_index(const struct hotkey_config_model *keyboard, const char *name)
+{
+    if (!strcmp(name, "default")) return HOTKEY_TRANSITION_DEFAULT;
+    for (size_t i = 0; i < keyboard->mode_count; ++i)
+        if (!strcmp(keyboard->modes[i].name, name)) return (int)i;
+    return HOTKEY_TRANSITION_NONE;
+}
+
+static bool resolve_hotkey_transitions(struct model_builder *b, struct hotkey_binding *bindings,
+                                       size_t binding_count, const char *path)
+{
+    for (size_t i = 0; i < binding_count; ++i) {
+        for (size_t j = 0; j < bindings[i].case_count; ++j) {
+            struct hotkey_binding_case *item = &bindings[i].cases[j];
+            if (!item->transition_name) continue;
+            item->transition_mode = hotkey_mode_index(&b->model->keyboard, item->transition_name);
+            if (item->transition_mode == HOTKEY_TRANSITION_NONE) {
+                char transition_path[256];
+                snprintf(transition_path, sizeof(transition_path), "%s[%zu].cases[%zu].transition", path, i, j);
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, transition_path, "transition references an unknown input mode");
+            }
+        }
+    }
+    return true;
+}
+
+static bool convert_hotkey_config(struct model_builder *b, id object)
+{
+    const char *base = "$.keyboard";
+    if (![object isKindOfClass:[NSDictionary class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "keyboard must be an object");
+    NSDictionary *keyboard = object;
+    const char *keys[] = {"enabled", "bindings", "modes"};
+    if (!hotkey_dictionary_has_only_keys(b, keyboard, keys, 3, base)) return false;
+    b->model->keyboard.present = true;
+    b->model->keyboard.enabled = true;
+    id enabled = keyboard[@"enabled"];
+    if (enabled) {
+        if (CFGetTypeID((CFTypeRef)enabled) != CFBooleanGetTypeID())
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.keyboard.enabled", "enabled must be boolean");
+        b->model->keyboard.enabled = [enabled boolValue];
+    }
+    size_t total = 0;
+    id bindings = keyboard[@"bindings"] ?: @[];
+    if (!convert_hotkey_bindings(b, bindings, &b->model->keyboard.bindings,
+                                 &b->model->keyboard.binding_count, &total, "$.keyboard.bindings")) return false;
+    id modes_object = keyboard[@"modes"] ?: @[];
+    if (![modes_object isKindOfClass:[NSArray class]])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.keyboard.modes", "modes must be an array");
+    NSArray *modes = modes_object;
+    if ([modes count] > HOTKEY_MAX_INPUT_MODES)
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.keyboard.modes", "input mode limit exceeded");
+    b->model->keyboard.mode_count = [modes count];
+    if (b->model->keyboard.mode_count) {
+        b->model->keyboard.modes = model_alloc(b, sizeof(*b->model->keyboard.modes) * b->model->keyboard.mode_count);
+        if (!b->model->keyboard.modes) return false;
+    }
+    for (size_t i = 0; i < b->model->keyboard.mode_count; ++i) {
+        char mode_path[256]; snprintf(mode_path, sizeof(mode_path), "$.keyboard.modes[%zu]", i);
+        id object = modes[i];
+        if (![object isKindOfClass:[NSDictionary class]])
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, mode_path, "input mode must be an object");
+        NSDictionary *mode = object;
+        const char *mode_keys[] = {"name", "capture_unbound", "bindings"};
+        if (!hotkey_dictionary_has_only_keys(b, mode, mode_keys, 3, mode_path)) return false;
+        struct hotkey_input_mode *out = &b->model->keyboard.modes[i];
+        char name_path[256]; snprintf(name_path, sizeof(name_path), "%s.name", mode_path);
+        out->name = model_string(b, mode[@"name"], DECLARATIVE_CONFIG_MAX_KEY_BYTES, true);
+        if (!out->name) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, name_path, "missing or invalid input mode name");
+        if (!strcmp(out->name, "default"))
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, name_path, "default is a reserved input mode name");
+        for (size_t j = 0; j < i; ++j)
+            if (!strcmp(b->model->keyboard.modes[j].name, out->name))
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, name_path, "input mode names must be unique");
+        id capture = mode[@"capture_unbound"];
+        if (capture && CFGetTypeID((CFTypeRef)capture) != CFBooleanGetTypeID()) {
+            char capture_path[256]; snprintf(capture_path, sizeof(capture_path), "%s.capture_unbound", mode_path);
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, capture_path, "capture_unbound must be boolean");
+        }
+        out->capture_unbound = capture ? [capture boolValue] : false;
+        char bindings_path[256]; snprintf(bindings_path, sizeof(bindings_path), "%s.bindings", mode_path);
+        if (!convert_hotkey_bindings(b, mode[@"bindings"] ?: @[], &out->bindings,
+                                     &out->binding_count, &total, bindings_path)) return false;
+    }
+    if (!resolve_hotkey_transitions(b, b->model->keyboard.bindings,
+                                    b->model->keyboard.binding_count, "$.keyboard.bindings")) return false;
+    for (size_t i = 0; i < b->model->keyboard.mode_count; ++i) {
+        char path[256]; snprintf(path, sizeof(path), "$.keyboard.modes[%zu].bindings", i);
+        if (!resolve_hotkey_transitions(b, b->model->keyboard.modes[i].bindings,
+                                        b->model->keyboard.modes[i].binding_count, path)) return false;
+    }
+    return true;
+}
+
 static bool convert_setting(struct model_builder *b, int setting_id, id object, struct declarative_value *out,
                             const char *path) {
     const char *const bools[] = {0};
@@ -1548,17 +2074,20 @@ static bool convert_root(id root, struct model_builder *b) {
     NSDictionary *d = root;
     for (NSString *k in d)
         if (!([k isEqualToString:@"version"] || [k isEqualToString:@"config"] || [k isEqualToString:@"spaces"] ||
-              [k isEqualToString:@"modes"] || [k isEqualToString:@"active_mode"] || [k isEqualToString:@"rules"]))
+              [k isEqualToString:@"modes"] || [k isEqualToString:@"active_mode"] || [k isEqualToString:@"rules"] ||
+              [k isEqualToString:@"keyboard"]))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.<unknown>", "unknown top-level field");
     int version;
     if (!d[@"version"])
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.version", "missing required version");
-    if (!builder_number_to_int(b, d[@"version"], "$.version", 1, 2, &version))
-        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.version", "version must equal 1 or 2");
+    if (!builder_number_to_int(b, d[@"version"], "$.version", 1, 3, &version))
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.version", "version must equal 1, 2, or 3");
     b->model->version = version;
     if (version == 1 && (d[@"modes"] || d[@"active_mode"]))
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, d[@"modes"] ? "$.modes" : "$.active_mode",
                              "field requires version 2");
+    if (version < 3 && d[@"keyboard"])
+        return builder_error(b, DECLARATIVE_ERROR_SCHEMA, "$.keyboard", "field requires version 3");
     if (d[@"config"] && !convert_config_object(b, d[@"config"], b->model->config, false, "$.config"))
         return false;
     size_t total = 0;
@@ -1635,6 +2164,8 @@ static bool convert_root(id root, struct model_builder *b) {
     }
     if (d[@"rules"] && !convert_rules(b, d[@"rules"]))
         return false;
+    if (d[@"keyboard"] && !convert_hotkey_config(b, d[@"keyboard"]))
+        return false;
     return true;
 }
 static void destroy_spaces(struct declarative_space_policy *spaces, size_t count, void (*release)(void *)) {
@@ -1646,6 +2177,20 @@ static void destroy_spaces(struct declarative_space_policy *spaces, size_t count
             release(spaces[i].scaffold[slot].pattern);
     }
     release(spaces);
+}
+static void destroy_hotkey_bindings(struct hotkey_binding *bindings, size_t count, void (*release)(void *)) {
+    if (!bindings) return;
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < bindings[i].case_count; ++j) {
+            struct hotkey_binding_case *item = &bindings[i].cases[j];
+            release(item->application.bundle_id);
+            release(item->application.name);
+            release(item->actions);
+            release(item->transition_name);
+        }
+        release(bindings[i].cases);
+    }
+    release(bindings);
 }
 void declarative_config_destroy(struct declarative_config_model *m) {
     if (!m)
@@ -1668,6 +2213,15 @@ void declarative_config_destroy(struct declarative_config_model *m) {
             release(r->scratchpad);
         }
     release(m->rules);
+    destroy_hotkey_bindings(m->keyboard.bindings, m->keyboard.binding_count, release);
+    if (m->keyboard.modes) {
+        for (size_t i = 0; i < m->keyboard.mode_count; ++i) {
+            release(m->keyboard.modes[i].name);
+            destroy_hotkey_bindings(m->keyboard.modes[i].bindings,
+                                    m->keyboard.modes[i].binding_count, release);
+        }
+    }
+    release(m->keyboard.modes);
     release(m);
 }
 

@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "hotkey.h"
+
 #define DECLARATIVE_CONFIG_MAX_FILE_SIZE (1024u * 1024u)
 #define DECLARATIVE_CONFIG_MAX_DEPTH 64u
 #define DECLARATIVE_CONFIG_MAX_OBJECT_MEMBERS 256u
@@ -131,7 +133,7 @@ struct declarative_matcher { char *pattern; bool exclude; };
 struct declarative_space_policy { bool by_index; int index; char *uuid; struct declarative_value settings[DECLARATIVE_CONFIG_COUNT]; struct declarative_matcher scaffold[DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS]; size_t scaffold_count; bool scaffold_present; };
 struct declarative_mode_model { char *name; struct declarative_space_policy *spaces; size_t space_count; };
 struct declarative_rule_model { char *label; bool one_shot; bool matcher_present[4]; struct declarative_matcher matchers[4]; bool display_present, space_present, follow_present, follow; int display_index, space_index; bool grid_present; unsigned grid[6]; bool opacity_present; float opacity; bool manage_present, manage, sticky_present, sticky, mff_present, mff, layer_present; int layer; bool fullscreen_present, fullscreen; char *scratchpad; };
-struct declarative_config_model { int version; struct declarative_value config[DECLARATIVE_CONFIG_COUNT]; struct declarative_space_policy *spaces; size_t space_count; struct declarative_mode_model *modes; size_t mode_count; char *active_mode; struct declarative_rule_model *rules; size_t rule_count; size_t allocated_bytes; void (*allocator_free)(void *); };
+struct declarative_config_model { int version; struct declarative_value config[DECLARATIVE_CONFIG_COUNT]; struct declarative_space_policy *spaces; size_t space_count; struct declarative_mode_model *modes; size_t mode_count; char *active_mode; struct declarative_rule_model *rules; size_t rule_count; struct hotkey_config_model keyboard; size_t allocated_bytes; void (*allocator_free)(void *); };
 
 enum declarative_file_result { DECLARATIVE_FILE_OK, DECLARATIVE_FILE_ABSENT, DECLARATIVE_FILE_ERROR };
 bool declarative_config_validate_path(const char *path, struct declarative_error *error);
