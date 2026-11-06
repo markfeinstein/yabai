@@ -108,6 +108,24 @@ static bool hotkey_modifiers_match(uint16_t required, uint16_t actual)
     return (actual & sided) == sided;
 }
 
+static bool hotkey_keycode_has_implicit_fn(uint16_t keycode)
+{
+    switch (keycode) {
+    case kVK_LeftArrow:
+    case kVK_RightArrow:
+    case kVK_DownArrow:
+    case kVK_UpArrow:
+    case kVK_Home:
+    case kVK_End:
+    case kVK_PageUp:
+    case kVK_PageDown:
+    case kVK_ForwardDelete:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool hotkey_application_matches(const struct hotkey_application_condition *condition,
                                        const char *bundle_id, const char *name)
 {
@@ -115,6 +133,33 @@ static bool hotkey_application_matches(const struct hotkey_application_condition
     if (condition->bundle_id && (!bundle_id || strcmp(condition->bundle_id, bundle_id))) return false;
     if (condition->name && (!name || strcmp(condition->name, name))) return false;
     return true;
+}
+
+// Returns 1 for a matching case, 0 when a binding owns the keystroke but no
+// application case matches, and -1 when no binding owns the keystroke.
+static int hotkey_match_bindings(const struct hotkey_binding *bindings, size_t binding_count,
+                                 uint16_t keycode, uint16_t modifiers,
+                                 const char *bundle_id, const char *name,
+                                 struct hotkey_match_result *result)
+{
+    for (size_t i = 0; i < binding_count; ++i) {
+        const struct hotkey_binding *binding = &bindings[i];
+        if (binding->keystroke.keycode != keycode ||
+            !hotkey_modifiers_match(binding->keystroke.modifiers, modifiers)) continue;
+        for (size_t j = 0; j < binding->case_count; ++j) {
+            const struct hotkey_binding_case *item = &binding->cases[j];
+            if (!hotkey_application_matches(&item->application, bundle_id, name)) continue;
+            result->matched = true;
+            result->repeat = binding->repeat;
+            result->disposition = item->disposition;
+            result->actions = item->actions;
+            result->action_count = item->action_count;
+            result->transition_mode = item->transition_mode;
+            return 1;
+        }
+        return 0;
+    }
+    return -1;
 }
 
 static bool hotkey_match(const struct hotkey_config_model *config, int active_mode,
@@ -136,22 +181,18 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
         result->capture_unbound = mode->capture_unbound;
     }
 
-    for (size_t i = 0; i < binding_count; ++i) {
-        const struct hotkey_binding *binding = &bindings[i];
-        if (binding->keystroke.keycode != keycode ||
-            !hotkey_modifiers_match(binding->keystroke.modifiers, modifiers)) continue;
-        for (size_t j = 0; j < binding->case_count; ++j) {
-            const struct hotkey_binding_case *item = &binding->cases[j];
-            if (!hotkey_application_matches(&item->application, bundle_id, name)) continue;
-            result->matched = true;
-            result->repeat = binding->repeat;
-            result->disposition = item->disposition;
-            result->actions = item->actions;
-            result->action_count = item->action_count;
-            result->transition_mode = item->transition_mode;
-            return true;
-        }
-        return false;
+    int exact = hotkey_match_bindings(bindings, binding_count, keycode, modifiers,
+                                      bundle_id, name, result);
+    if (exact >= 0) return exact == 1;
+
+    // macOS annotates arrow and navigation events with SecondaryFn (and often
+    // NumericPad) even when the physical Fn key is not pressed. Prefer an
+    // explicitly authored Fn binding above; when none exists, retry without
+    // that system-added flag so ordinary Ctrl+Arrow bindings remain portable.
+    if ((modifiers & HOTKEY_MODIFIER_FN) && hotkey_keycode_has_implicit_fn(keycode)) {
+        uint16_t normalized = modifiers & ~HOTKEY_MODIFIER_FN;
+        return hotkey_match_bindings(bindings, binding_count, keycode, normalized,
+                                     bundle_id, name, result) == 1;
     }
     return false;
 }

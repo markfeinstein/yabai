@@ -53,6 +53,38 @@ TEST_FUNC(hotkey_matcher_distinguishes_sided_modifiers_and_accepts_fn,
     }
 })
 
+TEST_FUNC(hotkey_matcher_prefers_explicit_fn_then_normalizes_navigation_fallback,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":["
+      "{\"key\":\"right\",\"modifiers\":[\"ctrl\"],\"cases\":[{\"disposition\":\"consume_only\"}]},"
+      "{\"key\":\"right\",\"modifiers\":[\"ctrl\",\"fn\"],\"cases\":[{\"disposition\":\"pass_through\"}]},"
+      "{\"key\":\"h\",\"modifiers\":[\"ctrl\"],\"cases\":[{\"disposition\":\"consume_only\"}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "implicit-fn.jsonc", &model, &error), true);
+    if (model) {
+        struct hotkey_match_result match;
+        uint16_t ctrl_fn = HOTKEY_MODIFIER_CONTROL | HOTKEY_MODIFIER_FN;
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
+                                     kVK_RightArrow, ctrl_fn, NULL, NULL, &match), true);
+        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_PASS_THROUGH);
+
+        // Removing the explicit Fn binding exposes the ordinary navigation
+        // binding through the implicit-Fn fallback.
+        model->keyboard.binding_count = 1;
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
+                                     kVK_RightArrow, ctrl_fn, NULL, NULL, &match), true);
+        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME_ONLY);
+
+        // Fn remains an exact modifier for non-navigation keys.
+        model->keyboard.binding_count = 3;
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
+                                     kVK_ANSI_H, ctrl_fn, NULL, NULL, &match), false);
+        declarative_config_destroy(model);
+    }
+})
+
 TEST_FUNC(hotkey_callback_transitions_modes_consumes_unbound_and_ignores_synthetic_events,
 {
     const char json[] =

@@ -63,7 +63,11 @@ Modifiers are `cmd`, `ctrl`, `alt`, `shift`, and `fn`. `hyper` expands to
 Cmd-Ctrl-Alt-Shift. Bindings may require `left_` or `right_` variants of Cmd,
 Ctrl, Alt, and Shift. Synthetic keys accept generic modifiers and `fn`, but not
 sided modifiers because CoreGraphics posts modifier flags rather than a
-physical left/right modifier transition.
+physical left/right modifier transition. macOS annotates navigation-key events
+with `SecondaryFn` even when the physical Fn key is not pressed. An explicitly
+authored `fn` binding wins first; otherwise yabai ignores that system-added flag
+for arrows, Home/End, Page Up/Down, and Forward Delete so ordinary bindings such
+as Ctrl+Arrow remain portable.
 
 Application matching is exact. When both `bundle_id` and `name` are present,
 both must match. Bundle identifiers are preferred because display names are
