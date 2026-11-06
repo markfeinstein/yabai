@@ -75,7 +75,7 @@ DEPLOY_OWNER_UID ?= 0
 DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax analyze \
         integration-hide-on-close integration private-api-smoke-build private-api-smoke \
         clean-debug clean-release clean-asan clean-tsan clean distclean
 .NOTPARALLEL:
@@ -153,6 +153,9 @@ test-all: test test-asan test-tsan test-architectures syntax man-contract
 
 syntax:
 	$(MAKE) -C tests syntax
+
+analyze:
+	$(SCRIPT_PATH)/analyze.sh
 
 # Explicit opt-in only: this opens windows and drives Accessibility UI against
 # a running daemon on the current BSP Space. Never a dependency of CI.

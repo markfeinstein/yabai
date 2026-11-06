@@ -1,8 +1,11 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
+@class NotifyDelegate;
+
 static bool g_notify_init;
 static NSImage *g_notify_img;
+static NotifyDelegate *g_notify_delegate;
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -19,7 +22,8 @@ static NSImage *g_notify_img;
 
 static bool notify_init(void)
 {
-    [[NSUserNotificationCenter defaultUserNotificationCenter] setDelegate:[NotifyDelegate alloc]];
+    g_notify_delegate = [[NotifyDelegate alloc] init];
+    [[NSUserNotificationCenter defaultUserNotificationCenter] setDelegate:g_notify_delegate];
     g_notify_img = [[[NSWorkspace sharedWorkspace] iconForFile:[[[NSBundle mainBundle] executablePath] stringByResolvingSymlinksInPath]] retain];
     g_notify_init = true;
 

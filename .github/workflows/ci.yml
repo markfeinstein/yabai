@@ -26,6 +26,8 @@ jobs:
           make man-contract
           make man-check
           git diff --check
+      - name: Static analyzer regression gate
+        run: make analyze
       - name: Offline evidence-gate self-tests
         run: make classifier-corpus-gate native-tab-evidence-gate
       - name: AX frame request benchmark
@@ -86,5 +88,29 @@ jobs:
               exit 1
               ;;
           esac
+      - name: Working tree remains clean
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+  macos-15-compatibility:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify macOS 15 arm64 runner
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 15
+      - name: Build and run offline compatibility suite
+        run: |
+          make syntax man-contract
+          make test
+          make debug release
+          bin/debug/yabai --check-config examples/yabai.jsonc
+          bin/debug/yabai --check-config examples/native-hotkeys.jsonc
+          for binary in bin/debug/yabai bin/release/yabai; do
+            for arch in arm64 x86_64; do
+              lipo "$binary" -verify_arch "$arch"
+              test "$(otool -arch "$arch" -l "$binary" | awk '$1 == "minos" { print $2 }')" = 14.0
+            done
+          done
       - name: Working tree remains clean
         run: test -z "$(git status --porcelain --untracked-files=all)"
