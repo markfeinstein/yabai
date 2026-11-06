@@ -127,19 +127,24 @@ The reader opens the selected path once with `O_RDONLY | O_CLOEXEC | O_NONBLOCK`
 
 Raw NUL bytes, malformed UTF-8, a BOM away from byte zero, UTF-16 or UTF-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and `null` are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
 
-Version 1 remains compatible and accepts exactly `version`, `config`, `spaces` and `rules`. Version 2 accepts those fields plus `modes` and `active_mode`. `version` is required and must have the mathematical integer value 1 or 2; `modes` and `active_mode` are rejected in version 1. All other fields shown here are optional:
+Version 1 remains compatible and accepts exactly `version`, `config`, `spaces` and `rules`. Version 2 accepts those fields plus `modes` and `active_mode`. Version 3 additionally accepts `keyboard`. `version` is required and must have the mathematical integer value 1, 2 or 3; `modes` and `active_mode` are rejected in version 1, and `keyboard` is rejected before version 3. All other fields shown here are optional:
 
 [source,json]
 ----
 {
-  "version": 2,
+  "version": 3,
   "config": {},
   "spaces": [],
   "modes": [
     { "name": "work", "spaces": [] }
   ],
   "active_mode": "work",
-  "rules": []
+  "rules": [],
+  "keyboard": {
+    "enabled": true,
+    "bindings": [],
+    "modes": []
+  }
 }
 ----
 
@@ -156,7 +161,11 @@ Parser and copied-model limits are:
 * nesting depth: 64 containers;
 * members in one object: 256;
 * base and mode Space policies: 1,024 total;
-* named modes: 64;
+* named Space-policy modes: 64;
+* keyboard input modes: 32;
+* keyboard bindings: 512 total across the default mode and input modes;
+* application cases per binding: 16;
+* native actions per binding case: 16;
 * native rules: 1,024;
 * decoded key: 128 UTF-8 bytes;
 * Space UUID, rule label or scratchpad: 1,024 UTF-8 bytes;
@@ -245,6 +254,23 @@ Runtime selection is transactional and errors are typed through topology capture
 `--query` returns the active mode as one escaped JSON string, or JSON `null`. `--list` returns stable JSON with declared names in source order and `active` set to that same string or `null`. Snapshot creation is worker-only and requires a fresh-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
 
 Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored-file, mode-count, aggregate-policy, string, model-memory and topology limits above all continue to apply.
+
+Native keyboard control
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Version 3's optional `keyboard` object contains `enabled` (boolean, default true), `bindings` for the implicit default input mode, and `modes` for transient keyboard modes. Keyboard input modes are independent of the top-level declarative Space-policy modes described above. Set `keyboard.enabled` to false to avoid installing the global keyboard event tap.
+
+A binding contains exactly one `key` or `keycode`, an optional exact `modifiers` array, optional boolean `repeat` (default true), and a nonempty ordered `cases` array. Named keys are letters, digits, `-`, `=`, arrows, `space`, `return`, `escape` and `backspace`. `keycode` accepts a nonnegative integer through `UINT16_MAX` or a `0x`-prefixed hexadecimal string and is independent of the active keyboard layout. Modifiers are `cmd`, `ctrl`, `alt` and `shift`; duplicates are rejected.
+
+A case may contain an exact `application` object with `bundle_id`, `name`, or both. Bundle identifiers are preferred; when both fields are authored, both must match. An omitted application is the optional wildcard case and must be unique and last. The required `disposition` is `consume`, `consume_only`, `pass_through` or `remap`. `consume` requires an `action`, a `transition`, or both. `consume_only` and `pass_through` allow neither. `remap` requires exactly one `synthesize_key` action. Bindings with the same physical keycode and modifiers conflict within one input mode, so application alternatives belong in one binding's `cases` array.
+
+An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are `focus_window`, `warp_window`, `resize_window`, `change_window_ratio`, `adaptive_resize`, `toggle_floating`, `toggle_zoom_fullscreen`, `rotate_space`, `set_space_layout`, `balance_space`, `focus_space`, `focus_occupied_space`, `move_window_to_space`, `close_window`, `close_other_windows`, `cycle_space_layout`, `reload_configuration`, `restart_service` and `synthesize_key`. The complete field schema and full skhd-parity configuration are in `doc/native_hotkeys.md` and `examples/native-hotkeys.jsonc`.
+
+Each keyboard mode is an exact object with unique nonempty `name`, optional boolean `capture_unbound`, and `bindings`. `default` is reserved. A consume case changes modes with `transition`; `default` exits a mode. Transitions and event disposition are decided synchronously in the event-tap callback, while typed actions are copied into a bounded job and executed on yabai's event-loop worker. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
+
+Synthetic key events carry a private event-source tag and bypass matching, preventing recursive remaps. The event tap re-enables itself after timeout or user-input disablement. `restart_service` runs `/bin/launchctl kickstart -k` for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
+
+Enabling the keyboard engine requires Input Monitoring permission for the stable signed yabai application identity. Accessibility remains required for window operations and synthetic event posting. The scripting addition is not required. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
 
 Managed scaffold
 ~~~~~~~~~~~~~~~~

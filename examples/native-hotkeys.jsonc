@@ -1,0 +1,406 @@
+{
+  // Native keyboard configuration requires schema version 3. This example is
+  // the complete skhd/window-helper parity keymap described in
+  // doc/native_hotkeys.md and can be merged with the other top-level sections
+  // in examples/yabai.jsonc.
+  "version": 3,
+  "keyboard": {
+    "enabled": true,
+    "bindings": [
+      {
+        "key": "h",
+        "modifiers": ["cmd"],
+        "repeat": false,
+        "cases": [
+          {
+            // Prefer bundle_id when Rex publishes a stable identifier. Name
+            // matching preserves compatibility with the current "Rex Beta" app.
+            "application": { "name": "Rex Beta" },
+            "disposition": "remap",
+            "action": {
+              "type": "synthesize_key",
+              "key": "h",
+              "modifiers": ["ctrl", "alt", "cmd"]
+            }
+          },
+          { "disposition": "consume_only" }
+        ]
+      },
+
+      {
+        "key": "h",
+        "modifiers": ["ctrl"],
+        "cases": [
+          { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
+          {
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "west", "robust": true }
+          }
+        ]
+      },
+      {
+        "key": "j",
+        "modifiers": ["ctrl"],
+        "cases": [
+          { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
+          {
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "south", "robust": true }
+          }
+        ]
+      },
+      {
+        "key": "k",
+        "modifiers": ["ctrl"],
+        "cases": [
+          { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
+          {
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "north", "robust": true }
+          }
+        ]
+      },
+      {
+        "key": "l",
+        "modifiers": ["ctrl"],
+        "cases": [
+          { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
+          {
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "east", "robust": true }
+          }
+        ]
+      },
+      {
+        "key": "backspace",
+        "modifiers": ["ctrl"],
+        "cases": [
+          { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
+          {
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "west", "robust": true }
+          }
+        ]
+      },
+
+      {
+        "key": "h",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_window", "direction": "west" } }]
+      },
+      {
+        "key": "j",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_window", "direction": "south" } }]
+      },
+      {
+        "key": "k",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_window", "direction": "north" } }]
+      },
+      {
+        "key": "l",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_window", "direction": "east" } }]
+      },
+
+      {
+        "key": "h",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "west" } }]
+      },
+      {
+        "key": "j",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "south" } }]
+      },
+      {
+        "key": "k",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "north" } }]
+      },
+      {
+        "key": "l",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "east" } }]
+      },
+
+      {
+        "key": "s",
+        "modifiers": ["alt"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "action": { "type": "cycle_space_layout" } }]
+      },
+      {
+        "key": "r",
+        "modifiers": ["alt"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "action": { "type": "rotate_space", "degrees": 90 } }]
+      },
+      {
+        "key": "space",
+        "modifiers": ["alt", "shift"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "action": { "type": "toggle_floating" } }]
+      },
+      {
+        "key": "f",
+        "modifiers": ["alt"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "action": { "type": "toggle_zoom_fullscreen" } }]
+      },
+      {
+        "key": "f",
+        "modifiers": ["alt", "ctrl"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "action": { "type": "toggle_zoom_fullscreen" } }]
+      },
+      {
+        "keycode": "0x1B",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "shrink" } }]
+      },
+      {
+        "keycode": "0x18",
+        "modifiers": ["alt"],
+        "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "grow" } }]
+      },
+
+      {
+        "key": "left",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_occupied_space", "direction": "previous" } }]
+      },
+      {
+        "key": "right",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_occupied_space", "direction": "next" } }]
+      },
+
+      {
+        "keycode": "0x12",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 1 } }]
+      },
+      {
+        "keycode": "0x13",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 2 } }]
+      },
+      {
+        "keycode": "0x14",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 3 } }]
+      },
+      {
+        "keycode": "0x15",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 4 } }]
+      },
+      {
+        "keycode": "0x17",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 5 } }]
+      },
+      {
+        "keycode": "0x16",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 6 } }]
+      },
+      {
+        "keycode": "0x1A",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 7 } }]
+      },
+      {
+        "keycode": "0x1C",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 8 } }]
+      },
+      {
+        "keycode": "0x19",
+        "modifiers": ["ctrl"],
+        "cases": [{ "disposition": "consume", "action": { "type": "focus_space", "index": 9 } }]
+      },
+
+      {
+        "keycode": "0x12",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 1 },
+          { "type": "focus_space", "index": 1 }
+        ] }]
+      },
+      {
+        "keycode": "0x13",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 2 },
+          { "type": "focus_space", "index": 2 }
+        ] }]
+      },
+      {
+        "keycode": "0x14",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 3 },
+          { "type": "focus_space", "index": 3 }
+        ] }]
+      },
+      {
+        "keycode": "0x15",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 4 },
+          { "type": "focus_space", "index": 4 }
+        ] }]
+      },
+      {
+        "keycode": "0x17",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 5 },
+          { "type": "focus_space", "index": 5 }
+        ] }]
+      },
+      {
+        "keycode": "0x16",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 6 },
+          { "type": "focus_space", "index": 6 }
+        ] }]
+      },
+      {
+        "keycode": "0x1A",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 7 },
+          { "type": "focus_space", "index": 7 }
+        ] }]
+      },
+      {
+        "keycode": "0x1C",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 8 },
+          { "type": "focus_space", "index": 8 }
+        ] }]
+      },
+      {
+        "keycode": "0x19",
+        "modifiers": ["alt", "ctrl"],
+        "cases": [{ "disposition": "consume", "action": [
+          { "type": "move_window_to_space", "index": 9 },
+          { "type": "focus_space", "index": 9 }
+        ] }]
+      },
+
+      {
+        "key": "r",
+        "modifiers": ["alt", "ctrl"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "transition": "resize" }]
+      },
+      {
+        "keycode": "0x29",
+        "modifiers": ["alt", "shift"],
+        "repeat": false,
+        "cases": [{ "disposition": "consume", "transition": "service" }]
+      }
+    ],
+
+    "modes": [
+      {
+        "name": "resize",
+        "capture_unbound": true,
+        "bindings": [
+          {
+            "key": "h",
+            "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "west" } }]
+          },
+          {
+            "key": "j",
+            "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "south" } }]
+          },
+          {
+            "key": "k",
+            "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "north" } }]
+          },
+          {
+            "key": "l",
+            "cases": [{ "disposition": "consume", "action": { "type": "adaptive_resize", "direction": "east" } }]
+          },
+          {
+            "key": "return",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "transition": "default" }]
+          },
+          {
+            "key": "escape",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "transition": "default" }]
+          }
+        ]
+      },
+      {
+        "name": "service",
+        "capture_unbound": true,
+        "bindings": [
+          {
+            "key": "escape",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "action": { "type": "reload_configuration" } }]
+          },
+          {
+            "key": "return",
+            "repeat": false,
+            "cases": [{
+              "disposition": "consume",
+              "transition": "default",
+              "action": { "type": "restart_service", "label": "org.nixos.yabai" }
+            }]
+          },
+          {
+            "key": "r",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "action": [
+              { "type": "set_space_layout", "layout": "bsp" },
+              { "type": "balance_space" }
+            ] }]
+          },
+          {
+            "key": "f",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "action": { "type": "toggle_floating" } }]
+          },
+          {
+            "key": "backspace",
+            "repeat": false,
+            "cases": [{ "disposition": "consume", "action": { "type": "close_other_windows" } }]
+          },
+          {
+            "key": "h",
+            "modifiers": ["alt", "shift"],
+            "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "west" } }]
+          },
+          {
+            "key": "j",
+            "modifiers": ["alt", "shift"],
+            "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "south" } }]
+          },
+          {
+            "key": "k",
+            "modifiers": ["alt", "shift"],
+            "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "north" } }]
+          },
+          {
+            "key": "l",
+            "modifiers": ["alt", "shift"],
+            "cases": [{ "disposition": "consume", "action": { "type": "warp_window", "direction": "east" } }]
+          }
+        ]
+      }
+    ]
+  }
+}

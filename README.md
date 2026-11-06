@@ -61,10 +61,10 @@ The live `make integration-hide-on-close` target is deliberately excluded from o
 ## Installation and Configuration
 
 - The [&nearr;&nbsp;upstream&nbsp;yabai&nbsp;wiki][yabai-wiki] covers general installation and uninstallation. For this fork’s configuration and added features, use the [local documentation][yabai-docs] and [examples][yabai-examples]; upstream documentation and releases may differ.
-- Native settings, per-Space policy, named layout modes, and persistent rules can be written in `~/.config/yabai/yabai.jsonc`. This includes the typed `window_focus_fallback` policy for focusing the recent managed window after destruction, minimization, or application hiding without shell-backed signals. Version 2 modes can be selected with `yabai -m mode --activate <name>` and inspected with `yabai -m mode --query` or `--list`. Validate the file without starting the daemon with `yabai --check-config ~/.config/yabai/yabai.jsonc`.
+- Native settings, per-Space policy, named layout modes, persistent rules, and global keyboard workflows can be written in `~/.config/yabai/yabai.jsonc`. Version 3 adds application-conditional shortcuts, raw keycodes, transient input modes, synthetic remapping, typed native actions, and ordered action sequences without skhd or per-action subprocesses. Version 2 layout modes can still be selected with `yabai -m mode --activate <name>` and inspected with `yabai -m mode --query` or `--list`. Validate the file without starting the daemon with `yabai --check-config ~/.config/yabai/yabai.jsonc`. See [native hotkeys](doc/native_hotkeys.md) and the [complete parity example](examples/native-hotkeys.jsonc).
 - Run `yabai --doctor` for bounded, read-only `PASS`/`WARN`/`FAIL`/`UNKNOWN` checks of the yabai binary, permissions, SIP requirements, launch agent, configuration readability, and optional scripting addition. It never changes services or system state and returns nonzero only when a check fails.
-- Native JSONC loads before `yabairc`. Keep `yabairc` for runtime overrides, signals, startup actions, and shell logic. Sample files are in the [&nearr;&nbsp;examples][yabai-examples] directory; the complete JSONC schema and reload behavior are in the [&nearr;&nbsp;documentation][yabai-docs].
-- Keyboard shortcuts can be defined with [&nearr;&nbsp;skhd][gh-skhd] or any other suitable software you may prefer.
+- Native JSONC loads before `yabairc`. Keep `yabairc` only for runtime overrides, signals, startup actions, or shell logic not represented by typed native configuration. Sample files are in the [&nearr;&nbsp;examples][yabai-examples] directory; the complete JSONC schema and reload behavior are in the [&nearr;&nbsp;documentation][yabai-docs].
+- Yabai can own global keyboard shortcuts directly. External hotkey daemons remain optional for workflows outside the native action inventory.
 
 ## Requirements and Caveats
 
@@ -76,6 +76,7 @@ Make sure you fulfil all of them before filing an issue.
 |Operating&nbsp;System&nbsp;Intel x86-64|Sonoma 14.0.0+, Sequoia 15.0+, Tahoe 26.0+, and Golden Gate 27.0+ are supported.|
 |Operating&nbsp;System&nbsp;Apple Silicon|Sonoma 14.0.0+, Sequoia 15.0+, Tahoe 26.0+, and Golden Gate 27.0+ are supported.|
 |Accessibility&nbsp;API|yabai must be given permission to utilize the Accessibility API and will request access upon launch. The application must be restarted after access has been granted.|
+|Input&nbsp;Monitoring|yabai must be given Input Monitoring permission when `keyboard.enabled` is true. Keep a stable signed application identity and restart after granting access.|
 |Screen Recording|yabai must be given Screen Recording permission if and only if you want to enable window animations, and will request access when necessary. The application must be restarted after access has been granted.|
 |System&nbsp;Settings&nbsp;(macOS 14.x, 15.x, 26.x, 27.x)|In the Desktop & Dock tab, inside the Mission Control pane, the setting "Displays have separate Spaces" must be enabled.|
 

@@ -171,20 +171,25 @@ The reader opens the selected path once with \f(CRO_RDONLY | O_CLOEXEC | O_NONBL
 .sp
 Raw NUL bytes, malformed UTF\-8, a BOM away from byte zero, UTF\-16 or UTF\-32 input, unpaired Unicode surrogates, and decoded U+0000 in any key or string are rejected. Decoded object keys must be unique within their object. Unknown keys and \f(CRnull\fP are rejected. Diagnostic JSON paths use known schema names, array indices and fixed placeholders; unknown or duplicate key text is not repeated.
 .sp
-Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 accepts those fields plus \f(CRmodes\fP and \f(CRactive_mode\fP. \f(CRversion\fP is required and must have the mathematical integer value 1 or 2; \f(CRmodes\fP and \f(CRactive_mode\fP are rejected in version 1. All other fields shown here are optional:
+Version 1 remains compatible and accepts exactly \f(CRversion\fP, \f(CRconfig\fP, \f(CRspaces\fP and \f(CRrules\fP. Version 2 accepts those fields plus \f(CRmodes\fP and \f(CRactive_mode\fP. Version 3 additionally accepts \f(CRkeyboard\fP. \f(CRversion\fP is required and must have the mathematical integer value 1, 2 or 3; \f(CRmodes\fP and \f(CRactive_mode\fP are rejected in version 1, and \f(CRkeyboard\fP is rejected before version 3. All other fields shown here are optional:
 .sp
 .if n .RS 4
 .nf
 .fam C
 {
-  "version": 2,
+  "version": 3,
   "config": {},
   "spaces": [],
   "modes": [
     { "name": "work", "spaces": [] }
   ],
   "active_mode": "work",
-  "rules": []
+  "rules": [],
+  "keyboard": {
+    "enabled": true,
+    "bindings": [],
+    "modes": []
+  }
 }
 .fam
 .fi
@@ -249,7 +254,51 @@ base and mode Space policies: 1,024 total;
 .  sp -1
 .  IP \(bu 2.3
 .\}
-named modes: 64;
+named Space\-policy modes: 64;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+keyboard input modes: 32;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+keyboard bindings: 512 total across the default mode and input modes;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+application cases per binding: 16;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.  sp -1
+.  IP \(bu 2.3
+.\}
+native actions per binding case: 16;
 .RE
 .sp
 .RS 4
@@ -745,6 +794,21 @@ Runtime selection is transactional and errors are typed through topology capture
 \f(CR\-\-query\fP returns the active mode as one escaped JSON string, or JSON \f(CRnull\fP. \f(CR\-\-list\fP returns stable JSON with declared names in source order and \f(CRactive\fP set to that same string or \f(CRnull\fP. Snapshot creation is worker\-only and requires a fresh\-zeroed or previously destroyed output. It returns owned copies of the names array, each name and the optional active name; callers must destroy it. Queries therefore copy installed names before output so a later reload cannot invalidate borrowed model storage.
 .sp
 Modes do not export, import, save, capture or undo layouts; launch applications; mutate the native rule generation; or persist runtime selection back to the JSONC file. Their Phase 1 scope is declarative Space policy and scaffold overlay selection. The authored\-file, mode\-count, aggregate\-policy, string, model\-memory and topology limits above all continue to apply.
+.SS "Native keyboard control"
+.sp
+Version 3\(cqs optional \f(CRkeyboard\fP object contains \f(CRenabled\fP (boolean, default true), \f(CRbindings\fP for the implicit default input mode, and \f(CRmodes\fP for transient keyboard modes. Keyboard input modes are independent of the top\-level declarative Space\-policy modes described above. Set \f(CRkeyboard.enabled\fP to false to avoid installing the global keyboard event tap.
+.sp
+A binding contains exactly one \f(CRkey\fP or \f(CRkeycode\fP, an optional exact \f(CRmodifiers\fP array, optional boolean \f(CRrepeat\fP (default true), and a nonempty ordered \f(CRcases\fP array. Named keys are letters, digits, \f(CR\-\fP, \f(CR=\fP, arrows, \f(CRspace\fP, \f(CRreturn\fP, \f(CRescape\fP and \f(CRbackspace\fP. \f(CRkeycode\fP accepts a nonnegative integer through \f(CRUINT16_MAX\fP or a \f(CR0x\fP\-prefixed hexadecimal string and is independent of the active keyboard layout. Modifiers are \f(CRcmd\fP, \f(CRctrl\fP, \f(CRalt\fP and \f(CRshift\fP; duplicates are rejected.
+.sp
+A case may contain an exact \f(CRapplication\fP object with \f(CRbundle_id\fP, \f(CRname\fP, or both. Bundle identifiers are preferred; when both fields are authored, both must match. An omitted application is the optional wildcard case and must be unique and last. The required \f(CRdisposition\fP is \f(CRconsume\fP, \f(CRconsume_only\fP, \f(CRpass_through\fP or \f(CRremap\fP. \f(CRconsume\fP requires an \f(CRaction\fP, a \f(CRtransition\fP, or both. \f(CRconsume_only\fP and \f(CRpass_through\fP allow neither. \f(CRremap\fP requires exactly one \f(CRsynthesize_key\fP action. Bindings with the same physical keycode and modifiers conflict within one input mode, so application alternatives belong in one binding\(cqs \f(CRcases\fP array.
+.sp
+An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are \f(CRfocus_window\fP, \f(CRwarp_window\fP, \f(CRresize_window\fP, \f(CRchange_window_ratio\fP, \f(CRadaptive_resize\fP, \f(CRtoggle_floating\fP, \f(CRtoggle_zoom_fullscreen\fP, \f(CRrotate_space\fP, \f(CRset_space_layout\fP, \f(CRbalance_space\fP, \f(CRfocus_space\fP, \f(CRfocus_occupied_space\fP, \f(CRmove_window_to_space\fP, \f(CRclose_window\fP, \f(CRclose_other_windows\fP, \f(CRcycle_space_layout\fP, \f(CRreload_configuration\fP, \f(CRrestart_service\fP and \f(CRsynthesize_key\fP. The complete field schema and full skhd\-parity configuration are in \f(CRdoc/native_hotkeys.md\fP and \f(CRexamples/native\-hotkeys.jsonc\fP.
+.sp
+Each keyboard mode is an exact object with unique nonempty \f(CRname\fP, optional boolean \f(CRcapture_unbound\fP, and \f(CRbindings\fP. \f(CRdefault\fP is reserved. A consume case changes modes with \f(CRtransition\fP; \f(CRdefault\fP exits a mode. Transitions and event disposition are decided synchronously in the event\-tap callback, while typed actions are copied into a bounded job and executed on yabai\(cqs event\-loop worker. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
+.sp
+Synthetic key events carry a private event\-source tag and bypass matching, preventing recursive remaps. The event tap re\-enables itself after timeout or user\-input disablement. \f(CRrestart_service\fP runs \f(CR/bin/launchctl kickstart \-k\fP for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
+.sp
+Enabling the keyboard engine requires Input Monitoring permission for the stable signed yabai application identity. Accessibility remains required for window operations and synthetic event posting. The scripting addition is not required. Yabai logs binding/action diagnostics only; it does not log typed text or unrelated keyboard activity.
 .SS "Managed scaffold"
 .sp
 An optional Space \f(CRscaffold\fP is an array of one to three app matchers. Each entry is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, using POSIX extended regular expressions. A scaffold is active only while the effective Space layout is \f(CRbsp\fP; changing the Space to another layout suspends it until BSP becomes effective again.
