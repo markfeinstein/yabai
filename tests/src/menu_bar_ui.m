@@ -982,6 +982,10 @@ test_expanded_render_uses_direct_actions_and_manual_menu(void)
     TEST_CHECK([button target] == controller);
     TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);
+    [controller updateKeyboardMode:@"resize"];
+    TEST_CHECK([[button toolTip] containsString:@"Keyboard mode: resize"]);
+    [controller updateKeyboardMode:@"default"];
+    TEST_CHECK(![[button toolTip] containsString:@"Keyboard mode:"]);
 
     [controller clearStatusItem];
     TEST_CHECK(menu_bar_ui_state(controller).status_item_count == 0);

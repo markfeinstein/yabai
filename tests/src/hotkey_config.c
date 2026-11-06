@@ -13,7 +13,7 @@ TEST_FUNC(hotkey_config_parses_app_cases_modes_sequences_and_raw_keycodes,
               "{\"type\":\"focus_space\",\"index\":1}]}]},"
           "{\"key\":\"r\",\"modifiers\":[\"alt\",\"ctrl\"],\"cases\":["
             "{\"disposition\":\"consume\",\"transition\":\"resize\"}]}],"
-        "\"modes\":[{\"name\":\"resize\",\"capture_unbound\":true,\"bindings\":["
+        "\"modes\":[{\"name\":\"resize\",\"capture_unbound\":true,\"timeout_ms\":250,\"bindings\":["
           "{\"key\":\"escape\",\"cases\":[{\"disposition\":\"consume\",\"transition\":\"default\"}]},"
           "{\"key\":\"h\",\"cases\":[{\"disposition\":\"consume\","
             "\"action\":{\"type\":\"adaptive_resize\",\"direction\":\"west\"}}]}]}]}}";
@@ -37,9 +37,43 @@ TEST_FUNC(hotkey_config_parses_app_cases_modes_sequences_and_raw_keycodes,
         TEST_CHECK(model->keyboard.bindings[1].cases[0].actions[0].type, HOTKEY_ACTION_MOVE_WINDOW_TO_SPACE);
         TEST_CHECK(model->keyboard.bindings[2].cases[0].transition_mode, 0);
         TEST_CHECK(model->keyboard.modes[0].capture_unbound, true);
+        TEST_CHECK(model->keyboard.modes[0].timeout_ms, 250U);
         TEST_CHECK(model->keyboard.modes[0].bindings[0].cases[0].transition_mode, HOTKEY_TRANSITION_DEFAULT);
         declarative_config_destroy(model);
     }
+})
+
+static int hotkey_config_test_layout_lookup(UniChar character)
+{
+    return character == 'h' ? 99 : -1;
+}
+
+TEST_FUNC(hotkey_config_supports_layout_keys_extended_names_and_modifiers,
+{
+    hotkey_test_layout_keycode_for_character = hotkey_config_test_layout_lookup;
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":["
+      "{\"key\":\"h\",\"modifiers\":[\"hyper\",\"fn\"],\"cases\":[{\"disposition\":\"consume_only\"}]},"
+      "{\"key\":\"f20\",\"modifiers\":[\"left_cmd\"],\"cases\":[{\"disposition\":\"consume_only\"}]},"
+      "{\"key\":\"keypad_enter\",\"modifiers\":[\"right_shift\"],\"cases\":[{\"disposition\":\"consume_only\"}]},"
+      "{\"key\":\"page_down\",\"cases\":[{\"disposition\":\"consume_only\"}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "extended.jsonc", &model, &error), true);
+    if (model) {
+        TEST_CHECK(model->keyboard.bindings[0].keystroke.keycode, 99);
+        TEST_CHECK(model->keyboard.bindings[0].keystroke.modifiers,
+                   HOTKEY_MODIFIER_HYPER_MASK | HOTKEY_MODIFIER_FN);
+        TEST_CHECK(model->keyboard.bindings[1].keystroke.keycode, kVK_F20);
+        TEST_CHECK(model->keyboard.bindings[1].keystroke.modifiers,
+                   HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_LEFT_COMMAND);
+        TEST_CHECK(model->keyboard.bindings[2].keystroke.keycode, kVK_ANSI_KeypadEnter);
+        TEST_CHECK(model->keyboard.bindings[2].keystroke.modifiers,
+                   HOTKEY_MODIFIER_SHIFT | HOTKEY_MODIFIER_RIGHT_SHIFT);
+        TEST_CHECK(model->keyboard.bindings[3].keystroke.keycode, kVK_PageDown);
+        declarative_config_destroy(model);
+    }
+    hotkey_test_layout_keycode_for_character = NULL;
 })
 
 TEST_FUNC(hotkey_config_rejects_versions_conflicts_conditions_actions_and_modes,
@@ -65,7 +99,22 @@ TEST_FUNC(hotkey_config_rejects_versions_conflicts_conditions_actions_and_modes,
          "$.keyboard.bindings[0].key"},
         {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":["
          "{\"disposition\":\"remap\",\"action\":{\"type\":\"focus_window\",\"direction\":\"west\"}}]}]}}",
-         "$.keyboard.bindings[0].cases[0]"}
+         "$.keyboard.bindings[0].cases[0]"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"modifiers\":[\"hyper\",\"cmd\"],"
+         "\"cases\":[{\"disposition\":\"consume_only\"}]}]}}",
+         "$.keyboard.bindings[0].modifiers[1]"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":[{\"disposition\":\"remap\","
+         "\"action\":{\"type\":\"synthesize_key\",\"key\":\"j\",\"modifiers\":[\"left_cmd\"]}}]}]}}",
+         "$.keyboard.bindings[0].cases[0].action.modifiers[0]"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":[{\"disposition\":\"consume\","
+         "\"action\":{\"type\":\"yabai_command\",\"arguments\":[]}}]}]}}",
+         "$.keyboard.bindings[0].cases[0].action.arguments"},
+        {"{\"version\":3,\"keyboard\":{\"modes\":[{\"name\":\"x\",\"timeout_ms\":0}]}}",
+         "$.keyboard.modes[0].timeout_ms"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":["
+         "{\"key\":\"h\",\"modifiers\":[\"cmd\"],\"cases\":[{\"disposition\":\"consume_only\"}]},"
+         "{\"key\":\"h\",\"modifiers\":[\"left_cmd\"],\"cases\":[{\"disposition\":\"consume_only\"}]}]}}",
+         "$.keyboard.bindings[1]"}
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
         struct declarative_config_model *model = NULL;
@@ -97,14 +146,20 @@ TEST_FUNC(hotkey_config_parses_all_native_action_primitives,
       "{\"type\":\"close_other_windows\"},"
       "{\"type\":\"cycle_space_layout\"},"
       "{\"type\":\"reload_configuration\"},"
+      "{\"type\":\"yabai_command\",\"arguments\":[\"space\",\"--balance\"]},"
       "{\"type\":\"restart_service\",\"label\":\"org.nixos.yabai\"}]}]}]}}";
     struct declarative_config_model *model = NULL;
     struct declarative_error error = {0};
     TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "actions.jsonc", &model, &error), true);
     if (model) {
-        TEST_CHECK(model->keyboard.bindings[0].cases[0].action_count, 15U);
-        TEST_CHECK(model->keyboard.bindings[0].cases[0].actions[14].type, HOTKEY_ACTION_RESTART_SERVICE);
-        TEST_CHECK(strcmp(model->keyboard.bindings[0].cases[0].actions[14].data.restart_service.label,
+        TEST_CHECK(model->keyboard.bindings[0].cases[0].action_count, 16U);
+        TEST_CHECK(model->keyboard.bindings[0].cases[0].actions[14].type, HOTKEY_ACTION_YABAI_COMMAND);
+        TEST_CHECK(model->keyboard.bindings[0].cases[0].actions[14].data.yabai_command.length,
+                   sizeof("space\0--balance\0"));
+        TEST_CHECK(memcmp(model->keyboard.bindings[0].cases[0].actions[14].data.yabai_command.bytes,
+                          "space\0--balance\0", sizeof("space\0--balance\0")), 0);
+        TEST_CHECK(model->keyboard.bindings[0].cases[0].actions[15].type, HOTKEY_ACTION_RESTART_SERVICE);
+        TEST_CHECK(strcmp(model->keyboard.bindings[0].cases[0].actions[15].data.restart_service.label,
                           "org.nixos.yabai"), 0);
         declarative_config_destroy(model);
     }

@@ -33,6 +33,26 @@ TEST_FUNC(hotkey_matcher_selects_exact_application_before_default,
     }
 })
 
+TEST_FUNC(hotkey_matcher_distinguishes_sided_modifiers_and_accepts_fn,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\","
+      "\"modifiers\":[\"left_cmd\",\"fn\"],\"cases\":[{\"disposition\":\"consume_only\"}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "sided.jsonc", &model, &error), true);
+    if (model) {
+        struct hotkey_match_result match;
+        uint16_t left = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_LEFT_COMMAND | HOTKEY_MODIFIER_FN;
+        uint16_t right = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_RIGHT_COMMAND | HOTKEY_MODIFIER_FN;
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
+                                     kVK_ANSI_H, left, NULL, NULL, &match), true);
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
+                                     kVK_ANSI_H, right, NULL, NULL, &match), false);
+        declarative_config_destroy(model);
+    }
+})
+
 TEST_FUNC(hotkey_callback_transitions_modes_consumes_unbound_and_ignores_synthetic_events,
 {
     const char json[] =
@@ -67,19 +87,52 @@ TEST_FUNC(hotkey_callback_transitions_modes_consumes_unbound_and_ignores_synthet
         CFRelease(enter);
 
         CGEventRef unbound = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, true);
+        CGEventSetFlags(unbound, 0);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, unbound, NULL) == NULL, true);
         CFRelease(unbound);
 
         CGEventRef synthetic = CGEventCreateKeyboardEvent(NULL, kVK_Escape, true);
+        CGEventSetFlags(synthetic, 0);
         CGEventSetIntegerValueField(synthetic, kCGEventSourceUserData, (int64_t)HOTKEY_SYNTHETIC_EVENT_TAG);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, synthetic, NULL) == synthetic, true);
         TEST_CHECK(hotkey_test_active_mode(), 0);
         CFRelease(synthetic);
 
         CGEventRef leave = CGEventCreateKeyboardEvent(NULL, kVK_Escape, true);
+        CGEventSetFlags(leave, 0);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, leave, NULL) == NULL, true);
         TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
         CFRelease(leave);
+        hotkey_manager_install_config(NULL);
+        declarative_config_destroy(model);
+    }
+})
+
+TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"r\",\"cases\":[{"
+      "\"disposition\":\"consume\",\"transition\":\"resize\"}]}],"
+      "\"modes\":[{\"name\":\"resize\",\"capture_unbound\":true,\"timeout_ms\":40,\"bindings\":[]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "timeout.jsonc", &model, &error), true);
+    if (model) {
+        hotkey_manager_install_config(&model->keyboard);
+        CGEventRef enter = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, true);
+        CGEventSetFlags(enter, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, enter, NULL) == NULL, true);
+        TEST_CHECK(hotkey_test_active_mode(), 0);
+        CFRelease(enter);
+        usleep(25000);
+        CGEventRef activity = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, true);
+        CGEventSetFlags(activity, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, activity, NULL) == NULL, true);
+        CFRelease(activity);
+        usleep(25000);
+        TEST_CHECK(hotkey_test_active_mode(), 0);
+        usleep(30000);
+        TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
         hotkey_manager_install_config(NULL);
         declarative_config_destroy(model);
     }
@@ -107,6 +160,7 @@ TEST_FUNC(hotkey_callback_does_not_reclaim_a_rejected_consumed_job,
         hotkey_rejected_post_count = 0;
         hotkey_test_set_action_poster(hotkey_test_reject_and_consume_action);
         CGEventRef key = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_J, true);
+        CGEventSetFlags(key, 0);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, key, NULL) == NULL, true);
         TEST_CHECK(hotkey_rejected_post_count, 1);
         CFRelease(key);
@@ -114,6 +168,21 @@ TEST_FUNC(hotkey_callback_does_not_reclaim_a_rejected_consumed_job,
         hotkey_manager_install_config(NULL);
         declarative_config_destroy(model);
     }
+})
+
+TEST_FUNC(hotkey_yabai_command_executes_in_process_and_propagates_failure,
+{
+    struct hotkey_action action = {.type = HOTKEY_ACTION_YABAI_COMMAND};
+    static const char success[] = "query\0--keyboard-mode\0";
+    memcpy(action.data.yabai_command.bytes, success, sizeof(success));
+    action.data.yabai_command.length = sizeof(success);
+    TEST_CHECK(hotkey_execute_yabai_command(&action), true);
+
+    static const char failure[] = "unknown\0";
+    memset(action.data.yabai_command.bytes, 0, sizeof(action.data.yabai_command.bytes));
+    memcpy(action.data.yabai_command.bytes, failure, sizeof(failure));
+    action.data.yabai_command.length = sizeof(failure);
+    TEST_CHECK(hotkey_execute_yabai_command(&action), false);
 })
 
 struct hotkey_sequence_test_context { int count; enum hotkey_action_type types[4]; int fail_at; };

@@ -404,6 +404,13 @@ void event_signal_push(enum signal_type type, void *context)
         snprintf(es->arg_name[3],  arg_size, "%s", "YABAI_RECENT_DISPLAY_INDEX");
         snprintf(es->arg_value[3], arg_size, "%d", recent_index);
     } break;
+    case SIGNAL_KEYBOARD_MODE_CHANGED: {
+        const char *name = context ? context : "default";
+        es->arg_name[0] = ts_alloc_unaligned(arg_size);
+        es->arg_value[0] = ts_alloc_unaligned(arg_size);
+        snprintf(es->arg_name[0], arg_size, "%s", "YABAI_KEYBOARD_MODE");
+        snprintf(es->arg_value[0], arg_size, "%s", name);
+    } break;
     case SIGNAL_MISSION_CONTROL_ENTER:
     case SIGNAL_MISSION_CONTROL_EXIT: {
         enum mission_control_mode mode = (enum mission_control_mode)(uintptr_t) context;

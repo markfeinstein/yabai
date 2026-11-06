@@ -193,6 +193,8 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     id _expanded_session;
     YBMenuBarExpandedPanel *_expanded_panel;
     id _expanded_event_monitor;
+    NSString *_keyboard_mode;
+    NSString *_status_base_tooltip;
     bool _panel_disabled;
     bool _is_tracking_menu;
     bool _is_tearing_down_status_item;
@@ -212,6 +214,8 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (void)installStripView:(NSView *)strip;
 - (void)installStatusStrip:(NSView *)strip;
 - (void)accessibilityPreferencesChanged;
+- (void)updateKeyboardMode:(NSString *)name;
+- (void)setStatusToolTipBase:(NSString *)text;
 - (void)cancelExpandedInterface;
 - (void)performPanelFilterAction:(id)sender;
 - (void)performPanelStyleAction:(id)sender;
@@ -988,13 +992,40 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (!self) return nil;
 
     if (callbacks) _callbacks = *callbacks;
+    _keyboard_mode = [@"default" copy];
     return self;
 }
 
 - (void)dealloc
 {
     [self shutdown];
+    [_keyboard_mode release];
+    [_status_base_tooltip release];
     [super dealloc];
+}
+
+- (void)setStatusToolTipBase:(NSString *)text
+{
+    if (_status_base_tooltip != text) {
+        [_status_base_tooltip release];
+        _status_base_tooltip = [text copy];
+    }
+    NSStatusBarButton *button = [_status_item button];
+    if (!button || !_status_base_tooltip) return;
+    NSString *tooltip = [_keyboard_mode isEqualToString:@"default"]
+                       ? _status_base_tooltip
+                       : [NSString stringWithFormat:@"%@ — Keyboard mode: %@", _status_base_tooltip, _keyboard_mode];
+    [button setToolTip:tooltip];
+}
+
+- (void)updateKeyboardMode:(NSString *)name
+{
+    NSString *mode = [name length] ? name : @"default";
+    if (![_keyboard_mode isEqualToString:mode]) {
+        [_keyboard_mode release];
+        _keyboard_mode = [mode copy];
+    }
+    [self setStatusToolTipBase:_status_base_tooltip];
 }
 
 - (void)shutdown
@@ -1571,7 +1602,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [button setAction:NULL];
     [button setImage:[self imageForStatusStrip:_strip_view]];
     [button setImagePosition:NSImageOnly];
-    [button setToolTip:@"Open yabai Spaces — Read Only"];
+    [self setStatusToolTipBase:@"Open yabai Spaces — Read Only"];
     [button setAccessibilityLabel:@"Open yabai Spaces — Read Only"];
     [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
 }
@@ -1612,7 +1643,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [button setImage:nil];
         [button setTarget:self];
         [button setAction:@selector(showStatusMenu:)];
-        [button setToolTip:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
+        [self setStatusToolTipBase:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
         [button setAccessibilityHelp:@"Click an inactive Space to focus it. Click the active Space, right-click or press and hold to open the menu."];
@@ -2172,6 +2203,34 @@ menu_bar_accessibility_preferences_changed(void)
     } else {
         dispatch_async_f(dispatch_get_main_queue(), controller,
                          menu_bar_accessibility_preferences_changed_main);
+    }
+}
+
+void
+menu_bar_keyboard_mode_changed(const char *name)
+{
+    @autoreleasepool {
+        YBMenuBarController *controller = nil;
+        pthread_mutex_lock(&g_menu_bar_lock);
+        if (g_menu_bar_initialized && g_menu_bar_controller) {
+            controller = [g_menu_bar_controller retain];
+        }
+        pthread_mutex_unlock(&g_menu_bar_lock);
+        if (!controller) return;
+
+        NSString *mode = [[NSString alloc] initWithUTF8String:name ? name : "default"];
+        if (!mode) mode = [@"default" retain];
+        if (pthread_main_np()) {
+            [controller updateKeyboardMode:mode];
+            [mode release];
+            [controller release];
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [controller updateKeyboardMode:mode];
+                [mode release];
+                [controller release];
+            });
+        }
     }
 }
 

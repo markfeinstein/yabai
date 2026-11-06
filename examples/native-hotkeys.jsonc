@@ -314,6 +314,7 @@
       {
         "name": "resize",
         "capture_unbound": true,
+        "timeout_ms": 5000,
         "bindings": [
           {
             "key": "h",

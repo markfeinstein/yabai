@@ -50,9 +50,20 @@ and transient; Space-policy mode remains managed by the `yabai -m mode` domain.
 }
 ```
 
-Named keys include `a` through `z`, `0` through `9`, `-`, `=`, arrows,
-`space`, `return`, `escape`, and `backspace`. Raw keycodes are matched without
-keyboard-layout translation.
+Single-character named keys are resolved through the selected keyboard layout
+when the configuration is loaded; use `keycode` when a binding must stay on a
+physical key position. Reload after changing input sources. Named special keys
+include arrows, `space`, `return`/`enter`, `tab`, `escape`, `backspace`,
+`delete`, `home`, `end`, `page_up`, `page_down`, F1 through F20, and keypad
+keys `keypad_0` through `keypad_9`, `keypad_decimal`, `keypad_multiply`,
+`keypad_plus`, `keypad_clear`, `keypad_divide`, `keypad_enter`,
+`keypad_minus`, and `keypad_equals`.
+
+Modifiers are `cmd`, `ctrl`, `alt`, `shift`, and `fn`. `hyper` expands to
+Cmd-Ctrl-Alt-Shift. Bindings may require `left_` or `right_` variants of Cmd,
+Ctrl, Alt, and Shift. Synthetic keys accept generic modifiers and `fn`, but not
+sided modifiers because CoreGraphics posts modifier flags rather than a
+physical left/right modifier transition.
 
 Application matching is exact. When both `bundle_id` and `name` are present,
 both must match. Bundle identifiers are preferred because display names are
@@ -81,6 +92,7 @@ behavior.
 {
   "name": "resize",
   "capture_unbound": true,
+  "timeout_ms": 3000,
   "bindings": [ /* same binding schema */ ]
 }
 ```
@@ -89,7 +101,12 @@ The implicit default mode uses `keyboard.bindings`. A binding case changes mode
 with `"transition": "mode-name"`; `"transition": "default"` exits a mode.
 Transitions happen synchronously in the event callback, while window-management
 actions remain queued. `capture_unbound` consumes otherwise-unmatched key-down
-and key-up events in that mode.
+and key-up events in that mode. Optional `timeout_ms` (1 through 3,600,000)
+returns to `default` after the mode has been idle for that interval.
+
+`yabai -m query --keyboard-mode` returns the current mode as JSON. Mode changes
+also refresh the menu-bar tooltip and emit the `keyboard_mode_changed` signal
+with `YABAI_KEYBOARD_MODE` in the subscriber environment.
 
 A successful configuration reload installs the complete new keymap atomically
 and resets keyboard mode to `default`. A rejected reload retains both the old
@@ -112,7 +129,7 @@ Supported primitives and workflows are:
 
 | Type | Fields | Behavior |
 | --- | --- | --- |
-| `focus_window` | `direction`, optional `robust` | Directional focus; robust mode adds geometric fallback and native app activation. |
+| `focus_window` | `direction`, optional `robust` | Directional focus; robust mode adds geometric fallback across every visible display and native app activation. |
 | `warp_window` | `direction` | Warp the focused managed window. |
 | `resize_window` | `handle`, `dx`, `dy` | Relative edge/corner resize. |
 | `change_window_ratio` | `delta` | Relative BSP ratio change. |
@@ -130,6 +147,7 @@ Supported primitives and workflows are:
 | `cycle_space_layout` | — | BSP → stack → horizontal accordion → vertical accordion → BSP. |
 | `reload_configuration` | — | Run the native transactional reload. |
 | `restart_service` | `label` | Spawn `/bin/launchctl kickstart -k gui/UID/LABEL`; launchd owns replacement. |
+| `yabai_command` | `arguments` | Execute any ordinary yabai message in process, without a client subprocess; arguments start with the domain. |
 | `synthesize_key` | key/keycode and modifiers | Post a tagged synthetic chord to the active GUI session. |
 
 Directions are `west`, `south`, `north`, and `east`. Adaptive resize directions

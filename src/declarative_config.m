@@ -204,10 +204,10 @@ static bool schema_known_key(const uint8_t *key, size_t length) {
     static const char *fixed[] = {"version", "config",  "spaces",   "modes",    "active_mode", "name",
                                   "rules",   "match",   "settings", "scaffold", "effects",     "index",
                                   "uuid",    "pattern", "exclude",  "mode",     "top_padding", "bottom_padding",
-                                  "keyboard", "enabled", "bindings", "capture_unbound", "key", "keycode",
+                                  "keyboard", "enabled", "bindings", "capture_unbound", "timeout_ms", "key", "keycode",
                                   "modifiers", "repeat", "cases", "application", "bundle_id", "disposition",
                                   "action", "transition", "type", "direction", "robust", "handle", "dx", "dy",
-                                  "delta", "degrees", "layout", "label"};
+                                  "delta", "degrees", "layout", "label", "arguments"};
     for (size_t i = 0; i < sizeof(fixed) / sizeof(*fixed); ++i)
         if (strlen(fixed[i]) == length && !memcmp(key, fixed[i], length))
             return true;
@@ -972,20 +972,9 @@ static bool hotkey_dictionary_has_only_keys(struct model_builder *b, NSDictionar
     return true;
 }
 
-static int hotkey_keycode_for_name(NSString *name)
+static int hotkey_ansi_keycode_for_character(UniChar character)
 {
-    if (![name isKindOfClass:[NSString class]]) return -1;
-    NSString *key = [name lowercaseString];
-    if ([key isEqualToString:@"space"]) return kVK_Space;
-    if ([key isEqualToString:@"return"]) return kVK_Return;
-    if ([key isEqualToString:@"escape"]) return kVK_Escape;
-    if ([key isEqualToString:@"backspace"]) return kVK_Delete;
-    if ([key isEqualToString:@"left"]) return kVK_LeftArrow;
-    if ([key isEqualToString:@"right"]) return kVK_RightArrow;
-    if ([key isEqualToString:@"up"]) return kVK_UpArrow;
-    if ([key isEqualToString:@"down"]) return kVK_DownArrow;
-    if ([key length] != 1) return -1;
-    switch ([key characterAtIndex:0]) {
+    switch (character) {
     case 'a': return kVK_ANSI_A; case 'b': return kVK_ANSI_B; case 'c': return kVK_ANSI_C;
     case 'd': return kVK_ANSI_D; case 'e': return kVK_ANSI_E; case 'f': return kVK_ANSI_F;
     case 'g': return kVK_ANSI_G; case 'h': return kVK_ANSI_H; case 'i': return kVK_ANSI_I;
@@ -999,12 +988,88 @@ static int hotkey_keycode_for_name(NSString *name)
     case '3': return kVK_ANSI_3; case '4': return kVK_ANSI_4; case '5': return kVK_ANSI_5;
     case '6': return kVK_ANSI_6; case '7': return kVK_ANSI_7; case '8': return kVK_ANSI_8;
     case '9': return kVK_ANSI_9; case '-': return kVK_ANSI_Minus; case '=': return kVK_ANSI_Equal;
+    case '[': return kVK_ANSI_LeftBracket; case ']': return kVK_ANSI_RightBracket;
+    case ';': return kVK_ANSI_Semicolon; case '\'': return kVK_ANSI_Quote;
+    case '\\': return kVK_ANSI_Backslash; case ',': return kVK_ANSI_Comma;
+    case '.': return kVK_ANSI_Period; case '/': return kVK_ANSI_Slash;
+    case '`': return kVK_ANSI_Grave;
     default: return -1;
     }
 }
 
+#ifdef TESTS
+static int (*hotkey_test_layout_keycode_for_character)(UniChar);
+#endif
+
+static int hotkey_layout_keycode_for_character(UniChar character)
+{
+#ifdef TESTS
+    return hotkey_test_layout_keycode_for_character
+         ? hotkey_test_layout_keycode_for_character(character) : -1;
+#else
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    if (!source) return -1;
+    CFDataRef data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+    if (!data || CFGetTypeID(data) != CFDataGetTypeID()) {
+        CFRelease(source);
+        return -1;
+    }
+    const UCKeyboardLayout *layout = (const UCKeyboardLayout *)CFDataGetBytePtr(data);
+    int result = -1;
+    for (UInt16 keycode = 0; keycode < 128; ++keycode) {
+        UInt32 dead_key_state = 0;
+        UniChar output[4] = {0};
+        UniCharCount output_count = 0;
+        OSStatus status = UCKeyTranslate(layout, keycode, kUCKeyActionDown, 0,
+                                         LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit,
+                                         &dead_key_state, sizeof(output) / sizeof(*output),
+                                         &output_count, output);
+        if (status == noErr && output_count == 1 && output[0] == character) {
+            result = keycode;
+            break;
+        }
+    }
+    CFRelease(source);
+    return result;
+#endif
+}
+
+static int hotkey_keycode_for_name(NSString *name)
+{
+    if (![name isKindOfClass:[NSString class]]) return -1;
+    NSString *key = [name lowercaseString];
+    static const struct { __unsafe_unretained NSString *name; int keycode; } named[] = {
+        {@"space", kVK_Space}, {@"return", kVK_Return}, {@"enter", kVK_Return},
+        {@"tab", kVK_Tab}, {@"escape", kVK_Escape}, {@"backspace", kVK_Delete},
+        {@"delete", kVK_ForwardDelete}, {@"left", kVK_LeftArrow}, {@"right", kVK_RightArrow},
+        {@"up", kVK_UpArrow}, {@"down", kVK_DownArrow}, {@"home", kVK_Home},
+        {@"end", kVK_End}, {@"page_up", kVK_PageUp}, {@"page_down", kVK_PageDown},
+        {@"f1", kVK_F1}, {@"f2", kVK_F2}, {@"f3", kVK_F3}, {@"f4", kVK_F4},
+        {@"f5", kVK_F5}, {@"f6", kVK_F6}, {@"f7", kVK_F7}, {@"f8", kVK_F8},
+        {@"f9", kVK_F9}, {@"f10", kVK_F10}, {@"f11", kVK_F11}, {@"f12", kVK_F12},
+        {@"f13", kVK_F13}, {@"f14", kVK_F14}, {@"f15", kVK_F15}, {@"f16", kVK_F16},
+        {@"f17", kVK_F17}, {@"f18", kVK_F18}, {@"f19", kVK_F19}, {@"f20", kVK_F20},
+        {@"keypad_0", kVK_ANSI_Keypad0}, {@"keypad_1", kVK_ANSI_Keypad1},
+        {@"keypad_2", kVK_ANSI_Keypad2}, {@"keypad_3", kVK_ANSI_Keypad3},
+        {@"keypad_4", kVK_ANSI_Keypad4}, {@"keypad_5", kVK_ANSI_Keypad5},
+        {@"keypad_6", kVK_ANSI_Keypad6}, {@"keypad_7", kVK_ANSI_Keypad7},
+        {@"keypad_8", kVK_ANSI_Keypad8}, {@"keypad_9", kVK_ANSI_Keypad9},
+        {@"keypad_decimal", kVK_ANSI_KeypadDecimal}, {@"keypad_multiply", kVK_ANSI_KeypadMultiply},
+        {@"keypad_plus", kVK_ANSI_KeypadPlus}, {@"keypad_clear", kVK_ANSI_KeypadClear},
+        {@"keypad_divide", kVK_ANSI_KeypadDivide}, {@"keypad_enter", kVK_ANSI_KeypadEnter},
+        {@"keypad_minus", kVK_ANSI_KeypadMinus}, {@"keypad_equals", kVK_ANSI_KeypadEquals}
+    };
+    for (size_t i = 0; i < sizeof(named) / sizeof(*named); ++i) {
+        if ([key isEqualToString:named[i].name]) return named[i].keycode;
+    }
+    if ([key length] != 1) return -1;
+    UniChar character = [key characterAtIndex:0];
+    int layout_keycode = hotkey_layout_keycode_for_character(character);
+    return layout_keycode >= 0 ? layout_keycode : hotkey_ansi_keycode_for_character(character);
+}
+
 static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictionary, const char *path,
-                                   struct hotkey_keystroke *out)
+                                   struct hotkey_keystroke *out, bool allow_sided_modifiers)
 {
     id key = dictionary[@"key"];
     id raw = dictionary[@"keycode"];
@@ -1041,19 +1106,39 @@ static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictio
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "modifiers must be an array");
     for (size_t i = 0; i < [modifiers count]; ++i) {
         id modifier = modifiers[i];
-        uint8_t flag = 0;
+        uint16_t flag = 0;
+        bool sided = false;
         if ([modifier isEqualToString:@"cmd"]) flag = HOTKEY_MODIFIER_COMMAND;
         else if ([modifier isEqualToString:@"ctrl"]) flag = HOTKEY_MODIFIER_CONTROL;
         else if ([modifier isEqualToString:@"alt"]) flag = HOTKEY_MODIFIER_OPTION;
         else if ([modifier isEqualToString:@"shift"]) flag = HOTKEY_MODIFIER_SHIFT;
-        else {
+        else if ([modifier isEqualToString:@"fn"]) flag = HOTKEY_MODIFIER_FN;
+        else if ([modifier isEqualToString:@"hyper"]) flag = HOTKEY_MODIFIER_HYPER_MASK;
+        else if ([modifier isEqualToString:@"left_cmd"]) {
+            flag = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_LEFT_COMMAND; sided = true;
+        } else if ([modifier isEqualToString:@"right_cmd"]) {
+            flag = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_RIGHT_COMMAND; sided = true;
+        } else if ([modifier isEqualToString:@"left_ctrl"]) {
+            flag = HOTKEY_MODIFIER_CONTROL | HOTKEY_MODIFIER_LEFT_CONTROL; sided = true;
+        } else if ([modifier isEqualToString:@"right_ctrl"]) {
+            flag = HOTKEY_MODIFIER_CONTROL | HOTKEY_MODIFIER_RIGHT_CONTROL; sided = true;
+        } else if ([modifier isEqualToString:@"left_alt"]) {
+            flag = HOTKEY_MODIFIER_OPTION | HOTKEY_MODIFIER_LEFT_OPTION; sided = true;
+        } else if ([modifier isEqualToString:@"right_alt"]) {
+            flag = HOTKEY_MODIFIER_OPTION | HOTKEY_MODIFIER_RIGHT_OPTION; sided = true;
+        } else if ([modifier isEqualToString:@"left_shift"]) {
+            flag = HOTKEY_MODIFIER_SHIFT | HOTKEY_MODIFIER_LEFT_SHIFT; sided = true;
+        } else if ([modifier isEqualToString:@"right_shift"]) {
+            flag = HOTKEY_MODIFIER_SHIFT | HOTKEY_MODIFIER_RIGHT_SHIFT; sided = true;
+        } else {
             char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "unknown keyboard modifier");
         }
-        if (out->modifiers & flag) {
-            char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
-            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "duplicate keyboard modifier");
-        }
+        char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
+        if (sided && !allow_sided_modifiers)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "synthetic keys do not support sided modifiers");
+        if (out->modifiers & flag)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "duplicate or overlapping keyboard modifier");
         out->modifiers |= flag;
     }
     return true;
@@ -1217,11 +1302,37 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         out->type = HOTKEY_ACTION_RESTART_SERVICE;
         snprintf(out->data.restart_service.label, sizeof(out->data.restart_service.label), "%s",
                  [action[@"label"] UTF8String]);
+    } else if ([type isEqualToString:@"yabai_command"]) {
+        const char *keys[] = {"type", "arguments"};
+        if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
+        id arguments = action[@"arguments"];
+        snprintf(path, sizeof(path), "%s.arguments", base);
+        if (![arguments isKindOfClass:[NSArray class]] || ![arguments count] || [arguments count] > 64)
+            return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path,
+                                 "arguments must contain 1 to 64 strings");
+        size_t length = 1;
+        for (size_t i = 0; i < [arguments count]; ++i) {
+            id value = arguments[i];
+            if (![value isKindOfClass:[NSString class]] || ![value length]) {
+                char item[256]; snprintf(item, sizeof(item), "%s[%zu]", path, i);
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item,
+                                     "command arguments must be nonempty strings");
+            }
+            const char *text = [value UTF8String];
+            size_t bytes = text ? strlen(text) : HOTKEY_MAX_COMMAND_BYTES;
+            if (bytes >= HOTKEY_MAX_COMMAND_BYTES || length > HOTKEY_MAX_COMMAND_BYTES - bytes - 1)
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "command arguments exceed byte limit");
+            memcpy(out->data.yabai_command.bytes + length - 1, text, bytes + 1);
+            length += bytes + 1;
+        }
+        out->data.yabai_command.bytes[length - 1] = '\0';
+        out->data.yabai_command.length = (uint16_t)length;
+        out->type = HOTKEY_ACTION_YABAI_COMMAND;
     } else if ([type isEqualToString:@"synthesize_key"]) {
         const char *keys[] = {"type", "key", "keycode", "modifiers"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 4, base)) return false;
         out->type = HOTKEY_ACTION_SYNTHESIZE_KEY;
-        if (!convert_hotkey_keycode(b, action, base, &out->data.synthesize_key)) return false;
+        if (!convert_hotkey_keycode(b, action, base, &out->data.synthesize_key, false)) return false;
     } else {
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "unknown keyboard action");
     }
@@ -1341,6 +1452,14 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
     return true;
 }
 
+static bool hotkey_modifier_requirements_conflict(uint16_t a, uint16_t b)
+{
+    if ((a & HOTKEY_MODIFIER_PRIMARY_MASK) != (b & HOTKEY_MODIFIER_PRIMARY_MASK)) return false;
+    uint16_t a_sided = a & HOTKEY_MODIFIER_SIDED_MASK;
+    uint16_t b_sided = b & HOTKEY_MODIFIER_SIDED_MASK;
+    return !a_sided || !b_sided || (a_sided & b_sided) != 0;
+}
+
 static bool convert_hotkey_bindings(struct model_builder *b, id object, struct hotkey_binding **out_bindings,
                                     size_t *out_count, size_t *total, const char *path)
 {
@@ -1363,7 +1482,7 @@ static bool convert_hotkey_bindings(struct model_builder *b, id object, struct h
         const char *keys[] = {"key", "keycode", "modifiers", "repeat", "cases"};
         if (!hotkey_dictionary_has_only_keys(b, item, keys, 5, base)) return false;
         struct hotkey_binding *binding = &(*out_bindings)[i];
-        if (!convert_hotkey_keycode(b, item, base, &binding->keystroke)) return false;
+        if (!convert_hotkey_keycode(b, item, base, &binding->keystroke, true)) return false;
         id repeat = item[@"repeat"];
         if (repeat && CFGetTypeID((CFTypeRef)repeat) != CFBooleanGetTypeID()) {
             char repeat_path[256]; snprintf(repeat_path, sizeof(repeat_path), "%s.repeat", base);
@@ -1376,7 +1495,8 @@ static bool convert_hotkey_bindings(struct model_builder *b, id object, struct h
         for (size_t j = 0; j < i; ++j) {
             struct hotkey_binding *previous = &(*out_bindings)[j];
             if (previous->keystroke.keycode == binding->keystroke.keycode &&
-                previous->keystroke.modifiers == binding->keystroke.modifiers)
+                hotkey_modifier_requirements_conflict(previous->keystroke.modifiers,
+                                                      binding->keystroke.modifiers))
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "conflicting keyboard binding");
         }
     }
@@ -1446,8 +1566,8 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
         if (![object isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, mode_path, "input mode must be an object");
         NSDictionary *mode = object;
-        const char *mode_keys[] = {"name", "capture_unbound", "bindings"};
-        if (!hotkey_dictionary_has_only_keys(b, mode, mode_keys, 3, mode_path)) return false;
+        const char *mode_keys[] = {"name", "capture_unbound", "timeout_ms", "bindings"};
+        if (!hotkey_dictionary_has_only_keys(b, mode, mode_keys, 4, mode_path)) return false;
         struct hotkey_input_mode *out = &b->model->keyboard.modes[i];
         char name_path[256]; snprintf(name_path, sizeof(name_path), "%s.name", mode_path);
         out->name = model_string(b, mode[@"name"], DECLARATIVE_CONFIG_MAX_KEY_BYTES, true);
@@ -1463,6 +1583,15 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, capture_path, "capture_unbound must be boolean");
         }
         out->capture_unbound = capture ? [capture boolValue] : false;
+        id timeout = mode[@"timeout_ms"];
+        if (timeout) {
+            int timeout_ms;
+            char timeout_path[256]; snprintf(timeout_path, sizeof(timeout_path), "%s.timeout_ms", mode_path);
+            if (!declarative_number_to_int(timeout, 1, 3600000, &timeout_ms))
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, timeout_path,
+                                     "timeout_ms must be an integer from 1 through 3600000");
+            out->timeout_ms = (uint32_t)timeout_ms;
+        }
         char bindings_path[256]; snprintf(bindings_path, sizeof(bindings_path), "%s.bindings", mode_path);
         if (!convert_hotkey_bindings(b, mode[@"bindings"] ?: @[], &out->bindings,
                                      &out->binding_count, &total, bindings_path)) return false;

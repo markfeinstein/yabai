@@ -40,6 +40,7 @@ enum signal_type
 
     SIGNAL_MENU_BAR_HIDDEN_CHANGED,
     SIGNAL_SYSTEM_WOKE,
+    SIGNAL_KEYBOARD_MODE_CHANGED,
 
     SIGNAL_TYPE_COUNT
 };
@@ -83,6 +84,7 @@ static const char *signal_type_str[] =
 
     [SIGNAL_MENU_BAR_HIDDEN_CHANGED]        = "menu_bar_hidden_changed",
     [SIGNAL_SYSTEM_WOKE]                    = "system_woke",
+    [SIGNAL_KEYBOARD_MODE_CHANGED]           = "keyboard_mode_changed",
 
     [SIGNAL_TYPE_COUNT]                     = "signal_type_count"
 };

@@ -201,6 +201,7 @@ static bool message_assign_string(char **target, char *value)
 #define COMMAND_QUERY_SPACES   "--spaces"
 #define COMMAND_QUERY_WINDOWS  "--windows"
 #define COMMAND_QUERY_DAEMON_IDENTITY "--daemon-identity"
+#define COMMAND_QUERY_KEYBOARD_MODE "--keyboard-mode"
 
 #define ARGUMENT_QUERY_DISPLAY "--display"
 #define ARGUMENT_QUERY_SPACE   "--space"
@@ -2844,13 +2845,33 @@ static bool query_reject_trailing_arguments(FILE *rsp, char **message)
     return true;
 }
 
+static size_t mode_json_string_size(const char *string);
+static char *mode_json_write_string(char *output, const char *string);
+
 static void handle_domain_query(FILE *rsp, struct token domain, char *message, size_t message_length)
 {
     TIME_FUNCTION;
 
     char *wire = message;
     struct token command = get_token(&message);
-    if (token_equals(command, COMMAND_QUERY_DAEMON_IDENTITY)) {
+    if (token_equals(command, COMMAND_QUERY_KEYBOARD_MODE)) {
+        static const char exact[] = COMMAND_QUERY_KEYBOARD_MODE "\0";
+        if (message_length != sizeof(exact) || memcmp(wire, exact, sizeof(exact)) != 0) {
+            daemon_fail(rsp, "query --keyboard-mode does not accept trailing arguments.\n");
+            return;
+        }
+        char name[DECLARATIVE_CONFIG_MAX_KEY_BYTES + 1];
+        if (!hotkey_manager_copy_active_mode(name, sizeof(name))) {
+            daemon_fail(rsp, "could not inspect the active keyboard mode.\n");
+            return;
+        }
+        char json[DECLARATIVE_CONFIG_MAX_KEY_BYTES * 6 + 16];
+        char *cursor = stpcpy(json, "{\"name\":");
+        cursor = mode_json_write_string(cursor, name);
+        *cursor++ = '}';
+        *cursor++ = '\n';
+        fwrite(json, 1, (size_t)(cursor - json), rsp);
+    } else if (token_equals(command, COMMAND_QUERY_DAEMON_IDENTITY)) {
         static const char exact[] = COMMAND_QUERY_DAEMON_IDENTITY "\0";
         if (message_length != sizeof(exact) || memcmp(wire, exact, sizeof(exact)) != 0) {
             daemon_fail(rsp, "query --daemon-identity does not accept trailing arguments.\n");

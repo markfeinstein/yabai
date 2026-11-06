@@ -1879,6 +1879,55 @@ TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
 
 });
 
+TEST_FUNC(message_keyboard_mode_query_is_strict_and_json_safe,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"r\",\"cases\":[{"
+      "\"disposition\":\"consume\",\"transition\":\"resize\\\"mode\"}]}],"
+      "\"modes\":[{\"name\":\"resize\\\"mode\",\"bindings\":[]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "mode-query.jsonc", &model, &error), true);
+    if (model) {
+        TEST_CHECK(model->keyboard.bindings[0].keystroke.keycode, kVK_ANSI_R);
+        hotkey_manager_install_config(&model->keyboard);
+        TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
+        struct hotkey_match_result direct_match;
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_R,
+                                     0, NULL, NULL, &direct_match), true);
+        CGEventRef enter = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, true);
+        CGEventSetFlags(enter, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, enter, NULL) == NULL, true);
+        CFRelease(enter);
+
+        char message[] = "--keyboard-mode\0";
+        FILE *response = tmpfile();
+        TEST_CHECK(response != NULL, true);
+        if (response) {
+            handle_domain_query(response, message_test_token("query"), message, sizeof(message));
+            rewind(response);
+            char output[256] = {0};
+            fread(output, 1, sizeof(output) - 1, response);
+            TEST_CHECK(strcmp(output, "{\"name\":\"resize\\\"mode\"}\n"), 0);
+            fclose(response);
+        }
+
+        char trailing[] = "--keyboard-mode\0extra\0";
+        response = tmpfile();
+        TEST_CHECK(response != NULL, true);
+        if (response) {
+            handle_domain_query(response, message_test_token("query"), trailing, sizeof(trailing));
+            rewind(response);
+            char output[256] = {0};
+            fread(output, 1, sizeof(output) - 1, response);
+            TEST_CHECK(strstr(output, "does not accept trailing arguments") != NULL, true);
+            fclose(response);
+        }
+        hotkey_manager_install_config(NULL);
+        declarative_config_destroy(model);
+    }
+})
+
 struct message_hotkey_action_capture
 {
     int count;

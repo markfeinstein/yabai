@@ -260,13 +260,13 @@ Native keyboard control
 
 Version 3's optional `keyboard` object contains `enabled` (boolean, default true), `bindings` for the implicit default input mode, and `modes` for transient keyboard modes. Keyboard input modes are independent of the top-level declarative Space-policy modes described above. Set `keyboard.enabled` to false to avoid installing the global keyboard event tap.
 
-A binding contains exactly one `key` or `keycode`, an optional exact `modifiers` array, optional boolean `repeat` (default true), and a nonempty ordered `cases` array. Named keys are letters, digits, `-`, `=`, arrows, `space`, `return`, `escape` and `backspace`. `keycode` accepts a nonnegative integer through `UINT16_MAX` or a `0x`-prefixed hexadecimal string and is independent of the active keyboard layout. Modifiers are `cmd`, `ctrl`, `alt` and `shift`; duplicates are rejected.
+A binding contains exactly one `key` or `keycode`, an optional exact `modifiers` array, optional boolean `repeat` (default true), and a nonempty ordered `cases` array. Single-character `key` values follow the selected keyboard layout at configuration load; `keycode` pins a physical key and accepts a nonnegative integer through `UINT16_MAX` or a `0x`-prefixed hexadecimal string. Named special keys include arrows, navigation keys, F1 through F20 and keypad keys. Modifiers are `cmd`, `ctrl`, `alt`, `shift`, `fn`, `hyper` (Cmd-Ctrl-Alt-Shift), and `left_`/`right_` variants of the four ordinary modifiers; overlapping entries are rejected.
 
 A case may contain an exact `application` object with `bundle_id`, `name`, or both. Bundle identifiers are preferred; when both fields are authored, both must match. An omitted application is the optional wildcard case and must be unique and last. The required `disposition` is `consume`, `consume_only`, `pass_through` or `remap`. `consume` requires an `action`, a `transition`, or both. `consume_only` and `pass_through` allow neither. `remap` requires exactly one `synthesize_key` action. Bindings with the same physical keycode and modifiers conflict within one input mode, so application alternatives belong in one binding's `cases` array.
 
-An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are `focus_window`, `warp_window`, `resize_window`, `change_window_ratio`, `adaptive_resize`, `toggle_floating`, `toggle_zoom_fullscreen`, `rotate_space`, `set_space_layout`, `balance_space`, `focus_space`, `focus_occupied_space`, `move_window_to_space`, `close_window`, `close_other_windows`, `cycle_space_layout`, `reload_configuration`, `restart_service` and `synthesize_key`. The complete field schema and full skhd-parity configuration are in `doc/native_hotkeys.md` and `examples/native-hotkeys.jsonc`.
+An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are `focus_window`, `warp_window`, `resize_window`, `change_window_ratio`, `adaptive_resize`, `toggle_floating`, `toggle_zoom_fullscreen`, `rotate_space`, `set_space_layout`, `balance_space`, `focus_space`, `focus_occupied_space`, `move_window_to_space`, `close_window`, `close_other_windows`, `cycle_space_layout`, `reload_configuration`, `restart_service`, `yabai_command` and `synthesize_key`. `yabai_command.arguments` executes an ordinary message in process, beginning with its domain, without spawning a client. The complete field schema and full skhd-parity configuration are in `doc/native_hotkeys.md` and `examples/native-hotkeys.jsonc`.
 
-Each keyboard mode is an exact object with unique nonempty `name`, optional boolean `capture_unbound`, and `bindings`. `default` is reserved. A consume case changes modes with `transition`; `default` exits a mode. Transitions and event disposition are decided synchronously in the event-tap callback, while typed actions are copied into a bounded job and executed on yabai's event-loop worker. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
+Each keyboard mode is an exact object with unique nonempty `name`, optional boolean `capture_unbound`, optional `timeout_ms` from 1 through 3,600,000, and `bindings`. `default` is reserved. A consume case changes modes with `transition`; `default` exits a mode. The timeout returns an idle mode to default. Transitions and event disposition are decided synchronously in the event-tap callback, while typed actions are copied into a bounded job and executed on yabai's event-loop worker. `yabai -m query --keyboard-mode` returns the active mode as JSON; changes update the menu-bar tooltip and emit `keyboard_mode_changed` with `YABAI_KEYBOARD_MODE`. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
 
 Synthetic key events carry a private event-source tag and bypass matching, preventing recursive remaps. The event tap re-enables itself after timeout or user-input disablement. `restart_service` runs `/bin/launchctl kickstart -k` for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
 
@@ -931,6 +931,9 @@ COMMAND
 *--windows*::
     Retrieve information about windows.
 
+*--keyboard-mode*::
+    Retrieve the active native keyboard input mode as a JSON object with a `name` string. This command accepts no properties or trailing arguments.
+
 *--daemon-identity*::
     Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments. +
     The JSON object contains `pid` (the daemon process identifier), `architecture` (`arm64` or `x86_64`), and `uuid` (the Mach-O UUID of the running architecture slice). +
@@ -1349,6 +1352,10 @@ EVENT
 
 *system_woke*::
     Triggered when macOS wakes from sleep.
+
+*keyboard_mode_changed*::
+    Triggered when the native keyboard input mode changes or times out. +
+    Passes one argument: $YABAI_KEYBOARD_MODE
 
 ACTION
 ^^^^^^

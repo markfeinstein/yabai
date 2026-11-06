@@ -5040,6 +5040,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     case HOTKEY_ACTION: {
         hotkey_action_job_destroy(context);
     } break;
+    case HOTKEY_MODE_CHANGED: {
+        free(context);
+    } break;
     case EVENT_LOOP_SYNC: {
         event_loop_sync_complete(context, false);
     } break;

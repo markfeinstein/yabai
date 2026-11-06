@@ -43,6 +43,39 @@ static bool hotkey_directional_candidate_is_better(double primary, double second
             (secondary == best_secondary && distance2 < best_distance2)));
 }
 
+static void hotkey_consider_directional_windows(enum hotkey_direction direction,
+                                                uint32_t focused_id, CGRect focused_frame,
+                                                uint32_t *window_list, int window_count,
+                                                struct window **best,
+                                                double *best_primary,
+                                                double *best_secondary,
+                                                double *best_distance2)
+{
+    double focused_x = CGRectGetMidX(focused_frame);
+    double focused_y = CGRectGetMidY(focused_frame);
+    for (int i = 0; window_list && i < window_count; ++i) {
+        struct window *candidate = window_manager_find_window(&g_window_manager, window_list[i]);
+        if (!candidate || candidate->id == focused_id || window_check_flag(candidate, WINDOW_MINIMIZE)) continue;
+        double dx = CGRectGetMidX(candidate->frame) - focused_x;
+        double dy = CGRectGetMidY(candidate->frame) - focused_y;
+        bool half_plane = (direction == HOTKEY_DIRECTION_WEST && dx < 0.0) ||
+                          (direction == HOTKEY_DIRECTION_EAST && dx > 0.0) ||
+                          (direction == HOTKEY_DIRECTION_NORTH && dy < 0.0) ||
+                          (direction == HOTKEY_DIRECTION_SOUTH && dy > 0.0);
+        if (!half_plane) continue;
+        double primary = direction == HOTKEY_DIRECTION_WEST || direction == HOTKEY_DIRECTION_EAST ? fabs(dx) : fabs(dy);
+        double secondary = direction == HOTKEY_DIRECTION_WEST || direction == HOTKEY_DIRECTION_EAST ? fabs(dy) : fabs(dx);
+        double distance2 = dx * dx + dy * dy;
+        if (!*best || hotkey_directional_candidate_is_better(primary, secondary, distance2,
+                                                              *best_primary, *best_secondary, *best_distance2)) {
+            *best = candidate;
+            *best_primary = primary;
+            *best_secondary = secondary;
+            *best_distance2 = distance2;
+        }
+    }
+}
+
 static bool hotkey_robust_focus_window_direction(enum hotkey_direction direction)
 {
     struct window *focused = window_manager_focused_window(&g_window_manager);
@@ -60,39 +93,32 @@ static bool hotkey_robust_focus_window_direction(enum hotkey_direction direction
         return true;
     }
 
-    uint32_t before_id = focused->id;
-    uint64_t sid = space_manager_active_space();
-    int window_count = 0;
-    uint32_t *window_list = sid ? space_window_list(sid, &window_count, false) : NULL;
-    if (!window_list || window_count <= 0) return false;
-
-    CGRect focused_frame = focused->frame;
-    double focused_x = CGRectGetMidX(focused_frame);
-    double focused_y = CGRectGetMidY(focused_frame);
     struct window *best = NULL;
     double best_primary = INFINITY;
     double best_secondary = INFINITY;
     double best_distance2 = INFINITY;
-    for (int i = 0; i < window_count; ++i) {
-        struct window *candidate = window_manager_find_window(&g_window_manager, window_list[i]);
-        if (!candidate || candidate->id == before_id || window_check_flag(candidate, WINDOW_MINIMIZE)) continue;
-        double dx = CGRectGetMidX(candidate->frame) - focused_x;
-        double dy = CGRectGetMidY(candidate->frame) - focused_y;
-        bool half_plane = (direction == HOTKEY_DIRECTION_WEST && dx < 0.0) ||
-                          (direction == HOTKEY_DIRECTION_EAST && dx > 0.0) ||
-                          (direction == HOTKEY_DIRECTION_NORTH && dy < 0.0) ||
-                          (direction == HOTKEY_DIRECTION_SOUTH && dy > 0.0);
-        if (!half_plane) continue;
-        double primary = direction == HOTKEY_DIRECTION_WEST || direction == HOTKEY_DIRECTION_EAST ? fabs(dx) : fabs(dy);
-        double secondary = direction == HOTKEY_DIRECTION_WEST || direction == HOTKEY_DIRECTION_EAST ? fabs(dy) : fabs(dx);
-        double distance2 = dx * dx + dy * dy;
-        if (!best || hotkey_directional_candidate_is_better(primary, secondary, distance2,
-                                                             best_primary, best_secondary, best_distance2)) {
-            best = candidate;
-            best_primary = primary;
-            best_secondary = secondary;
-            best_distance2 = distance2;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (topology && cf_is_type(topology, CFArrayGetTypeID())) {
+        for (CFIndex i = 0; i < CFArrayGetCount(topology); ++i) {
+            CFTypeRef display = CFArrayGetValueAtIndex(topology, i);
+            if (!cf_is_type(display, CFDictionaryGetTypeID())) continue;
+            uint64_t sid = 0;
+            if (!managed_space_id(CFDictionaryGetValue((CFDictionaryRef)display, CFSTR("Current Space")), &sid)) continue;
+            int window_count = 0;
+            uint32_t *window_list = space_window_list(sid, &window_count, false);
+            hotkey_consider_directional_windows(direction, focused->id, focused->frame,
+                                                window_list, window_count, &best,
+                                                &best_primary, &best_secondary, &best_distance2);
         }
+        CFRelease(topology);
+    } else {
+        if (topology) CFRelease(topology);
+        uint64_t sid = space_manager_active_space();
+        int window_count = 0;
+        uint32_t *window_list = sid ? space_window_list(sid, &window_count, false) : NULL;
+        hotkey_consider_directional_windows(direction, focused->id, focused->frame,
+                                            window_list, window_count, &best,
+                                            &best_primary, &best_secondary, &best_distance2);
     }
     if (!best) return false;
     window_manager_focus_window_with_raise(&best->application->psn, best->id, best->ref);
@@ -286,6 +312,23 @@ static bool hotkey_restart_service(const char *label)
     return posix_spawn(&pid, arguments[0], NULL, NULL, arguments, environ) == 0;
 }
 
+static bool hotkey_execute_yabai_command(const struct hotkey_action *action)
+{
+    uint16_t length = action->data.yabai_command.length;
+    if (length < 2 || length > HOTKEY_MAX_COMMAND_BYTES) return false;
+    char message[HOTKEY_MAX_COMMAND_BYTES];
+    memcpy(message, action->data.yabai_command.bytes, length);
+    char *response = NULL;
+    size_t response_length = 0;
+    FILE *stream = open_memstream(&response, &response_length);
+    if (!stream) return false;
+    handle_message(stream, message, length);
+    bool closed = fclose(stream) == 0;
+    bool success = closed && (!response_length || response[0] != DAEMON_MESSAGE_FAILURE_MARKER);
+    free(response);
+    return success;
+}
+
 static bool hotkey_execute_action(const struct hotkey_action *action)
 {
 #ifdef TESTS
@@ -344,6 +387,8 @@ static bool hotkey_execute_action(const struct hotkey_action *action)
         return declarative_config_reload(NULL);
     case HOTKEY_ACTION_RESTART_SERVICE:
         return hotkey_restart_service(action->data.restart_service.label);
+    case HOTKEY_ACTION_YABAI_COMMAND:
+        return hotkey_execute_yabai_command(action);
     case HOTKEY_ACTION_SYNTHESIZE_KEY:
         return hotkey_post_synthetic_keystroke(action->data.synthesize_key);
     }

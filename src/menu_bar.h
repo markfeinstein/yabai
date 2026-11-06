@@ -109,6 +109,7 @@ void menu_bar_publish_snapshot(struct menu_bar_snapshot *snapshot);
 /* Thread-safe in-place redraw request for public accessibility display option
  * changes. This never requests a new model or WindowServer inventory snapshot. */
 void menu_bar_accessibility_preferences_changed(void);
+void menu_bar_keyboard_mode_changed(const char *name);
 
 #ifdef __cplusplus
 }

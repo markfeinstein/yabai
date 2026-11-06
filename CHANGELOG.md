@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Expand native keyboard workflows with layout-aware key names, F-key/navigation/keypad names, Fn/Hyper and sided modifiers, idle mode timeouts, mode query/menu/signal status, cross-display robust focus, and in-process `yabai_command` actions.
+
 ### Changed
 - Drive window animations from the destination display's refresh cadence instead of the aggregate active-display clock.
 - Require meaningful horizontal progress or terminal velocity before committing a direct trackpad Space switch, so small or cancelled swipes do not change Spaces.

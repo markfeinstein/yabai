@@ -41,6 +41,7 @@ struct hotkey_manager_state
     char front_bundle_id[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     char front_name[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     struct hotkey_manager_resources resources;
+    uint64_t mode_generation;
     bool lifecycle_started;
 };
 
@@ -50,24 +51,61 @@ static struct hotkey_manager_state hotkey_manager = {
     .active_mode = HOTKEY_TRANSITION_DEFAULT
 };
 
-static uint8_t hotkey_modifiers_from_event(CGEventFlags flags)
+#ifdef TESTS
+static bool (*hotkey_key_state)(CGKeyCode) = NULL;
+#endif
+
+static bool hotkey_modifier_key_is_down(CGKeyCode keycode)
 {
-    uint8_t modifiers = 0;
-    if (flags & kCGEventFlagMaskCommand) modifiers |= HOTKEY_MODIFIER_COMMAND;
-    if (flags & kCGEventFlagMaskControl) modifiers |= HOTKEY_MODIFIER_CONTROL;
-    if (flags & kCGEventFlagMaskAlternate) modifiers |= HOTKEY_MODIFIER_OPTION;
-    if (flags & kCGEventFlagMaskShift) modifiers |= HOTKEY_MODIFIER_SHIFT;
+#ifdef TESTS
+    if (hotkey_key_state) return hotkey_key_state(keycode);
+#endif
+    return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, keycode);
+}
+
+static uint16_t hotkey_modifiers_from_event(CGEventFlags flags)
+{
+    uint16_t modifiers = 0;
+    if (flags & kCGEventFlagMaskCommand) {
+        modifiers |= HOTKEY_MODIFIER_COMMAND;
+        if (hotkey_modifier_key_is_down(kVK_Command)) modifiers |= HOTKEY_MODIFIER_LEFT_COMMAND;
+        if (hotkey_modifier_key_is_down(kVK_RightCommand)) modifiers |= HOTKEY_MODIFIER_RIGHT_COMMAND;
+    }
+    if (flags & kCGEventFlagMaskControl) {
+        modifiers |= HOTKEY_MODIFIER_CONTROL;
+        if (hotkey_modifier_key_is_down(kVK_Control)) modifiers |= HOTKEY_MODIFIER_LEFT_CONTROL;
+        if (hotkey_modifier_key_is_down(kVK_RightControl)) modifiers |= HOTKEY_MODIFIER_RIGHT_CONTROL;
+    }
+    if (flags & kCGEventFlagMaskAlternate) {
+        modifiers |= HOTKEY_MODIFIER_OPTION;
+        if (hotkey_modifier_key_is_down(kVK_Option)) modifiers |= HOTKEY_MODIFIER_LEFT_OPTION;
+        if (hotkey_modifier_key_is_down(kVK_RightOption)) modifiers |= HOTKEY_MODIFIER_RIGHT_OPTION;
+    }
+    if (flags & kCGEventFlagMaskShift) {
+        modifiers |= HOTKEY_MODIFIER_SHIFT;
+        if (hotkey_modifier_key_is_down(kVK_Shift)) modifiers |= HOTKEY_MODIFIER_LEFT_SHIFT;
+        if (hotkey_modifier_key_is_down(kVK_RightShift)) modifiers |= HOTKEY_MODIFIER_RIGHT_SHIFT;
+    }
+    if (flags & kCGEventFlagMaskSecondaryFn) modifiers |= HOTKEY_MODIFIER_FN;
     return modifiers;
 }
 
-static CGEventFlags hotkey_event_flags(uint8_t modifiers)
+static CGEventFlags hotkey_event_flags(uint16_t modifiers)
 {
     CGEventFlags flags = 0;
     if (modifiers & HOTKEY_MODIFIER_COMMAND) flags |= kCGEventFlagMaskCommand;
     if (modifiers & HOTKEY_MODIFIER_CONTROL) flags |= kCGEventFlagMaskControl;
     if (modifiers & HOTKEY_MODIFIER_OPTION) flags |= kCGEventFlagMaskAlternate;
     if (modifiers & HOTKEY_MODIFIER_SHIFT) flags |= kCGEventFlagMaskShift;
+    if (modifiers & HOTKEY_MODIFIER_FN) flags |= kCGEventFlagMaskSecondaryFn;
     return flags;
+}
+
+static bool hotkey_modifiers_match(uint16_t required, uint16_t actual)
+{
+    if ((required & HOTKEY_MODIFIER_PRIMARY_MASK) != (actual & HOTKEY_MODIFIER_PRIMARY_MASK)) return false;
+    uint16_t sided = required & HOTKEY_MODIFIER_SIDED_MASK;
+    return (actual & sided) == sided;
 }
 
 static bool hotkey_application_matches(const struct hotkey_application_condition *condition,
@@ -80,7 +118,7 @@ static bool hotkey_application_matches(const struct hotkey_application_condition
 }
 
 static bool hotkey_match(const struct hotkey_config_model *config, int active_mode,
-                         uint16_t keycode, uint8_t modifiers,
+                         uint16_t keycode, uint16_t modifiers,
                          const char *bundle_id, const char *name,
                          struct hotkey_match_result *result)
 {
@@ -100,7 +138,8 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
 
     for (size_t i = 0; i < binding_count; ++i) {
         const struct hotkey_binding *binding = &bindings[i];
-        if (binding->keystroke.keycode != keycode || binding->keystroke.modifiers != modifiers) continue;
+        if (binding->keystroke.keycode != keycode ||
+            !hotkey_modifiers_match(binding->keystroke.modifiers, modifiers)) continue;
         for (size_t j = 0; j < binding->case_count; ++j) {
             const struct hotkey_binding_case *item = &binding->cases[j];
             if (!hotkey_application_matches(&item->application, bundle_id, name)) continue;
@@ -131,7 +170,7 @@ void hotkey_test_set_action_poster(bool (*poster)(void *))
 }
 
 bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
-                       uint16_t keycode, uint8_t modifiers,
+                       uint16_t keycode, uint16_t modifiers,
                        const char *bundle_id, const char *name,
                        struct hotkey_match_result *result)
 {
@@ -146,6 +185,49 @@ int hotkey_test_active_mode(void)
     return result;
 }
 #endif
+
+bool hotkey_manager_copy_active_mode(char *buffer, size_t capacity)
+{
+    if (!buffer || !capacity) return false;
+    pthread_mutex_lock(&hotkey_manager.lock);
+    const char *name = "default";
+    if (hotkey_manager.config && hotkey_manager.active_mode >= 0 &&
+        (size_t)hotkey_manager.active_mode < hotkey_manager.config->mode_count) {
+        name = hotkey_manager.config->modes[hotkey_manager.active_mode].name;
+    }
+    int length = snprintf(buffer, capacity, "%s", name ? name : "default");
+    pthread_mutex_unlock(&hotkey_manager.lock);
+    return length >= 0 && (size_t)length < capacity;
+}
+
+static void hotkey_manager_post_mode_changed(void)
+{
+    char *name = malloc(DECLARATIVE_CONFIG_MAX_KEY_BYTES + 1);
+    if (!name) return;
+    if (!hotkey_manager_copy_active_mode(name, DECLARATIVE_CONFIG_MAX_KEY_BYTES + 1)) {
+        free(name);
+        return;
+    }
+    (void)event_loop_try_post(&g_event_loop, HOTKEY_MODE_CHANGED, name, 0);
+}
+
+static void hotkey_manager_schedule_mode_timeout(uint64_t generation, uint32_t timeout_ms)
+{
+    if (!generation || !timeout_ms) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_ms * NSEC_PER_MSEC),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        bool changed = false;
+        pthread_mutex_lock(&hotkey_manager.lock);
+        if (hotkey_manager.mode_generation == generation && hotkey_manager.active_mode >= 0) {
+            hotkey_manager.active_mode = HOTKEY_TRANSITION_DEFAULT;
+            ++hotkey_manager.mode_generation;
+            changed = true;
+            debug("keyboard input mode timed out; returning to default\n");
+        }
+        pthread_mutex_unlock(&hotkey_manager.lock);
+        if (changed) hotkey_manager_post_mode_changed();
+    });
+}
 
 static void hotkey_manager_dispose_resources(struct hotkey_manager_resources resources)
 {
@@ -197,11 +279,14 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
         return event;
 
     uint16_t keycode = (uint16_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-    bool repeat = type == kCGEventKeyDown &&
-                  CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat) != 0;
-    uint8_t modifiers = hotkey_modifiers_from_event(CGEventGetFlags(event));
+    bool key_down = type == kCGEventKeyDown;
+    bool repeat = key_down && CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat) != 0;
+    uint16_t modifiers = hotkey_modifiers_from_event(CGEventGetFlags(event));
     struct hotkey_match_result match;
     struct hotkey_action_job *job = NULL;
+    uint64_t timeout_generation = 0;
+    uint32_t timeout_ms = 0;
+    bool mode_changed = false;
 
     pthread_mutex_lock(&hotkey_manager.lock);
     const struct hotkey_config_model *config = hotkey_manager.config;
@@ -211,9 +296,16 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
                                 hotkey_manager.front_name[0] ? hotkey_manager.front_name : NULL,
                                 &match);
     if (matched) {
-        bool key_down = type == kCGEventKeyDown;
-        if (key_down && !repeat && match.transition_mode != HOTKEY_TRANSITION_NONE)
+        if (key_down && !repeat && match.transition_mode != HOTKEY_TRANSITION_NONE &&
+            hotkey_manager.active_mode != match.transition_mode) {
             hotkey_manager.active_mode = match.transition_mode;
+            timeout_generation = ++hotkey_manager.mode_generation;
+            mode_changed = true;
+            if (match.transition_mode >= 0 &&
+                (size_t)match.transition_mode < config->mode_count) {
+                timeout_ms = config->modes[match.transition_mode].timeout_ms;
+            }
+        }
         if (key_down && (!repeat || match.repeat) && match.action_count) {
             job = malloc(sizeof(*job));
             if (job) {
@@ -222,7 +314,16 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
             }
         }
     }
+    if (key_down && !repeat && !mode_changed && config && hotkey_manager.active_mode >= 0 &&
+        (matched || match.capture_unbound) &&
+        (size_t)hotkey_manager.active_mode < config->mode_count &&
+        config->modes[hotkey_manager.active_mode].timeout_ms) {
+        timeout_generation = ++hotkey_manager.mode_generation;
+        timeout_ms = config->modes[hotkey_manager.active_mode].timeout_ms;
+    }
     pthread_mutex_unlock(&hotkey_manager.lock);
+    hotkey_manager_schedule_mode_timeout(timeout_generation, timeout_ms);
+    if (mode_changed) hotkey_manager_post_mode_changed();
 
     if (job) {
 #ifdef TESTS
@@ -369,10 +470,13 @@ static bool hotkey_manager_reconcile_event_tap(void)
 void hotkey_manager_install_config(const struct hotkey_config_model *config)
 {
     pthread_mutex_lock(&hotkey_manager.lock);
+    bool mode_changed = hotkey_manager.active_mode != HOTKEY_TRANSITION_DEFAULT;
     hotkey_manager.config = config;
     hotkey_manager.active_mode = HOTKEY_TRANSITION_DEFAULT;
+    ++hotkey_manager.mode_generation;
     bool started = hotkey_manager.lifecycle_started;
     pthread_mutex_unlock(&hotkey_manager.lock);
+    if (mode_changed) hotkey_manager_post_mode_changed();
     if (started && !hotkey_manager_reconcile_event_tap()) {
         warn("yabai: could not update the keyboard event tap; verify Accessibility permission and secure-input state\n");
     }
@@ -440,6 +544,15 @@ bool hotkey_post_synthetic_keystroke(struct hotkey_keystroke keystroke)
 void hotkey_action_job_destroy(void *context)
 {
     free(context);
+}
+
+static EVENT_HANDLER(HOTKEY_MODE_CHANGED)
+{
+    (void)param1;
+    char *name = context;
+    event_signal_push(SIGNAL_KEYBOARD_MODE_CHANGED, name);
+    menu_bar_keyboard_mode_changed(name);
+    free(name);
 }
 
 static EVENT_HANDLER(HOTKEY_ACTION)

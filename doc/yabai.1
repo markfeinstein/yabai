@@ -798,13 +798,13 @@ Modes do not export, import, save, capture or undo layouts; launch applications;
 .sp
 Version 3\(cqs optional \f(CRkeyboard\fP object contains \f(CRenabled\fP (boolean, default true), \f(CRbindings\fP for the implicit default input mode, and \f(CRmodes\fP for transient keyboard modes. Keyboard input modes are independent of the top\-level declarative Space\-policy modes described above. Set \f(CRkeyboard.enabled\fP to false to avoid installing the global keyboard event tap.
 .sp
-A binding contains exactly one \f(CRkey\fP or \f(CRkeycode\fP, an optional exact \f(CRmodifiers\fP array, optional boolean \f(CRrepeat\fP (default true), and a nonempty ordered \f(CRcases\fP array. Named keys are letters, digits, \f(CR\-\fP, \f(CR=\fP, arrows, \f(CRspace\fP, \f(CRreturn\fP, \f(CRescape\fP and \f(CRbackspace\fP. \f(CRkeycode\fP accepts a nonnegative integer through \f(CRUINT16_MAX\fP or a \f(CR0x\fP\-prefixed hexadecimal string and is independent of the active keyboard layout. Modifiers are \f(CRcmd\fP, \f(CRctrl\fP, \f(CRalt\fP and \f(CRshift\fP; duplicates are rejected.
+A binding contains exactly one \f(CRkey\fP or \f(CRkeycode\fP, an optional exact \f(CRmodifiers\fP array, optional boolean \f(CRrepeat\fP (default true), and a nonempty ordered \f(CRcases\fP array. Single\-character \f(CRkey\fP values follow the selected keyboard layout at configuration load; \f(CRkeycode\fP pins a physical key and accepts a nonnegative integer through \f(CRUINT16_MAX\fP or a \f(CR0x\fP\-prefixed hexadecimal string. Named special keys include arrows, navigation keys, F1 through F20 and keypad keys. Modifiers are \f(CRcmd\fP, \f(CRctrl\fP, \f(CRalt\fP, \f(CRshift\fP, \f(CRfn\fP, \f(CRhyper\fP (Cmd\-Ctrl\-Alt\-Shift), and \f(CRleft_\fP/\f(CRright_\fP variants of the four ordinary modifiers; overlapping entries are rejected.
 .sp
 A case may contain an exact \f(CRapplication\fP object with \f(CRbundle_id\fP, \f(CRname\fP, or both. Bundle identifiers are preferred; when both fields are authored, both must match. An omitted application is the optional wildcard case and must be unique and last. The required \f(CRdisposition\fP is \f(CRconsume\fP, \f(CRconsume_only\fP, \f(CRpass_through\fP or \f(CRremap\fP. \f(CRconsume\fP requires an \f(CRaction\fP, a \f(CRtransition\fP, or both. \f(CRconsume_only\fP and \f(CRpass_through\fP allow neither. \f(CRremap\fP requires exactly one \f(CRsynthesize_key\fP action. Bindings with the same physical keycode and modifiers conflict within one input mode, so application alternatives belong in one binding\(cqs \f(CRcases\fP array.
 .sp
-An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are \f(CRfocus_window\fP, \f(CRwarp_window\fP, \f(CRresize_window\fP, \f(CRchange_window_ratio\fP, \f(CRadaptive_resize\fP, \f(CRtoggle_floating\fP, \f(CRtoggle_zoom_fullscreen\fP, \f(CRrotate_space\fP, \f(CRset_space_layout\fP, \f(CRbalance_space\fP, \f(CRfocus_space\fP, \f(CRfocus_occupied_space\fP, \f(CRmove_window_to_space\fP, \f(CRclose_window\fP, \f(CRclose_other_windows\fP, \f(CRcycle_space_layout\fP, \f(CRreload_configuration\fP, \f(CRrestart_service\fP and \f(CRsynthesize_key\fP. The complete field schema and full skhd\-parity configuration are in \f(CRdoc/native_hotkeys.md\fP and \f(CRexamples/native\-hotkeys.jsonc\fP.
+An action is one typed object or an ordered array of up to 16 typed objects. Arrays stop at the first failed action. Supported action types are \f(CRfocus_window\fP, \f(CRwarp_window\fP, \f(CRresize_window\fP, \f(CRchange_window_ratio\fP, \f(CRadaptive_resize\fP, \f(CRtoggle_floating\fP, \f(CRtoggle_zoom_fullscreen\fP, \f(CRrotate_space\fP, \f(CRset_space_layout\fP, \f(CRbalance_space\fP, \f(CRfocus_space\fP, \f(CRfocus_occupied_space\fP, \f(CRmove_window_to_space\fP, \f(CRclose_window\fP, \f(CRclose_other_windows\fP, \f(CRcycle_space_layout\fP, \f(CRreload_configuration\fP, \f(CRrestart_service\fP, \f(CRyabai_command\fP and \f(CRsynthesize_key\fP. \f(CRyabai_command.arguments\fP executes an ordinary message in process, beginning with its domain, without spawning a client. The complete field schema and full skhd\-parity configuration are in \f(CRdoc/native_hotkeys.md\fP and \f(CRexamples/native\-hotkeys.jsonc\fP.
 .sp
-Each keyboard mode is an exact object with unique nonempty \f(CRname\fP, optional boolean \f(CRcapture_unbound\fP, and \f(CRbindings\fP. \f(CRdefault\fP is reserved. A consume case changes modes with \f(CRtransition\fP; \f(CRdefault\fP exits a mode. Transitions and event disposition are decided synchronously in the event\-tap callback, while typed actions are copied into a bounded job and executed on yabai\(cqs event\-loop worker. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
+Each keyboard mode is an exact object with unique nonempty \f(CRname\fP, optional boolean \f(CRcapture_unbound\fP, optional \f(CRtimeout_ms\fP from 1 through 3,600,000, and \f(CRbindings\fP. \f(CRdefault\fP is reserved. A consume case changes modes with \f(CRtransition\fP; \f(CRdefault\fP exits a mode. The timeout returns an idle mode to default. Transitions and event disposition are decided synchronously in the event\-tap callback, while typed actions are copied into a bounded job and executed on yabai\(cqs event\-loop worker. \f(CRyabai \-m query \-\-keyboard\-mode\fP returns the active mode as JSON; changes update the menu\-bar tooltip and emit \f(CRkeyboard_mode_changed\fP with \f(CRYABAI_KEYBOARD_MODE\fP. A successful JSONC reload installs the complete keymap atomically and resets the keyboard mode to default. A failed reload retains the prior keymap and active mode.
 .sp
 Synthetic key events carry a private event\-source tag and bypass matching, preventing recursive remaps. The event tap re\-enables itself after timeout or user\-input disablement. \f(CRrestart_service\fP runs \f(CR/bin/launchctl kickstart \-k\fP for the exact configured user LaunchAgent label, leaving launchd responsible for replacing the daemon.
 .sp
@@ -1827,6 +1827,11 @@ Retrieve information about spaces.
 Retrieve information about windows.
 .RE
 .sp
+\fB\-\-keyboard\-mode\fP
+.RS 4
+Retrieve the active native keyboard input mode as a JSON object with a \f(CRname\fP string. This command accepts no properties or trailing arguments.
+.RE
+.sp
 \fB\-\-daemon\-identity\fP
 .RS 4
 Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments.
@@ -2427,6 +2432,13 @@ Triggered when the macOS menubar \fIautohide\fP setting changes.
 \fBsystem_woke\fP
 .RS 4
 Triggered when macOS wakes from sleep.
+.RE
+.sp
+\fBkeyboard_mode_changed\fP
+.RS 4
+Triggered when the native keyboard input mode changes or times out.
+.br
+Passes one argument: $YABAI_KEYBOARD_MODE
 .RE
 .SS "ACTION"
 .sp

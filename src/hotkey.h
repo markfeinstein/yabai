@@ -11,14 +11,33 @@
 #define HOTKEY_MAX_CASES 16u
 #define HOTKEY_MAX_ACTIONS 16u
 #define HOTKEY_MAX_SERVICE_LABEL_BYTES 127u
+#define HOTKEY_MAX_COMMAND_BYTES 1024u
 
 #define HOTKEY_TRANSITION_NONE    (-2)
 #define HOTKEY_TRANSITION_DEFAULT (-1)
 
-#define HOTKEY_MODIFIER_COMMAND (1u << 0)
-#define HOTKEY_MODIFIER_CONTROL (1u << 1)
-#define HOTKEY_MODIFIER_OPTION  (1u << 2)
-#define HOTKEY_MODIFIER_SHIFT   (1u << 3)
+#define HOTKEY_MODIFIER_COMMAND       (1u << 0)
+#define HOTKEY_MODIFIER_CONTROL       (1u << 1)
+#define HOTKEY_MODIFIER_OPTION        (1u << 2)
+#define HOTKEY_MODIFIER_SHIFT         (1u << 3)
+#define HOTKEY_MODIFIER_FN            (1u << 4)
+#define HOTKEY_MODIFIER_LEFT_COMMAND  (1u << 5)
+#define HOTKEY_MODIFIER_RIGHT_COMMAND (1u << 6)
+#define HOTKEY_MODIFIER_LEFT_CONTROL  (1u << 7)
+#define HOTKEY_MODIFIER_RIGHT_CONTROL (1u << 8)
+#define HOTKEY_MODIFIER_LEFT_OPTION   (1u << 9)
+#define HOTKEY_MODIFIER_RIGHT_OPTION  (1u << 10)
+#define HOTKEY_MODIFIER_LEFT_SHIFT    (1u << 11)
+#define HOTKEY_MODIFIER_RIGHT_SHIFT   (1u << 12)
+#define HOTKEY_MODIFIER_PRIMARY_MASK  (HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_CONTROL | \
+                                       HOTKEY_MODIFIER_OPTION | HOTKEY_MODIFIER_SHIFT | \
+                                       HOTKEY_MODIFIER_FN)
+#define HOTKEY_MODIFIER_HYPER_MASK    (HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_CONTROL | \
+                                       HOTKEY_MODIFIER_OPTION | HOTKEY_MODIFIER_SHIFT)
+#define HOTKEY_MODIFIER_SIDED_MASK    (HOTKEY_MODIFIER_LEFT_COMMAND | HOTKEY_MODIFIER_RIGHT_COMMAND | \
+                                       HOTKEY_MODIFIER_LEFT_CONTROL | HOTKEY_MODIFIER_RIGHT_CONTROL | \
+                                       HOTKEY_MODIFIER_LEFT_OPTION | HOTKEY_MODIFIER_RIGHT_OPTION | \
+                                       HOTKEY_MODIFIER_LEFT_SHIFT | HOTKEY_MODIFIER_RIGHT_SHIFT)
 
 enum hotkey_disposition
 {
@@ -56,6 +75,7 @@ enum hotkey_action_type
     HOTKEY_ACTION_CYCLE_SPACE_LAYOUT,
     HOTKEY_ACTION_RELOAD_CONFIGURATION,
     HOTKEY_ACTION_RESTART_SERVICE,
+    HOTKEY_ACTION_YABAI_COMMAND,
     HOTKEY_ACTION_SYNTHESIZE_KEY
 };
 
@@ -87,7 +107,7 @@ enum hotkey_occupied_space_direction
 struct hotkey_keystroke
 {
     uint16_t keycode;
-    uint8_t modifiers;
+    uint16_t modifiers;
 };
 
 struct hotkey_action
@@ -104,6 +124,7 @@ struct hotkey_action
         struct { int index; } space;
         struct { enum hotkey_occupied_space_direction direction; } occupied_space;
         struct { char label[HOTKEY_MAX_SERVICE_LABEL_BYTES + 1]; } restart_service;
+        struct { uint16_t length; char bytes[HOTKEY_MAX_COMMAND_BYTES]; } yabai_command;
         struct hotkey_keystroke synthesize_key;
     } data;
 };
@@ -136,6 +157,7 @@ struct hotkey_input_mode
 {
     char *name;
     bool capture_unbound;
+    uint32_t timeout_ms;
     struct hotkey_binding *bindings;
     size_t binding_count;
 };
@@ -168,10 +190,11 @@ void hotkey_manager_update_frontmost_application(pid_t pid, const char *name);
 bool hotkey_post_synthetic_keystroke(struct hotkey_keystroke keystroke);
 void hotkey_action_job_destroy(void *context);
 bool hotkey_action_execute_sequence(const struct hotkey_action *actions, size_t count);
+bool hotkey_manager_copy_active_mode(char *buffer, size_t capacity);
 
 #ifdef TESTS
 bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
-                       uint16_t keycode, uint8_t modifiers,
+                       uint16_t keycode, uint16_t modifiers,
                        const char *bundle_id, const char *name,
                        struct hotkey_match_result *result);
 int hotkey_test_active_mode(void);
