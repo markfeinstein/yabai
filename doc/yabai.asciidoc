@@ -822,6 +822,9 @@ COMMAND
     Focus the given window. +
     If none specified, focus the selected window instead.
 
+*--focus-robust* 'west|south|north|east'::
+    Attempt ordinary managed-window directional focus, verify that focus changed, then fall back to the nearest visible non-minimized window on the current Space by directional geometry. If direct focus still fails, activate the target window's owning application. No matching target is a quiet no-op. This command exposes the same native operation used by declarative robust-focus hotkeys.
+
 *--close* ['<WINDOW_SEL>']::
     Close the given window. +
     If none specified, close the selected window instead. +

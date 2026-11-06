@@ -1649,6 +1649,11 @@ Focus the given window.
 If none specified, focus the selected window instead.
 .RE
 .sp
+\fB\-\-focus\-robust\fP \fIwest|south|north|east\fP
+.RS 4
+Attempt ordinary managed\-window directional focus, verify that focus changed, then fall back to the nearest visible non\-minimized window on the current Space by directional geometry. If direct focus still fails, activate the target window\(cqs owning application. No matching target is a quiet no\-op. This command exposes the same native operation used by declarative robust\-focus hotkeys.
+.RE
+.sp
 \fB\-\-close\fP [\fI<WINDOW_SEL>\fP]
 .RS 4
 Close the given window.

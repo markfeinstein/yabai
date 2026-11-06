@@ -1878,3 +1878,49 @@ TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
     TEST_CHECK(window_manager_query_needs_topology(WINDOW_PROPERTY_ID), false);
 
 });
+
+struct message_hotkey_action_capture
+{
+    int count;
+    struct hotkey_action action;
+};
+
+static bool message_test_capture_hotkey_action(const struct hotkey_action *action, void *context)
+{
+    struct message_hotkey_action_capture *capture = context;
+    capture->action = *action;
+    ++capture->count;
+    return true;
+}
+
+TEST_FUNC(message_window_focus_robust_dispatches_typed_native_action,
+{
+    struct message_hotkey_action_capture capture = {0};
+    hotkey_test_set_action_executor(message_test_capture_hotkey_action, &capture);
+    char message[] = "--focus-robust\0west\0";
+    FILE *response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        handle_domain_window(response, message_test_token("window"), message);
+        TEST_CHECK(fseek(response, 0, SEEK_END), 0);
+        TEST_CHECK(ftell(response), 0L);
+        fclose(response);
+    }
+    TEST_CHECK(capture.count, 1);
+    TEST_CHECK(capture.action.type, HOTKEY_ACTION_FOCUS_WINDOW);
+    TEST_CHECK(capture.action.data.focus_window.robust, true);
+    TEST_CHECK(capture.action.data.focus_window.direction, HOTKEY_DIRECTION_WEST);
+    hotkey_test_set_action_executor(NULL, NULL);
+
+    char invalid[] = "--focus-robust\0diagonal\0";
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        handle_domain_window(response, message_test_token("window"), invalid);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "unknown value 'diagonal'") != NULL, true);
+        fclose(response);
+    }
+})

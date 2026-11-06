@@ -220,11 +220,13 @@ instance plus yabai's existing lock file prevents duplicate daemons.
    (`org.nixos.yabai` in the referenced Nix configuration).
 3. Keep Rex's internal private binding:
    `ctrl+alt+cmd+[KeyH] → client.sidebar.toggle`.
-4. Validate with `yabai --check-config PATH` and reload with
+4. Replace Rex and Neovim outer-edge helper calls with
+   `yabai -m window --focus-robust DIRECTION`.
+5. Validate with `yabai --check-config PATH` and reload with
    `yabai -m config reload`.
-5. Stop skhd and exercise the acceptance matrix before removing it.
-6. Remove the skhd package/service/generated config and activation hook.
-7. Remove `focus-window-direction` and the skhd-only helper applications for
+6. Stop skhd and exercise the acceptance matrix before removing it.
+7. Remove the skhd package/service/generated config and activation hook.
+8. Remove `focus-window-direction` and the skhd-only helper applications for
    relative Space focus, move-and-follow, layout cycling, adaptive resize,
    close-others, remapping, and restart.
 

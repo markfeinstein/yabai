@@ -148,6 +148,7 @@ static bool message_assign_string(char **target, char *value)
 
 /* --------------------------------DOMAIN WINDOW-------------------------------- */
 #define COMMAND_WINDOW_FOCUS      "--focus"
+#define COMMAND_WINDOW_FOCUS_ROBUST "--focus-robust"
 #define COMMAND_WINDOW_CLOSE      "--close"
 #define COMMAND_WINDOW_MINIMIZE   "--minimize"
 #define COMMAND_WINDOW_DEMINIMIZE "--deminimize"
@@ -2417,6 +2418,7 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
     for (; token_is_valid(command); command = get_token(&message)) {
         if (!acting_window &&
             !token_equals(command, COMMAND_WINDOW_FOCUS) &&
+            !token_equals(command, COMMAND_WINDOW_FOCUS_ROBUST) &&
             !token_equals(command, COMMAND_WINDOW_CLOSE) &&
             !token_equals(command, COMMAND_WINDOW_MINIMIZE) &&
             !token_equals(command, COMMAND_WINDOW_DEMINIMIZE) &&
@@ -2442,6 +2444,23 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             } else {
                 daemon_fail(rsp, "could not locate the window to act on!\n");
             }
+        } else if (token_equals(command, COMMAND_WINDOW_FOCUS_ROBUST)) {
+            struct token value = get_token(&message);
+            enum hotkey_direction direction;
+            if (token_equals(value, ARGUMENT_COMMON_SEL_WEST)) direction = HOTKEY_DIRECTION_WEST;
+            else if (token_equals(value, ARGUMENT_COMMON_SEL_SOUTH)) direction = HOTKEY_DIRECTION_SOUTH;
+            else if (token_equals(value, ARGUMENT_COMMON_SEL_NORTH)) direction = HOTKEY_DIRECTION_NORTH;
+            else if (token_equals(value, ARGUMENT_COMMON_SEL_EAST)) direction = HOTKEY_DIRECTION_EAST;
+            else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n",
+                            value.length, value.text, command.length, command.text, domain.length, domain.text);
+                return;
+            }
+            struct hotkey_action action = {
+                .type = HOTKEY_ACTION_FOCUS_WINDOW,
+                .data.focus_window = { .direction = direction, .robust = true }
+            };
+            (void)hotkey_action_execute_sequence(&action, 1);
         } else if (token_equals(command, COMMAND_WINDOW_CLOSE)) {
             struct selector selector = parse_window_selector(rsp, &message, acting_window, true);
 
