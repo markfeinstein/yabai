@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #define HOTKEY_MAX_BINDINGS 512u
 #define HOTKEY_MAX_INPUT_MODES 32u
@@ -148,5 +149,32 @@ struct hotkey_config_model
     struct hotkey_input_mode *modes;
     size_t mode_count;
 };
+
+struct hotkey_match_result
+{
+    bool matched;
+    bool capture_unbound;
+    enum hotkey_disposition disposition;
+    const struct hotkey_action *actions;
+    size_t action_count;
+    int transition_mode;
+};
+
+void hotkey_manager_install_config(const struct hotkey_config_model *config);
+bool hotkey_manager_begin(void);
+void hotkey_manager_end(void);
+void hotkey_manager_update_frontmost_application(pid_t pid, const char *name);
+bool hotkey_post_synthetic_keystroke(struct hotkey_keystroke keystroke);
+void hotkey_action_job_destroy(void *context);
+bool hotkey_action_execute_sequence(const struct hotkey_action *actions, size_t count);
+
+#ifdef TESTS
+bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
+                       uint16_t keycode, uint8_t modifiers,
+                       const char *bundle_id, const char *name,
+                       struct hotkey_match_result *result);
+int hotkey_test_active_mode(void);
+void hotkey_test_set_action_executor(bool (*executor)(const struct hotkey_action *, void *), void *context);
+#endif
 
 #endif

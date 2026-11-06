@@ -358,10 +358,14 @@ static PROCESS_EVENT_HANDLER(process_handler)
             pid_t pid = process_manager_test_pid_for_psn(psn);
 #else
             pid_t pid = process_pid_for_psn(psn);
+            hotkey_manager_update_frontmost_application(pid, NULL);
 #endif
             if (pid) process_manager_schedule_discovery_retry(pm, psn, pid, 0);
             return noErr;
         }
+#ifndef TESTS
+        hotkey_manager_update_frontmost_application(process->pid, process->name);
+#endif
 
         bool launch_owns_convergence = false;
         if (process_launch_retries_reset_if_at_least(process, 5)) {

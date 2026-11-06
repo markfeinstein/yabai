@@ -125,6 +125,8 @@
 #include "accessibility_preferences.m"
 #include "menu_bar.m"
 #include "menu_bar_manager.c"
+#include "hotkey_action.m"
+#include "hotkey.m"
 #include "event_loop.c"
 #include "event_signal.c"
 #include "workspace.m"

@@ -489,6 +489,10 @@ int main(int argc, char **argv)
         error("yabai: could not start display manager! abort..\n");
     }
 
+    if (!hotkey_manager_begin()) {
+        error("yabai: could not start keyboard event tap; grant Yabai Input Monitoring permission! abort..\n");
+    }
+
     if (!mouse_handler_begin(&g_mouse_state, MOUSE_EVENT_MASK_FFM)) {
         error("yabai: could not start mouse handler! abort..\n");
     }
@@ -536,6 +540,7 @@ int main(int argc, char **argv)
     }
 
     [NSApp run];
+    hotkey_manager_end();
     accessibility_preferences_end();
 
     return 0;

@@ -560,6 +560,7 @@ static bool declarative_startup_bundle_publish(struct declarative_startup_state 
                                    (const char *const *) declarative_installed.labels,
                                    declarative_installed.label_count,
                                    declarative_installed.fold_context);
+    hotkey_manager_install_config(&declarative_installed.model->keyboard);
     return true;
 }
 
@@ -822,6 +823,7 @@ static void declarative_reload_publish(void *context)
                                    (const char *const *) declarative_installed.labels,
                                    declarative_installed.label_count,
                                    declarative_installed.fold_context);
+    hotkey_manager_install_config(&declarative_installed.model->keyboard);
 }
 
 static void declarative_reload_retire(struct declarative_reload_transaction *transaction)
@@ -2025,6 +2027,7 @@ void declarative_install_test_reset(void)
         declarative_install_destroy_window_manager(&g_window_manager);
     }
     rule_native_generation_clear();
+    hotkey_manager_install_config(NULL);
     declarative_config_destroy(declarative_installed.model);
     declarative_install_free(declarative_installed.path);
     declarative_install_free(declarative_installed.selected_mode);

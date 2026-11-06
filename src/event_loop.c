@@ -1915,6 +1915,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     if (deactivated_application) event_loop_application_front_signal(SIGNAL_APPLICATION_DEACTIVATED, deactivated_application);
 
     debug("%s: %s (%d)\n", __FUNCTION__, application->name, event.pid);
+    hotkey_manager_update_frontmost_application(event.pid, application->name);
     event_loop_application_front_signal(SIGNAL_APPLICATION_ACTIVATED, application);
     event_loop_application_front_signal(SIGNAL_APPLICATION_FRONT_SWITCHED, NULL);
 
@@ -5035,6 +5036,9 @@ static void event_loop_release_event_context(enum event_type type, void *context
     } break;
     case MENU_BAR_ACTION: {
         menu_bar_manager_release_action(context);
+    } break;
+    case HOTKEY_ACTION: {
+        hotkey_action_job_destroy(context);
     } break;
     case EVENT_LOOP_SYNC: {
         event_loop_sync_complete(context, false);

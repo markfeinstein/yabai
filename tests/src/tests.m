@@ -225,6 +225,7 @@ TEST_REGISTER(menu_bar_model_exact_effective_equality_and_focus_only_changes)
 #include "message.c"
 #include "declarative_config.c"
 #include "hotkey_config.c"
+#include "hotkey.c"
 #include "declarative_modes.c"
 #include "declarative_startup.c"
 #include "declarative_runtime.c"
