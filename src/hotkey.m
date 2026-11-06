@@ -105,6 +105,7 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
             const struct hotkey_binding_case *item = &binding->cases[j];
             if (!hotkey_application_matches(&item->application, bundle_id, name)) continue;
             result->matched = true;
+            result->repeat = binding->repeat;
             result->disposition = item->disposition;
             result->actions = item->actions;
             result->action_count = item->action_count;
@@ -201,7 +202,6 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
     uint8_t modifiers = hotkey_modifiers_from_event(CGEventGetFlags(event));
     struct hotkey_match_result match;
     struct hotkey_action_job *job = NULL;
-    bool binding_repeat = false;
 
     pthread_mutex_lock(&hotkey_manager.lock);
     const struct hotkey_config_model *config = hotkey_manager.config;
@@ -211,22 +211,10 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
                                 hotkey_manager.front_name[0] ? hotkey_manager.front_name : NULL,
                                 &match);
     if (matched) {
-        const struct hotkey_binding *bindings = config->bindings;
-        size_t binding_count = config->binding_count;
-        if (active_mode >= 0 && (size_t)active_mode < config->mode_count) {
-            bindings = config->modes[active_mode].bindings;
-            binding_count = config->modes[active_mode].binding_count;
-        }
-        for (size_t i = 0; i < binding_count; ++i) {
-            if (bindings[i].keystroke.keycode == keycode && bindings[i].keystroke.modifiers == modifiers) {
-                binding_repeat = bindings[i].repeat;
-                break;
-            }
-        }
         bool key_down = type == kCGEventKeyDown;
         if (key_down && !repeat && match.transition_mode != HOTKEY_TRANSITION_NONE)
             hotkey_manager.active_mode = match.transition_mode;
-        if (key_down && (!repeat || binding_repeat) && match.action_count) {
+        if (key_down && (!repeat || match.repeat) && match.action_count) {
             job = malloc(sizeof(*job));
             if (job) {
                 job->count = match.action_count;

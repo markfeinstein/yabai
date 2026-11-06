@@ -154,6 +154,7 @@ struct hotkey_match_result
 {
     bool matched;
     bool capture_unbound;
+    bool repeat;
     enum hotkey_disposition disposition;
     const struct hotkey_action *actions;
     size_t action_count;

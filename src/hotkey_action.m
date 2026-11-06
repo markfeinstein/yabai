@@ -181,22 +181,34 @@ static bool hotkey_focus_occupied_space(enum hotkey_occupied_space_direction dir
 {
     uint64_t active_sid = space_manager_active_space();
     if (!active_sid) return false;
+    CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
+    if (!topology) return false;
     int space_count = 0;
-    uint64_t *space_list = display_space_list(space_display_id(active_sid), &space_count);
-    if (!space_list || space_count <= 0) return false;
+    uint64_t *space_list = display_space_list_with_topology(
+        space_display_id(active_sid), topology, &space_count);
+    if (!space_list || space_count <= 0) {
+        CFRelease(topology);
+        return false;
+    }
     struct hotkey_occupied_space *occupied = ts_alloc_list(struct hotkey_occupied_space, space_count);
-    if (!occupied) return false;
+    if (!occupied) {
+        CFRelease(topology);
+        return false;
+    }
     int occupied_count = 0;
     for (int i = 0; i < space_count; ++i) {
         uint64_t sid = space_list[i];
         int window_count = 0;
         if (sid != active_sid) (void)space_window_list(sid, &window_count, true);
         if (sid != active_sid && window_count <= 0) continue;
-        int index = space_manager_mission_control_index(sid);
+        int index = managed_space_index(topology, sid);
         if (index <= 0) continue;
         occupied[occupied_count++] = (struct hotkey_occupied_space){sid, index};
     }
-    if (!occupied_count) return false;
+    if (!occupied_count) {
+        CFRelease(topology);
+        return false;
+    }
     for (int i = 1; i < occupied_count; ++i) {
         struct hotkey_occupied_space value = occupied[i];
         int j = i;
@@ -208,11 +220,16 @@ static bool hotkey_focus_occupied_space(enum hotkey_occupied_space_direction dir
     }
     int active = -1;
     for (int i = 0; i < occupied_count; ++i) if (occupied[i].sid == active_sid) { active = i; break; }
-    if (active < 0) return false;
+    if (active < 0) {
+        CFRelease(topology);
+        return false;
+    }
     int target = direction == HOTKEY_OCCUPIED_SPACE_PREVIOUS
                ? (active + occupied_count - 1) % occupied_count
                : (active + 1) % occupied_count;
-    return hotkey_focus_space(occupied[target].sid);
+    uint64_t target_sid = occupied[target].sid;
+    CFRelease(topology);
+    return hotkey_focus_space(target_sid);
 }
 
 static bool hotkey_move_window_to_space(int index)

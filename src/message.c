@@ -2400,12 +2400,21 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
     }
 }
 
+static bool message_window_selector_is_absolute_id(char *message)
+{
+    struct token token = get_token(&message);
+    struct token_value value = token_to_value(token);
+    return value.type == TOKEN_TYPE_INT && value.int_value > 0;
+}
+
 static void handle_domain_window(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
 
     struct token command;
-    struct window *acting_window = window_manager_focused_window(&g_window_manager);
+    struct window *acting_window = message_window_selector_is_absolute_id(message)
+                                  ? NULL
+                                  : window_manager_focused_window(&g_window_manager);
     struct selector selector = parse_window_selector(NULL, &message, acting_window, true);
 
     if (selector.did_parse) {

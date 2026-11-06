@@ -1228,10 +1228,11 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
     context->animation_duration = g_window_manager.window_animation_duration;
     context->animation_easing = g_window_manager.window_animation_easing;
 
-    pthread_t *threads = window_manager_animation_allocate((size_t) window_count * sizeof(pthread_t));
-    if (!threads) goto cleanup;
+    struct window_animation **build_jobs = window_manager_animation_allocate(
+        (size_t) window_count * sizeof(*build_jobs));
+    if (!build_jobs) goto cleanup;
 
-    int thread_count = 0;
+    int build_job_count = 0;
     bool update_disabled = true;
 
     (void) window_manager_animation_disable_update(context->animation_connection);
@@ -1270,19 +1271,20 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
                 window_manager_destroy_window_proxy(existing_animation->cid, &existing_animation->proxy);
             }
         } else {
-            pthread_t thread;
-            if (pthread_create(&thread, NULL, &window_manager_build_window_proxy_thread_proc, &context->animation_list[i]) == 0) {
-                threads[thread_count++] = thread;
-            } else {
-                window_manager_build_window_proxy_thread_proc(&context->animation_list[i]);
-            }
+            build_jobs[build_job_count++] = &context->animation_list[i];
         }
         if (add_to_table) table_add(&g_window_manager.window_animations_table, &context->animation_list[i].wid, &context->animation_list[i]);
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
 
-    for (int i = 0; i < thread_count; ++i) pthread_join(threads[i], NULL);
-    free(threads);
+    if (build_job_count > 0) {
+        dispatch_apply((size_t) build_job_count,
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                       ^(size_t index) {
+            window_manager_build_window_proxy_thread_proc(build_jobs[index]);
+        });
+    }
+    free(build_jobs);
 
     pthread_mutex_lock(&g_window_manager.window_animations_lock);
     window_manager_animation_prune_failed_locked(context);

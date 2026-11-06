@@ -17,6 +17,7 @@ TEST_FUNC(hotkey_matcher_selects_exact_application_before_default,
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_H,
                                      HOTKEY_MODIFIER_COMMAND, "com.example.rex", "Rex Beta", &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_REMAP);
+        TEST_CHECK(match.repeat, true);
         TEST_CHECK(match.action_count, 1U);
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_H,
                                      HOTKEY_MODIFIER_COMMAND, "com.apple.Safari", "Safari", &match), true);
