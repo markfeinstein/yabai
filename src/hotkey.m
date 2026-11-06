@@ -8,20 +8,45 @@ struct hotkey_action_job
     struct hotkey_action actions[HOTKEY_MAX_ACTIONS];
 };
 
+struct hotkey_event_context
+{
+    CFMachPortRef event_tap;
+};
+
+struct hotkey_manager_resources
+{
+    CFMachPortRef event_tap;
+    CFRunLoopSourceRef runloop_source;
+    CFRunLoopRef runloop;
+    pthread_t thread;
+    bool thread_started;
+    struct hotkey_event_context *context;
+};
+
+struct hotkey_thread_start
+{
+    struct hotkey_manager_resources *resources;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool ready;
+    bool live;
+};
+
 struct hotkey_manager_state
 {
     pthread_mutex_t lock;
+    pthread_mutex_t lifecycle_lock;
     const struct hotkey_config_model *config;
     int active_mode;
     char front_bundle_id[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     char front_name[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
-    CFMachPortRef event_tap;
-    CFRunLoopSourceRef runloop_source;
+    struct hotkey_manager_resources resources;
     bool lifecycle_started;
 };
 
 static struct hotkey_manager_state hotkey_manager = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
+    .lifecycle_lock = PTHREAD_MUTEX_INITIALIZER,
     .active_mode = HOTKEY_TRANSITION_DEFAULT
 };
 
@@ -121,29 +146,49 @@ int hotkey_test_active_mode(void)
 }
 #endif
 
-static void hotkey_manager_remove_event_tap(void)
+static void hotkey_manager_dispose_resources(struct hotkey_manager_resources resources)
 {
-    if (hotkey_manager.runloop_source) {
-        CFRunLoopRemoveSource(CFRunLoopGetMain(), hotkey_manager.runloop_source, kCFRunLoopCommonModes);
-        CFRunLoopSourceInvalidate(hotkey_manager.runloop_source);
-        CFRelease(hotkey_manager.runloop_source);
-        hotkey_manager.runloop_source = NULL;
+    if (resources.runloop_source) {
+        CFRunLoopSourceInvalidate(resources.runloop_source);
+        CFRelease(resources.runloop_source);
     }
-    if (hotkey_manager.event_tap) {
-        CGEventTapEnable(hotkey_manager.event_tap, false);
-        CFMachPortInvalidate(hotkey_manager.event_tap);
-        CFRelease(hotkey_manager.event_tap);
-        hotkey_manager.event_tap = NULL;
+    if (resources.event_tap) {
+        CGEventTapEnable(resources.event_tap, false);
+        CFMachPortInvalidate(resources.event_tap);
+        CFRelease(resources.event_tap);
     }
+    free(resources.context);
+}
+
+static void hotkey_manager_stop_resources(struct hotkey_manager_resources *resources)
+{
+    if (resources->event_tap) CGEventTapEnable(resources->event_tap, false);
+    if (resources->runloop && resources->runloop_source) {
+        CFRunLoopRemoveSource(resources->runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRunLoopStop(resources->runloop);
+        CFRunLoopWakeUp(resources->runloop);
+    }
+    if (resources->thread_started) pthread_join(resources->thread, NULL);
+    resources->runloop = NULL;
+    resources->thread = (pthread_t) {0};
+    resources->thread_started = false;
+}
+
+static void hotkey_manager_remove_event_tap_locked(void)
+{
+    struct hotkey_manager_resources resources = hotkey_manager.resources;
+    hotkey_manager.resources = (struct hotkey_manager_resources) {0};
+    hotkey_manager_stop_resources(&resources);
+    hotkey_manager_dispose_resources(resources);
 }
 
 static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
                                         CGEventRef event, void *context)
 {
     (void)proxy;
-    (void)context;
+    struct hotkey_event_context *event_context = context;
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
-        if (hotkey_manager.event_tap) CGEventTapEnable(hotkey_manager.event_tap, true);
+        if (event_context && event_context->event_tap) CGEventTapEnable(event_context->event_tap, true);
         return event;
     }
     if (type != kCGEventKeyDown && type != kCGEventKeyUp) return event;
@@ -203,24 +248,113 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
     return match.disposition == HOTKEY_DISPOSITION_PASS_THROUGH ? event : NULL;
 }
 
-static bool hotkey_manager_add_event_tap(void)
+static bool hotkey_manager_create_resources(struct hotkey_manager_resources *resources)
 {
+    resources->context = calloc(1, sizeof(*resources->context));
+    if (!resources->context) return false;
+
     CGEventMask mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp);
-    hotkey_manager.event_tap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
-                                                kCGEventTapOptionDefault, mask,
-                                                hotkey_event_callback, NULL);
-    if (!hotkey_manager.event_tap) return false;
-    hotkey_manager.runloop_source = CFMachPortCreateRunLoopSource(NULL, hotkey_manager.event_tap, 0);
-    if (!hotkey_manager.runloop_source) {
-        hotkey_manager_remove_event_tap();
+    resources->event_tap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
+                                            kCGEventTapOptionDefault, mask,
+                                            hotkey_event_callback, resources->context);
+    if (!resources->event_tap) {
+        hotkey_manager_dispose_resources(*resources);
+        *resources = (struct hotkey_manager_resources) {0};
         return false;
     }
-    CFRunLoopAddSource(CFRunLoopGetMain(), hotkey_manager.runloop_source, kCFRunLoopCommonModes);
-    CGEventTapEnable(hotkey_manager.event_tap, true);
-    if (!CGEventTapIsEnabled(hotkey_manager.event_tap)) {
-        hotkey_manager_remove_event_tap();
+    resources->context->event_tap = resources->event_tap;
+    if (!CGEventTapIsEnabled(resources->event_tap)) {
+        hotkey_manager_dispose_resources(*resources);
+        *resources = (struct hotkey_manager_resources) {0};
         return false;
     }
+    CGEventTapEnable(resources->event_tap, false);
+
+    resources->runloop_source = CFMachPortCreateRunLoopSource(NULL, resources->event_tap, 0);
+    if (!resources->runloop_source) {
+        hotkey_manager_dispose_resources(*resources);
+        *resources = (struct hotkey_manager_resources) {0};
+        return false;
+    }
+    return true;
+}
+
+static void hotkey_manager_signal_thread_start(struct hotkey_thread_start *start,
+                                               CFRunLoopRef runloop, bool live)
+{
+    pthread_mutex_lock(&start->mutex);
+    start->resources->runloop = runloop;
+    start->live = live;
+    start->ready = true;
+    pthread_cond_signal(&start->cond);
+    pthread_mutex_unlock(&start->mutex);
+}
+
+static void *hotkey_manager_thread_proc(void *context)
+{
+    pthread_setname_np("yabai-hotkeys");
+    struct hotkey_thread_start *start = context;
+    struct hotkey_manager_resources *resources = start->resources;
+    CFRunLoopRef runloop = CFRunLoopGetCurrent();
+    CFRetain(runloop);
+    CFRunLoopAddSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+    bool live = CFRunLoopContainsSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+    if (!live) {
+        CFRunLoopRemoveSource(runloop, resources->runloop_source, kCFRunLoopCommonModes);
+        CFRelease(runloop);
+        hotkey_manager_signal_thread_start(start, NULL, false);
+        return NULL;
+    }
+    hotkey_manager_signal_thread_start(start, runloop, true);
+    CFRunLoopRun();
+    CFRelease(runloop);
+    return NULL;
+}
+
+static bool hotkey_manager_start_resources(struct hotkey_manager_resources *resources)
+{
+    struct hotkey_thread_start start = {.resources = resources};
+    if (pthread_mutex_init(&start.mutex, NULL) != 0) return false;
+    if (pthread_cond_init(&start.cond, NULL) != 0) {
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+    if (pthread_create(&resources->thread, NULL, hotkey_manager_thread_proc, &start) != 0) {
+        pthread_cond_destroy(&start.cond);
+        pthread_mutex_destroy(&start.mutex);
+        return false;
+    }
+    pthread_mutex_lock(&start.mutex);
+    while (!start.ready) pthread_cond_wait(&start.cond, &start.mutex);
+    bool live = start.live;
+    pthread_mutex_unlock(&start.mutex);
+    pthread_cond_destroy(&start.cond);
+    pthread_mutex_destroy(&start.mutex);
+    if (!live) {
+        pthread_join(resources->thread, NULL);
+        resources->thread = (pthread_t) {0};
+        return false;
+    }
+    resources->thread_started = true;
+    return true;
+}
+
+static bool hotkey_manager_add_event_tap_locked(void)
+{
+    struct hotkey_manager_resources resources = {0};
+    if (!hotkey_manager_create_resources(&resources) ||
+        !hotkey_manager_start_resources(&resources)) {
+        hotkey_manager_stop_resources(&resources);
+        hotkey_manager_dispose_resources(resources);
+        return false;
+    }
+    CGEventTapEnable(resources.event_tap, true);
+    if (!CGEventTapIsEnabled(resources.event_tap)) {
+        hotkey_manager_stop_resources(&resources);
+        hotkey_manager_dispose_resources(resources);
+        return false;
+    }
+    hotkey_manager.resources = resources;
     return true;
 }
 
@@ -232,12 +366,16 @@ static bool hotkey_manager_reconcile_event_tap(void)
     enabled = hotkey_manager.config && hotkey_manager.config->present && hotkey_manager.config->enabled;
     started = hotkey_manager.lifecycle_started;
     pthread_mutex_unlock(&hotkey_manager.lock);
+
+    pthread_mutex_lock(&hotkey_manager.lifecycle_lock);
+    bool result = true;
     if (!started || !enabled) {
-        hotkey_manager_remove_event_tap();
-        return true;
+        hotkey_manager_remove_event_tap_locked();
+    } else if (!hotkey_manager.resources.event_tap) {
+        result = hotkey_manager_add_event_tap_locked();
     }
-    if (hotkey_manager.event_tap) return true;
-    return hotkey_manager_add_event_tap();
+    pthread_mutex_unlock(&hotkey_manager.lifecycle_lock);
+    return result;
 }
 
 void hotkey_manager_install_config(const struct hotkey_config_model *config)
@@ -247,12 +385,8 @@ void hotkey_manager_install_config(const struct hotkey_config_model *config)
     hotkey_manager.active_mode = HOTKEY_TRANSITION_DEFAULT;
     bool started = hotkey_manager.lifecycle_started;
     pthread_mutex_unlock(&hotkey_manager.lock);
-    if (started) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!hotkey_manager_reconcile_event_tap()) {
-                warn("yabai: could not update the keyboard event tap; verify Accessibility permission and secure-input state\n");
-            }
-        });
+    if (started && !hotkey_manager_reconcile_event_tap()) {
+        warn("yabai: could not update the keyboard event tap; verify Accessibility permission and secure-input state\n");
     }
 }
 
@@ -291,7 +425,7 @@ void hotkey_manager_end(void)
     pthread_mutex_lock(&hotkey_manager.lock);
     hotkey_manager.lifecycle_started = false;
     pthread_mutex_unlock(&hotkey_manager.lock);
-    hotkey_manager_remove_event_tap();
+    (void)hotkey_manager_reconcile_event_tap();
 }
 
 bool hotkey_post_synthetic_keystroke(struct hotkey_keystroke keystroke)

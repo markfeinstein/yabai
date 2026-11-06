@@ -202,8 +202,10 @@ addition is required.
 On first use, enable Yabai in System Settings → Privacy & Security →
 Accessibility.
 
-The tap is created only when `keyboard.enabled` is true. It is installed and
-removed with yabai's application lifecycle. Reload can replace a live keymap,
+The tap is created only when `keyboard.enabled` is true. It runs on a dedicated
+run-loop thread so menu-bar or Accessibility work on the main thread cannot
+delay system-wide key disposition. It is installed and removed with yabai's
+application lifecycle. Reload can replace a live keymap,
 disable input handling, or enable it without a daemon restart. If a newly
 enabled tap cannot be created, yabai warns and keeps window management running.
 Check the Accessibility grant and whether macOS Secure Input is active. Secure
