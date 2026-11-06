@@ -3134,6 +3134,87 @@ TEST_FUNC(event_loop_sync_submission_concurrent_with_shutdown_completes,
     TEST_CHECK(event_loop_test_admission_is_closed(&g_event_loop), true);
 });
 
+static int responsiveness_callback_count;
+static struct application_responsiveness_event responsiveness_callback_event;
+static void responsiveness_callback_observe(const struct application_responsiveness_event *event)
+{
+    ++responsiveness_callback_count;
+    responsiveness_callback_event = *event;
+}
+
+TEST_FUNC(application_responsiveness_notifications_validate_and_decode_payloads,
+{
+    ProcessSerialNumber psn = {0};
+    GetCurrentProcess(&psn);
+    uint8_t payload[0x10 + sizeof(psn)] = {0};
+    memcpy(payload + 0x10, &psn, sizeof(psn));
+    responsiveness_callback_count = 0;
+    yabai_test_responsiveness_observer = responsiveness_callback_observe;
+    application_responsiveness_handler(750, payload, sizeof(payload) - 1, NULL);
+    TEST_CHECK(responsiveness_callback_count, 0);
+    application_responsiveness_handler(750, payload, sizeof(payload), NULL);
+    TEST_CHECK(responsiveness_callback_count, 1);
+    TEST_CHECK(responsiveness_callback_event.unresponsive, true);
+    TEST_CHECK(psn_equals(&responsiveness_callback_event.psn, &psn), true);
+    application_responsiveness_handler(751, payload, sizeof(payload), NULL);
+    TEST_CHECK(responsiveness_callback_count, 2);
+    TEST_CHECK(responsiveness_callback_event.unresponsive, false);
+    yabai_test_responsiveness_observer = NULL;
+})
+
+TEST_FUNC(application_responsiveness_events_gate_ax_and_schedule_recovery,
+{
+    struct table saved_applications = g_window_manager.application;
+    struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    g_window_manager.application = (struct table) {0};
+    g_window_manager.applications_to_refresh = NULL;
+    table_init(&g_window_manager.application, 4, hash_wm, compare_wm);
+
+    ProcessSerialNumber psn = {0};
+    GetCurrentProcess(&psn);
+    struct application application = {
+        .psn = psn,
+        .pid = getpid(),
+        .name = "responsive-fixture"
+    };
+    TEST_CHECK(window_manager_add_application(&g_window_manager, &application), true);
+
+    struct application_responsiveness_event *event = malloc(sizeof(*event));
+    *event = (struct application_responsiveness_event){.psn = psn, .unresponsive = true};
+    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(event, 0);
+    TEST_CHECK(application_is_unresponsive(&application), true);
+    TEST_CHECK(application_focused_window(&application), 0U);
+    TEST_CHECK(application_window_list(&application) == NULL, true);
+    struct window window = {
+        .application = &application,
+        .frame = CGRectMake(1, 2, 300, 200),
+        .title = CFSTR("cached title"),
+        .role = kAXWindowRole,
+        .subrole = kAXStandardWindowSubrole
+    };
+    CGRect cached_frame = CGRectZero;
+    TEST_CHECK(window_ax_frame_with_status(&window, &cached_frame), false);
+    TEST_CHECK(CGRectEqualToRect(window_ax_frame(&window), window.frame), true);
+    CFStringRef cached_title = window_title(&window);
+    TEST_CHECK(cached_title && CFEqual(cached_title, CFSTR("cached title")), true);
+    if (cached_title) CFRelease(cached_title);
+    TEST_CHECK(window_ax_can_move(&window), false);
+    TEST_CHECK(window_manager_close_window(&window), false);
+
+    event = malloc(sizeof(*event));
+    *event = (struct application_responsiveness_event){.psn = psn, .unresponsive = false};
+    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(event, 0);
+    TEST_CHECK(application_is_unresponsive(&application), false);
+    TEST_CHECK(application.ax_retry, true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 1);
+    TEST_CHECK(g_window_manager.applications_to_refresh[0] == &application, true);
+
+    table_free(&g_window_manager.application);
+    buf_free(g_window_manager.applications_to_refresh);
+    g_window_manager.application = saved_applications;
+    g_window_manager.applications_to_refresh = saved_refresh;
+})
+
 TEST_FUNC(event_loop_bootstrap_failure_drains_queued_daemon_messages,
 {
     TEST_SAVE(g_event_loop);

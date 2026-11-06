@@ -1939,6 +1939,27 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
 }
 #pragma clang diagnostic pop
 
+static EVENT_HANDLER(APPLICATION_RESPONSIVENESS_CHANGED)
+{
+    (void)param1;
+    struct application_responsiveness_event *event = context;
+    if (!event) return;
+    pid_t pid = process_pid_for_psn(event->psn);
+    struct application *application = pid > 0
+                                    ? window_manager_find_application(&g_window_manager, pid)
+                                    : NULL;
+    if (application && application_is_unresponsive(application) != event->unresponsive) {
+        application_set_unresponsive(application, event->unresponsive);
+        debug("%s: %s (%d) is %s\n", __FUNCTION__, application->name, application->pid,
+              event->unresponsive ? "unresponsive" : "responsive");
+        if (!event->unresponsive) {
+            application->ax_retry = true;
+            window_manager_request_application_refresh(&g_window_manager, application);
+        }
+    }
+    free(event);
+}
+
 static EVENT_HANDLER(APPLICATION_VISIBLE)
 {
     struct application *application = window_manager_find_application(&g_window_manager, (pid_t)(intptr_t) context);
@@ -5006,7 +5027,8 @@ static void event_loop_release_event_context(enum event_type type, void *context
     if (!context) return;
 
     switch (type) {
-    case APPLICATION_FRONT_SWITCHED: {
+    case APPLICATION_FRONT_SWITCHED:
+    case APPLICATION_RESPONSIVENESS_CHANGED: {
         free(context);
     } break;
     case MISSION_CONTROL_SHOW_ALL_WINDOWS:

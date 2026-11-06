@@ -92,7 +92,7 @@ static void (*application_observer_release)(AXObserverRef);
 
 bool application_observe_frame_recovery(struct application *application)
 {
-    if (!application || !application->is_observing) return false;
+    if (!application || !application->is_observing || application_is_unresponsive(application)) return false;
 
     for (int i = AX_APPLICATION_LAYOUT_CHANGED_INDEX; i <= AX_APPLICATION_VALUE_CHANGED_INDEX; ++i) {
         uint16_t flag = (uint16_t) (1U << i);
@@ -143,6 +143,7 @@ bool application_unobserve_frame_recovery(struct application *application)
 
 bool application_observe(struct application *application)
 {
+    if (!application || application_is_unresponsive(application)) return false;
     bool retryable_failure = false;
     bool permanent_failure = false;
     application->ax_retry = false;
@@ -201,6 +202,7 @@ void application_unobserve(struct application *application)
 
 uint32_t application_focused_window(struct application *application)
 {
+    if (application_is_unresponsive(application)) return 0;
     CFTypeRef window_ref = NULL;
     AXUIElementCopyAttributeValue(application->ref, kAXFocusedWindowAttribute, &window_ref);
     if (!window_ref) return 0;
@@ -226,8 +228,9 @@ bool application_is_hidden(struct application *application)
 }
 #pragma clang diagnostic pop
 
-CFArrayRef application_window_list(struct application *application)
+CF_RETURNS_RETAINED CFArrayRef application_window_list(struct application *application)
 {
+    if (application_is_unresponsive(application)) return NULL;
     CFTypeRef window_list_ref = NULL;
     AXUIElementCopyAttributeValue(application->ref, kAXWindowsAttribute, &window_list_ref);
     return window_list_ref;

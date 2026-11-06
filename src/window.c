@@ -60,6 +60,10 @@ static float (*window_test_serialization_opacity)(uint32_t) = window_opacity;
 
 bool window_observe(struct window *window, bool *retry)
 {
+    if (!window || application_is_unresponsive(window->application)) {
+        if (retry) *retry = true;
+        return false;
+    }
     bool retryable_failure = false;
     bool permanent_failure = false;
     if (retry) *retry = false;
@@ -1141,6 +1145,8 @@ char *window_title_ts(struct window *window)
 
 CFStringRef window_title(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application))
+        return window && window->title ? CFRetain(window->title) : NULL;
     CFTypeRef value = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXTitleAttribute, &value);
     return value;
@@ -1355,7 +1361,9 @@ bool window_ax_snapshot_frame(const struct window_ax_snapshot *snapshot, CGRect 
 
 CGPoint window_ax_origin(struct window *window)
 {
-    CGPoint origin = {0};
+    if (!window) return CGPointZero;
+    CGPoint origin = window->frame.origin;
+    if (application_is_unresponsive(window->application)) return origin;
     CFTypeRef position_ref = NULL;
 
     AXUIElementCopyAttributeValue(window->ref, kAXPositionAttribute, &position_ref);
@@ -1370,7 +1378,7 @@ CGPoint window_ax_origin(struct window *window)
 
 bool window_ax_frame_with_status(struct window *window, CGRect *frame)
 {
-    if (!window || !window->ref || !frame) return false;
+    if (!window || !window->ref || !frame || application_is_unresponsive(window->application)) return false;
 
     struct window_ax_snapshot snapshot = {0};
     (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE, &snapshot);
@@ -1397,7 +1405,7 @@ CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen
 {
     CGRect frame = window ? window->frame : CGRectZero;
     if (is_fullscreen) *is_fullscreen = false;
-    if (!window || !window->ref) return frame;
+    if (!window || !window->ref || application_is_unresponsive(window->application)) return frame;
 
     struct window_ax_snapshot snapshot = {0};
     (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_FULLSCREEN, &snapshot);
@@ -1409,6 +1417,7 @@ CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen
 
 bool window_ax_can_move(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application)) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXPositionAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1423,6 +1432,7 @@ bool window_can_move(struct window *window)
 
 bool window_ax_can_resize(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application)) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXSizeAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1437,6 +1447,7 @@ bool window_can_resize(struct window *window)
 
 bool window_can_minimize(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application)) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXMinimizedAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1453,6 +1464,8 @@ bool window_is_undersized(struct window *window)
 
 bool window_is_fullscreen(struct window *window)
 {
+    if (!window) return false;
+    if (application_is_unresponsive(window->application)) return window_check_flag(window, WINDOW_FULLSCREEN);
     Boolean result = 0;
     CFTypeRef value;
 
@@ -1672,6 +1685,8 @@ out:
 
 CFStringRef window_ax_role(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application))
+        return window && window->role ? CFRetain(window->role) : NULL;
     const void *role = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXRoleAttribute, &role);
     return role;
@@ -1693,6 +1708,8 @@ char *window_role_ts(struct window *window)
 
 CFStringRef window_ax_subrole(struct window *window)
 {
+    if (!window || application_is_unresponsive(window->application))
+        return window && window->subrole ? CFRetain(window->subrole) : NULL;
     const void *srole = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXSubroleAttribute, &srole);
     return srole;

@@ -89,6 +89,7 @@ struct application
     bool ax_retry;
     bool launch_refresh;
     bool initial_window_inventory;
+    bool volatile is_unresponsive;
     uint8_t frame_recovery_unobserve_retries;
     bool frame_recovery_hint_pending;
     bool frame_recovery_hint_active;
@@ -98,10 +99,26 @@ struct application
     uint64_t frame_recovery_cleanup_retry_time;
 };
 
+struct application_responsiveness_event
+{
+    ProcessSerialNumber psn;
+    bool unresponsive;
+};
+
+static inline bool application_is_unresponsive(struct application *application)
+{
+    return application && __atomic_load_n(&application->is_unresponsive, __ATOMIC_ACQUIRE);
+}
+
+static inline void application_set_unresponsive(struct application *application, bool unresponsive)
+{
+    if (application) __atomic_store_n(&application->is_unresponsive, unresponsive, __ATOMIC_RELEASE);
+}
+
 bool application_is_frontmost(struct application *application);
 bool application_is_hidden(struct application *application);
 uint32_t application_focused_window(struct application *application);
-CFArrayRef application_window_list(struct application *application);
+CF_RETURNS_RETAINED CFArrayRef application_window_list(struct application *application);
 bool application_observe(struct application *application);
 bool application_observe_frame_recovery(struct application *application);
 bool application_unobserve_frame_recovery(struct application *application);

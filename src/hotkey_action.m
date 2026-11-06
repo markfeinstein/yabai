@@ -30,7 +30,7 @@ static bool hotkey_focus_window_direction(enum hotkey_direction direction)
     if (!window) return false;
     struct window *target = window_manager_find_closest_managed_window_in_direction(
         &g_window_manager, window, hotkey_window_direction(direction));
-    if (!target) return false;
+    if (!target || application_is_unresponsive(target->application)) return false;
     window_manager_focus_window_with_raise(&target->application->psn, target->id, target->ref);
     return true;
 }
@@ -55,7 +55,8 @@ static void hotkey_consider_directional_windows(enum hotkey_direction direction,
     double focused_y = CGRectGetMidY(focused_frame);
     for (int i = 0; window_list && i < window_count; ++i) {
         struct window *candidate = window_manager_find_window(&g_window_manager, window_list[i]);
-        if (!candidate || candidate->id == focused_id || window_check_flag(candidate, WINDOW_MINIMIZE)) continue;
+        if (!candidate || candidate->id == focused_id || window_check_flag(candidate, WINDOW_MINIMIZE) ||
+            application_is_unresponsive(candidate->application)) continue;
         double dx = CGRectGetMidX(candidate->frame) - focused_x;
         double dy = CGRectGetMidY(candidate->frame) - focused_y;
         bool half_plane = (direction == HOTKEY_DIRECTION_WEST && dx < 0.0) ||
@@ -83,7 +84,7 @@ static bool hotkey_robust_focus_window_direction(enum hotkey_direction direction
 
     struct window *managed = window_manager_find_closest_managed_window_in_direction(
         &g_window_manager, focused, hotkey_window_direction(direction));
-    if (managed) {
+    if (managed && !application_is_unresponsive(managed->application)) {
         window_manager_focus_window_with_raise(&managed->application->psn, managed->id, managed->ref);
         @autoreleasepool {
             NSRunningApplication *application =

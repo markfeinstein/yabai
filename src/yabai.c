@@ -49,6 +49,49 @@ struct declarative_startup_state g_declarative_startup;
 static bool g_native_config_explicit;
 static int g_lock_fd = -1;
 
+typedef void (*sls_global_notify_callback)(uint32_t, void *, size_t, void *);
+static CGError (*sls_register_notify_proc)(sls_global_notify_callback, uint32_t, void *);
+static CGError (*sls_set_unresponsive_notification_timeout)(int, float);
+
+#ifdef TESTS
+static void (*yabai_test_responsiveness_observer)(const struct application_responsiveness_event *);
+#endif
+
+static void application_responsiveness_handler(uint32_t type, void *data, size_t data_length, void *context)
+{
+    (void)context;
+    if ((type != 750 && type != 751) || !data ||
+        data_length < 0x10 + sizeof(ProcessSerialNumber)) return;
+    struct application_responsiveness_event *event = malloc(sizeof(*event));
+    if (!event) return;
+    memcpy(&event->psn, (const uint8_t *)data + 0x10, sizeof(event->psn));
+    event->unresponsive = type == 750;
+#ifdef TESTS
+    if (yabai_test_responsiveness_observer) {
+        yabai_test_responsiveness_observer(event);
+        free(event);
+        return;
+    }
+#endif
+    (void)event_loop_try_post(&g_event_loop, APPLICATION_RESPONSIVENESS_CHANGED, event, 0);
+}
+
+#ifndef TESTS
+static void observe_application_responsiveness(void)
+{
+    /* Keep the established 750/751 payload contract on the pre-Tahoe
+     * WindowServer family. Newer generations retain ordinary AX timeout
+     * behavior until a live responsiveness corpus establishes their ABI. */
+    if (workspace_is_macos_tahoe_or_newer() ||
+        !sls_register_notify_proc || !sls_set_unresponsive_notification_timeout) return;
+    if (sls_set_unresponsive_notification_timeout(g_connection, 1.0f) != kCGErrorSuccess ||
+        sls_register_notify_proc(application_responsiveness_handler, 750, NULL) != kCGErrorSuccess ||
+        sls_register_notify_proc(application_responsiveness_handler, 751, NULL) != kCGErrorSuccess) {
+        warn("yabai: could not observe application responsiveness; AX calls retain ordinary timeouts\n");
+    }
+}
+#endif
+
 int g_connection;
 bool g_verbose;
 pid_t g_pid;
@@ -172,6 +215,8 @@ static inline bool configure_settings_and_acquire_lock(void)
     g_layer_above_window_level  = CGWindowLevelForKey(LAYER_ABOVE);
     CGSGetConnectionPortById    = macho_find_symbol("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", "_CGSGetConnectionPortById");
     SLSPerformAsynchronousBridgedWindowManagementOperation = macho_find_symbol("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", "__ZL54SLSPerformAsynchronousBridgedWindowManagementOperationP47SLSAsynchronousBridgedWindowManagementOperation");
+    sls_register_notify_proc = macho_find_symbol("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", "_SLSRegisterNotifyProc");
+    sls_set_unresponsive_notification_timeout = macho_find_symbol("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", "_SLSEventSetAppIsUnresponsiveNotificationTimeout");
 
     signal(SIGCHLD, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -483,6 +528,7 @@ int main(int argc, char **argv)
     if (!process_manager_begin(&g_process_manager)) {
         error("yabai: could not start process manager! abort..\n");
     }
+    observe_application_responsiveness();
 
     bool native_installed = declarative_installed_generation() != 0;
     if (!(native_installed ? display_manager_observe() : display_manager_begin(&g_display_manager))) {

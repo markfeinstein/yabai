@@ -67,7 +67,7 @@ static const char *process_name_blacklist[] =
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-static inline pid_t process_pid_for_psn(ProcessSerialNumber psn)
+pid_t process_pid_for_psn(ProcessSerialNumber psn)
 {
     pid_t pid = 0;
     GetProcessPID(&psn, &pid);

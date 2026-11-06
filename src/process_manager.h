@@ -91,6 +91,7 @@ struct process_manager
 
 /* process_destroy accepts NULL and releases all resources owned by a process. */
 void process_destroy(struct process *process);
+pid_t process_pid_for_psn(ProcessSerialNumber psn);
 struct process *process_manager_find_process(struct process_manager *pm, ProcessSerialNumber *psn);
 bool process_manager_begin(struct process_manager *pm);
 
