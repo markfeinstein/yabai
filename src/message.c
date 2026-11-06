@@ -2460,7 +2460,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 .type = HOTKEY_ACTION_FOCUS_WINDOW,
                 .data.focus_window = { .direction = direction, .robust = true }
             };
-            (void)hotkey_action_execute_sequence(&action, 1);
+            if (!hotkey_action_execute_sequence(&action, 1)) {
+                daemon_fail(rsp, "could not focus a window in the requested direction.\n");
+                return;
+            }
         } else if (token_equals(command, COMMAND_WINDOW_CLOSE)) {
             struct selector selector = parse_window_selector(rsp, &message, acting_window, true);
 

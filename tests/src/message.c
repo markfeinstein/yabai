@@ -1882,6 +1882,7 @@ TEST_FUNC(message_window_visibility_uses_topology_snapshot_before_live_query,
 struct message_hotkey_action_capture
 {
     int count;
+    bool result;
     struct hotkey_action action;
 };
 
@@ -1890,12 +1891,12 @@ static bool message_test_capture_hotkey_action(const struct hotkey_action *actio
     struct message_hotkey_action_capture *capture = context;
     capture->action = *action;
     ++capture->count;
-    return true;
+    return capture->result;
 }
 
 TEST_FUNC(message_window_focus_robust_dispatches_typed_native_action,
 {
-    struct message_hotkey_action_capture capture = {0};
+    struct message_hotkey_action_capture capture = {.result = true};
     hotkey_test_set_action_executor(message_test_capture_hotkey_action, &capture);
     char message[] = "--focus-robust\0west\0";
     FILE *response = tmpfile();
@@ -1910,6 +1911,19 @@ TEST_FUNC(message_window_focus_robust_dispatches_typed_native_action,
     TEST_CHECK(capture.action.type, HOTKEY_ACTION_FOCUS_WINDOW);
     TEST_CHECK(capture.action.data.focus_window.robust, true);
     TEST_CHECK(capture.action.data.focus_window.direction, HOTKEY_DIRECTION_WEST);
+    capture = (struct message_hotkey_action_capture){.result = false};
+    char failure[] = "--focus-robust\0east\0";
+    response = tmpfile();
+    TEST_CHECK(response != NULL, true);
+    if (response) {
+        handle_domain_window(response, message_test_token("window"), failure);
+        rewind(response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, response);
+        TEST_CHECK(strstr(output, "could not focus a window in the requested direction") != NULL, true);
+        fclose(response);
+    }
+    TEST_CHECK(capture.count, 1);
     hotkey_test_set_action_executor(NULL, NULL);
 
     char invalid[] = "--focus-robust\0diagonal\0";

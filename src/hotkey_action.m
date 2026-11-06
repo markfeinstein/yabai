@@ -35,24 +35,6 @@ static bool hotkey_focus_window_direction(enum hotkey_direction direction)
     return true;
 }
 
-static uint32_t hotkey_focused_window_id(void)
-{
-    struct window *window = window_manager_focused_window(&g_window_manager);
-    return window ? window->id : 0;
-}
-
-static bool hotkey_wait_for_focus(uint32_t before_id, uint32_t expected_id)
-{
-    static const useconds_t delays[] = {0, 10000, 20000, 30000, 40000};
-    for (size_t i = 0; i < sizeof(delays) / sizeof(*delays); ++i) {
-        if (delays[i]) usleep(delays[i]);
-        uint32_t focused_id = hotkey_focused_window_id();
-        if (expected_id ? focused_id == expected_id : (before_id && focused_id && focused_id != before_id))
-            return true;
-    }
-    return false;
-}
-
 static bool hotkey_directional_candidate_is_better(double primary, double secondary, double distance2,
                                                     double best_primary, double best_secondary, double best_distance2)
 {
@@ -65,10 +47,20 @@ static bool hotkey_robust_focus_window_direction(enum hotkey_direction direction
 {
     struct window *focused = window_manager_focused_window(&g_window_manager);
     if (!focused) return false;
-    uint32_t before_id = focused->id;
-    (void)hotkey_focus_window_direction(direction);
-    if (hotkey_wait_for_focus(before_id, 0)) return true;
 
+    struct window *managed = window_manager_find_closest_managed_window_in_direction(
+        &g_window_manager, focused, hotkey_window_direction(direction));
+    if (managed) {
+        window_manager_focus_window_with_raise(&managed->application->psn, managed->id, managed->ref);
+        @autoreleasepool {
+            NSRunningApplication *application =
+                [NSRunningApplication runningApplicationWithProcessIdentifier:managed->application->pid];
+            if (application) (void)[application activateWithOptions:0];
+        }
+        return true;
+    }
+
+    uint32_t before_id = focused->id;
     uint64_t sid = space_manager_active_space();
     int window_count = 0;
     uint32_t *window_list = sid ? space_window_list(sid, &window_count, false) : NULL;
@@ -104,13 +96,12 @@ static bool hotkey_robust_focus_window_direction(enum hotkey_direction direction
     }
     if (!best) return false;
     window_manager_focus_window_with_raise(&best->application->psn, best->id, best->ref);
-    if (hotkey_wait_for_focus(before_id, best->id)) return true;
-
     @autoreleasepool {
         NSRunningApplication *application =
             [NSRunningApplication runningApplicationWithProcessIdentifier:best->application->pid];
-        return application && [application activateWithOptions:0];
+        if (application) (void)[application activateWithOptions:0];
     }
+    return true;
 }
 
 static bool hotkey_warp_window_direction(enum hotkey_direction direction)
@@ -242,13 +233,14 @@ static bool hotkey_close_other_windows(void)
     int count = 0;
     uint32_t *window_list = space_window_list(sid, &count, false);
     if (!window_list && count) return false;
+    bool success = true;
     for (int i = 0; i < count; ++i) {
         if (window_list[i] == focused->id) continue;
         struct window *window = window_manager_find_window(&g_window_manager, window_list[i]);
         if (!window || window_check_flag(window, WINDOW_MINIMIZE)) continue;
-        (void)window_manager_close_window(window);
+        if (!window_manager_close_window(window)) success = false;
     }
-    return true;
+    return success;
 }
 
 static bool hotkey_cycle_space_layout(void)
