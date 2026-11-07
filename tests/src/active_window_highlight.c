@@ -1,13 +1,17 @@
 static int active_window_highlight_refresh_calls;
 static int active_window_highlight_hide_calls;
+static uint32_t active_window_highlight_refresh_target_wid;
+static CGRect active_window_highlight_refresh_target_frame;
+static bool active_window_highlight_refresh_target_frame_valid;
 
 static void active_window_highlight_test_refresh_observer(struct window_manager *wm,
                                                            uint32_t target_wid,
                                                            const CGRect *target_frame)
 {
     (void) wm;
-    (void) target_wid;
-    (void) target_frame;
+    active_window_highlight_refresh_target_wid = target_wid;
+    active_window_highlight_refresh_target_frame_valid = target_frame != NULL;
+    if (target_frame) active_window_highlight_refresh_target_frame = *target_frame;
     ++active_window_highlight_refresh_calls;
 }
 
@@ -69,7 +73,7 @@ TEST_FUNC(active_window_highlight_geometry_is_bounded_and_outset,
     TEST_CHECK(active_window_highlight_can_fast_update(&state, 42), false);
 });
 
-TEST_FUNC(active_window_highlight_redraws_when_only_origin_changes,
+TEST_FUNC(active_window_highlight_moves_without_redrawing_unchanged_geometry,
 {
     struct active_window_highlight highlight = {
         .id = 7,
@@ -82,12 +86,17 @@ TEST_FUNC(active_window_highlight_redraws_when_only_origin_changes,
         active_window_highlight_geometry_make(CGRectMake(10.0, 20.0, 100.0, 40.0), 4.0f, 9.0f);
     struct active_window_highlight_geometry moved =
         active_window_highlight_geometry_make(CGRectMake(10.0, 120.0, 100.0, 40.0), 4.0f, 9.0f);
+    struct active_window_highlight_geometry resized =
+        active_window_highlight_geometry_make(CGRectMake(10.0, 120.0, 120.0, 60.0), 4.0f, 9.0f);
 
     TEST_CHECK(active_window_highlight_needs_redraw(&highlight, &same,
                                                     highlight.color, highlight.width,
                                                     highlight.radius), false);
     TEST_CHECK(CGSizeEqualToSize(highlight.frame.size, moved.frame.size), true);
     TEST_CHECK(active_window_highlight_needs_redraw(&highlight, &moved,
+                                                    highlight.color, highlight.width,
+                                                    highlight.radius), false);
+    TEST_CHECK(active_window_highlight_needs_redraw(&highlight, &resized,
                                                     highlight.color, highlight.width,
                                                     highlight.radius), true);
 });
@@ -116,6 +125,39 @@ TEST_FUNC(active_window_highlight_pending_geometry_rejects_stale_server_frame,
     selected = window_manager_active_window_highlight_resolve_frame(&highlight, 99, old_frame);
     TEST_CHECK(CGRectEqualToRect(selected, old_frame), true);
     TEST_CHECK(highlight.pending_target_frame_valid, false);
+});
+
+TEST_FUNC(active_window_highlight_window_events_use_cached_frame,
+{
+    TEST_SAVE(window_manager_test_active_window_highlight_refresh_observer);
+    TEST_SAVE(g_window_manager.focused_window_id);
+    TEST_SAVE(g_mouse_state.native_resize);
+    window_manager_test_active_window_highlight_refresh_observer = active_window_highlight_test_refresh_observer;
+    g_mouse_state.native_resize = (struct native_resize_state) {0};
+
+    struct window window = {
+        .id = 42,
+        .frame = CGRectMake(40.0, 60.0, 300.0, 200.0)
+    };
+    g_window_manager.focused_window_id = window.id;
+    active_window_highlight_refresh_calls = 0;
+    active_window_highlight_refresh_target_wid = 0;
+    active_window_highlight_refresh_target_frame = CGRectZero;
+    active_window_highlight_refresh_target_frame_valid = false;
+
+    window_event_refresh_active_window_highlight(&window);
+    TEST_CHECK(active_window_highlight_refresh_calls, 1);
+    TEST_CHECK(active_window_highlight_refresh_target_wid, window.id);
+    TEST_CHECK(active_window_highlight_refresh_target_frame_valid, true);
+    TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame, window.frame), true);
+
+    g_window_manager.focused_window_id = 99;
+    window_event_refresh_active_window_highlight(&window);
+    TEST_CHECK(active_window_highlight_refresh_calls, 1);
+
+    TEST_RESTORE(g_mouse_state.native_resize);
+    TEST_RESTORE(g_window_manager.focused_window_id);
+    TEST_RESTORE(window_manager_test_active_window_highlight_refresh_observer);
 });
 
 TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,

@@ -2596,6 +2596,16 @@ static void managed_window_correction_schedule_application(struct application *a
     }
 }
 
+static void window_event_refresh_active_window_highlight(struct window *window)
+{
+    if (window->id == g_window_manager.focused_window_id &&
+        !native_resize_suppress_highlight(window->id)) {
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
+                                                                  window->id,
+                                                                  window->frame);
+    }
+}
+
 static EVENT_HANDLER(WINDOW_MOVED)
 {
     uint32_t window_id = (uint32_t)(intptr_t) context;
@@ -2622,10 +2632,7 @@ static EVENT_HANDLER(WINDOW_MOVED)
     event_signal_push(SIGNAL_WINDOW_MOVED, window);
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame.origin = new_origin;
-    if (window->id == g_window_manager.focused_window_id &&
-        !native_resize_suppress_highlight(window->id)) {
-        window_manager_refresh_active_window_highlight(&g_window_manager);
-    }
+    window_event_refresh_active_window_highlight(window);
 
     if (!windowed_fullscreen) {
         window_clear_flag(window, WINDOW_WINDOWED);
@@ -2712,10 +2719,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
-    if (window->id == g_window_manager.focused_window_id &&
-        !native_resize_suppress_highlight(window->id)) {
-        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager, window->id, window->frame);
-    }
+    window_event_refresh_active_window_highlight(window);
 
     if (was_fullscreen != is_fullscreen) {
         managed_window_correction_clear(window);
