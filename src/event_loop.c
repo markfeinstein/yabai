@@ -389,14 +389,7 @@ static bool native_move_observe(struct mouse_state *mouse_state, struct window *
         return false;
     }
 
-    if (!state->claimed) {
-        // macOS applies a short cursor threshold before a title-bar drag starts.
-        // Re-anchor when the first AX move confirms the gesture so that threshold
-        // is not added to every predicted overlay position.
-        state->initial_frame = window->frame;
-        state->down_location = state->drag_location;
-        state->claimed = true;
-    }
+    state->claimed = true;
     return native_move_refresh_active_window_highlight(mouse_state);
 }
 
