@@ -152,82 +152,164 @@ static char *plist_xml_escape(char *s)
 //          4. Running (Start / Stop)
 //
 
-/* The running daemon ignores SIGCHLD so fire-and-forget signal commands are
- * reaped automatically. A direct waitpid therefore reports ECHILD. Use a
- * short-lived helper with a private SIGCHLD disposition and return the actual
- * command status through a close-on-exec pipe. */
-static int safe_exec_waitable(char *const argv[], bool suppress_output)
+/* Run argv[0] and return its exit status, or 1 when it cannot be started,
+ * is terminated by a signal, or its status cannot be collected.
+ *
+ * The running daemon ignores SIGCHLD so fire-and-forget signal commands are
+ * reaped automatically, which makes a direct waitpid report ECHILD. Commands
+ * therefore run under a short-lived helper with a private SIGCHLD disposition;
+ * the helper returns the command status through a close-on-exec pipe. The
+ * daemon is multithreaded, so only async-signal-safe calls run between fork
+ * and exec or _exit. */
+struct safe_exec_request
 {
-    int result_pipe[2] = { -1, -1 };
-    if (pipe(result_pipe) != 0 ||
-        fcntl(result_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
-        fcntl(result_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
-        if (result_pipe[0] >= 0) close(result_pipe[0]);
-        if (result_pipe[1] >= 0) close(result_pipe[1]);
-        return 1;
+    char *const *argv;
+    bool discard_stdout;
+    bool discard_stderr;
+    char *output;
+    size_t capacity;
+};
+
+static bool safe_exec_pipe(int fds[2])
+{
+    fds[0] = fds[1] = -1;
+    if (pipe(fds) != 0) {
+        fds[0] = fds[1] = -1;
+        return false;
     }
-
-    pid_t helper = fork();
-    if (helper == -1) {
-        close(result_pipe[0]);
-        close(result_pipe[1]);
-        return 1;
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) == -1 || fcntl(fds[1], F_SETFD, FD_CLOEXEC) == -1) {
+        close(fds[0]);
+        close(fds[1]);
+        fds[0] = fds[1] = -1;
+        return false;
     }
+    return true;
+}
 
-    if (helper == 0) {
-        close(result_pipe[0]);
-        struct sigaction action = { .sa_handler = SIG_DFL };
-        sigemptyset(&action.sa_mask);
-        sigaction(SIGCHLD, &action, NULL);
-
-        pid_t command = fork();
-        if (command == 0) {
-            close(result_pipe[1]);
-            if (suppress_output) {
-                int null_fd = open("/dev/null", O_WRONLY|O_APPEND);
-                if (null_fd == -1 || dup2(null_fd, STDOUT_FILENO) == -1 ||
-                    dup2(null_fd, STDERR_FILENO) == -1) _exit(127);
-                if (null_fd > STDERR_FILENO) close(null_fd);
-            }
-            extern char **environ;
-            execve(argv[0], argv, environ);
-            _exit(127);
-        }
-
-        int result = 1;
-        if (command != -1) {
-            int status = 0;
-            pid_t waited;
-            do {
-                waited = waitpid(command, &status, 0);
-            } while (waited == -1 && errno == EINTR);
-            if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
-        }
-
-        const char *bytes = (const char *) &result;
-        size_t remaining = sizeof(result);
-        while (remaining) {
-            ssize_t written = write(result_pipe[1], bytes, remaining);
-            if (written == -1 && errno == EINTR) continue;
-            if (written <= 0) break;
-            bytes += written;
-            remaining -= (size_t) written;
-        }
-        close(result_pipe[1]);
-        _exit(0);
+static void safe_exec_close(int *fd)
+{
+    if (*fd >= 0) {
+        close(*fd);
+        *fd = -1;
     }
+}
 
-    close(result_pipe[1]);
-    int result = 1;
-    char *bytes = (char *) &result;
+static void safe_exec_write_all(int fd, const void *buffer, size_t length)
+{
+    const char *bytes = buffer;
+    while (length) {
+        ssize_t written = write(fd, bytes, length);
+        if (written == -1 && errno == EINTR) continue;
+        if (written <= 0) return;
+        bytes += written;
+        length -= (size_t) written;
+    }
+}
+
+static size_t safe_exec_read_all(int fd, void *buffer, size_t length)
+{
+    char *bytes = buffer;
     size_t received = 0;
-    while (received < sizeof(result)) {
-        ssize_t count = read(result_pipe[0], bytes + received, sizeof(result) - received);
+    while (received < length) {
+        ssize_t count = read(fd, bytes + received, length - received);
         if (count == -1 && errno == EINTR) continue;
         if (count <= 0) break;
         received += (size_t) count;
     }
-    close(result_pipe[0]);
+    return received;
+}
+
+__attribute__((noreturn))
+static void safe_exec_command_child(const struct safe_exec_request *request, int output_fd)
+{
+    if (output_fd >= 0 && dup2(output_fd, STDOUT_FILENO) == -1) _exit(127);
+    if (request->discard_stdout || request->discard_stderr) {
+        int null_fd = open("/dev/null", O_WRONLY|O_APPEND);
+        if (null_fd == -1) _exit(127);
+        if (request->discard_stdout && dup2(null_fd, STDOUT_FILENO) == -1) _exit(127);
+        if (request->discard_stderr && dup2(null_fd, STDERR_FILENO) == -1) _exit(127);
+        if (null_fd > STDERR_FILENO) close(null_fd);
+    }
+    extern char **environ;
+    execve(request->argv[0], request->argv, environ);
+    _exit(127);
+}
+
+__attribute__((noreturn))
+static void safe_exec_helper_child(const struct safe_exec_request *request, int result_fd, int output_fd)
+{
+    struct sigaction action = { .sa_handler = SIG_DFL };
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGCHLD, &action, NULL);
+
+    pid_t command = fork();
+    if (command == 0) safe_exec_command_child(request, output_fd);
+    if (output_fd >= 0) close(output_fd);
+
+    int result = 1;
+    if (command != -1) {
+        int status = 0;
+        pid_t waited;
+        do {
+            waited = waitpid(command, &status, 0);
+        } while (waited == -1 && errno == EINTR);
+        if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
+    }
+
+    safe_exec_write_all(result_fd, &result, sizeof(result));
+    close(result_fd);
+    _exit(0);
+}
+
+static int safe_exec_run(const struct safe_exec_request *request)
+{
+    if (!request || !request->argv || !request->argv[0]) return 1;
+    bool capture = request->output && request->capacity;
+    if (capture) request->output[0] = '\0';
+
+    int result_pipe[2];
+    int output_pipe[2] = { -1, -1 };
+    if (!safe_exec_pipe(result_pipe)) return 1;
+    if (capture && !safe_exec_pipe(output_pipe)) {
+        safe_exec_close(&result_pipe[0]);
+        safe_exec_close(&result_pipe[1]);
+        return 1;
+    }
+
+    pid_t helper = fork();
+    if (helper == 0) {
+        close(result_pipe[0]);
+        if (output_pipe[0] >= 0) close(output_pipe[0]);
+        safe_exec_helper_child(request, result_pipe[1], output_pipe[1]);
+    }
+
+    safe_exec_close(&result_pipe[1]);
+    safe_exec_close(&output_pipe[1]);
+    if (helper == -1) {
+        safe_exec_close(&result_pipe[0]);
+        safe_exec_close(&output_pipe[0]);
+        return 1;
+    }
+
+    if (capture) {
+        size_t stored = 0;
+        char buffer[1024];
+        for (;;) {
+            ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
+            if (count == -1 && errno == EINTR) continue;
+            if (count <= 0) break;
+            size_t available = request->capacity - 1 - stored;
+            size_t copy = (size_t) count < available ? (size_t) count : available;
+            memcpy(request->output + stored, buffer, copy);
+            stored += copy;
+        }
+        request->output[stored] = '\0';
+        safe_exec_close(&output_pipe[0]);
+    }
+
+    int result = 1;
+    size_t received = safe_exec_read_all(result_pipe[0], &result, sizeof(result));
+    safe_exec_close(&result_pipe[0]);
 
     int helper_status = 0;
     while (waitpid(helper, &helper_status, 0) == -1 && errno == EINTR) {}
@@ -238,142 +320,23 @@ static int safe_exec_capture(char *const argv[], bool suppress_stderr,
                              char *output, size_t capacity)
 {
     if (!output || capacity == 0) return 1;
-    output[0] = '\0';
-
-    int result_pipe[2] = { -1, -1 };
-    int output_pipe[2] = { -1, -1 };
-    if (pipe(result_pipe) != 0 || pipe(output_pipe) != 0 ||
-        fcntl(result_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
-        fcntl(result_pipe[1], F_SETFD, FD_CLOEXEC) == -1 ||
-        fcntl(output_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
-        fcntl(output_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
-        if (result_pipe[0] >= 0) close(result_pipe[0]);
-        if (result_pipe[1] >= 0) close(result_pipe[1]);
-        if (output_pipe[0] >= 0) close(output_pipe[0]);
-        if (output_pipe[1] >= 0) close(output_pipe[1]);
-        return 1;
-    }
-
-    pid_t helper = fork();
-    if (helper == -1) {
-        close(result_pipe[0]);
-        close(result_pipe[1]);
-        close(output_pipe[0]);
-        close(output_pipe[1]);
-        return 1;
-    }
-
-    if (helper == 0) {
-        close(result_pipe[0]);
-        close(output_pipe[0]);
-        struct sigaction action = { .sa_handler = SIG_DFL };
-        sigemptyset(&action.sa_mask);
-        sigaction(SIGCHLD, &action, NULL);
-
-        pid_t command = fork();
-        if (command == 0) {
-            close(result_pipe[1]);
-            if (dup2(output_pipe[1], STDOUT_FILENO) == -1) _exit(127);
-            if (output_pipe[1] > STDERR_FILENO) close(output_pipe[1]);
-            if (suppress_stderr) {
-                int null_fd = open("/dev/null", O_WRONLY|O_APPEND);
-                if (null_fd == -1 || dup2(null_fd, STDERR_FILENO) == -1) _exit(127);
-                if (null_fd > STDERR_FILENO) close(null_fd);
-            }
-            extern char **environ;
-            execve(argv[0], argv, environ);
-            _exit(127);
-        }
-
-        close(output_pipe[1]);
-        int result = 1;
-        if (command != -1) {
-            int status = 0;
-            pid_t waited;
-            do {
-                waited = waitpid(command, &status, 0);
-            } while (waited == -1 && errno == EINTR);
-            if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
-        }
-
-        const char *bytes = (const char *) &result;
-        size_t remaining = sizeof(result);
-        while (remaining) {
-            ssize_t written = write(result_pipe[1], bytes, remaining);
-            if (written == -1 && errno == EINTR) continue;
-            if (written <= 0) break;
-            bytes += written;
-            remaining -= (size_t) written;
-        }
-        close(result_pipe[1]);
-        _exit(0);
-    }
-
-    close(result_pipe[1]);
-    close(output_pipe[1]);
-    size_t stored = 0;
-    char buffer[1024];
-    for (;;) {
-        ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
-        if (count == -1 && errno == EINTR) continue;
-        if (count <= 0) break;
-        size_t available = capacity - 1 - stored;
-        size_t copy = (size_t) count < available ? (size_t) count : available;
-        if (copy) {
-            memcpy(output + stored, buffer, copy);
-            stored += copy;
-        }
-    }
-    close(output_pipe[0]);
-    output[stored] = '\0';
-
-    int result = 1;
-    char *bytes = (char *) &result;
-    size_t received = 0;
-    while (received < sizeof(result)) {
-        ssize_t count = read(result_pipe[0], bytes + received, sizeof(result) - received);
-        if (count == -1 && errno == EINTR) continue;
-        if (count <= 0) break;
-        received += (size_t) count;
-    }
-    close(result_pipe[0]);
-
-    int helper_status = 0;
-    while (waitpid(helper, &helper_status, 0) == -1 && errno == EINTR) {}
-    return received == sizeof(result) ? result : 1;
+    struct safe_exec_request request = {
+        .argv = argv,
+        .discard_stderr = suppress_stderr,
+        .output = output,
+        .capacity = capacity
+    };
+    return safe_exec_run(&request);
 }
 
 static int safe_exec(char *const argv[], bool suppress_output)
 {
-    struct sigaction child_action;
-    if (sigaction(SIGCHLD, NULL, &child_action) != 0) return 1;
-    if (child_action.sa_handler == SIG_IGN || (child_action.sa_flags & SA_NOCLDWAIT)) {
-        return safe_exec_waitable(argv, suppress_output);
-    }
-
-    pid_t pid;
-    posix_spawn_file_actions_t actions;
-    int status = posix_spawn_file_actions_init(&actions);
-    if (status != 0) return 1;
-
-    if (suppress_output &&
-        (posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0) != 0 ||
-         posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY|O_APPEND, 0) != 0)) {
-        posix_spawn_file_actions_destroy(&actions);
-        return 1;
-    }
-
-    status = posix_spawn(&pid, argv[0], &actions, NULL, argv, NULL);
-    posix_spawn_file_actions_destroy(&actions);
-    if (status != 0) return 1;
-
-    pid_t waited;
-    do {
-        waited = waitpid(pid, &status, 0);
-    } while (waited == -1 && errno == EINTR);
-
-    if (waited != pid || !WIFEXITED(status)) return 1;
-    return WEXITSTATUS(status);
+    struct safe_exec_request request = {
+        .argv = argv,
+        .discard_stdout = suppress_output,
+        .discard_stderr = suppress_output
+    };
+    return safe_exec_run(&request);
 }
 
 static char *populate_plist_path(void)
