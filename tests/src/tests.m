@@ -1007,6 +1007,73 @@ TEST_FUNC(config_file_execution_preserves_literal_path,
     }
 });
 
+static int g_service_quit_test_call_count;
+static int g_service_quit_test_results[3];
+static bool g_service_quit_test_valid;
+
+static int service_quit_test_exec(char *const argv[], bool suppress_output)
+{
+    int call = g_service_quit_test_call_count++;
+    if (call >= 3 || !argv || !argv[0] || strcmp(argv[0], _PATH_LAUNCHCTL) != 0) {
+        g_service_quit_test_valid = false;
+        return 1;
+    }
+
+    const char *expected_command = call == 0 ? "print" : call == 1 ? "disable" : "bootout";
+    const char *expected_target = call < 2 ? "gui/501/com.asmvik.yabai" : "gui/501";
+    bool expected_suppression = call == 0;
+    if (!argv[1] || strcmp(argv[1], expected_command) != 0 ||
+        !argv[2] || strcmp(argv[2], expected_target) != 0 ||
+        suppress_output != expected_suppression) {
+        g_service_quit_test_valid = false;
+    }
+    if (call == 2) {
+        if (!argv[3] || strcmp(argv[3], "/tmp/yabai service.plist") != 0 || argv[4]) {
+            g_service_quit_test_valid = false;
+        }
+    } else if (argv[3]) {
+        g_service_quit_test_valid = false;
+    }
+
+    return g_service_quit_test_results[call];
+}
+
+static void service_quit_test_reset(void)
+{
+    g_service_quit_test_call_count = 0;
+    memset(g_service_quit_test_results, 0, sizeof(g_service_quit_test_results));
+    g_service_quit_test_valid = true;
+}
+
+TEST_FUNC(service_quit_disables_before_bootout_and_skips_unmanaged_processes,
+{
+    service_quit_test_reset();
+    TEST_CHECK(service_stop_for_quit_with_exec("/tmp/yabai service.plist", 501, false,
+                                               service_quit_test_exec), 0);
+    TEST_CHECK(g_service_quit_test_call_count, 0);
+
+    service_quit_test_reset();
+    g_service_quit_test_results[0] = 1;
+    TEST_CHECK(service_stop_for_quit_with_exec("/tmp/yabai service.plist", 501, true,
+                                               service_quit_test_exec), 0);
+    TEST_CHECK(g_service_quit_test_call_count, 1);
+    TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    g_service_quit_test_results[1] = 7;
+    TEST_CHECK(service_stop_for_quit_with_exec("/tmp/yabai service.plist", 501, true,
+                                               service_quit_test_exec), 7);
+    TEST_CHECK(g_service_quit_test_call_count, 2);
+    TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    g_service_quit_test_results[2] = 9;
+    TEST_CHECK(service_stop_for_quit_with_exec("/tmp/yabai service.plist", 501, true,
+                                               service_quit_test_exec), 9);
+    TEST_CHECK(g_service_quit_test_call_count, 3);
+    TEST_CHECK(g_service_quit_test_valid, true);
+});
+
 TEST_FUNC(safe_exec_reports_child_outcomes,
 {
     char *success[] = { "/usr/bin/true", NULL };

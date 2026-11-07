@@ -659,9 +659,11 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     NSMenuItem *quit = [menu itemAtIndex:10];
     TEST_CHECK([[reload title] isEqualToString:@"Reload Configuration"]);
     TEST_CHECK([reload action] == @selector(performMenuAction:));
+    TEST_CHECK([[reload toolTip] isEqualToString:@"Reload the installed native JSONC configuration."]);
     TEST_CHECK([[reload accessibilityLabel] isEqualToString:@"Reload yabai configuration"]);
     TEST_CHECK([[quit title] isEqualToString:@"Quit yabai"]);
     TEST_CHECK([quit action] == @selector(performMenuAction:));
+    TEST_CHECK([[quit toolTip] isEqualToString:@"Stop the launchd service and quit yabai."]);
     TEST_CHECK([[quit accessibilityLabel] isEqualToString:@"Quit yabai"]);
     [controller performMenuAction:reload];
     [controller performMenuAction:quit];

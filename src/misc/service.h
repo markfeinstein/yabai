@@ -425,6 +425,44 @@ static int service_restart(void)
     return safe_exec((char *const*)args, false);
 }
 
+typedef int service_exec_fn(char *const argv[], bool suppress_output);
+
+/* Stop a launchd-managed instance from inside yabai itself. Disabling the job
+ * before bootout prevents launchd from racing the requested termination with a
+ * replacement process. A missing or unloaded service means this process was
+ * started independently and can be terminated directly by the caller. */
+static int service_stop_for_quit_with_exec(const char *yabai_plist_path, uid_t uid,
+                                           bool service_installed, service_exec_fn exec_fn)
+{
+    if (!service_installed) return 0;
+
+    char service_target[MAXLEN];
+    snprintf(service_target, sizeof(service_target), "gui/%u/%s", (unsigned int) uid, _NAME_YABAI_PLIST);
+
+    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
+    if (exec_fn((char *const *) print_args, true) != 0) return 0;
+
+    const char *const disable_args[] = { _PATH_LAUNCHCTL, "disable", service_target, NULL };
+    int result = exec_fn((char *const *) disable_args, false);
+    if (result != 0) return result;
+
+    char domain_target[MAXLEN];
+    snprintf(domain_target, sizeof(domain_target), "gui/%u", (unsigned int) uid);
+    const char *const bootout_args[] = {
+        _PATH_LAUNCHCTL, "bootout", domain_target, yabai_plist_path, NULL
+    };
+    return exec_fn((char *const *) bootout_args, false);
+}
+
+static int service_stop_for_quit(void)
+{
+    char *yabai_plist_path = populate_plist_path();
+    int result = service_stop_for_quit_with_exec(yabai_plist_path, getuid(),
+                                                 file_exists(yabai_plist_path), safe_exec);
+    free(yabai_plist_path);
+    return result;
+}
+
 static int service_stop(void)
 {
     char *yabai_plist_path = populate_plist_path();

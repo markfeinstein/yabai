@@ -66,12 +66,21 @@ struct menu_bar_manager_native_seams
 static struct menu_bar_manager_state g_menu_bar_manager;
 static struct menu_bar_manager_native_seams g_menu_bar_manager_native;
 
+static void menu_bar_manager_deliver_notification(const char *subtitle, const char *message)
+{
+    notify(subtitle, "%s", message);
+}
+
 #ifdef TESTS
 static bool (*menu_bar_manager_reload_config)(FILE *) = declarative_config_reload;
+static int (*menu_bar_manager_stop_service)(void) = service_stop_for_quit;
 static void (*menu_bar_manager_quit)(void) = menu_bar_request_quit;
+static void (*menu_bar_manager_notify)(const char *, const char *) = menu_bar_manager_deliver_notification;
 #else
 #define menu_bar_manager_reload_config declarative_config_reload
+#define menu_bar_manager_stop_service service_stop_for_quit
 #define menu_bar_manager_quit menu_bar_request_quit
+#define menu_bar_manager_notify menu_bar_manager_deliver_notification
 #endif
 
 static bool menu_bar_manager_valid_enabled(enum menu_bar_enabled enabled)
@@ -1345,6 +1354,7 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
 
         if (menu_bar_manager_reload_config(NULL)) {
             menu_bar_manager_clear_action_failure();
+            menu_bar_manager_notify("configuration", "Configuration reloaded successfully.");
         } else {
             menu_bar_manager_set_action_failure(action->generation, "configuration reload failed");
         }
@@ -1353,7 +1363,15 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
                                     MENU_BAR_DIRTY_WINDOW);
     } break;
     case MENU_BAR_ACTION_QUIT: {
-        if (menu_bar_manager_action_in_enabled_lifecycle(action)) menu_bar_manager_quit();
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        if (menu_bar_manager_stop_service() == 0) {
+            menu_bar_manager_quit();
+        } else {
+            menu_bar_manager_set_action_failure(action->generation, "could not stop launchd service");
+            menu_bar_manager_notify("service", "Could not stop the launchd service. yabai is still running.");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION);
+        }
     } break;
     case MENU_BAR_ACTION_MENU_TRACKING_CHANGED: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;

@@ -1523,7 +1523,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     YBMenuBarActionTarget *quit_target = yb_action_target(YB_MENU_BAR_CONTROL_QUIT,
                                                           _snapshot->generation);
     NSMenuItem *quit = yb_menu_item(@"Quit yabai", @selector(performMenuAction:), self, quit_target);
-    [quit setToolTip:@"Stop the running yabai application."];
+    [quit setToolTip:@"Stop the launchd service and quit yabai."];
     [quit setAccessibilityLabel:@"Quit yabai"];
     [_menu addItem:quit];
 }
