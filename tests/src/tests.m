@@ -1535,6 +1535,62 @@ TEST_FUNC(serialization_string_escaping_is_strict,
 
 });
 
+TEST_FUNC(scratch_string_helpers_bound_unbounded_input_instead_of_exiting,
+{
+    //
+    // ts_string_copy, ts_cfstring_copy, and ts_string_escape bump-allocate from a
+    // fixed-size scratch arena shared by every event; an unbounded window title,
+    // application name, or escaped string previously exceeded it and exit()ed the
+    // whole daemon. Confirm each helper instead truncates to
+    // TS_UNBOUNDED_STRING_MAX_BYTES and returns a result without terminating.
+    //
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+
+    size_t oversized_length = (size_t) TS_UNBOUNDED_STRING_MAX_BYTES * 2;
+    char *oversized = malloc(oversized_length + 1);
+    TEST_CHECK(oversized != NULL, true);
+    if (!oversized) return result;
+    memset(oversized, 'a', oversized_length);
+    oversized[oversized_length] = '\0';
+
+    TEST_SAVE(g_temp_storage.used);
+    ts_reset();
+    char *copied = ts_string_copy(oversized);
+    TEST_CHECK(copied != NULL, true);
+    TEST_CHECK(strlen(copied), (size_t) TS_UNBOUNDED_STRING_MAX_BYTES);
+
+    ts_reset();
+    oversized[0] = '"';
+    char *escaped = ts_string_escape(oversized);
+    TEST_CHECK(escaped != NULL, true);
+    TEST_CHECK(strlen(escaped) <= (size_t) TS_UNBOUNDED_STRING_MAX_BYTES + 6, true);
+    TEST_CHECK(strncmp(escaped, "\\\"", 2) == 0, true);
+    free(oversized);
+
+    ts_reset();
+    CFMutableStringRef oversized_cfstring = CFStringCreateMutable(NULL, 0);
+    TEST_CHECK(oversized_cfstring != NULL, true);
+    if (oversized_cfstring) {
+        for (size_t i = 0; i < oversized_length; ++i) {
+            CFStringAppendCString(oversized_cfstring, "a", kCFStringEncodingUTF8);
+        }
+        //
+        // ts_cfstring_copy caps the UTF-16 length to TS_UNBOUNDED_STRING_MAX_BYTES / 3
+        // (integer division) so the worst-case 3-byte-per-unit UTF-8 encoding stays
+        // within the bound; for this all-ASCII input the UTF-8 length equals that
+        // capped UTF-16 length exactly.
+        //
+        char *cfcopied = ts_cfstring_copy(oversized_cfstring);
+        TEST_CHECK(cfcopied != NULL, true);
+        TEST_CHECK(strlen(cfcopied), (size_t) TS_UNBOUNDED_STRING_MAX_BYTES / 3);
+        CFRelease(oversized_cfstring);
+    }
+
+    ts_reset();
+});
+
 TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_strings,
 {
     bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));

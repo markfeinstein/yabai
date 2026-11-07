@@ -325,10 +325,27 @@ static inline bool utf8_validate_string(const char *s)
     return utf8_validate_bytes(s, strlen(s));
 }
 
+//
+// NOTE(asmvik): A window title, application name, or scratchpad label is
+// effectively attacker/environment-controlled length: applications set
+// their own AX title strings. ts_alloc_unaligned bump-allocates from a
+// fixed 8MB arena and exit()s the whole daemon, not just the current
+// request, when the running total exceeds it. Cap the input consumed by
+// ts_string_escape, ts_string_copy, and ts_cfstring_copy so one oversized
+// string cannot exhaust the arena and bring down yabai; excess content is
+// dropped rather than fatally erroring. ts_string_escape can expand each
+// input byte into at most 6 output bytes (a control character becomes
+// "\u00xx"), so this input bound keeps its worst-case output, and every
+// other bound here, well under the arena size shared by everything reset
+// once per event.
+//
+#define TS_UNBOUNDED_STRING_MAX_BYTES KILOBYTES(2)
+
 static inline char *ts_string_escape(char *s)
 {
     const unsigned char *bytes = (const unsigned char *) s;
-    size_t length = strlen(s);
+    size_t full_length = strlen(s);
+    size_t length = full_length > TS_UNBOUNDED_STRING_MAX_BYTES ? TS_UNBOUNDED_STRING_MAX_BYTES : full_length;
     size_t extra = 0;
 
     for (size_t offset = 0; offset < length;) {
@@ -349,19 +366,16 @@ static inline char *ts_string_escape(char *s)
             increment = 5;
         }
 
-        if (extra > SIZE_MAX - increment) {
-            fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
-            exit(EXIT_FAILURE);
-        }
         extra += increment;
         offset += sequence_length;
     }
 
-    if (extra == 0) return NULL;
-    if (extra == SIZE_MAX || length > SIZE_MAX - extra - 1) {
-        fprintf(stderr, "fatal error: JSON string escaping size overflow\n");
-        exit(EXIT_FAILURE);
-    }
+    //
+    // extra is the number of inserted escape/replacement bytes, each coming from a
+    // fixed small per-character or per-invalid-sequence set (1 or 5 bytes); length
+    // is capped above, so this sum cannot overflow size_t on any supported platform.
+    //
+    if (extra == 0 && length == full_length) return NULL;
 
     size_t size_in_bytes = length + extra;
     char *result = ts_alloc_unaligned(size_in_bytes + 1);
@@ -494,9 +508,10 @@ static inline CFIndex cfstring_utf8_capacity(CFStringRef string)
 
 // CFStringGetCString rejects strings containing unpaired UTF-16 surrogates, which
 // applications can report in window titles. Encode them as U+FFFD instead.
-static inline void cfstring_copy_utf8_lossy(CFStringRef string, char *buffer)
+// `length` bounds how many UTF-16 units of `string` are read and may be less
+// than CFStringGetLength(string) to cap the resulting UTF-8 byte count.
+static inline void cfstring_copy_utf8_lossy_range(CFStringRef string, CFIndex length, char *buffer)
 {
-    CFIndex length = CFStringGetLength(string);
     CFStringInlineBuffer characters;
     CFStringInitInlineBuffer(string, &characters, CFRangeMake(0, length));
 
@@ -534,14 +549,21 @@ static inline void cfstring_copy_utf8_lossy(CFStringRef string, char *buffer)
     *out = '\0';
 }
 
+static inline void cfstring_copy_utf8_lossy(CFStringRef string, char *buffer)
+{
+    cfstring_copy_utf8_lossy_range(string, CFStringGetLength(string), buffer);
+}
+
 static inline char *ts_cfstring_copy(CFStringRef string)
 {
-    CFIndex capacity = cfstring_utf8_capacity(string);
-    if (capacity < 0) return NULL;
-    char *result = ts_alloc_unaligned(capacity);
+    CFIndex length = CFStringGetLength(string);
+    if (length < 0) return NULL;
+    if ((uint64_t) length > TS_UNBOUNDED_STRING_MAX_BYTES / 3) length = (CFIndex) (TS_UNBOUNDED_STRING_MAX_BYTES / 3);
+    CFIndex capacity = length * 3 + 1;
+    char *result = ts_alloc_unaligned((uint64_t) capacity);
 
     if (!CFStringGetCString(string, result, capacity, kCFStringEncodingUTF8)) {
-        cfstring_copy_utf8_lossy(string, result);
+        cfstring_copy_utf8_lossy_range(string, length, result);
     }
 
     return result;
@@ -564,6 +586,7 @@ static inline char *cfstring_copy(CFStringRef string)
 static inline char *ts_string_copy(char *s)
 {
     size_t length = strlen(s);
+    if (length > TS_UNBOUNDED_STRING_MAX_BYTES) length = TS_UNBOUNDED_STRING_MAX_BYTES;
     char *result = ts_alloc_unaligned(length + 1);
 
     memcpy(result, s, length);
