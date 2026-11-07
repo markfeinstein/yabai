@@ -76,7 +76,6 @@ struct native_move_state
     CGPoint down_location;
     CGPoint drag_location;
     CGRect initial_frame;
-    uint64_t anchor_time;
     bool dragging;
     bool claimed;
 };

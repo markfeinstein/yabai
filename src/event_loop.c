@@ -58,7 +58,6 @@ static void event_loop_test_mouse_drag_resize_window_direct(struct window *windo
 static void (*event_loop_test_mouse_drag_resize_window)(struct window *, CGRect) = event_loop_test_mouse_drag_resize_window_direct;
 static enum window_op_error (*event_loop_test_mouse_bsp_live_resize)(struct window_manager *, struct window *, int, float, float, bool) = window_manager_resize_window_relative;
 static uint64_t (*event_loop_test_mouse_drag_time)(void) = read_os_timer;
-static CGEventRef (*event_loop_test_native_move_cursor_event)(CGEventSourceRef) = CGEventCreate;
 static void (*event_loop_test_mouse_drop_try_adjust_bsp_grid)(struct window_manager *, struct view *, struct window *, struct mouse_window_info *) = mouse_drop_try_adjust_bsp_grid;
 static bool (*event_loop_test_native_resize_space_visible)(uint64_t);
 static void (*event_loop_test_native_resize_schedule)(uint32_t, uint64_t);
@@ -76,7 +75,6 @@ static uint32_t (*event_loop_test_drag_point_display_id)(CGPoint) = display_mana
 static CGRect (*event_loop_test_drag_display_bounds)(uint32_t) = CGDisplayBounds;
 static CGRect (*event_loop_test_drag_display_bounds_constrained)(uint32_t, bool) = display_bounds_constrained;
 #else
-#define event_loop_test_native_move_cursor_event CGEventCreate
 #define event_loop_test_drag_point_display_id display_manager_point_display_id
 #define event_loop_test_drag_display_bounds CGDisplayBounds
 #define event_loop_test_drag_display_bounds_constrained display_bounds_constrained
@@ -345,17 +343,6 @@ static void native_move_candidate_begin(struct mouse_state *mouse_state, struct 
     };
 }
 
-static bool native_move_cursor_sample(CGPoint *location, uint64_t *timestamp)
-{
-    CGEventRef event = event_loop_test_native_move_cursor_event(NULL);
-    if (!event) return false;
-    *location = CGEventGetLocation(event);
-    *timestamp = CGEventGetTimestamp(event);
-    if (!*timestamp) *timestamp = read_os_timer();
-    CFRelease(event);
-    return true;
-}
-
 static bool native_move_window_is_valid(const struct mouse_state *mouse_state,
                                         struct window *window)
 {
@@ -402,30 +389,16 @@ static bool native_move_observe(struct mouse_state *mouse_state, struct window *
         return false;
     }
 
-    if (!state->claimed) {
-        CGPoint cursor;
-        uint64_t timestamp;
-        if (native_move_cursor_sample(&cursor, &timestamp)) {
-            // Pair the live AX frame with a live cursor sample. Mouse-drag events
-            // already queued before this anchor are ignored by timestamp below.
-            state->initial_frame = window->frame;
-            state->down_location = cursor;
-            state->drag_location = cursor;
-            state->anchor_time = timestamp;
-        }
-        state->claimed = true;
-    }
+    state->claimed = true;
     return native_move_refresh_active_window_highlight(mouse_state);
 }
 
-static bool native_move_drag(struct mouse_state *mouse_state, int64_t button,
-                             CGPoint point, uint64_t timestamp)
+static bool native_move_drag(struct mouse_state *mouse_state, int64_t button, CGPoint point)
 {
     struct native_move_state *state = &mouse_state->native_move;
     if (!state->window_id || state->button != button) return false;
-    state->dragging = true;
-    if (state->claimed && state->anchor_time && timestamp <= state->anchor_time) return false;
     state->drag_location = point;
+    state->dragging = true;
     return state->claimed && native_move_refresh_active_window_highlight(mouse_state);
 }
 
@@ -3797,7 +3770,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
     CGPoint point = CGEventGetLocation(context);
     if (!mouse_drag_event_is_owner(&g_mouse_state, button)) {
         if (mission_control_is_active()) native_move_clear(&g_mouse_state);
-        else (void) native_move_drag(&g_mouse_state, button, point, CGEventGetTimestamp(context));
+        else (void) native_move_drag(&g_mouse_state, button, point);
         goto out;
     }
     if (mission_control_is_active()) goto abort;
