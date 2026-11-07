@@ -44,11 +44,14 @@ captures, or network access. These validate the gates, not real-host coverage.
 
 `make fuzz-build` builds deterministic AddressSanitizer and
 UndefinedBehaviorSanitizer drivers for the regex-cost/compiler boundary, daemon
-message framing, and Mach-O parser. `make fuzz-smoke` runs 1,000 generated inputs
-per harness with bounded maximum input sizes and is suitable for CI. Each harness
-source exports the standard `LLVMFuzzerTestOneInput` entry point, so a developer
-with a libFuzzer runtime can link the same source with `-fsanitize=fuzzer` for a
-coverage-guided campaign.
+message framing, Mach-O parser, and the complete native JSONC configuration
+parser/model builder. `make fuzz-smoke` runs 1,000 generated inputs per harness
+with bounded maximum input sizes and is suitable for CI. Each harness source
+exports the standard `LLVMFuzzerTestOneInput` entry point, so a developer with a
+libFuzzer runtime can link the same source with `-fsanitize=fuzzer` for a
+coverage-guided campaign. The configuration harness uses the production parser
+with in-memory bytes, destroys every successfully built model, and does not read
+configuration files or mutate runtime state.
 
 The repository does not ship crash corpora or mutate production files. Preserve
 any useful reproducer as a focused regression fixture before committing it.

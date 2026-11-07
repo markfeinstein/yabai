@@ -38,7 +38,9 @@ FUZZ_PATH      = $(BUILD_PATH)/fuzz
 FUZZ_PATTERN   = $(FUZZ_PATH)/pattern-fuzz
 FUZZ_FRAME     = $(FUZZ_PATH)/message-frame-fuzz
 FUZZ_MACHO     = $(FUZZ_PATH)/macho-parser-fuzz
+FUZZ_CONFIG    = $(FUZZ_PATH)/declarative-config-fuzz
 FUZZ_FLAGS     = -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
+FUZZ_CONFIG_FLAGS = $(FUZZ_FLAGS) -DTESTS -Wno-unused-function -Wno-unused-parameter -Wno-deprecated-declarations $(FRAMEWORK_PATH) $(FRAMEWORK)
 YABAI_COMMON   = ./src/manifest.m
 YABAI_MODULES  = menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test
 YABAI_MODULE_SOURCES = $(foreach module,$(YABAI_MODULES),./src/$(module).c ./src/$(module).h)
@@ -162,12 +164,13 @@ syntax:
 analyze:
 	$(SCRIPT_PATH)/analyze.sh
 
-fuzz-build: $(FUZZ_PATTERN) $(FUZZ_FRAME) $(FUZZ_MACHO)
+fuzz-build: $(FUZZ_PATTERN) $(FUZZ_FRAME) $(FUZZ_MACHO) $(FUZZ_CONFIG)
 
 fuzz-smoke: fuzz-build
 	$(FUZZ_PATTERN) 1000 4096
 	$(FUZZ_FRAME) 1000 1048576
 	$(FUZZ_MACHO) 1000 65536
+	$(FUZZ_CONFIG) 1000 65536
 
 $(FUZZ_PATTERN): tests/fuzz/pattern_fuzz.c tests/fuzz/fuzz_driver.c src/pattern.c src/pattern.h src/message_frame.h
 	@mkdir -p '$(FUZZ_PATH)'
@@ -180,6 +183,11 @@ $(FUZZ_FRAME): tests/fuzz/message_frame_fuzz.c tests/fuzz/fuzz_driver.c src/mess
 $(FUZZ_MACHO): tests/fuzz/macho_parser_fuzz.c tests/fuzz/fuzz_driver.c scripts/macho_parser.c scripts/macho_parser.h
 	@mkdir -p '$(FUZZ_PATH)'
 	$(XCRUN) clang tests/fuzz/fuzz_driver.c tests/fuzz/macho_parser_fuzz.c scripts/macho_parser.c -o '$@' $(FUZZ_FLAGS)
+
+$(FUZZ_CONFIG): tests/fuzz/declarative_config_fuzz.m tests/fuzz/fuzz_driver.c $(YABAI_DEPS) $(YABAI_MODULE_SOURCES)
+	@mkdir -p '$(FUZZ_PATH)'
+	$(XCRUN) clang tests/fuzz/fuzz_driver.c tests/fuzz/declarative_config_fuzz.m \
+		$(foreach module,$(YABAI_MODULES),./src/$(module).c) -o '$@' $(FUZZ_CONFIG_FLAGS)
 
 # Explicit opt-in only: this opens windows and drives Accessibility UI against
 # a running daemon on the current BSP Space. Never a dependency of CI.

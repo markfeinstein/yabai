@@ -54,7 +54,7 @@ The flake supports `aarch64-darwin` and `x86_64-darwin`. It requires the Xcode c
 
 For focused core checks, build with `make -C tests core-build`, then run `tests/bin/ordinary/tests --list` or `tests/bin/ordinary/tests --filter <substring>`. Listing and filtering compose; no match fails rather than silently passing. See [development testing](doc/testing.md) for exact argument and exit-status behavior.
 
-`make fuzz-build` builds deterministic ASan+UBSan fuzz-smoke binaries for regex patterns, daemon frames, and Mach-O parsing under `bin/fuzz/`. `make fuzz-smoke` runs a bounded 1,000-input pass for each harness. The harness sources expose the standard `LLVMFuzzerTestOneInput` entry point and can also be linked with libFuzzer when its runtime is installed.
+`make fuzz-build` builds deterministic ASan+UBSan fuzz-smoke binaries for regex patterns, daemon frames, Mach-O parsing, and native JSONC configuration parsing under `bin/fuzz/`. `make fuzz-smoke` runs a bounded 1,000-input pass for each harness. The harness sources expose the standard `LLVMFuzzerTestOneInput` entry point and can also be linked with libFuzzer when its runtime is installed.
 
 `make private-api-smoke` is an opt-in, read-only **live** WindowServer query check. It needs a logged-in native Mac with an existing visible app window, but no running daemon or scripting addition. It records redacted OS/build/architecture evidence and fails on missing prerequisites or a 15-second probe timeout. The manual prepared-host workflow supports macOS 14, 15, 26, and 27 on native arm64 or x86_64; it does not provision hosts or treat cross-builds as live evidence. See [development testing](doc/testing.md) for scope, safety, and runner setup.
 
