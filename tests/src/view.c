@@ -715,6 +715,14 @@ static uint64_t *lifecycle_test_second_space_failure(uint32_t did, int *count)
     return &sid;
 }
 
+static uint64_t *lifecycle_test_duplicate_space(uint32_t did, int *count)
+{
+    static uint64_t sid = 91;
+    (void) did;
+    *count = 1;
+    return &sid;
+}
+
 TEST_FUNC(space_manager_begin_reports_and_cleans_initialization_failures,
 {
     struct view_test_platform_ops view_ops = {
@@ -745,6 +753,12 @@ TEST_FUNC(space_manager_begin_reports_and_cleans_initialization_failures,
 
     space_manager_test_active_display_list = lifecycle_test_two_active_displays;
     space_manager_test_display_space_list = lifecycle_test_second_space_failure;
+    TEST_CHECK(space_manager_begin(&manager), false);
+    TEST_CHECK(manager.did_begin, false);
+    TEST_CHECK(manager.view.buckets == NULL, true);
+    TEST_CHECK(legacy_allocation_test_outstanding(), 0UL);
+
+    space_manager_test_display_space_list = lifecycle_test_duplicate_space;
     TEST_CHECK(space_manager_begin(&manager), false);
     TEST_CHECK(manager.did_begin, false);
     TEST_CHECK(manager.view.buckets == NULL, true);

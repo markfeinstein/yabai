@@ -34,7 +34,9 @@ void table_free(struct table *table);
 
 #define table_add(table, key, value) _table_try_add(table, key, sizeof(*key), value)
 #define table_try_add(table, key, value) _table_try_add(table, key, sizeof(*key), value)
+#define table_try_insert(table, key, value) _table_try_insert(table, key, sizeof(*key), value)
 bool _table_try_add(struct table *table, void *key, int key_size, void *value);
+bool _table_try_insert(struct table *table, void *key, int key_size, void *value);
 bool table_replace(struct table *table, void *key, void *value);
 #ifdef TESTS
 void table_test_fail_allocation_after(int successful_allocations);
@@ -169,6 +171,35 @@ bool _table_try_add(struct table *table, void *key, int key_size, void *value)
         if (!(*bucket)->value) (*bucket)->value = value;
         return true;
     }
+
+    struct bucket *new_bucket = table_malloc(sizeof(*new_bucket));
+    void *new_key = table_malloc((size_t) key_size);
+    if (!new_bucket || !new_key) {
+        free(new_key);
+        free(new_bucket);
+        return false;
+    }
+    memcpy(new_key, key, (size_t) key_size);
+    new_bucket->key = new_key;
+    new_bucket->value = value;
+    new_bucket->next = NULL;
+    *bucket = new_bucket;
+    ++table->count;
+
+    float load = (1.0f * table->count) / table->capacity;
+    if (load > table->max_load && !table_rehash(table)) {
+        table_remove(table, key);
+        return false;
+    }
+    return true;
+}
+
+bool _table_try_insert(struct table *table, void *key, int key_size, void *value)
+{
+    if (!table || !table->buckets || table->capacity <= 0 || !table->hash || !table->cmp ||
+        !key || key_size <= 0) return false;
+    struct bucket **bucket = table_get_bucket(table, key);
+    if (*bucket) return false;
 
     struct bucket *new_bucket = table_malloc(sizeof(*new_bucket));
     void *new_key = table_malloc((size_t) key_size);

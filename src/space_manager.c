@@ -1783,7 +1783,7 @@ bool space_manager_begin(struct space_manager *sm)
         for (int j = 0; j < space_count; ++j) {
             struct view *view = view_create(space_list[j]);
             if (!view) goto fail;
-            if (!table_try_add(&sm->view, &space_list[j], view)) {
+            if (!table_try_insert(&sm->view, &space_list[j], view)) {
                 view_destroy(view);
                 legacy_allocation_free(view);
                 goto fail;

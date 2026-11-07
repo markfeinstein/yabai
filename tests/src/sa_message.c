@@ -146,7 +146,11 @@ TEST_FUNC(sa_checked_hashtable_insert_rehashes_and_rolls_back_failures,
     for (size_t i = 0; i < 3; ++i) TEST_CHECK(table_find(&table, &keys[i]), &values[i]);
     TEST_CHECK(table_try_add(&table, &keys[0], &values[1]), true);
     TEST_CHECK(table_find(&table, &keys[0]), &values[0]);
+    TEST_CHECK(table_try_insert(&table, &keys[0], &values[1]), false);
+    TEST_CHECK(table.count, 3);
+    TEST_CHECK(table_find(&table, &keys[0]), &values[0]);
     TEST_CHECK(_table_try_add(&table, &keys[0], 0, &values[0]), false);
+    TEST_CHECK(_table_try_insert(&table, &keys[0], 0, &values[0]), false);
     table_free(&table);
 });
 
