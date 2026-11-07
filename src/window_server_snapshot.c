@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <dlfcn.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdlib.h>
 
@@ -82,13 +83,21 @@ static bool window_server_snapshot_alpha(CFTypeRef iterator, float *alpha)
     return true;
 }
 
+static bool window_server_snapshot_alpha_value_valid(float alpha)
+{
+    return isfinite(alpha) && alpha >= 0.0f && alpha <= 1.0f;
+}
+
+#define WINDOW_SERVER_SNAPSHOT_MAX_SPACE_COUNT 1024
+
 static bool window_server_snapshot_space_count_value_valid(int space_count)
 {
     /* Every WindowServer window belongs to at least one Space. Newer
      * WindowServer builds still export the optional getter but can return zero for every
      * record; treat that sentinel as unavailable so callers use the
-     * authoritative SLSCopySpacesForWindows fallback. */
-    return space_count > 0;
+     * authoritative SLSCopySpacesForWindows fallback. A large positive value is
+     * likewise treated as an ABI mismatch rather than as sticky-window evidence. */
+    return space_count > 0 && space_count <= WINDOW_SERVER_SNAPSHOT_MAX_SPACE_COUNT;
 }
 
 static bool window_server_snapshot_space_count(CFTypeRef iterator, int *space_count)
@@ -171,10 +180,16 @@ static void window_server_snapshot_copy_record(const struct window_server_snapsh
         window_corner_geometry_is_complete(&record->corner_geometry)) {
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_CORNER_GEOMETRY;
     }
-    if (backend->iterator_alpha && backend->iterator_alpha(iterator, &record->alpha)) {
+    float alpha = 0.0f;
+    if (backend->iterator_alpha && backend->iterator_alpha(iterator, &alpha) &&
+        window_server_snapshot_alpha_value_valid(alpha)) {
+        record->alpha = alpha;
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_ALPHA;
     }
-    if (backend->iterator_space_count && backend->iterator_space_count(iterator, &record->space_count)) {
+    int space_count = 0;
+    if (backend->iterator_space_count && backend->iterator_space_count(iterator, &space_count) &&
+        window_server_snapshot_space_count_value_valid(space_count)) {
+        record->space_count = space_count;
         record->valid_fields |= WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT;
     }
 }

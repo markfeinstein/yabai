@@ -751,12 +751,39 @@ static bool window_server_snapshot_fake_space_count(CFTypeRef iterator, int *spa
     return true;
 }
 
-TEST_FUNC(window_server_snapshot_space_count_rejects_impossible_zero_sentinel,
+static bool window_server_snapshot_fake_invalid_alpha(CFTypeRef iterator, float *alpha)
 {
+    (void) iterator;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record) return false;
+    *alpha = record->id == 1000u ? NAN : 1.01f;
+    return true;
+}
+
+static bool window_server_snapshot_fake_invalid_space_count(CFTypeRef iterator, int *space_count)
+{
+    (void) iterator;
+    const struct window_server_snapshot_fake_record *record = window_server_snapshot_fake_current();
+    if (!record) return false;
+    *space_count = record->id == 1000u ? 0 : WINDOW_SERVER_SNAPSHOT_MAX_SPACE_COUNT + 1;
+    return true;
+}
+
+TEST_FUNC(window_server_snapshot_optional_values_require_plausible_domains,
+{
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(-0.01f), false);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(0.0f), true);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(0.5f), true);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(1.0f), true);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(1.01f), false);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(NAN), false);
+    TEST_CHECK(window_server_snapshot_alpha_value_valid(INFINITY), false);
     TEST_CHECK(window_server_snapshot_space_count_value_valid(-1), false);
     TEST_CHECK(window_server_snapshot_space_count_value_valid(0), false);
     TEST_CHECK(window_server_snapshot_space_count_value_valid(1), true);
-    TEST_CHECK(window_server_snapshot_space_count_value_valid(INT_MAX), true);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(WINDOW_SERVER_SNAPSHOT_MAX_SPACE_COUNT), true);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(WINDOW_SERVER_SNAPSHOT_MAX_SPACE_COUNT + 1), false);
+    TEST_CHECK(window_server_snapshot_space_count_value_valid(INT_MAX), false);
 })
 
 TEST_FUNC(window_server_snapshot_alpha_and_space_count_are_optional,
@@ -776,6 +803,25 @@ TEST_FUNC(window_server_snapshot_alpha_and_space_count_are_optional,
         TEST_CHECK(snapshot->records[0].space_count, 3);
         TEST_CHECK(snapshot->records[1].alpha == 1.0f, true);
         TEST_CHECK(snapshot->records[1].space_count, 1);
+    }
+    window_server_snapshot_destroy(snapshot);
+    CFRelease(ids);
+    window_server_snapshot_fake_end();
+
+    // Implausible optional values are rejected so callers use live fallbacks.
+    window_server_snapshot_fake_begin(2);
+    struct window_server_snapshot_backend with_invalid_optional = window_server_snapshot_fake_backend;
+    with_invalid_optional.iterator_alpha = window_server_snapshot_fake_invalid_alpha;
+    with_invalid_optional.iterator_space_count = window_server_snapshot_fake_invalid_space_count;
+    window_server_snapshot_test_backend = &with_invalid_optional;
+    ids = window_server_snapshot_fake_window_ids(2);
+    snapshot = window_server_snapshot_create(1, ids, 2);
+    TEST_CHECK(snapshot != NULL, true);
+    if (snapshot) {
+        TEST_CHECK(snapshot->records[0].valid_fields &
+                   (WINDOW_SERVER_WINDOW_FIELD_ALPHA | WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT), 0ULL);
+        TEST_CHECK(snapshot->records[1].valid_fields &
+                   (WINDOW_SERVER_WINDOW_FIELD_ALPHA | WINDOW_SERVER_WINDOW_FIELD_SPACE_COUNT), 0ULL);
     }
     window_server_snapshot_destroy(snapshot);
     CFRelease(ids);
