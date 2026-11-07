@@ -40,6 +40,19 @@ self-tests with synthetic positive and negative evidence. Both also run through
 `make test` / `make test-all` and an explicit CI step, without a daemon, live
 captures, or network access. These validate the gates, not real-host coverage.
 
+## Bounded parser fuzzing
+
+`make fuzz-build` builds deterministic AddressSanitizer and
+UndefinedBehaviorSanitizer drivers for the regex-cost/compiler boundary, daemon
+message framing, and Mach-O parser. `make fuzz-smoke` runs 1,000 generated inputs
+per harness with bounded maximum input sizes and is suitable for CI. Each harness
+source exports the standard `LLVMFuzzerTestOneInput` entry point, so a developer
+with a libFuzzer runtime can link the same source with `-fsanitize=fuzzer` for a
+coverage-guided campaign.
+
+The repository does not ship crash corpora or mutate production files. Preserve
+any useful reproducer as a focused regression fixture before committing it.
+
 ## Wake and visibility recovery
 
 The offline `window_focus_reconciliation_` test uses mocked live AX and

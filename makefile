@@ -34,6 +34,11 @@ WINDOW_CONSTRAINTS_PROBE_BIN = $(BUILD_PATH)/debug/window-constraints-probe
 DISPLAY_CADENCE_DIAGNOSTIC_BIN = $(BUILD_PATH)/debug/display-cadence-diagnostic
 NATIVE_RESIZE_PIPELINE_PROBE_BIN = $(BUILD_PATH)/debug/native-resize-pipeline-probe
 PRIVATE_API_SMOKE_BIN = $(BUILD_PATH)/debug/private-api-smoke
+FUZZ_PATH      = $(BUILD_PATH)/fuzz
+FUZZ_PATTERN   = $(FUZZ_PATH)/pattern-fuzz
+FUZZ_FRAME     = $(FUZZ_PATH)/message-frame-fuzz
+FUZZ_MACHO     = $(FUZZ_PATH)/macho-parser-fuzz
+FUZZ_FLAGS     = -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 YABAI_COMMON   = ./src/manifest.m
 YABAI_MODULES  = menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test
 YABAI_MODULE_SOURCES = $(foreach module,$(YABAI_MODULES),./src/$(module).c ./src/$(module).h)
@@ -75,9 +80,9 @@ DEPLOY_OWNER_UID ?= 0
 DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax analyze \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax analyze fuzz-build fuzz-smoke \
         integration-hide-on-close integration private-api-smoke-build private-api-smoke \
-        clean-debug clean-release clean-asan clean-tsan clean distclean
+        clean-debug clean-release clean-asan clean-tsan clean-fuzz clean distclean
 .NOTPARALLEL:
 
 all: debug
@@ -156,6 +161,25 @@ syntax:
 
 analyze:
 	$(SCRIPT_PATH)/analyze.sh
+
+fuzz-build: $(FUZZ_PATTERN) $(FUZZ_FRAME) $(FUZZ_MACHO)
+
+fuzz-smoke: fuzz-build
+	$(FUZZ_PATTERN) 1000 4096
+	$(FUZZ_FRAME) 1000 1048576
+	$(FUZZ_MACHO) 1000 65536
+
+$(FUZZ_PATTERN): tests/fuzz/pattern_fuzz.c tests/fuzz/fuzz_driver.c src/pattern.c src/pattern.h src/message_frame.h
+	@mkdir -p '$(FUZZ_PATH)'
+	$(XCRUN) clang tests/fuzz/fuzz_driver.c tests/fuzz/pattern_fuzz.c src/pattern.c -o '$@' $(FUZZ_FLAGS)
+
+$(FUZZ_FRAME): tests/fuzz/message_frame_fuzz.c tests/fuzz/fuzz_driver.c src/message_frame.h src/misc/socket_io.h
+	@mkdir -p '$(FUZZ_PATH)'
+	$(XCRUN) clang tests/fuzz/fuzz_driver.c tests/fuzz/message_frame_fuzz.c -o '$@' $(FUZZ_FLAGS)
+
+$(FUZZ_MACHO): tests/fuzz/macho_parser_fuzz.c tests/fuzz/fuzz_driver.c scripts/macho_parser.c scripts/macho_parser.h
+	@mkdir -p '$(FUZZ_PATH)'
+	$(XCRUN) clang tests/fuzz/fuzz_driver.c tests/fuzz/macho_parser_fuzz.c scripts/macho_parser.c -o '$@' $(FUZZ_FLAGS)
 
 # Explicit opt-in only: this opens windows and drives Accessibility UI against
 # a running daemon on the current BSP Space. Never a dependency of CI.
@@ -344,8 +368,9 @@ $(eval $(call CLEAN_RULE,debug))
 $(eval $(call CLEAN_RULE,release))
 $(eval $(call CLEAN_RULE,asan))
 $(eval $(call CLEAN_RULE,tsan))
+$(eval $(call CLEAN_RULE,fuzz))
 
-clean: clean-debug clean-release clean-asan clean-tsan
+clean: clean-debug clean-release clean-asan clean-tsan clean-fuzz
 	@set -eu; repo='$(REPO_ROOT)'; [ "$$(pwd -P)" = "$$repo" ]; \
 	[ '$(BUILD_PATH_ORIGIN)' != 'command line' ]; [ '$(BUILD_PATH)' = './bin' ]; \
 	root="$$repo/bin"; [ ! -L "$$root" ]; \

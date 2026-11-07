@@ -28,6 +28,8 @@ jobs:
           git diff --check
       - name: Static analyzer regression gate
         run: make analyze
+      - name: Bounded parser fuzz smoke
+        run: make fuzz-smoke
       - name: Offline evidence-gate self-tests
         run: make classifier-corpus-gate native-tab-evidence-gate
       - name: AX frame request benchmark
