@@ -447,6 +447,36 @@ TEST_FUNC(hotkey_lifecycle_reconcile_serializes_state_snapshot_with_resource_act
     }
 })
 
+TEST_FUNC(hotkey_occupied_space_selection_requires_a_real_target_and_wraps,
+{
+    uint64_t target = 0;
+    struct hotkey_occupied_space occupied[] = {
+        { .sid = 11, .index = 1 },
+        { .sid = 33, .index = 3 },
+        { .sid = 55, .index = 5 }
+    };
+
+    TEST_CHECK(hotkey_select_occupied_space(NULL, 0, 2,
+                                            HOTKEY_OCCUPIED_SPACE_NEXT, &target), false);
+    TEST_CHECK(hotkey_select_occupied_space(occupied, 3, 2,
+                                            HOTKEY_OCCUPIED_SPACE_NEXT, &target), true);
+    TEST_CHECK(target, 33ULL);
+    TEST_CHECK(hotkey_select_occupied_space(occupied, 3, 4,
+                                            HOTKEY_OCCUPIED_SPACE_PREVIOUS, &target), true);
+    TEST_CHECK(target, 33ULL);
+    TEST_CHECK(hotkey_select_occupied_space(occupied, 3, 5,
+                                            HOTKEY_OCCUPIED_SPACE_NEXT, &target), true);
+    TEST_CHECK(target, 11ULL);
+    TEST_CHECK(hotkey_select_occupied_space(occupied, 3, 1,
+                                            HOTKEY_OCCUPIED_SPACE_PREVIOUS, &target), true);
+    TEST_CHECK(target, 55ULL);
+
+    struct hotkey_occupied_space current_only[] = {{ .sid = 22, .index = 2 }};
+    TEST_CHECK(hotkey_select_occupied_space(current_only, 1, 2,
+                                            HOTKEY_OCCUPIED_SPACE_NEXT, &target), true);
+    TEST_CHECK(target, 22ULL);
+});
+
 TEST_FUNC(hotkey_yabai_command_executes_in_process_and_propagates_failure,
 {
     struct hotkey_action action = {.type = HOTKEY_ACTION_YABAI_COMMAND};
