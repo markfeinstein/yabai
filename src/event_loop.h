@@ -172,5 +172,6 @@ void event_loop_request_window_focus_fallback(void);
 void event_loop_request_active_window_highlight_refresh(void);
 void event_loop_active_window_highlight_target_did_change(void);
 void event_loop_process_application_windows(struct window **window_list, int window_count, bool preserve_existing_space);
+void event_loop_abort_native_resize(bool restore);
 
 #endif
