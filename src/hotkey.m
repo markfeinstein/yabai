@@ -61,6 +61,8 @@ static struct hotkey_manager_state hotkey_manager = {
 
 #ifdef TESTS
 static bool (*hotkey_key_state)(CGKeyCode) = NULL;
+static void (*hotkey_test_reconcile_locked_hook)(void);
+static void (*hotkey_test_reconcile_observer)(bool);
 #endif
 
 static bool hotkey_modifier_key_is_down(CGKeyCode keycode)
@@ -515,14 +517,22 @@ static bool hotkey_manager_add_event_tap_locked(void)
 
 static bool hotkey_manager_reconcile_event_tap(void)
 {
-    bool enabled;
-    bool started;
+    pthread_mutex_lock(&hotkey_manager.lifecycle_lock);
+
     pthread_mutex_lock(&hotkey_manager.lock);
-    enabled = hotkey_manager.config && hotkey_manager.config->present && hotkey_manager.config->enabled;
-    started = hotkey_manager.lifecycle_started;
+    bool enabled = hotkey_manager.config && hotkey_manager.config->present && hotkey_manager.config->enabled;
+    bool started = hotkey_manager.lifecycle_started;
     pthread_mutex_unlock(&hotkey_manager.lock);
 
-    pthread_mutex_lock(&hotkey_manager.lifecycle_lock);
+#ifdef TESTS
+    if (hotkey_test_reconcile_locked_hook) hotkey_test_reconcile_locked_hook();
+    if (hotkey_test_reconcile_observer) {
+        hotkey_test_reconcile_observer(started && enabled);
+        pthread_mutex_unlock(&hotkey_manager.lifecycle_lock);
+        return true;
+    }
+#endif
+
     bool result = true;
     if (!started || !enabled) {
         hotkey_manager_remove_event_tap_locked();

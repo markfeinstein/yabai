@@ -267,6 +267,119 @@ TEST_FUNC(hotkey_callback_does_not_reclaim_a_rejected_consumed_job,
     }
 })
 
+struct hotkey_lifecycle_serialization_test
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    const struct hotkey_config_model *config;
+    bool first_reconcile_entered;
+    bool release_first_reconcile;
+    bool shutdown_state_published;
+    bool observed[2];
+    int observed_count;
+};
+
+static struct hotkey_lifecycle_serialization_test *hotkey_lifecycle_serialization_active;
+
+static void hotkey_lifecycle_serialization_locked_hook(void)
+{
+    struct hotkey_lifecycle_serialization_test *test = hotkey_lifecycle_serialization_active;
+    if (!test) return;
+    pthread_mutex_lock(&test->mutex);
+    if (!test->first_reconcile_entered) {
+        test->first_reconcile_entered = true;
+        pthread_cond_broadcast(&test->cond);
+        while (!test->release_first_reconcile) pthread_cond_wait(&test->cond, &test->mutex);
+    }
+    pthread_mutex_unlock(&test->mutex);
+}
+
+static void hotkey_lifecycle_serialization_observer(bool enabled)
+{
+    struct hotkey_lifecycle_serialization_test *test = hotkey_lifecycle_serialization_active;
+    if (test && test->observed_count < (int)array_count(test->observed)) {
+        test->observed[test->observed_count++] = enabled;
+    }
+}
+
+static void *hotkey_lifecycle_install_thread(void *context)
+{
+    struct hotkey_lifecycle_serialization_test *test = context;
+    hotkey_manager_install_config(test->config);
+    return NULL;
+}
+
+static void *hotkey_lifecycle_shutdown_thread(void *context)
+{
+    struct hotkey_lifecycle_serialization_test *test = context;
+    pthread_mutex_lock(&hotkey_manager.lock);
+    hotkey_manager.lifecycle_started = false;
+    pthread_mutex_unlock(&hotkey_manager.lock);
+
+    pthread_mutex_lock(&test->mutex);
+    test->shutdown_state_published = true;
+    pthread_cond_broadcast(&test->cond);
+    pthread_mutex_unlock(&test->mutex);
+
+    (void)hotkey_manager_reconcile_event_tap();
+    return NULL;
+}
+
+TEST_FUNC(hotkey_lifecycle_reconcile_serializes_state_snapshot_with_resource_action,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"a\",\"cases\":[{\"disposition\":\"consume_only\"}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json),
+                                               "lifecycle.jsonc", &model, &error), true);
+    if (model) {
+        struct hotkey_lifecycle_serialization_test test = {
+            .mutex = PTHREAD_MUTEX_INITIALIZER,
+            .cond = PTHREAD_COND_INITIALIZER,
+            .config = &model->keyboard
+        };
+        pthread_mutex_lock(&hotkey_manager.lock);
+        hotkey_manager.lifecycle_started = true;
+        hotkey_manager.config = NULL;
+        pthread_mutex_unlock(&hotkey_manager.lock);
+        hotkey_lifecycle_serialization_active = &test;
+        hotkey_test_reconcile_locked_hook = hotkey_lifecycle_serialization_locked_hook;
+        hotkey_test_reconcile_observer = hotkey_lifecycle_serialization_observer;
+
+        pthread_t install_thread;
+        TEST_CHECK(pthread_create(&install_thread, NULL, hotkey_lifecycle_install_thread, &test), 0);
+        pthread_mutex_lock(&test.mutex);
+        while (!test.first_reconcile_entered) pthread_cond_wait(&test.cond, &test.mutex);
+        pthread_mutex_unlock(&test.mutex);
+
+        pthread_t shutdown_thread;
+        TEST_CHECK(pthread_create(&shutdown_thread, NULL, hotkey_lifecycle_shutdown_thread, &test), 0);
+        pthread_mutex_lock(&test.mutex);
+        while (!test.shutdown_state_published) pthread_cond_wait(&test.cond, &test.mutex);
+        test.release_first_reconcile = true;
+        pthread_cond_broadcast(&test.cond);
+        pthread_mutex_unlock(&test.mutex);
+
+        pthread_join(install_thread, NULL);
+        pthread_join(shutdown_thread, NULL);
+        TEST_CHECK(test.observed_count, 2);
+        TEST_CHECK(test.observed[0], true);
+        TEST_CHECK(test.observed[1], false);
+
+        hotkey_test_reconcile_locked_hook = NULL;
+        hotkey_test_reconcile_observer = NULL;
+        hotkey_lifecycle_serialization_active = NULL;
+        pthread_mutex_lock(&hotkey_manager.lock);
+        hotkey_manager.config = NULL;
+        hotkey_manager.lifecycle_started = false;
+        pthread_mutex_unlock(&hotkey_manager.lock);
+        pthread_cond_destroy(&test.cond);
+        pthread_mutex_destroy(&test.mutex);
+        declarative_config_destroy(model);
+    }
+})
+
 TEST_FUNC(hotkey_yabai_command_executes_in_process_and_propagates_failure,
 {
     struct hotkey_action action = {.type = HOTKEY_ACTION_YABAI_COMMAND};
