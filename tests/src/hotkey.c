@@ -140,6 +140,65 @@ TEST_FUNC(hotkey_callback_transitions_modes_consumes_unbound_and_ignores_synthet
     }
 })
 
+TEST_FUNC(hotkey_callback_preserves_key_delivery_across_mode_changes,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":["
+      "{\"key\":\"a\",\"cases\":[{\"disposition\":\"pass_through\"}]},"
+      "{\"key\":\"r\",\"cases\":[{\"disposition\":\"consume\",\"transition\":\"plain\"}]},"
+      "{\"key\":\"c\",\"cases\":[{\"disposition\":\"consume\",\"transition\":\"capture\"}]}],"
+      "\"modes\":["
+      "{\"name\":\"plain\",\"bindings\":[{\"key\":\"escape\",\"cases\":[{\"disposition\":\"consume\",\"transition\":\"default\"}]}]},"
+      "{\"name\":\"capture\",\"capture_unbound\":true,\"bindings\":[]} ]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "delivery.jsonc", &model, &error), true);
+    if (model) {
+        hotkey_manager_install_config(&model->keyboard);
+
+        CGEventRef enter_down = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, true);
+        CGEventRef enter_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, false);
+        CGEventSetFlags(enter_down, 0);
+        CGEventSetFlags(enter_up, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, enter_down, NULL) == NULL, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, enter_up, NULL) == NULL, true);
+        TEST_CHECK(hotkey_test_active_mode(), 0);
+        CFRelease(enter_down);
+        CFRelease(enter_up);
+
+        CGEventRef leave_down = CGEventCreateKeyboardEvent(NULL, kVK_Escape, true);
+        CGEventRef leave_up = CGEventCreateKeyboardEvent(NULL, kVK_Escape, false);
+        CGEventSetFlags(leave_down, 0);
+        CGEventSetFlags(leave_up, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, leave_down, NULL) == NULL, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, leave_up, NULL) == NULL, true);
+        TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
+        CFRelease(leave_down);
+        CFRelease(leave_up);
+
+        CGEventRef pass_down = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_A, true);
+        CGEventRef pass_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_A, false);
+        CGEventRef capture_down = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_C, true);
+        CGEventRef capture_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_C, false);
+        CGEventSetFlags(pass_down, 0);
+        CGEventSetFlags(pass_up, 0);
+        CGEventSetFlags(capture_down, 0);
+        CGEventSetFlags(capture_up, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, pass_down, NULL) == pass_down, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, capture_down, NULL) == NULL, true);
+        TEST_CHECK(hotkey_test_active_mode(), 1);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, pass_up, NULL) == pass_up, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, capture_up, NULL) == NULL, true);
+        CFRelease(pass_down);
+        CFRelease(pass_up);
+        CFRelease(capture_down);
+        CFRelease(capture_up);
+
+        hotkey_manager_install_config(NULL);
+        declarative_config_destroy(model);
+    }
+})
+
 TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
 {
     const char json[] =
@@ -156,6 +215,9 @@ TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, enter, NULL) == NULL, true);
         TEST_CHECK(hotkey_test_active_mode(), 0);
         CFRelease(enter);
+        CGEventRef enter_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, false);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, enter_up, NULL) == NULL, true);
+        CFRelease(enter_up);
         usleep(25000);
         CGEventRef activity = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, true);
         CGEventSetFlags(activity, 0);
@@ -165,6 +227,9 @@ TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
         TEST_CHECK(hotkey_test_active_mode(), 0);
         usleep(30000);
         TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
+        CGEventRef activity_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, false);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, activity_up, NULL) == NULL, true);
+        CFRelease(activity_up);
         hotkey_manager_install_config(NULL);
         declarative_config_destroy(model);
     }

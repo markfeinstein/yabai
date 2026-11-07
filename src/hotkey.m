@@ -32,6 +32,13 @@ struct hotkey_thread_start
     bool live;
 };
 
+enum hotkey_delivery
+{
+    HOTKEY_DELIVERY_UNTRACKED,
+    HOTKEY_DELIVERY_PASS,
+    HOTKEY_DELIVERY_CONSUME
+};
+
 struct hotkey_manager_state
 {
     pthread_mutex_t lock;
@@ -42,6 +49,7 @@ struct hotkey_manager_state
     char front_name[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     struct hotkey_manager_resources resources;
     uint64_t mode_generation;
+    uint8_t delivery[UINT16_MAX + 1u];
     bool lifecycle_started;
 };
 
@@ -304,6 +312,10 @@ static void hotkey_manager_remove_event_tap_locked(void)
     hotkey_manager.resources = (struct hotkey_manager_resources) {0};
     hotkey_manager_stop_resources(&resources);
     hotkey_manager_dispose_resources(resources);
+
+    pthread_mutex_lock(&hotkey_manager.lock);
+    memset(hotkey_manager.delivery, HOTKEY_DELIVERY_UNTRACKED, sizeof(hotkey_manager.delivery));
+    pthread_mutex_unlock(&hotkey_manager.lock);
 }
 
 static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
@@ -362,6 +374,20 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
         timeout_generation = ++hotkey_manager.mode_generation;
         timeout_ms = config->modes[hotkey_manager.active_mode].timeout_ms;
     }
+
+    bool pass_event = !matched ? !match.capture_unbound
+                               : match.disposition == HOTKEY_DISPOSITION_PASS_THROUGH;
+    enum hotkey_delivery delivery = hotkey_manager.delivery[keycode];
+    if (key_down) {
+        if (!repeat || delivery == HOTKEY_DELIVERY_UNTRACKED) {
+            delivery = pass_event ? HOTKEY_DELIVERY_PASS : HOTKEY_DELIVERY_CONSUME;
+            hotkey_manager.delivery[keycode] = delivery;
+        }
+        pass_event = delivery == HOTKEY_DELIVERY_PASS;
+    } else if (delivery != HOTKEY_DELIVERY_UNTRACKED) {
+        pass_event = delivery == HOTKEY_DELIVERY_PASS;
+        hotkey_manager.delivery[keycode] = HOTKEY_DELIVERY_UNTRACKED;
+    }
     pthread_mutex_unlock(&hotkey_manager.lock);
     hotkey_manager_schedule_mode_timeout(timeout_generation, timeout_ms);
     if (mode_changed) hotkey_manager_post_mode_changed();
@@ -374,8 +400,7 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
         (void)event_loop_try_post(&g_event_loop, HOTKEY_ACTION, job, 0);
 #endif
     }
-    if (!matched) return match.capture_unbound ? NULL : event;
-    return match.disposition == HOTKEY_DISPOSITION_PASS_THROUGH ? event : NULL;
+    return pass_event ? event : NULL;
 }
 
 static bool hotkey_manager_create_resources(struct hotkey_manager_resources *resources)
