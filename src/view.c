@@ -8,6 +8,37 @@ extern struct mouse_state g_mouse_state;
 
 #ifdef TESTS
 static struct view_test_platform_ops view_test_platform_ops;
+static CGError (*insert_feedback_new_region)(CGRect *, CFTypeRef *) = CGSNewRegionWithRect;
+static CFTypeRef (*insert_feedback_empty_region)(void) = CGRegionCreateEmptyRegion;
+static CGError (*insert_feedback_new_window)(int, int, CFTypeRef, CFTypeRef, int, uint64_t *,
+                                             float, float, int, uint32_t *, void *) =
+    SLSNewWindowWithOpaqueShapeAndContext;
+static CGContextRef (*insert_feedback_new_context)(int, uint32_t, CFDictionaryRef) = SLWindowContextCreate;
+static bool (*insert_feedback_disable_shadow)(uint32_t) = sls_window_disable_shadow;
+static int (*insert_feedback_window_level)(uint32_t) = window_level;
+static int (*insert_feedback_window_sub_level)(uint32_t) = window_sub_level;
+static CGError (*insert_feedback_set_resolution)(int, uint32_t, double) = SLSSetWindowResolution;
+static CGError (*insert_feedback_set_opacity)(int, uint32_t, bool) = SLSSetWindowOpacity;
+static CGError (*insert_feedback_set_level)(int, uint32_t, int) = SLSSetWindowLevel;
+static CGError (*insert_feedback_set_sub_level)(int, uint32_t, int) = SLSSetWindowSubLevel;
+static CGError (*insert_feedback_set_shape)(int, uint32_t, float, float, CFTypeRef) = SLSSetWindowShape;
+static CGError (*insert_feedback_order_window)(int, uint32_t, int, uint32_t) = SLSOrderWindow;
+static CGError (*insert_feedback_release_window)(int, uint32_t) = SLSReleaseWindow;
+#else
+#define insert_feedback_new_region CGSNewRegionWithRect
+#define insert_feedback_empty_region CGRegionCreateEmptyRegion
+#define insert_feedback_new_window SLSNewWindowWithOpaqueShapeAndContext
+#define insert_feedback_new_context SLWindowContextCreate
+#define insert_feedback_disable_shadow sls_window_disable_shadow
+#define insert_feedback_window_level window_level
+#define insert_feedback_window_sub_level window_sub_level
+#define insert_feedback_set_resolution SLSSetWindowResolution
+#define insert_feedback_set_opacity SLSSetWindowOpacity
+#define insert_feedback_set_level SLSSetWindowLevel
+#define insert_feedback_set_sub_level SLSSetWindowSubLevel
+#define insert_feedback_set_shape SLSSetWindowShape
+#define insert_feedback_order_window SLSOrderWindow
+#define insert_feedback_release_window SLSReleaseWindow
 #endif
 
 struct insert_feedback_geometry insert_feedback_geometry_make(CGRect frame, float configured_width, float configured_radius)
@@ -58,6 +89,65 @@ void insert_feedback_refresh_all(void)
     insert_feedback_refresh_all_with(insert_feedback_refresh_node);
 }
 
+static void insert_feedback_release_resources(struct window_node *node)
+{
+    if (node->feedback_window.id) {
+        (void) insert_feedback_order_window(g_connection, node->feedback_window.id, 0, 0);
+    }
+    if (node->feedback_window.context) CGContextRelease(node->feedback_window.context);
+    if (node->feedback_window.id) {
+        (void) insert_feedback_release_window(g_connection, node->feedback_window.id);
+    }
+    memset(&node->feedback_window, 0, sizeof(node->feedback_window));
+}
+
+static void insert_feedback_abandon(struct window_node *node)
+{
+    if (g_mouse_state.feedback_node == node) g_mouse_state.feedback_node = NULL;
+    insert_feedback_release_resources(node);
+}
+
+static bool insert_feedback_create(struct window_node *node, CFTypeRef frame_region)
+{
+    uint64_t tags = (1ULL << 1) | (1ULL << 9);
+    CFTypeRef empty_region = insert_feedback_empty_region();
+    if (!empty_region) return false;
+
+    CGError result = insert_feedback_new_window(g_connection, 2, frame_region, empty_region,
+                                                13, &tags, 0, 0, 64,
+                                                &node->feedback_window.id, NULL);
+    CFRelease(empty_region);
+    if (result != kCGErrorSuccess || !node->feedback_window.id) {
+        node->feedback_window.id = 0;
+        return false;
+    }
+
+    // Shadow suppression is cosmetic; keep insertion feedback usable if it fails.
+    (void) insert_feedback_disable_shadow(node->feedback_window.id);
+    if (insert_feedback_set_resolution(g_connection, node->feedback_window.id, 1.0f) != kCGErrorSuccess ||
+        insert_feedback_set_opacity(g_connection, node->feedback_window.id, false) != kCGErrorSuccess ||
+        insert_feedback_set_level(g_connection, node->feedback_window.id,
+                                  insert_feedback_window_level(node->window_order[0])) != kCGErrorSuccess ||
+        insert_feedback_set_sub_level(g_connection, node->feedback_window.id,
+                                      insert_feedback_window_sub_level(node->window_order[0])) != kCGErrorSuccess) {
+        insert_feedback_release_resources(node);
+        return false;
+    }
+
+    node->feedback_window.context = insert_feedback_new_context(g_connection,
+                                                                node->feedback_window.id, NULL);
+    if (!node->feedback_window.context ||
+        insert_feedback_order_window(g_connection, node->feedback_window.id,
+                                     1, node->window_order[0]) != kCGErrorSuccess ||
+        !table_try_add(&g_window_manager.insert_feedback, &node->window_order[0], node)) {
+        insert_feedback_release_resources(node);
+        return false;
+    }
+
+    if (!workspace_is_macos_sequoia_or_newer()) update_window_notifications();
+    return true;
+}
+
 void insert_feedback_show(struct window_node *node)
 {
 #ifdef TESTS
@@ -73,33 +163,14 @@ void insert_feedback_show(struct window_node *node)
         return;
     }
 
-    CFTypeRef frame_region;
+    CFTypeRef frame_region = NULL;
     CGRect frame = {{node->area.x, node->area.y},{node->area.w, node->area.h}};
-    CGSNewRegionWithRect(&frame, &frame_region);
+    if (insert_feedback_new_region(&frame, &frame_region) != kCGErrorSuccess || !frame_region) return;
     frame.origin.x = 0; frame.origin.y = 0;
 
-    if (!node->feedback_window.id) {
-        uint64_t tags = (1ULL << 1) | (1ULL << 9);
-        CFTypeRef empty_region = CGRegionCreateEmptyRegion();
-        SLSNewWindowWithOpaqueShapeAndContext(g_connection, 2, frame_region, empty_region, 13, &tags, 0, 0, 64, &node->feedback_window.id, NULL);
-        CFRelease(empty_region);
-
-        // Shadow suppression is cosmetic; keep insertion feedback usable if it fails.
-        (void) sls_window_disable_shadow(node->feedback_window.id);
-        SLSSetWindowResolution(g_connection, node->feedback_window.id, 1.0f);
-        SLSSetWindowOpacity(g_connection, node->feedback_window.id, 0);
-        SLSSetWindowLevel(g_connection, node->feedback_window.id, window_level(node->window_order[0]));
-        SLSSetWindowSubLevel(g_connection, node->feedback_window.id, window_sub_level(node->window_order[0]));
-        node->feedback_window.context = SLWindowContextCreate(g_connection, node->feedback_window.id, 0);
-        SLSDisableUpdate(g_connection);
-        CGContextClearRect(node->feedback_window.context, frame);
-        CGContextFlush(node->feedback_window.context);
-        SLSReenableUpdate(g_connection);
-        SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
-        table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
-        if (!workspace_is_macos_sequoia_or_newer()) {
-            update_window_notifications();
-        }
+    if (!node->feedback_window.id && !insert_feedback_create(node, frame_region)) {
+        CFRelease(frame_region);
+        return;
     }
 
     struct insert_feedback_geometry geometry = insert_feedback_geometry_make(frame,
@@ -148,6 +219,15 @@ void insert_feedback_show(struct window_node *node)
     CGRect clip = { { rect.origin.x + clip_x, rect.origin.y + clip_y }, { rect.size.width + clip_w, rect.size.height + clip_h } };
     CGPathRef path = CGPathCreateWithRoundedRect(rect, geometry.corner_radius_x, geometry.corner_radius_y, NULL);
     CGPathRef fill_path = CGPathCreateWithRoundedRect(fill, geometry.fill_radius_x, geometry.fill_radius_y, NULL);
+    if (!path || !fill_path ||
+        insert_feedback_set_shape(g_connection, node->feedback_window.id, 0.0f, 0.0f,
+                                  frame_region) != kCGErrorSuccess) {
+        if (fill_path) CGPathRelease(fill_path);
+        if (path) CGPathRelease(path);
+        CFRelease(frame_region);
+        insert_feedback_destroy(node);
+        return;
+    }
 
     CGContextSetLineWidth(node->feedback_window.context, width);
     CGContextSetRGBFillColor(node->feedback_window.context,
@@ -160,8 +240,7 @@ void insert_feedback_show(struct window_node *node)
                                g_window_manager.insert_feedback_color.g,
                                g_window_manager.insert_feedback_color.b,
                                g_window_manager.insert_feedback_color.a);
-    SLSDisableUpdate(g_connection);
-    SLSSetWindowShape(g_connection, node->feedback_window.id, 0.0f, 0.0f, frame_region);
+    bool update_disabled = SLSDisableUpdate(g_connection) == kCGErrorSuccess;
     CGContextClearRect(node->feedback_window.context, frame);
     CGContextClipToRect(node->feedback_window.context, clip);
     CGContextAddPath(node->feedback_window.context, fill_path);
@@ -170,7 +249,7 @@ void insert_feedback_show(struct window_node *node)
     CGContextStrokePath(node->feedback_window.context);
     CGContextResetClip(node->feedback_window.context);
     CGContextFlush(node->feedback_window.context);
-    SLSReenableUpdate(g_connection);
+    if (update_disabled) (void) SLSReenableUpdate(g_connection);
     CGPathRelease(fill_path);
     CGPathRelease(path);
     CFRelease(frame_region);
@@ -188,15 +267,8 @@ void insert_feedback_destroy(struct window_node *node)
 
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
-
-        if (!workspace_is_macos_sequoia_or_newer()) {
-            update_window_notifications();
-        }
-
-        SLSOrderWindow(g_connection, node->feedback_window.id, 0, 0);
-        CGContextRelease(node->feedback_window.context);
-        SLSReleaseWindow(g_connection, node->feedback_window.id);
-        memset(&node->feedback_window, 0, sizeof(struct feedback_window));
+        if (!workspace_is_macos_sequoia_or_newer()) update_window_notifications();
+        insert_feedback_release_resources(node);
     }
 }
 
@@ -204,7 +276,9 @@ void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id)
 {
     if (node->feedback_window.id && prev_window_id != node->window_order[0]) {
         table_remove(&g_window_manager.insert_feedback, &prev_window_id);
-        table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
+        if (!table_try_add(&g_window_manager.insert_feedback, &node->window_order[0], node)) {
+            insert_feedback_abandon(node);
+        }
 
         if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
@@ -214,11 +288,14 @@ void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id)
 
 static void insert_feedback_adopt(struct window_node *parent, struct window_node *child)
 {
-    if (child->feedback_window.id) {
+    bool had_feedback = child->feedback_window.id != 0;
+    bool adopted = false;
+    if (had_feedback) {
         table_remove(&g_window_manager.insert_feedback, &child->window_order[0]);
         parent->feedback_window = child->feedback_window;
         memset(&child->feedback_window, 0, sizeof(struct feedback_window));
-        table_add(&g_window_manager.insert_feedback, &parent->window_order[0], parent);
+        adopted = table_try_add(&g_window_manager.insert_feedback, &parent->window_order[0], parent);
+        if (!adopted) insert_feedback_abandon(parent);
 
         if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();
@@ -226,7 +303,7 @@ static void insert_feedback_adopt(struct window_node *parent, struct window_node
     }
 
     if (g_mouse_state.feedback_node == child) {
-        g_mouse_state.feedback_node = parent;
+        g_mouse_state.feedback_node = !had_feedback || adopted ? parent : NULL;
     }
 }
 
@@ -646,8 +723,14 @@ void window_node_swap_window_list(struct window_node *a_node, struct window_node
     if (a_node->feedback_window.id || b_node->feedback_window.id) {
         if (a_node->feedback_window.id) table_remove(&g_window_manager.insert_feedback, &a_prev_order_head);
         if (b_node->feedback_window.id) table_remove(&g_window_manager.insert_feedback, &b_prev_order_head);
-        if (a_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &a_node->window_order[0], a_node);
-        if (b_node->feedback_window.id) table_add(&g_window_manager.insert_feedback, &b_node->window_order[0], b_node);
+        if (a_node->feedback_window.id &&
+            !table_try_add(&g_window_manager.insert_feedback, &a_node->window_order[0], a_node)) {
+            insert_feedback_abandon(a_node);
+        }
+        if (b_node->feedback_window.id &&
+            !table_try_add(&g_window_manager.insert_feedback, &b_node->window_order[0], b_node)) {
+            insert_feedback_abandon(b_node);
+        }
 
         if (!workspace_is_macos_sequoia_or_newer()) {
             update_window_notifications();

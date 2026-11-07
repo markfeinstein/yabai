@@ -1,14 +1,25 @@
+#ifdef TESTS
+static workspace_context *(*workspace_test_context_create)(void);
+#endif
+
+static workspace_context *workspace_context_create(void)
+{
+#ifdef TESTS
+    if (workspace_test_context_create) return workspace_test_context_create();
+#endif
+    return [[workspace_context alloc] init];
+}
+
 bool workspace_event_handler_begin(void **context)
 {
+    if (!context) return false;
     NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
     workspace_set_macos_version(os_version.majorVersion);
 
-    workspace_context *ws_context = [workspace_context alloc];
+    workspace_context *ws_context = workspace_context_create();
     if (!ws_context) return false;
 
-    [ws_context init];
     *context = ws_context;
-
     return true;
 }
 

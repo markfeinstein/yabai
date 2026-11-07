@@ -196,6 +196,7 @@ static bool test_temp_storage_ensure(uint64_t size);
 #include "area.c"
 #include "display.c"
 #include "window.c"
+#include "workspace.c"
 #include "window_constraints.c"
 #include "accessibility_preferences.c"
 #include "window_management_bridge.c"

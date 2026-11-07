@@ -441,6 +441,145 @@ TEST_FUNC(insert_feedback_geometry_clamps_configured_values_to_safe_rectangles,
     TEST_CHECK(negative.fill_rect.size.height, 0.0);
 });
 
+static CGError insert_feedback_test_region_ok(CGRect *frame, CFTypeRef *region)
+{
+    (void) frame;
+    *region = CFRetain(kCFBooleanTrue);
+    return kCGErrorSuccess;
+}
+
+static CGError insert_feedback_test_region_fail(CGRect *frame, CFTypeRef *region)
+{
+    (void) frame;
+    (void) region;
+    return kCGErrorFailure;
+}
+
+static CFTypeRef insert_feedback_test_empty_ok(void) { return CFRetain(kCFBooleanTrue); }
+static CFTypeRef insert_feedback_test_empty_fail(void) { return NULL; }
+static CGError insert_feedback_test_window_result;
+static CGError insert_feedback_test_new_window(int cid, int type, CFTypeRef region, CFTypeRef shape,
+                                               int options, uint64_t *tags, float x, float y,
+                                               int tag_size, uint32_t *wid, void *context)
+{
+    (void) cid; (void) type; (void) region; (void) shape; (void) options; (void) tags;
+    (void) x; (void) y; (void) tag_size; (void) context;
+    if (insert_feedback_test_window_result == kCGErrorSuccess) *wid = 99;
+    return insert_feedback_test_window_result;
+}
+
+static CGContextRef insert_feedback_test_context_result;
+static CGContextRef insert_feedback_test_new_context(int cid, uint32_t wid, CFDictionaryRef options)
+{
+    (void) cid; (void) wid; (void) options;
+    return insert_feedback_test_context_result ? CGContextRetain(insert_feedback_test_context_result) : NULL;
+}
+
+static bool insert_feedback_test_shadow(uint32_t wid) { (void) wid; return true; }
+static int insert_feedback_test_level(uint32_t wid) { (void) wid; return 1; }
+static CGError insert_feedback_test_set_double(int cid, uint32_t wid, double value)
+{ (void) cid; (void) wid; (void) value; return kCGErrorSuccess; }
+static CGError insert_feedback_test_set_bool(int cid, uint32_t wid, bool value)
+{ (void) cid; (void) wid; (void) value; return kCGErrorSuccess; }
+static CGError insert_feedback_test_set_int(int cid, uint32_t wid, int value)
+{ (void) cid; (void) wid; (void) value; return kCGErrorSuccess; }
+static CGError insert_feedback_test_shape_result;
+static CGError insert_feedback_test_set_shape(int cid, uint32_t wid, float x, float y, CFTypeRef shape)
+{ (void) cid; (void) wid; (void) x; (void) y; (void) shape; return insert_feedback_test_shape_result; }
+static CGError insert_feedback_test_order(int cid, uint32_t wid, int order, uint32_t relative)
+{ (void) cid; (void) wid; (void) order; (void) relative; return kCGErrorSuccess; }
+static int insert_feedback_test_release_count;
+static CGError insert_feedback_test_release(int cid, uint32_t wid)
+{ (void) cid; (void) wid; ++insert_feedback_test_release_count; return kCGErrorSuccess; }
+
+TEST_FUNC(insert_feedback_creation_failures_unwind_without_publication,
+{
+    TEST_OVERRIDE(insert_feedback_new_region, insert_feedback_test_region_fail);
+    TEST_OVERRIDE(insert_feedback_empty_region, insert_feedback_test_empty_ok);
+    TEST_OVERRIDE(insert_feedback_new_window, insert_feedback_test_new_window);
+    TEST_OVERRIDE(insert_feedback_new_context, insert_feedback_test_new_context);
+    TEST_OVERRIDE(insert_feedback_disable_shadow, insert_feedback_test_shadow);
+    TEST_OVERRIDE(insert_feedback_window_level, insert_feedback_test_level);
+    TEST_OVERRIDE(insert_feedback_window_sub_level, insert_feedback_test_level);
+    TEST_OVERRIDE(insert_feedback_set_resolution, insert_feedback_test_set_double);
+    TEST_OVERRIDE(insert_feedback_set_opacity, insert_feedback_test_set_bool);
+    TEST_OVERRIDE(insert_feedback_set_level, insert_feedback_test_set_int);
+    TEST_OVERRIDE(insert_feedback_set_sub_level, insert_feedback_test_set_int);
+    TEST_OVERRIDE(insert_feedback_set_shape, insert_feedback_test_set_shape);
+    TEST_OVERRIDE(insert_feedback_order_window, insert_feedback_test_order);
+    TEST_OVERRIDE(insert_feedback_release_window, insert_feedback_test_release);
+
+    struct table saved_feedback = g_window_manager.insert_feedback;
+    memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
+    table_init(&g_window_manager.insert_feedback, 1, hash_wm, compare_wm);
+    long saved_macos_version = workspace_macos_major_version();
+    workspace_set_macos_version(15);
+    g_window_manager.insert_feedback_width = 2.0f;
+    g_window_manager.insert_feedback_radius = 9.0f;
+    g_window_manager.insert_feedback_color = rgba_color_from_hex(0xffffffff);
+
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    insert_feedback_test_context_result = color_space
+        ? CGBitmapContextCreate(NULL, 16, 16, 8, 64, color_space,
+                                (CGBitmapInfo) kCGImageAlphaPremultipliedLast)
+        : NULL;
+    if (color_space) CGColorSpaceRelease(color_space);
+    TEST_CHECK(insert_feedback_test_context_result != NULL, true);
+
+    struct window_node node = {
+        .window_order = { 42 }, .window_count = 1, .insert_dir = STACK,
+        .area = { 0, 0, 100, 50 }
+    };
+    insert_feedback_test_release_count = 0;
+    insert_feedback_show(&node);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 0);
+
+    insert_feedback_new_region = insert_feedback_test_region_ok;
+    insert_feedback_empty_region = insert_feedback_test_empty_fail;
+    insert_feedback_show(&node);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 0);
+
+    insert_feedback_empty_region = insert_feedback_test_empty_ok;
+    insert_feedback_test_window_result = kCGErrorFailure;
+    insert_feedback_show(&node);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 0);
+
+    insert_feedback_test_window_result = kCGErrorSuccess;
+    if (insert_feedback_test_context_result) CGContextRelease(insert_feedback_test_context_result);
+    insert_feedback_test_context_result = NULL;
+    insert_feedback_show(&node);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 1);
+
+    color_space = CGColorSpaceCreateDeviceRGB();
+    insert_feedback_test_context_result = color_space
+        ? CGBitmapContextCreate(NULL, 16, 16, 8, 64, color_space,
+                                (CGBitmapInfo) kCGImageAlphaPremultipliedLast)
+        : NULL;
+    if (color_space) CGColorSpaceRelease(color_space);
+    table_test_fail_allocation_after(0);
+    insert_feedback_show(&node);
+    table_test_fail_allocation_after(-1);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 2);
+    TEST_CHECK(table_find(&g_window_manager.insert_feedback, &node.window_order[0]) == NULL, true);
+
+    insert_feedback_test_shape_result = kCGErrorFailure;
+    insert_feedback_show(&node);
+    TEST_CHECK(node.feedback_window.id, 0U);
+    TEST_CHECK(insert_feedback_test_release_count, 3);
+    TEST_CHECK(table_find(&g_window_manager.insert_feedback, &node.window_order[0]) == NULL, true);
+
+    if (insert_feedback_test_context_result) CGContextRelease(insert_feedback_test_context_result);
+    insert_feedback_test_context_result = NULL;
+    workspace_set_macos_version(saved_macos_version);
+    table_free(&g_window_manager.insert_feedback);
+    g_window_manager.insert_feedback = saved_feedback;
+});
+
 static bool lifecycle_test_space_is_user(uint64_t sid, void *context)
 {
     (void) sid; (void) context;
