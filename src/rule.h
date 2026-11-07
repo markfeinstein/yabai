@@ -39,7 +39,8 @@ enum rule_owner
 enum rule_add_result
 {
     RULE_ADD_OK,
-    RULE_ADD_PROTECTED_COLLISION
+    RULE_ADD_PROTECTED_COLLISION,
+    RULE_ADD_ALLOCATION_FAILED
 };
 
 enum rule_remove_result

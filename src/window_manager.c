@@ -2905,13 +2905,14 @@ void window_manager_capture_window_origin(uint64_t *sid, bool *fixed)
     *fixed = *sid != 0;
 }
 
-void window_manager_request_application_refresh(struct window_manager *wm,
+bool window_manager_request_application_refresh(struct window_manager *wm,
                                                 struct application *application);
 
 struct window **window_manager_add_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int *count)
 {
     *count = 0;
     struct window **list = NULL;
+    bool capture_ok = true;
     application->launch_refresh = true;
     if (!rule_retry_pending_one_shots() || !rule_reserve_one_shots(application)) {
         window_manager_request_application_refresh(wm, application);
@@ -2939,7 +2940,11 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
             struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true,
                                                                           application->pid, application->initial_window_inventory, &retry);
             if (window) {
-                buf_push(list, window);
+                if (capture_ok && !buf_try_push(list, window)) {
+                    capture_ok = false;
+                    buf_free(list);
+                    list = NULL;
+                }
             } else if (retry && !window_manager_schedule_window_created_retry(
                            window_ref, application, origin_sid, origin_fixed, 0, 100,
                            true, application->pid, application->initial_window_inventory)) {
@@ -2949,7 +2954,14 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
         CFRelease(window_list);
     }
 
-    window_manager_add_existing_application_windows(sm, wm, application, -1, &list, count);
+    bool inventory_ok = capture_ok && window_manager_add_existing_application_windows(
+        sm, wm, application, -1, &list, count);
+    if (!capture_ok || !inventory_ok) {
+        buf_free(list);
+        *count = 0;
+        (void)window_manager_request_application_refresh(wm, application);
+        return NULL;
+    }
     *count = buf_len(list);
     return list;
 }
@@ -3049,12 +3061,12 @@ static bool window_manager_window_list_is_resolved(struct window_manager *wm, ui
     return true;
 }
 
-void window_manager_request_application_refresh(struct window_manager *wm, struct application *application)
+bool window_manager_request_application_refresh(struct window_manager *wm, struct application *application)
 {
     for (int i = 0; i < buf_len(wm->applications_to_refresh); ++i) {
-        if (wm->applications_to_refresh[i] == application) return;
+        if (wm->applications_to_refresh[i] == application) return true;
     }
-    buf_push(wm->applications_to_refresh, application);
+    return buf_try_push(wm->applications_to_refresh, application);
 }
 
 bool window_manager_remove_application_refresh(struct window_manager *wm, struct application *application)
@@ -3096,6 +3108,7 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 {
     if (refresh_index == -1) window_manager_begin_inactive_probe_pass(4096);
     bool result = false;
+    bool capture_ok = true;
     if (created_count) *created_count = 0;
     if (application->launch_refresh && !rule_retry_pending_one_shots()) {
         window_manager_request_application_refresh(wm, application);
@@ -3141,12 +3154,14 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
             struct window *window = window_manager_create_and_add_window_with_server_record(
                 sm, wm, application, CFRetain(window_ref), window_id, server_record,
                 one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
-            if (window && created_windows) buf_push(*created_windows, window);
+            if (window && created_windows && capture_ok &&
+                !buf_try_push(*created_windows, window)) capture_ok = false;
         }
     }
 
     if (!window_manager_window_list_is_resolved(wm, global_window_list, global_window_count)) {
             bool missing_window = false;
+            bool probe_list_ok = true;
             uint32_t *app_window_list = NULL;
 
             int probe_role_count = 0;
@@ -3157,11 +3172,14 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                 struct window *window = window_manager_find_window(wm, global_window_list[i]);
                 if (!window) {
                     missing_window = true;
-                    ts_buf_push(app_window_list, global_window_list[i]);
+                    if (!ts_buf_try_push(app_window_list, global_window_list[i])) {
+                        probe_list_ok = false;
+                        break;
+                    }
                 }
             }
 
-            if (missing_window) {
+            if (missing_window && probe_list_ok) {
                 debug("%s: %s has %d windows that are not yet resolved, attempting workaround\n", __FUNCTION__, application->name, ts_buf_len(app_window_list));
 
                 //
@@ -3255,7 +3273,8 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
                                     one_shot_rules, one_shot_owner_pid, application->initial_window_inventory, NULL);
 #endif
                                 if (window) {
-                                    if (created_windows) buf_push(*created_windows, window);
+                                    if (created_windows && capture_ok &&
+                                        !buf_try_push(*created_windows, window)) capture_ok = false;
                                     ts_buf_del(app_window_list, match_index);
                                 }
                             }
@@ -3280,7 +3299,11 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
             }
 
 probe_complete:
-            if (ts_buf_len(app_window_list) > 0) {
+            if (!probe_list_ok) {
+                debug("%s: could not allocate inactive-window probe storage for %s\n",
+                      __FUNCTION__, application->name);
+                (void)window_manager_request_application_refresh(wm, application);
+            } else if (ts_buf_len(app_window_list) > 0) {
                 debug("%s: workaround failed to resolve all windows for %s (probed roles=%d windows=%d last_window_element_id=%llu unresolved=%d)\n",
                       __FUNCTION__, application->name, probe_role_count, probe_window_count, probe_last_window_element_id, ts_buf_len(app_window_list));
                 for (int i = 0; i < ts_buf_len(app_window_list); ++i) {
@@ -3292,7 +3315,8 @@ probe_complete:
             }
     }
 
-    bool fully_resolved = window_manager_window_list_is_resolved(wm, global_window_list, global_window_count);
+    bool fully_resolved = capture_ok &&
+                          window_manager_window_list_is_resolved(wm, global_window_list, global_window_count);
     bool finalization_ok = !fully_resolved || !application->launch_refresh ||
                            rule_finalize_one_shots(application);
     if (fully_resolved && finalization_ok && refresh_index != -1 &&
@@ -3304,6 +3328,11 @@ probe_complete:
 
     if (window_list_ref) CFRelease(window_list_ref);
     window_server_snapshot_destroy(window_server_snapshot);
+    if (!capture_ok && created_windows) {
+        buf_free(*created_windows);
+        *created_windows = NULL;
+        (void)window_manager_request_application_refresh(wm, application);
+    }
     if (created_count && created_windows) *created_count = buf_len(*created_windows);
     if (fully_resolved && finalization_ok) {
         application->inactive_probe_cursor = 0;
@@ -4304,11 +4333,20 @@ bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct 
     struct window *existing_window = window_manager_find_scratchpad_window(wm, label);
     if (existing_window) return false;
 
+    bool replaces_existing = false;
+    for (int i = 0; i < buf_len(wm->scratchpad_window); ++i) {
+        if (wm->scratchpad_window[i].window == window) {
+            replaces_existing = true;
+            break;
+        }
+    }
+    if (!replaces_existing && !buf_try_fit(wm->scratchpad_window, 1)) return false;
+
     window_manager_remove_scratchpad_for_window(wm, window, false);
-    buf_push(wm->scratchpad_window, ((struct scratchpad) {
+    if (!buf_try_push(wm->scratchpad_window, ((struct scratchpad) {
         .label = label,
         .window = window
-    }));
+    }))) return false;
     window->scratchpad = label;
     window_manager_make_window_floating(&g_space_manager, wm, window, true, false);
 

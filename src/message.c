@@ -2052,8 +2052,12 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
         char *label;
         if (parse_label(rsp, get_token(&message), LABEL_DISPLAY, &label)) {
             if (label) {
-                display_manager_set_label_for_display(&g_display_manager, acting_did, label);
-                menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_DISPLAY);
+                if (!display_manager_set_label_for_display(&g_display_manager, acting_did, label)) {
+                    daemon_fail(rsp, "could not allocate display label storage.\n");
+                    free(label);
+                } else {
+                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_DISPLAY);
+                }
             } else {
                 if (!display_manager_remove_label_for_display(&g_display_manager, acting_did)) {
                     daemon_fail(rsp, "the selected display was not associated with a label!\n");
@@ -2385,8 +2389,12 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
             char *label;
             if (parse_label(rsp, get_token(&message), LABEL_SPACE, &label)) {
                 if (label) {
-                    space_manager_set_label_for_space(&g_space_manager, acting_sid, label);
-                    menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_SPACE);
+                    if (!space_manager_set_label_for_space(&g_space_manager, acting_sid, label)) {
+                        daemon_fail(rsp, "could not allocate space label storage.\n");
+                        free(label);
+                    } else {
+                        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_LABEL | MENU_BAR_DIRTY_SPACE);
+                    }
                 } else {
                     if (!space_manager_remove_label_for_space(&g_space_manager, acting_sid)) {
                         daemon_fail(rsp, "the selected space was not associated with a label!\n");
@@ -3345,8 +3353,12 @@ static void handle_domain_rule(FILE *rsp, struct token domain, char *message)
         }
 
         if (parse_rule(rsp, &message, &rule, token)) {
-            if (rule_add(&rule) == RULE_ADD_PROTECTED_COLLISION) {
+            enum rule_add_result add_result = rule_add(&rule);
+            if (add_result == RULE_ADD_PROTECTED_COLLISION) {
                 daemon_fail(rsp, "rule with label '%s' is native and cannot be replaced.\n", rule.label);
+                rule_destroy(&rule);
+            } else if (add_result == RULE_ADD_ALLOCATION_FAILED) {
+                daemon_fail(rsp, "could not allocate rule storage.\n");
                 rule_destroy(&rule);
             }
         } else {
@@ -3514,7 +3526,10 @@ static void handle_domain_signal(FILE *rsp, struct token domain, char *message)
         }
 
         if (did_parse) {
-            event_signal_add(signal_type, &signal);
+            if (!event_signal_add(signal_type, &signal)) {
+                daemon_fail(rsp, "could not allocate signal storage.\n");
+                event_signal_destroy(&signal);
+            }
         } else {
             event_signal_destroy(&signal);
         }

@@ -186,6 +186,45 @@ TEST_FUNC(message_rule_and_signal_allocation_failures_are_atomic,
 
 });
 
+TEST_FUNC(message_rule_and_signal_buffer_growth_failures_are_atomic,
+{
+    struct rule *saved_rules = g_window_manager.rules;
+    struct signal *saved_signals = g_signal_event[SIGNAL_APPLICATION_LAUNCHED];
+    g_window_manager.rules = NULL;
+    g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = NULL;
+    g_test_buffer_realloc_fail = true;
+
+    char rule_wire[] = "--add\0app=^App$\0";
+    FILE *rule_response = tmpfile();
+    TEST_CHECK(rule_response != NULL, true);
+    if (rule_response) {
+        handle_domain_rule(rule_response, message_test_token("rule"), rule_wire);
+        rewind(rule_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, rule_response);
+        TEST_CHECK(strstr(output, "could not allocate rule storage") != NULL, true);
+        fclose(rule_response);
+    }
+    TEST_CHECK(g_window_manager.rules == NULL, true);
+
+    char signal_wire[] = "--add\0event=application_launched\0action=echo test\0";
+    FILE *signal_response = tmpfile();
+    TEST_CHECK(signal_response != NULL, true);
+    if (signal_response) {
+        handle_domain_signal(signal_response, message_test_token("signal"), signal_wire);
+        rewind(signal_response);
+        char output[256] = {0};
+        fread(output, 1, sizeof(output) - 1, signal_response);
+        TEST_CHECK(strstr(output, "could not allocate signal storage") != NULL, true);
+        fclose(signal_response);
+    }
+    TEST_CHECK(g_signal_event[SIGNAL_APPLICATION_LAUNCHED] == NULL, true);
+
+    g_test_buffer_realloc_fail = false;
+    g_window_manager.rules = saved_rules;
+    g_signal_event[SIGNAL_APPLICATION_LAUNCHED] = saved_signals;
+})
+
 TEST_FUNC(message_rule_and_signal_reject_duplicate_fields,
 {
     char duplicate_rule[] = "app=first\0app=second\0";

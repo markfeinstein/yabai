@@ -104,14 +104,26 @@ static inline void *ts_alloc_unaligned(uint64_t size)
     return g_temp_storage.memory + used;
 }
 
+static inline bool ts_expand_checked(void *ptr, uint64_t old_size, uint64_t increment)
+{
+    if (!ptr) return false;
+    for (;;) {
+        uint64_t used = __atomic_load_n(&g_temp_storage.used, __ATOMIC_RELAXED);
+        if (old_size > used || ptr != g_temp_storage.memory + used - old_size ||
+            used > g_temp_storage.size || increment > g_temp_storage.size - used) return false;
+        if (__sync_bool_compare_and_swap(&g_temp_storage.used, used, used + increment)) return true;
+    }
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static inline void *ts_expand(void *ptr, uint64_t old_size, uint64_t increment)
 {
     if (ptr) {
-        assert(ptr == g_temp_storage.memory + g_temp_storage.used - old_size);
-        uint64_t used = __sync_fetch_and_add(&g_temp_storage.used, increment);
-        ts_assert_within_bounds(used+increment);
+        if (!ts_expand_checked(ptr, old_size, increment)) {
+            fprintf(stderr, "fatal error: temporary storage expansion failed\n");
+            exit(EXIT_FAILURE);
+        }
     } else {
         ptr = ts_alloc_unaligned(increment);
     }

@@ -100,7 +100,10 @@ size_t application_responsiveness_drain(void)
                   snapshot.unresponsive ? "unresponsive" : "responsive");
             if (!snapshot.unresponsive) {
                 application->ax_retry = true;
-                window_manager_request_application_refresh(&g_window_manager, application);
+                if (!window_manager_request_application_refresh(&g_window_manager, application)) {
+                    warn("%s: could not queue refresh for %s (%d)\n", __FUNCTION__,
+                         application->name ? application->name : "<unknown>", application->pid);
+                }
             }
         }
         ++applied;

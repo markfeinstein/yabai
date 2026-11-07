@@ -433,10 +433,20 @@ enum signal_type signal_type_from_string(const char *str)
     return SIGNAL_TYPE_UNKNOWN;
 }
 
-void event_signal_add(enum signal_type type, struct signal *signal)
+bool event_signal_add(enum signal_type type, struct signal *signal)
 {
+    bool replaces_existing = false;
+    if (signal->label) {
+        for (int i = 0; i < buf_len(g_signal_event[type]); ++i) {
+            if (string_equals(signal->label, g_signal_event[type][i].label)) {
+                replaces_existing = true;
+                break;
+            }
+        }
+    }
+    if (!replaces_existing && !buf_try_fit(g_signal_event[type], 1)) return false;
     if (signal->label) event_signal_remove(signal->label);
-    buf_push(g_signal_event[type], *signal);
+    return buf_try_push(g_signal_event[type], *signal);
 }
 
 void event_signal_destroy(struct signal *signal)

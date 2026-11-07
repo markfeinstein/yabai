@@ -36,6 +36,13 @@ static FILE *daemon_response_test_fmemopen(void *bytes, size_t size, const char 
 #define DAEMON_RESPONSE_ALLOCATE(size) daemon_response_test_allocate(size)
 #define DAEMON_RESPONSE_FMEMOPEN(bytes, size, mode) daemon_response_test_fmemopen(bytes, size, mode)
 
+static bool g_test_buffer_realloc_fail;
+static void *test_buffer_realloc(void *pointer, size_t size)
+{
+    return g_test_buffer_realloc_fail ? NULL : realloc(pointer, size);
+}
+#define BUFFER_REALLOC(pointer, size) test_buffer_realloc((pointer), (size))
+
 static bool g_test_cfarray_create_mutable_fail;
 static bool g_test_cfdictionary_create_fail;
 static int g_test_cfnumber_create_fail_after = -1;
@@ -586,6 +593,96 @@ TEST_FUNC(stretch_buffers_use_full_capacity_before_growth,
     TEST_CHECK(g_temp_storage.used, temporary_used);
     TEST_CHECK(ts_buf_len(temporary_values), 3);
 });
+
+TEST_FUNC(stretch_buffer_growth_failures_preserve_existing_storage,
+{
+    uint32_t *heap_values = NULL;
+    g_test_buffer_realloc_fail = true;
+    TEST_CHECK(buf_try_push(heap_values, 1), false);
+    TEST_CHECK(heap_values == NULL, true);
+
+    g_test_buffer_realloc_fail = false;
+    TEST_CHECK(buf_try_push(heap_values, 11), true);
+    uint32_t *original_heap = heap_values;
+    int original_heap_length = buf_len(heap_values);
+    g_test_buffer_realloc_fail = true;
+    TEST_CHECK(buf_try_push(heap_values, 12), false);
+    TEST_CHECK(heap_values == original_heap, true);
+    TEST_CHECK(buf_len(heap_values), original_heap_length);
+    TEST_CHECK(heap_values[0], 11U);
+    g_test_buffer_realloc_fail = false;
+    buf_free(heap_values);
+
+    char fake_storage[offsetof(struct buf_hdr, buf) + sizeof(uint32_t)] = {0};
+    struct buf_hdr *fake_header = (struct buf_hdr *) fake_storage;
+    fake_header->len = INT_MAX;
+    fake_header->cap = INT_MAX;
+    uint32_t *fake_values = (uint32_t *) fake_header->buf;
+    TEST_CHECK(buf_try_fit(fake_values, 1), false);
+    TEST_CHECK(fake_values == (uint32_t *) fake_header->buf, true);
+
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+    ts_reset();
+    uint32_t *temporary_values = NULL;
+    TEST_CHECK(ts_buf_try_push(temporary_values, 21), true);
+    uint32_t *original_temporary = temporary_values;
+    int original_temporary_length = ts_buf_len(temporary_values);
+    TEST_CHECK(ts_alloc_unaligned(1) != NULL, true);
+    TEST_CHECK(ts_buf_try_push(temporary_values, 22), false);
+    TEST_CHECK(temporary_values == original_temporary, true);
+    TEST_CHECK(ts_buf_len(temporary_values), original_temporary_length);
+    TEST_CHECK(temporary_values[0], 21U);
+})
+
+TEST_FUNC(heap_stretch_buffer_consumers_preserve_ownership_on_allocation_failure,
+{
+    g_test_buffer_realloc_fail = true;
+
+    struct display_manager display_manager = {0};
+    char *display_label = strdup("display");
+    TEST_CHECK(display_manager_set_label_for_display(&display_manager, 1, display_label), false);
+    TEST_CHECK(display_manager.labels == NULL, true);
+    free(display_label);
+
+    struct space_manager space_manager = {0};
+    char *space_label = strdup("space");
+    TEST_CHECK(space_manager_set_label_for_space(&space_manager, 1, space_label), false);
+    TEST_CHECK(space_manager.labels == NULL, true);
+    free(space_label);
+
+    struct window_manager window_manager = {0};
+    struct window window = {0};
+    char *scratchpad_label = strdup("scratchpad");
+    TEST_CHECK(window_manager_set_scratchpad_for_window(&window_manager, &window, scratchpad_label), false);
+    TEST_CHECK(window_manager.scratchpad_window == NULL, true);
+    TEST_CHECK(window.scratchpad == NULL, true);
+    free(scratchpad_label);
+
+    struct application application = {0};
+    TEST_CHECK(window_manager_request_application_refresh(&window_manager, &application), false);
+    TEST_CHECK(window_manager.applications_to_refresh == NULL, true);
+
+    struct rule *saved_rules = g_window_manager.rules;
+    g_window_manager.rules = NULL;
+    struct rule rule = {.label = strdup("runtime-rule")};
+    TEST_CHECK(rule_add(&rule), RULE_ADD_ALLOCATION_FAILED);
+    TEST_CHECK(g_window_manager.rules == NULL, true);
+    rule_destroy(&rule);
+    g_window_manager.rules = saved_rules;
+
+    enum signal_type type = SIGNAL_APPLICATION_LAUNCHED;
+    struct signal *saved_signals = g_signal_event[type];
+    g_signal_event[type] = NULL;
+    struct signal signal = {.command = strdup("true")};
+    TEST_CHECK(event_signal_add(type, &signal), false);
+    TEST_CHECK(g_signal_event[type] == NULL, true);
+    event_signal_destroy(&signal);
+    g_signal_event[type] = saved_signals;
+
+    g_test_buffer_realloc_fail = false;
+})
 
 TEST_FUNC(temporary_stretch_buffer_growth_charges_only_capacity,
 {

@@ -306,10 +306,19 @@ bool space_manager_remove_label_for_space(struct space_manager *sm, uint64_t sid
     return false;
 }
 
-void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, char *label)
+bool space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, char *label)
 {
-    space_manager_remove_label_for_space(sm, sid);
+    bool replaces_existing = false;
+    for (int i = 0; i < buf_len(sm->labels); ++i) {
+        struct space_label *space_label = &sm->labels[i];
+        if (space_label->sid == sid || string_equals(space_label->label, label)) {
+            replaces_existing = true;
+            break;
+        }
+    }
+    if (!replaces_existing && !buf_try_fit(sm->labels, 1)) return false;
 
+    space_manager_remove_label_for_space(sm, sid);
     for (int i = 0; i < buf_len(sm->labels); ++i) {
         struct space_label *space_label = &sm->labels[i];
         if (string_equals(space_label->label, label)) {
@@ -319,7 +328,7 @@ void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, c
         }
     }
 
-    buf_push(sm->labels, ((struct space_label) {
+    return buf_try_push(sm->labels, ((struct space_label) {
         .sid   = sid,
         .label = label
     }));

@@ -326,20 +326,24 @@ static void rule_buffer_delete_ordered(int index)
 
 enum rule_add_result rule_add(struct rule *rule)
 {
+    int replacement = -1;
     if (rule->label) {
         if (rule_native_label_is_protected(rule->label)) return RULE_ADD_PROTECTED_COLLISION;
         for (int i = 0; i < buf_len(g_window_manager.rules); ++i) {
             if (string_equals(g_window_manager.rules[i].label, rule->label)) {
                 if (g_window_manager.rules[i].owner == RULE_OWNER_NATIVE) return RULE_ADD_PROTECTED_COLLISION;
-                rule_destroy(&g_window_manager.rules[i]);
-                rule_buffer_delete_ordered(i);
+                replacement = i;
                 break;
             }
         }
     }
+    if (replacement == -1 && !buf_try_fit(g_window_manager.rules, 1)) return RULE_ADD_ALLOCATION_FAILED;
+    if (replacement != -1) {
+        rule_destroy(&g_window_manager.rules[replacement]);
+        rule_buffer_delete_ordered(replacement);
+    }
     rule->owner = RULE_OWNER_RUNTIME;
-    buf_push(g_window_manager.rules, *rule);
-    return RULE_ADD_OK;
+    return buf_try_push(g_window_manager.rules, *rule) ? RULE_ADD_OK : RULE_ADD_ALLOCATION_FAILED;
 }
 
 enum rule_remove_result rule_remove_by_index(int index)

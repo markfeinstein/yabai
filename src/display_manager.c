@@ -58,10 +58,19 @@ bool display_manager_remove_label_for_display(struct display_manager *dm, uint32
     return false;
 }
 
-void display_manager_set_label_for_display(struct display_manager *dm, uint32_t did, char *label)
+bool display_manager_set_label_for_display(struct display_manager *dm, uint32_t did, char *label)
 {
-    display_manager_remove_label_for_display(dm, did);
+    bool replaces_existing = false;
+    for (int i = 0; i < buf_len(dm->labels); ++i) {
+        struct display_label *display_label = &dm->labels[i];
+        if (display_label->did == did || string_equals(display_label->label, label)) {
+            replaces_existing = true;
+            break;
+        }
+    }
+    if (!replaces_existing && !buf_try_fit(dm->labels, 1)) return false;
 
+    display_manager_remove_label_for_display(dm, did);
     for (int i = 0; i < buf_len(dm->labels); ++i) {
         struct display_label *display_label = &dm->labels[i];
         if (string_equals(display_label->label, label)) {
@@ -71,7 +80,7 @@ void display_manager_set_label_for_display(struct display_manager *dm, uint32_t 
         }
     }
 
-    buf_push(dm->labels, ((struct display_label) {
+    return buf_try_push(dm->labels, ((struct display_label) {
         .did   = did,
         .label = label
     }));

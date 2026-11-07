@@ -121,7 +121,7 @@ struct signal
 void event_signal_push(enum signal_type type, void *context);
 void event_signal_flush(void);
 
-void event_signal_add(enum signal_type type, struct signal *signal);
+bool event_signal_add(enum signal_type type, struct signal *signal);
 void event_signal_destroy(struct signal *signal);
 bool event_signal_remove_by_index(int index);
 bool event_signal_remove(char *label);

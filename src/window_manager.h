@@ -293,7 +293,7 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
 struct window **window_manager_add_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int *count);
 bool window_manager_add_existing_application_windows(struct space_manager *sm, struct window_manager *wm, struct application *application, int refresh_index, struct window ***created_windows, int *created_count);
 void window_manager_capture_window_origin(uint64_t *sid, bool *fixed);
-void window_manager_request_application_refresh(struct window_manager *wm, struct application *application);
+bool window_manager_request_application_refresh(struct window_manager *wm, struct application *application);
 bool window_manager_remove_application_refresh(struct window_manager *wm, struct application *application);
 void window_manager_begin_inactive_probe_pass(int budget);
 int window_manager_inactive_probe_budget_remaining(void);

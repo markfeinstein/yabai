@@ -56,7 +56,7 @@ struct display_manager
 struct display_label *display_manager_get_label_for_display(struct display_manager *dm, uint32_t did);
 struct display_label *display_manager_get_display_for_label(struct display_manager *dm, char *label);
 bool display_manager_remove_label_for_display(struct display_manager *dm, uint32_t did);
-void display_manager_set_label_for_display(struct display_manager *dm, uint32_t did, char *label);
+bool display_manager_set_label_for_display(struct display_manager *dm, uint32_t did, char *label);
 bool display_manager_query_displays(FILE *rsp, uint64_t flags);
 uint32_t display_manager_main_display_id(void);
 CFStringRef display_manager_active_display_uuid(void);
