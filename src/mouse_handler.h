@@ -73,9 +73,6 @@ struct native_move_state
 {
     uint32_t window_id;
     int64_t button;
-    CGPoint down_location;
-    CGPoint drag_location;
-    CGRect initial_frame;
     bool dragging;
     bool claimed;
 };

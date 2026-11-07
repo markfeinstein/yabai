@@ -329,17 +329,14 @@ static void native_move_clear(struct mouse_state *mouse_state)
 }
 
 static void native_move_candidate_begin(struct mouse_state *mouse_state, struct window *window,
-                                        int64_t button, CGPoint point)
+                                        int64_t button)
 {
     native_move_clear(mouse_state);
     if (!window || button != kCGMouseButtonLeft) return;
 
     mouse_state->native_move = (struct native_move_state) {
         .window_id = window->id,
-        .button = button,
-        .down_location = point,
-        .drag_location = point,
-        .initial_frame = window->frame
+        .button = button
     };
 }
 
@@ -356,29 +353,6 @@ static bool native_move_window_is_valid(const struct mouse_state *mouse_state,
            !window_check_flag(window, WINDOW_ORDERED_OUT);
 }
 
-static CGRect native_move_predicted_frame(const struct native_move_state *state)
-{
-    CGRect frame = state->initial_frame;
-    frame.origin.x += state->drag_location.x - state->down_location.x;
-    frame.origin.y += state->drag_location.y - state->down_location.y;
-    return frame;
-}
-
-static bool native_move_refresh_active_window_highlight(struct mouse_state *mouse_state)
-{
-    struct native_move_state *state = &mouse_state->native_move;
-    struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
-    if (!native_move_window_is_valid(mouse_state, window)) {
-        native_move_clear(mouse_state);
-        return false;
-    }
-
-    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
-                                                              window->id,
-                                                              native_move_predicted_frame(state));
-    return true;
-}
-
 static bool native_move_observe(struct mouse_state *mouse_state, struct window *window)
 {
     struct native_move_state *state = &mouse_state->native_move;
@@ -389,17 +363,19 @@ static bool native_move_observe(struct mouse_state *mouse_state, struct window *
         return false;
     }
 
-    state->claimed = true;
-    return native_move_refresh_active_window_highlight(mouse_state);
+    if (!state->claimed) {
+        state->claimed = true;
+        window_manager_hide_active_window_highlight(&g_window_manager);
+    }
+    return true;
 }
 
-static bool native_move_drag(struct mouse_state *mouse_state, int64_t button, CGPoint point)
+static bool native_move_drag(struct mouse_state *mouse_state, int64_t button)
 {
     struct native_move_state *state = &mouse_state->native_move;
     if (!state->window_id || state->button != button) return false;
-    state->drag_location = point;
     state->dragging = true;
-    return state->claimed && native_move_refresh_active_window_highlight(mouse_state);
+    return state->claimed;
 }
 
 static void native_move_end(struct mouse_state *mouse_state, int64_t button)
@@ -410,10 +386,13 @@ static void native_move_end(struct mouse_state *mouse_state, int64_t button)
     if (!state.claimed) return;
 
     struct window *window = window_manager_find_window(&g_window_manager, state.window_id);
-    if (!window || window->id != g_window_manager.focused_window_id) return;
-    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
-                                                              window->id,
-                                                              window_ax_frame(window));
+    if (window && window->id == g_window_manager.focused_window_id) {
+        window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
+                                                                  window->id,
+                                                                  window_ax_frame(window));
+    } else {
+        window_manager_refresh_active_window_highlight(&g_window_manager);
+    }
 }
 
 static uint32_t native_resize_next_generation(struct native_resize_state *state)
@@ -3601,7 +3580,7 @@ static EVENT_HANDLER(NATIVE_RESIZE_CANCEL)
 {
     (void) context;
     (void) param1;
-    native_move_clear(&g_mouse_state);
+    native_move_end(&g_mouse_state, g_mouse_state.native_move.button);
     native_resize_abort(&g_mouse_state, true);
 }
 
@@ -3729,7 +3708,7 @@ static EVENT_HANDLER(MOUSE_DOWN)
             struct window *window = window_manager_find_window(&g_window_manager,
                                                                 g_window_manager.focused_window_id);
             if (window && CGRectContainsPoint(window->frame, point)) {
-                native_move_candidate_begin(&g_mouse_state, window, button, point);
+                native_move_candidate_begin(&g_mouse_state, window, button);
             }
         }
         goto out;
@@ -3770,7 +3749,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
     CGPoint point = CGEventGetLocation(context);
     if (!mouse_drag_event_is_owner(&g_mouse_state, button)) {
         if (mission_control_is_active()) native_move_clear(&g_mouse_state);
-        else (void) native_move_drag(&g_mouse_state, button, point);
+        else (void) native_move_drag(&g_mouse_state, button);
         goto out;
     }
     if (mission_control_is_active()) goto abort;
