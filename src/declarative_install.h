@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "declarative_reload_summary.h"
+
 struct declarative_startup_state;
 struct declarative_topology_capture_ops;
 struct declarative_error;
@@ -33,6 +35,8 @@ void declarative_mode_snapshot_destroy(struct declarative_mode_snapshot *snapsho
 bool declarative_mode_activate(const char *name, struct declarative_modes_error *error);
 bool declarative_mode_deactivate(struct declarative_modes_error *error);
 bool declarative_config_reload(FILE *response);
+bool declarative_config_reload_with_summary(FILE *response,
+                                            struct declarative_reload_summary *summary);
 bool declarative_configuration_reconcile(void);
 /* Event-handler entry owns the coalesced reservation and retry lifecycle. */
 bool declarative_configuration_reconcile_event(uint64_t reservation_token);

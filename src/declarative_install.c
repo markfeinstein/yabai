@@ -1511,8 +1511,10 @@ void declarative_configuration_request_reconcile(void)
 }
 
 static bool declarative_config_reload_with_ops(FILE *response,
-                                               const struct declarative_reload_ops *ops)
+                                               const struct declarative_reload_ops *ops,
+                                               struct declarative_reload_summary *summary)
 {
+    if (summary) memset(summary, 0, sizeof(*summary));
     if (!event_loop_is_worker_thread(&g_event_loop)) {
         declarative_report_runtime_client(response, "runtime", declarative_installed.path, "$", 0, 0,
                                           "reload must run on the event-loop worker");
@@ -1566,6 +1568,8 @@ static bool declarative_config_reload_with_ops(FILE *response,
         declarative_report_runtime_client(response, "runtime", transaction.candidate.path, "$", 0, 0,
                                           "forest and managed-window preparation failed");
     } else if (result) {
+        declarative_reload_summary_build(summary, transaction.retired.model,
+                                         declarative_installed.model);
         declarative_reload_retire(&transaction);
         menu_bar_manager_settings_postcommit(&transaction.previous_menu_settings);
         if (transaction.previous_opacity_enabled != g_window_manager.enable_window_opacity) {
@@ -1598,11 +1602,14 @@ static bool declarative_config_reload_with_ops(FILE *response,
     return result;
 }
 
-bool declarative_config_reload(FILE *response)
+bool declarative_config_reload_with_summary(FILE *response,
+                                            struct declarative_reload_summary *summary)
 {
 #ifdef TESTS
     if (declarative_reload_message_test_ops) {
-        return declarative_config_reload_with_test_ops(response, declarative_reload_message_test_ops);
+        struct declarative_reload_ops test_ops =
+            declarative_reload_ops_from_test(declarative_reload_message_test_ops);
+        return declarative_config_reload_with_ops(response, &test_ops, summary);
     }
 #endif
     const struct declarative_reload_ops ops = {
@@ -1614,7 +1621,12 @@ bool declarative_config_reload(FILE *response)
         .refresh_active_window_highlight = declarative_reload_refresh_active_window_highlight,
         .refresh_insert_feedback = declarative_reload_refresh_insert_feedback
     };
-    return declarative_config_reload_with_ops(response, &ops);
+    return declarative_config_reload_with_ops(response, &ops, summary);
+}
+
+bool declarative_config_reload(FILE *response)
+{
+    return declarative_config_reload_with_summary(response, NULL);
 }
 
 struct declarative_mode_publication
@@ -1934,7 +1946,7 @@ bool declarative_config_reload_with_test_ops(FILE *response,
 {
     if (!test_ops) return false;
     struct declarative_reload_ops ops = declarative_reload_ops_from_test(test_ops);
-    return declarative_config_reload_with_ops(response, &ops);
+    return declarative_config_reload_with_ops(response, &ops, NULL);
 }
 
 bool declarative_configuration_reconcile_with_test_ops(const struct declarative_reload_test_ops *test_ops)

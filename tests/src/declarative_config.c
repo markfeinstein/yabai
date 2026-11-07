@@ -472,3 +472,50 @@ TEST_FUNC(declarative_scaffold_schema_is_strict_and_owned,
         TEST_CHECK(model == NULL, true);
     }
 })
+
+TEST_FUNC(declarative_reload_summary_reports_semantic_section_changes,
+{
+    const char previous_json[] =
+        "{\"version\":3,\"config\":{\"manage\":true,\"window_gap\":8},"
+        "\"spaces\":[{\"match\":{\"index\":1},\"settings\":{\"layout\":\"bsp\"},"
+        "\"scaffold\":[{\"pattern\":\"^Terminal$\"}]}],"
+        "\"modes\":[{\"name\":\"work\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":3}}]}],\"active_mode\":\"work\","
+        "\"rules\":[{\"label\":\"terminal\",\"match\":{\"app\":{\"pattern\":\"^Terminal$\"}},"
+        "\"effects\":{\"manage\":true}}],"
+        "\"keyboard\":{\"enabled\":true,\"bindings\":[{\"key\":\"f\",\"cases\":[{"
+        "\"disposition\":\"consume\",\"action\":{\"type\":\"focus_window\","
+        "\"direction\":\"west\"}}]}]}}";
+    const char current_json[] =
+        "{\"version\":3,\"config\":{\"manage\":false,\"window_gap\":12},"
+        "\"spaces\":[{\"match\":{\"index\":2},\"settings\":{\"layout\":\"bsp\"},"
+        "\"scaffold\":[{\"pattern\":\"^Terminal$\"}]}],"
+        "\"modes\":[{\"name\":\"home\",\"spaces\":[{\"match\":{\"index\":1},"
+        "\"settings\":{\"window_gap\":3}}]}],\"active_mode\":\"home\","
+        "\"rules\":[{\"label\":\"terminal\",\"match\":{\"app\":{\"pattern\":\"^Terminal$\"}},"
+        "\"effects\":{\"manage\":false}}],"
+        "\"keyboard\":{\"enabled\":true,\"bindings\":[{\"key\":\"f\",\"cases\":[{"
+        "\"disposition\":\"consume\",\"action\":{\"type\":\"focus_window\","
+        "\"direction\":\"east\"}}]}]}}";
+    struct declarative_config_model *previous = NULL;
+    struct declarative_config_model *current = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) previous_json, strlen(previous_json),
+                                              "previous.jsonc", &previous, &error), true);
+    memset(&error, 0, sizeof(error));
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *) current_json, strlen(current_json),
+                                              "current.jsonc", &current, &error), true);
+    if (previous && current) {
+        struct declarative_reload_summary summary;
+        declarative_reload_summary_build(&summary, previous, previous);
+        TEST_CHECK(summary.change_count, 0U);
+        TEST_CHECK_STRING(summary.text, "Configuration reloaded. No changes detected.");
+
+        declarative_reload_summary_build(&summary, previous, current);
+        TEST_CHECK(summary.change_count, 7U);
+        TEST_CHECK_STRING(summary.text,
+                          "Configuration reloaded. Changed: manage, window_gap, spaces, modes, active_mode, and 2 more.");
+    }
+    declarative_config_destroy(previous);
+    declarative_config_destroy(current);
+})

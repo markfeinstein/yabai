@@ -1038,6 +1038,26 @@ static void service_quit_test_reset(void)
     g_service_quit_test_valid = true;
 }
 
+TEST_FUNC(notification_uses_yabai_icon_and_omits_empty_subtitle,
+{
+    @autoreleasepool {
+        NSUserNotification *plain = notify_create_notification(NULL, @"Configuration reloaded.");
+        TEST_CHECK(plain != nil, true);
+        TEST_CHECK([[plain title] isEqualToString:@"yabai"], true);
+        TEST_CHECK([plain subtitle] == nil || [[plain subtitle] length] == 0, true);
+        TEST_CHECK([[plain informativeText] isEqualToString:@"Configuration reloaded."], true);
+        TEST_CHECK(g_notify_img != nil, true);
+        TEST_CHECK([g_notify_img isValid], true);
+        TEST_CHECK((int) [g_notify_img size].width, 512);
+        TEST_CHECK((int) [g_notify_img size].height, 512);
+        [plain release];
+
+        NSUserNotification *subtitled = notify_create_notification("service", @"Could not quit.");
+        TEST_CHECK([[subtitled subtitle] isEqualToString:@"service"], true);
+        [subtitled release];
+    }
+});
+
 TEST_FUNC(service_quit_disables_active_launchd_job_before_bootout,
 {
     const char *unmanaged_labels[] = { NULL, "", "0", "application.com.asmvik.yabai.123" };

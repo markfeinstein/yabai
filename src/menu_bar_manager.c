@@ -72,12 +72,13 @@ static void menu_bar_manager_deliver_notification(const char *subtitle, const ch
 }
 
 #ifdef TESTS
-static bool (*menu_bar_manager_reload_config)(FILE *) = declarative_config_reload;
+static bool (*menu_bar_manager_reload_config)(FILE *, struct declarative_reload_summary *) =
+    declarative_config_reload_with_summary;
 static int (*menu_bar_manager_stop_service)(void) = service_stop_for_quit;
 static void (*menu_bar_manager_quit)(void) = menu_bar_request_quit;
 static void (*menu_bar_manager_notify)(const char *, const char *) = menu_bar_manager_deliver_notification;
 #else
-#define menu_bar_manager_reload_config declarative_config_reload
+#define menu_bar_manager_reload_config declarative_config_reload_with_summary
 #define menu_bar_manager_stop_service service_stop_for_quit
 #define menu_bar_manager_quit menu_bar_request_quit
 #define menu_bar_manager_notify menu_bar_manager_deliver_notification
@@ -1352,9 +1353,10 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
     case MENU_BAR_ACTION_RELOAD_CONFIG: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
 
-        if (menu_bar_manager_reload_config(NULL)) {
+        struct declarative_reload_summary summary;
+        if (menu_bar_manager_reload_config(NULL, &summary)) {
             menu_bar_manager_clear_action_failure();
-            menu_bar_manager_notify("configuration", "Configuration reloaded successfully.");
+            menu_bar_manager_notify(NULL, summary.text);
         } else {
             menu_bar_manager_set_action_failure(action->generation, "configuration reload failed");
         }

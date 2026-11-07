@@ -81,10 +81,16 @@ static int g_menu_bar_manager_test_notification_call_count;
 static char g_menu_bar_manager_test_notification_subtitle[64];
 static char g_menu_bar_manager_test_notification_message[128];
 
-static bool menu_bar_manager_test_reload(FILE *response)
+static bool menu_bar_manager_test_reload(FILE *response,
+                                         struct declarative_reload_summary *summary)
 {
     (void) response;
     ++g_menu_bar_manager_test_reload_call_count;
+    if (g_menu_bar_manager_test_reload_result && summary) {
+        summary->change_count = 2;
+        snprintf(summary->text, sizeof(summary->text),
+                 "Configuration reloaded. Changed: window_gap, rules.");
+    }
     return g_menu_bar_manager_test_reload_result;
 }
 
@@ -103,7 +109,7 @@ static void menu_bar_manager_test_notify(const char *subtitle, const char *messa
 {
     ++g_menu_bar_manager_test_notification_call_count;
     snprintf(g_menu_bar_manager_test_notification_subtitle,
-             sizeof(g_menu_bar_manager_test_notification_subtitle), "%s", subtitle);
+             sizeof(g_menu_bar_manager_test_notification_subtitle), "%s", subtitle ? subtitle : "");
     snprintf(g_menu_bar_manager_test_notification_message,
              sizeof(g_menu_bar_manager_test_notification_message), "%s", message);
 }
@@ -965,9 +971,9 @@ TEST_FUNC(menu_bar_manager_reload_and_quit_actions_are_generation_safe, {
     TEST_CHECK(g_menu_bar_manager_test_reload_call_count, 2);
     TEST_CHECK(g_menu_bar_manager.action_failure_text == NULL, true);
     TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 1);
-    TEST_CHECK_STRING(g_menu_bar_manager_test_notification_subtitle, "configuration");
+    TEST_CHECK_STRING(g_menu_bar_manager_test_notification_subtitle, "");
     TEST_CHECK_STRING(g_menu_bar_manager_test_notification_message,
-                      "Configuration reloaded successfully.");
+                      "Configuration reloaded. Changed: window_gap, rules.");
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
 
     struct menu_bar_action *quit = menu_bar_manager_test_action(MENU_BAR_ACTION_QUIT, 5);
