@@ -75,7 +75,7 @@ static enum space_op_error g_menu_bar_manager_test_focus_result;
 static int g_menu_bar_manager_test_reload_call_count;
 static bool g_menu_bar_manager_test_reload_result;
 static int g_menu_bar_manager_test_stop_service_call_count;
-static int g_menu_bar_manager_test_stop_service_result;
+static enum service_quit_result g_menu_bar_manager_test_stop_service_result;
 static int g_menu_bar_manager_test_quit_call_count;
 static int g_menu_bar_manager_test_notification_call_count;
 static char g_menu_bar_manager_test_notification_subtitle[64];
@@ -94,7 +94,7 @@ static bool menu_bar_manager_test_reload(FILE *response,
     return g_menu_bar_manager_test_reload_result;
 }
 
-static int menu_bar_manager_test_stop_service(void)
+static enum service_quit_result menu_bar_manager_test_stop_service(void)
 {
     ++g_menu_bar_manager_test_stop_service_call_count;
     return g_menu_bar_manager_test_stop_service_result;
@@ -457,7 +457,7 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_reload_call_count = 0;
     g_menu_bar_manager_test_reload_result = true;
     g_menu_bar_manager_test_stop_service_call_count = 0;
-    g_menu_bar_manager_test_stop_service_result = 0;
+    g_menu_bar_manager_test_stop_service_result = SERVICE_QUIT_DIRECT;
     g_menu_bar_manager_test_quit_call_count = 0;
     g_menu_bar_manager_test_notification_call_count = 0;
     g_menu_bar_manager_test_notification_subtitle[0] = '\0';
@@ -983,10 +983,19 @@ TEST_FUNC(menu_bar_manager_reload_and_quit_actions_are_generation_safe, {
 
     g_menu_bar_manager.refresh_pending = false;
     g_menu_bar_manager.dirty_reasons = 0;
-    g_menu_bar_manager_test_stop_service_result = 1;
+    g_menu_bar_manager_test_stop_service_result = SERVICE_QUIT_BOOTOUT_REQUESTED;
+    struct menu_bar_action *managed_quit = menu_bar_manager_test_action(MENU_BAR_ACTION_QUIT, 5);
+    menu_bar_manager_handle_action(managed_quit);
+    TEST_CHECK(g_menu_bar_manager_test_stop_service_call_count, 2);
+    TEST_CHECK(g_menu_bar_manager_test_quit_call_count, 1);
+    TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 1);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 0);
+
+    g_menu_bar_manager_test_stop_service_result = SERVICE_QUIT_FAILED;
     struct menu_bar_action *failed_quit = menu_bar_manager_test_action(MENU_BAR_ACTION_QUIT, 5);
     menu_bar_manager_handle_action(failed_quit);
-    TEST_CHECK(g_menu_bar_manager_test_stop_service_call_count, 2);
+    TEST_CHECK(g_menu_bar_manager_test_stop_service_call_count, 3);
     TEST_CHECK(g_menu_bar_manager_test_quit_call_count, 1);
     TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text, "could not stop launchd service");
     TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 2);

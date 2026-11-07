@@ -427,6 +427,13 @@ static int service_restart(void)
 
 typedef int service_exec_fn(char *const argv[], bool suppress_output);
 
+enum service_quit_result
+{
+    SERVICE_QUIT_DIRECT,
+    SERVICE_QUIT_BOOTOUT_REQUESTED,
+    SERVICE_QUIT_FAILED
+};
+
 static bool service_quit_label_is_managed(const char *label)
 {
     return label && label[0] && !string_equals(label, "0") &&
@@ -437,27 +444,29 @@ static bool service_quit_label_is_managed(const char *label)
  * supplied by launchd and supports both yabai's built-in label and external
  * launch-agent definitions such as org.nixos.yabai. Disabling before bootout
  * prevents KeepAlive from racing the requested termination with a replacement. */
-static int service_stop_for_quit_with_exec(const char *label, uid_t uid, service_exec_fn exec_fn)
+static enum service_quit_result service_stop_for_quit_with_exec(const char *label, uid_t uid,
+                                                                service_exec_fn exec_fn)
 {
-    if (!service_quit_label_is_managed(label)) return 0;
+    if (!service_quit_label_is_managed(label)) return SERVICE_QUIT_DIRECT;
 
     char service_target[MAXLEN];
     int length = snprintf(service_target, sizeof(service_target), "gui/%u/%s",
                           (unsigned int) uid, label);
-    if (length < 0 || length >= (int) sizeof(service_target)) return 1;
+    if (length < 0 || length >= (int) sizeof(service_target)) return SERVICE_QUIT_FAILED;
 
     const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    if (exec_fn((char *const *) print_args, true) != 0) return 0;
+    if (exec_fn((char *const *) print_args, true) != 0) return SERVICE_QUIT_DIRECT;
 
     const char *const disable_args[] = { _PATH_LAUNCHCTL, "disable", service_target, NULL };
-    int result = exec_fn((char *const *) disable_args, false);
-    if (result != 0) return result;
+    if (exec_fn((char *const *) disable_args, false) != 0) return SERVICE_QUIT_FAILED;
 
     const char *const bootout_args[] = { _PATH_LAUNCHCTL, "bootout", service_target, NULL };
-    return exec_fn((char *const *) bootout_args, false);
+    return exec_fn((char *const *) bootout_args, false) == 0
+         ? SERVICE_QUIT_BOOTOUT_REQUESTED
+         : SERVICE_QUIT_FAILED;
 }
 
-static int service_stop_for_quit(void)
+static enum service_quit_result service_stop_for_quit(void)
 {
     return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), safe_exec);
 }

@@ -1064,28 +1064,35 @@ TEST_FUNC(service_quit_disables_active_launchd_job_before_bootout,
     for (size_t i = 0; i < array_count(unmanaged_labels); ++i) {
         service_quit_test_reset();
         TEST_CHECK(service_stop_for_quit_with_exec(unmanaged_labels[i], 501,
-                                                   service_quit_test_exec), 0);
+                                                   service_quit_test_exec), SERVICE_QUIT_DIRECT);
         TEST_CHECK(g_service_quit_test_call_count, 0);
     }
 
     service_quit_test_reset();
     g_service_quit_test_results[0] = 1;
     TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), 0);
+                                               service_quit_test_exec), SERVICE_QUIT_DIRECT);
     TEST_CHECK(g_service_quit_test_call_count, 1);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
     g_service_quit_test_results[1] = 7;
     TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), 7);
+                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
     TEST_CHECK(g_service_quit_test_call_count, 2);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
     g_service_quit_test_results[2] = 9;
     TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), 9);
+                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_call_count, 3);
+    TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
+                                               service_quit_test_exec),
+               SERVICE_QUIT_BOOTOUT_REQUESTED);
     TEST_CHECK(g_service_quit_test_call_count, 3);
     TEST_CHECK(g_service_quit_test_valid, true);
 
@@ -1094,7 +1101,7 @@ TEST_FUNC(service_quit_disables_active_launchd_job_before_bootout,
     oversized_label[sizeof(oversized_label) - 1] = '\0';
     service_quit_test_reset();
     TEST_CHECK(service_stop_for_quit_with_exec(oversized_label, 501,
-                                               service_quit_test_exec), 1);
+                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
     TEST_CHECK(g_service_quit_test_call_count, 0);
 });
 

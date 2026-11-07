@@ -74,7 +74,7 @@ static void menu_bar_manager_deliver_notification(const char *subtitle, const ch
 #ifdef TESTS
 static bool (*menu_bar_manager_reload_config)(FILE *, struct declarative_reload_summary *) =
     declarative_config_reload_with_summary;
-static int (*menu_bar_manager_stop_service)(void) = service_stop_for_quit;
+static enum service_quit_result (*menu_bar_manager_stop_service)(void) = service_stop_for_quit;
 static void (*menu_bar_manager_quit)(void) = menu_bar_request_quit;
 static void (*menu_bar_manager_notify)(const char *, const char *) = menu_bar_manager_deliver_notification;
 #else
@@ -1367,12 +1367,20 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
     case MENU_BAR_ACTION_QUIT: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
 
-        if (menu_bar_manager_stop_service() == 0) {
+        switch (menu_bar_manager_stop_service()) {
+        case SERVICE_QUIT_DIRECT:
             menu_bar_manager_quit();
-        } else {
+            break;
+        case SERVICE_QUIT_BOOTOUT_REQUESTED:
+            /* launchctl accepted the asynchronous bootout. Let launchd
+             * terminate this process after removing the KeepAlive job; an
+             * eager NSApp termination would race that removal and respawn. */
+            break;
+        case SERVICE_QUIT_FAILED:
             menu_bar_manager_set_action_failure(action->generation, "could not stop launchd service");
             menu_bar_manager_notify("service", "Could not stop the launchd service. yabai is still running.");
             menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION);
+            break;
         }
     } break;
     case MENU_BAR_ACTION_MENU_TRACKING_CHANGED: {
