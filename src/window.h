@@ -209,13 +209,13 @@ static inline bool window_check_rule_flag(struct window *w, enum window_rule_fla
 static inline void window_clear_rule_flag(struct window *w, enum window_rule_flag x) { w->rule_flags &= ~x; }
 static inline void window_set_rule_flag(struct window *w, enum window_rule_flag x) { w->rule_flags |= x; }
 
-CFStringRef window_display_uuid(uint32_t wid);
+CF_RETURNS_RETAINED CFStringRef window_display_uuid(uint32_t wid);
 uint32_t window_display_id(uint32_t wid);
 uint64_t window_space(uint32_t wid);
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
 bool window_space_membership_contains(CFArrayRef space_list_ref, uint64_t sid);
-CFArrayRef window_copy_space_membership(uint32_t wid);
+CF_RETURNS_RETAINED CFArrayRef window_copy_space_membership(uint32_t wid);
 bool window_is_on_space(uint32_t wid, uint64_t sid);
 void window_unknown_serialize(FILE *rsp, uint32_t wid, uint64_t flags);
 void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags,
@@ -267,10 +267,10 @@ bool window_observe(struct window *window, bool *retry);
 void window_unobserve(struct window *window);
 /* Consumes the caller's retained window_ref on both success and failure.
  * Application and server_record remain caller-owned. Returns an owned window or NULL. */
-struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef CF_CONSUMED window_ref,
                                                 uint32_t window_id,
                                                 const struct window_server_window_record *server_record);
-struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id);
+struct window *window_create(struct application *application, AXUIElementRef CF_CONSUMED window_ref, uint32_t window_id);
 void window_destroy(struct window *window);
 
 #endif

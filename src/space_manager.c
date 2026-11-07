@@ -1,3 +1,7 @@
+@interface NSObject (YabaiBridgedMoveWindows)
+- (instancetype)initWithWindows:(id)windows spaceID:(uint64_t)sid;
+@end
+
 extern struct window_manager g_window_manager;
 extern int g_connection;
 
@@ -1004,8 +1008,7 @@ static bool space_manager_move_window_list_using_bridge(uint64_t sid, uint32_t *
     if (!cls) return false;
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(window_list, sizeof(uint32_t), window_count, kCFNumberSInt32Type);
     if (!window_list_ref) return false;
-    SEL sel = sel_registerName("initWithWindows:spaceID:");
-    id operation = ((id (*)(id, SEL, id, uint64_t))objc_msgSend)([cls alloc], sel, (__bridge id)window_list_ref, sid);
+    id operation = [[cls alloc] initWithWindows:(__bridge id)window_list_ref spaceID:sid];
     bool dispatched = operation != nil;
     if (operation) {
         SLSPerformAsynchronousBridgedWindowManagementOperation(operation);

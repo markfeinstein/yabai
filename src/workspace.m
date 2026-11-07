@@ -23,7 +23,7 @@ bool workspace_use_macos_space_workaround(void)
     return os_version.majorVersion >= 15;
 }
 
-void *workspace_application_create_running_ns_application(struct process *process)
+NSRunningApplication *workspace_application_create_running_ns_application(struct process *process)
 {
     return [[NSRunningApplication runningApplicationWithProcessIdentifier:process->pid] retain];
 }

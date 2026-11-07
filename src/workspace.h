@@ -69,7 +69,11 @@ static inline void workspace_set_macos_version(long running_major_version)
 @end
 
 struct process;
+#ifdef __OBJC__
+NSRunningApplication *workspace_application_create_running_ns_application(struct process *process) NS_RETURNS_RETAINED;
+#else
 void *workspace_application_create_running_ns_application(struct process *process);
+#endif
 void workspace_application_destroy_running_ns_application(void *context, struct process *process);
 void workspace_application_unobserve(void *context, struct process *process);
 bool workspace_application_is_observable(struct process *process);

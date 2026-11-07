@@ -450,8 +450,8 @@ static bool declarative_topology_system_active_pair(uint32_t *did, uint64_t *sid
     return *did != 0 && *sid != 0;
 }
 
-static CFTypeRef declarative_topology_system_displays(void *context) { (void) context; return SLSCopyManagedDisplays(g_connection); }
-static CFTypeRef declarative_topology_system_spaces(void *context) { (void) context; return SLSCopyManagedDisplaySpaces(g_connection); }
+static CF_RETURNS_RETAINED CFTypeRef declarative_topology_system_displays(void *context) { (void) context; return SLSCopyManagedDisplays(g_connection); }
+static CF_RETURNS_RETAINED CFTypeRef declarative_topology_system_spaces(void *context) { (void) context; return SLSCopyManagedDisplaySpaces(g_connection); }
 static uint32_t declarative_topology_system_display_id(CFStringRef uuid, void *context) { (void) context; return display_id(uuid); }
 static CGRect declarative_topology_system_bounds(uint32_t did, void *context)
 {
@@ -460,7 +460,7 @@ static CGRect declarative_topology_system_bounds(uint32_t did, void *context)
                                                         config->external_bar_top_padding,
                                                         config->external_bar_bottom_padding);
 }
-static CFStringRef declarative_topology_system_space_uuid(uint64_t sid, void *context) { (void) context; return SLSSpaceCopyName(g_connection, sid); }
+static CF_RETURNS_RETAINED CFStringRef declarative_topology_system_space_uuid(uint64_t sid, void *context) { (void) context; return SLSSpaceCopyName(g_connection, sid); }
 static bool declarative_topology_system_space_kind(uint64_t sid, int *kind, void *context)
 {
     (void) context;

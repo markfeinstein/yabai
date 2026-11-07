@@ -281,6 +281,7 @@ struct window_created_retry *window_manager_create_window_created_retry(
     uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt,
     bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
 void window_manager_destroy_window_created_retry(struct window_created_retry *retry);
+void window_manager_release_window_created_ref(AXUIElementRef window_ref);
 bool window_manager_schedule_window_created_retry(
     AXUIElementRef window_ref, struct application *application,
     uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt, uint64_t delay_ms,

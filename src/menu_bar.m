@@ -1706,9 +1706,10 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     }
 
     struct yb_screen_entry *entries = total ? calloc(total, sizeof(struct yb_screen_entry)) : NULL;
+    if (total && !entries) total = 0;
     size_t output = 0;
     size_t active = total;
-    if (!total || entries) {
+    if (entries) {
         for (size_t display_index = 0; _snapshot && display_index < _snapshot->display_count; ++display_index) {
             const struct menu_bar_display *display = &_snapshot->displays[display_index];
             for (size_t space_index = 0; space_index < display->space_count; ++space_index) {
@@ -1723,6 +1724,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     total = output;
 
     struct yb_screen_selection selection = yb_select_screen_interval(entries, total, active);
+    if (selection.start > total || selection.count > total - selection.start) {
+        selection = (struct yb_screen_selection) {0};
+    }
     size_t omitted_before = selection.start;
     size_t omitted_after = total - selection.start - selection.count;
     CGFloat strip_width = total
@@ -1754,9 +1758,10 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         x += YB_MENU_BAR_CELL_WIDTH;
     }
 
-    for (size_t i = 0; i < selection.count; ++i) {
+    for (size_t i = 0; entries && i < selection.count; ++i) {
         size_t entry_index = selection.start + i;
         const struct yb_screen_entry *entry = &entries[entry_index];
+        if (!entry->space) continue;
         if (i) {
             x += entries[entry_index - 1].display == entry->display
                ? YB_MENU_BAR_GAP : YB_MENU_BAR_DISPLAY_GAP;

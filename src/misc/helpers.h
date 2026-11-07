@@ -422,7 +422,7 @@ static inline char *ts_string_escape(char *s)
 }
 
 
-static inline CFStringRef CFSTRINGNUM32(int32_t num)
+static inline CF_RETURNS_RETAINED CFStringRef CFSTRINGNUM32(int32_t num)
 {
     char num_str[255] = {0};
     snprintf(num_str, sizeof(num_str), "%d", num);
@@ -439,7 +439,7 @@ static inline CFStringRef CFSTRINGNUM32(int32_t num)
 #define YABAI_CFDICTIONARY_CREATE CFDictionaryCreate
 #endif
 
-static inline CFNumberRef CFNUM32(int32_t num)
+static inline CF_RETURNS_RETAINED CFNumberRef CFNUM32(int32_t num)
 {
     return YABAI_CFNUMBER_CREATE(NULL, kCFNumberSInt32Type, &num);
 }
@@ -463,7 +463,7 @@ static inline bool sls_window_disable_shadow(uint32_t id)
 }
 
 // An empty input is a successful conversion and returns an empty array.
-static inline CFArrayRef cfarray_of_cfnumbers(const void *values, size_t size, int count, CFNumberType type)
+static inline CF_RETURNS_RETAINED CFArrayRef cfarray_of_cfnumbers(const void *values, size_t size, int count, CFNumberType type)
 {
     if (count < 0 || (count && (!values || !size))) return NULL;
 

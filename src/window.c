@@ -89,12 +89,13 @@ bool window_observe(struct window *window, bool *retry)
 
 void window_unobserve(struct window *window)
 {
+    if (!window) return;
     AXObserverRef observer_ref = window->application ? window->application->observer_ref : NULL;
 
     for (int i = 0; i < array_count(ax_window_notification); ++i) {
         if (!(window->notification & (1 << i))) continue;
 
-        if (observer_ref) {
+        if (observer_ref && window->ref) {
             AXObserverRemoveNotification(observer_ref, window->ref, ax_window_notification[i]);
         }
 
@@ -102,7 +103,7 @@ void window_unobserve(struct window *window)
     }
 }
 
-CFStringRef window_display_uuid(uint32_t wid)
+CF_RETURNS_RETAINED CFStringRef window_display_uuid(uint32_t wid)
 {
     CFStringRef uuid = SLSCopyManagedDisplayForWindow(g_connection, wid);
     if (!uuid) {
@@ -287,7 +288,7 @@ bool window_space_membership_contains(CFArrayRef space_list_ref, uint64_t sid)
 }
 
 // Copies the Spaces that contain `wid` as a CFArray of CFNumbers, or NULL.
-CFArrayRef window_copy_space_membership(uint32_t wid)
+CF_RETURNS_RETAINED CFArrayRef window_copy_space_membership(uint32_t wid)
 {
     CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
     if (!window_list_ref) return NULL;
@@ -1786,7 +1787,7 @@ bool window_is_unknown(struct window *window)
     return result;
 }
 
-struct window *window_create_with_server_record(struct application *application, AXUIElementRef window_ref,
+struct window *window_create_with_server_record(struct application *application, AXUIElementRef CF_CONSUMED window_ref,
                                                 uint32_t window_id,
                                                 const struct window_server_window_record *server_record)
 {
@@ -1869,7 +1870,7 @@ struct window *window_create_with_server_record(struct application *application,
     return window;
 }
 
-struct window *window_create(struct application *application, AXUIElementRef window_ref, uint32_t window_id)
+struct window *window_create(struct application *application, AXUIElementRef CF_CONSUMED window_ref, uint32_t window_id)
 {
     return window_create_with_server_record(application, window_ref, window_id, NULL);
 }

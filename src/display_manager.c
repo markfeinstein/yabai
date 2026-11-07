@@ -220,14 +220,14 @@ int display_manager_display_id_arrangement(uint32_t did)
     return result;
 }
 
-static CFStringRef display_manager_uuid_at_index(CFArrayRef displays, int index)
+static CF_RETURNS_RETAINED CFStringRef display_manager_uuid_at_index(CFArrayRef displays, int index)
 {
     if (!cf_is_type(displays, CFArrayGetTypeID()) || index < 0 || index >= CFArrayGetCount(displays)) return NULL;
     CFTypeRef uuid = CFArrayGetValueAtIndex(displays, index);
     return cf_is_type(uuid, CFStringGetTypeID()) ? CFRetain(uuid) : NULL;
 }
 
-CFStringRef display_manager_arrangement_display_uuid(int arrangement)
+CF_RETURNS_RETAINED CFStringRef display_manager_arrangement_display_uuid(int arrangement)
 {
     if (arrangement < 1) return NULL;
     CFTypeRef native_displays = SLSCopyManagedDisplays(g_connection);

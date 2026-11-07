@@ -689,6 +689,7 @@ enum window_op_error window_manager_move_window_relative(struct window_manager *
 {
     TIME_FUNCTION;
 
+    if (!wm || !window) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
     struct view *view = window_manager_find_managed_window(wm, window);
     if (view) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
 
@@ -890,6 +891,7 @@ fail:
 
 static void window_manager_destroy_window_proxy(int animation_connection, struct window_proxy *proxy)
 {
+    if (!proxy) return;
     if (proxy->image) {
         CFRelease(proxy->image);
         proxy->image = NULL;
@@ -979,11 +981,12 @@ static void window_manager_animation_tick(void *data, const struct animation_clo
     if (t <= 0.0) t = 0.0f;
     if (t >= 1.0) t = 1.0f;
 
-    float mt;
+    float mt = (float) t;
     switch (context->animation_easing) {
 #define ANIMATION_EASING_TYPE_ENTRY(value) case value##_type: mt = value(t); break;
         ANIMATION_EASING_TYPE_LIST
 #undef ANIMATION_EASING_TYPE_ENTRY
+    default: break;
     }
 
     pthread_mutex_lock(&g_window_manager.window_animations_lock);
@@ -2625,6 +2628,21 @@ struct window_created_retry *window_manager_create_window_created_retry(
     return retry;
 }
 
+void window_manager_release_window_created_ref(AXUIElementRef window_ref)
+{
+    if (!window_ref) return;
+#ifdef TESTS
+    if (window_manager_test_retry_release) window_manager_test_retry_release(window_ref);
+    else CFRelease(window_ref);
+#else
+    // Callers pass the conditionally retained reference returned by the
+    // create-and-add retry contract; suppress the analyzer's +0 assumption.
+    [[clang::suppress]] {
+        CFRelease(window_ref);
+    }
+#endif
+}
+
 void window_manager_destroy_window_created_retry(struct window_created_retry *retry)
 {
     if (!retry) return;
@@ -2649,11 +2667,6 @@ bool window_manager_schedule_window_created_retry(
     struct window_created_retry *retry = window_manager_create_window_created_retry(
         window_ref, application, origin_sid, origin_fixed, identity_attempt,
         one_shot_rules, one_shot_owner_pid, suppress_rule_follow);
-#ifdef TESTS
-    if (window_manager_test_retry_release) window_manager_test_retry_release(window_ref); else CFRelease(window_ref);
-#else
-    CFRelease(window_ref);
-#endif
     if (!retry) return false;
 #ifdef TESTS
     if (window_manager_test_retry_post) {
@@ -2937,7 +2950,8 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
             if (!window_id || window_manager_find_window(wm, window_id)) continue;
 
             bool retry = false;
-            struct window *window = window_manager_create_and_add_window(sm, wm, application, CFRetain(window_ref), window_id, true,
+            AXUIElementRef owned_window_ref = (AXUIElementRef) CFRetain(window_ref);
+            struct window *window = window_manager_create_and_add_window(sm, wm, application, owned_window_ref, window_id, true,
                                                                           application->pid, application->initial_window_inventory, &retry);
             if (window) {
                 if (capture_ok && !buf_try_push(list, window)) {
@@ -2945,10 +2959,17 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
                     buf_free(list);
                     list = NULL;
                 }
-            } else if (retry && !window_manager_schedule_window_created_retry(
-                           window_ref, application, origin_sid, origin_fixed, 0, 100,
-                           true, application->pid, application->initial_window_inventory)) {
-                window_manager_request_application_refresh(wm, application);
+            } else if (retry) {
+                if (!window_manager_schedule_window_created_retry(
+                        owned_window_ref, application, origin_sid, origin_fixed, 0, 100,
+                        true, application->pid, application->initial_window_inventory)) {
+                    window_manager_request_application_refresh(wm, application);
+                }
+                // create-and-add conditionally returns this retained reference to
+                // the retry path; the analyzer cannot model that ownership result.
+                [[clang::suppress]] {
+                    window_manager_release_window_created_ref(owned_window_ref);
+                }
             }
         }
         CFRelease(window_list);
@@ -3350,6 +3371,7 @@ enum window_op_error window_manager_set_window_insertion(struct space_manager *s
 {
     TIME_FUNCTION;
 
+    if (!sm || !window) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
     uint64_t sid = window_space(window->id);
     struct view *view = space_manager_find_view(sm, sid);
     if (!view || view->layout != VIEW_BSP) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
@@ -3405,6 +3427,8 @@ enum window_op_error window_manager_stack_window(struct space_manager *sm, struc
 {
     TIME_FUNCTION;
 
+    if (!sm || !wm || !a) return WINDOW_OP_ERROR_INVALID_SRC_NODE;
+    if (!b) return WINDOW_OP_ERROR_INVALID_DST_NODE;
     if (a->id == b->id) return WINDOW_OP_ERROR_SAME_WINDOW;
 
     struct view *a_view = window_manager_find_managed_window(wm, a);
@@ -3462,6 +3486,8 @@ enum window_op_error window_manager_warp_window(struct space_manager *sm, struct
 {
     TIME_FUNCTION;
 
+    if (!sm || !wm || !a) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
+    if (!b) return WINDOW_OP_ERROR_INVALID_DST_VIEW;
     if (a->id == b->id) return WINDOW_OP_ERROR_SAME_WINDOW;
 
     uint64_t a_sid = window_space(a->id);
@@ -3679,6 +3705,8 @@ enum window_op_error window_manager_swap_window(struct space_manager *sm, struct
 {
     TIME_FUNCTION;
 
+    if (!sm || !wm || !a) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
+    if (!b) return WINDOW_OP_ERROR_INVALID_DST_VIEW;
     if (a->id == b->id) return WINDOW_OP_ERROR_SAME_WINDOW;
 
     uint64_t a_sid = window_space(a->id);
@@ -3832,6 +3860,7 @@ bool window_manager_send_window_to_space(struct space_manager *sm, struct window
 {
     TIME_FUNCTION;
 
+    if (!sm || !wm || !window || !dst_sid) return false;
     uint64_t src_sid = window_space(window->id);
     if (src_sid == dst_sid) return true;
     struct view *src_view = window_manager_find_managed_window(wm, window);
@@ -3875,6 +3904,7 @@ enum window_op_error window_manager_apply_grid(struct space_manager *sm, struct 
 {
     TIME_FUNCTION;
 
+    if (!sm || !wm || !window || !r || !c) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
     struct view *view = window_manager_find_managed_window(wm, window);
     if (view) return WINDOW_OP_ERROR_INVALID_SRC_VIEW;
 

@@ -1508,7 +1508,7 @@ void event_loop_process_application_windows(struct window **window_list, int win
 }
 
 #ifdef TESTS
-static void *(*event_loop_test_create_running_application)(struct process *) = workspace_application_create_running_ns_application;
+static NSRunningApplication *(*event_loop_test_create_running_application)(struct process *) = workspace_application_create_running_ns_application;
 static bool (*event_loop_test_application_finished)(struct process *) = workspace_application_is_finished_launching;
 static bool (*event_loop_test_application_observable)(struct process *) = workspace_application_is_observable;
 static pid_t (*event_loop_test_ax_window_pid)(AXUIElementRef);
@@ -1517,6 +1517,9 @@ static struct application *(*event_loop_test_application_for_window_id)(uint32_t
 static void (*event_loop_test_adopt_created)(AXUIElementRef, struct application *);
 #endif
 
+// The retained NSRunningApplication is transferred into process->ns_application
+// and released by workspace_application_destroy_running_ns_application. The
+// analyzer cannot follow that ownership through the atomic void-pointer field.
 static EVENT_HANDLER(APPLICATION_LAUNCHED)
 {
     struct process *process = context;
@@ -1532,7 +1535,11 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
 #ifdef TESTS
         __atomic_store_n(&process->ns_application, event_loop_test_create_running_application(process), __ATOMIC_RELEASE);
 #else
-        __atomic_store_n(&process->ns_application, workspace_application_create_running_ns_application(process), __ATOMIC_RELEASE);
+        [[clang::suppress]] {
+            __atomic_store_n(&process->ns_application,
+                             workspace_application_create_running_ns_application(process),
+                             __ATOMIC_RELEASE);
+        }
 #endif
 
         if (!__atomic_load_n(&process->ns_application, __ATOMIC_RELAXED)) {
@@ -1777,7 +1784,7 @@ static struct application *event_loop_find_processed_front_application(void)
 }
 
 static void event_loop_handle_window_created(
-    AXUIElementRef window_ref, struct application *application,
+    AXUIElementRef CF_CONSUMED window_ref, struct application *application,
     uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt,
     bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow);
 
@@ -1796,10 +1803,16 @@ static struct application *event_loop_application_for_window_id(uint32_t window_
 #endif
 }
 
+// window_manager_copy_application_window_ref returns an owned reference. Test
+// hooks and event_loop_handle_window_created both consume it; the analyzer does
+// not model that callback/handler ownership contract across the branch.
 static bool event_loop_try_adopt_focused_window(struct application *application, uint32_t window_id)
 {
     if (!application || !window_id || application->adopt_attempted_window_id == window_id) return false;
-    AXUIElementRef window_ref = window_manager_copy_application_window_ref(application, window_id);
+    AXUIElementRef window_ref = NULL;
+    [[clang::suppress]] {
+        window_ref = window_manager_copy_application_window_ref(application, window_id);
+    }
     if (!window_ref) return false;
 
     application->adopt_attempted_window_id = window_id;
@@ -1810,7 +1823,9 @@ static bool event_loop_try_adopt_focused_window(struct application *application,
         return true;
     }
 #endif
-    event_loop_handle_window_created(window_ref, application, 0, false, 0, true, 0, false);
+    event_loop_handle_window_created((AXUIElementRef) CFRetain(window_ref), application,
+                                     0, false, 0, true, 0, false);
+    CFRelease(window_ref);
     return true;
 }
 
@@ -2101,7 +2116,7 @@ static struct application *event_loop_application_for_window_ref(AXUIElementRef 
 }
 
 static void event_loop_handle_window_created(
-    AXUIElementRef window_ref, struct application *application,
+    AXUIElementRef CF_CONSUMED window_ref, struct application *application,
     uint64_t origin_sid, bool origin_fixed, uint8_t identity_attempt,
     bool one_shot_rules, pid_t one_shot_owner_pid, bool suppress_rule_follow)
 {
@@ -2117,6 +2132,7 @@ static void event_loop_handle_window_created(
                         one_shot_rules, one_shot_owner_pid, suppress_rule_follow)) {
                     window_manager_request_application_refresh(&g_window_manager, application);
                 }
+                window_manager_release_window_created_ref(window_ref);
                 return;
             }
             if (application) window_manager_request_application_refresh(&g_window_manager, application);
@@ -2142,10 +2158,13 @@ static void event_loop_handle_window_created(
     bool retry = false;
     struct window *window = window_manager_create_and_add_window(&g_space_manager, &g_window_manager, application, window_ref, window_id,
                                                                  one_shot_rules, one_shot_owner_pid, suppress_rule_follow, &retry);
-    if (!window && retry && !window_manager_schedule_window_created_retry(
-            window_ref, application, origin_sid, origin_fixed, 0, 100,
-            one_shot_rules, one_shot_owner_pid, suppress_rule_follow)) {
-        window_manager_request_application_refresh(&g_window_manager, application);
+    if (!window && retry) {
+        if (!window_manager_schedule_window_created_retry(
+                window_ref, application, origin_sid, origin_fixed, 0, 100,
+                one_shot_rules, one_shot_owner_pid, suppress_rule_follow)) {
+            window_manager_request_application_refresh(&g_window_manager, application);
+        }
+        window_manager_release_window_created_ref(window_ref);
     }
     if (!window) return;
     application->adopt_attempted_window_id = 0;
@@ -3618,11 +3637,12 @@ static EVENT_HANDLER(NATIVE_RESIZE_CANCEL)
 static void mouse_drag_end(int64_t button, CGPoint point)
 {
     if (!mouse_drag_event_is_owner(&g_mouse_state, button)) return;
-    if (mission_control_is_active())                        goto reset;
-    if (!g_mouse_state.window)                             goto reset;
+    if (mission_control_is_active()) goto reset;
+    struct window *drag_window = g_mouse_state.window;
+    if (!drag_window) goto reset;
 
-    if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
-        debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
+    if (!__sync_bool_compare_and_swap(&drag_window->id_ptr, &drag_window->id, &drag_window->id)) {
+        debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, drag_window->id);
         goto reset;
     }
 
@@ -3662,11 +3682,11 @@ static void mouse_drag_end(int64_t button, CGPoint point)
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
         if (!dst_view) goto reset;
 
-        struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, g_mouse_state.window->id);
+        struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, drag_window->id);
         if (!window) window = window_manager_find_window_at_point(&g_window_manager, point);
-        if (window == g_mouse_state.window) window = NULL;
+        if (window == drag_window) window = NULL;
 
-        struct window_node *a_node = view_find_window_node(src_view, g_mouse_state.window->id);
+        struct window_node *a_node = view_find_window_node(src_view, drag_window->id);
         struct window_node *b_node = window ? view_find_window_node(dst_view, window->id) : NULL;
 
         if (mouse_drag_feedback_target_is_valid(a_node, b_node)) {
@@ -3765,11 +3785,12 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
     if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
-    if (mission_control_is_active())                        goto abort;
-    if (!g_mouse_state.window)                             goto abort;
+    if (mission_control_is_active()) goto abort;
+    struct window *drag_window = g_mouse_state.window;
+    if (!drag_window) goto abort;
 
-    if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
-        debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
+    if (!__sync_bool_compare_and_swap(&drag_window->id_ptr, &drag_window->id, &drag_window->id)) {
+        debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, drag_window->id);
         goto abort;
     }
 
@@ -3827,11 +3848,11 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
         if (!dst_view) goto out;
 
-        struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, g_mouse_state.window->id);
+        struct window *window = window_manager_find_window_at_point_filtering_window(&g_window_manager, point, drag_window->id);
         if (!window) window = window_manager_find_window_at_point(&g_window_manager, point);
-        if (window == g_mouse_state.window) window = NULL;
+        if (window == drag_window) window = NULL;
 
-        struct window_node *a_node = view_find_window_node(src_view, g_mouse_state.window->id);
+        struct window_node *a_node = view_find_window_node(src_view, drag_window->id);
         struct window_node *b_node = window ? view_find_window_node(dst_view, window->id) : NULL;
 
         if (a_node && b_node && a_node != b_node) {

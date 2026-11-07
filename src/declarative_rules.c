@@ -295,18 +295,32 @@ static char *declarative_rule_strdup(const char *value)
     return declarative_rules_strdup(value);
 }
 
-static bool declarative_rule_copy_matcher(struct rule *rule, int index, const char *pattern, bool exclude)
+enum declarative_rule_matcher_copy_result
+{
+    DECLARATIVE_RULE_MATCHER_COPY_OK,
+    DECLARATIVE_RULE_MATCHER_COPY_ALLOCATION_FAILED,
+    DECLARATIVE_RULE_MATCHER_COPY_INVALID
+};
+
+static enum declarative_rule_matcher_copy_result
+declarative_rule_copy_matcher(struct rule *rule, int index, const char *pattern, bool exclude)
 {
     char **strings[] = { &rule->app, &rule->title, &rule->role, &rule->subrole };
     regex_t *regexes[] = { &rule->app_regex, &rule->title_regex, &rule->role_regex, &rule->subrole_regex };
     enum rule_flag valid[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID };
     enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
+    if (pattern_compile(regexes[index], pattern) != PATTERN_COMPILE_OK) {
+        return DECLARATIVE_RULE_MATCHER_COPY_INVALID;
+    }
     *strings[index] = declarative_rule_strdup(pattern);
-    if (!*strings[index]) return false;
-    if (pattern_compile(regexes[index], *strings[index]) != PATTERN_COMPILE_OK) return false;
+    if (!*strings[index]) {
+        regfree(regexes[index]);
+        memset(regexes[index], 0, sizeof(*regexes[index]));
+        return DECLARATIVE_RULE_MATCHER_COPY_ALLOCATION_FAILED;
+    }
     rule_set_flag(rule, valid[index]);
     if (exclude) rule_set_flag(rule, excluded[index]);
-    return true;
+    return DECLARATIVE_RULE_MATCHER_COPY_OK;
 }
 
 static bool declarative_rule_clone(const struct rule *source, struct rule *destination)
@@ -333,7 +347,9 @@ static bool declarative_rule_clone(const struct rule *source, struct rule *desti
     enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
     for (int i = 0; i < 4; ++i) {
         if (rule_check_flag((struct rule *) source, valid[i]) &&
-            !declarative_rule_copy_matcher(destination, i, patterns[i], rule_check_flag((struct rule *) source, excluded[i]))) goto fail;
+            declarative_rule_copy_matcher(destination, i, patterns[i],
+                                          rule_check_flag((struct rule *) source, excluded[i])) !=
+                DECLARATIVE_RULE_MATCHER_COPY_OK) goto fail;
     }
     return true;
 fail:
@@ -355,12 +371,15 @@ static enum declarative_rule_prepare_result declarative_rule_from_model(const st
     rule->target_unavailable = target_unavailable;
     if (model->label && !(rule->label = declarative_rule_strdup(model->label))) goto allocation_failure;
     for (int i = 0; i < 4; ++i) {
-        if (model->matcher_present[i] && !declarative_rule_copy_matcher(rule, i, model->matchers[i].pattern, model->matchers[i].exclude)) {
-            if ((i == 0 && rule->app) || (i == 1 && rule->title) || (i == 2 && rule->role) || (i == 3 && rule->subrole)) {
+        if (model->matcher_present[i]) {
+            enum declarative_rule_matcher_copy_result copy =
+                declarative_rule_copy_matcher(rule, i, model->matchers[i].pattern,
+                                              model->matchers[i].exclude);
+            if (copy == DECLARATIVE_RULE_MATCHER_COPY_INVALID) {
                 rule_destroy(rule);
                 return DECLARATIVE_RULE_PREPARE_INVALID_REGEX;
             }
-            goto allocation_failure;
+            if (copy == DECLARATIVE_RULE_MATCHER_COPY_ALLOCATION_FAILED) goto allocation_failure;
         }
     }
     if (model->one_shot) rule_set_flag(rule, RULE_ONE_SHOT);

@@ -780,6 +780,7 @@ static void declarative_space_fill_forest_index(struct window_node *node, struct
                                                  struct declarative_space_forest_index_entry *items,
                                                  size_t *count)
 {
+    if (!node || !items || !count) return;
     DECLARATIVE_SPACE_INDEX_OPERATION();
     if (node->left) {
         declarative_space_fill_forest_index(node->left, view, items, count);
@@ -803,7 +804,7 @@ static void declarative_space_fill_node_index(struct window_node *node,
                                                struct window_node **items,
                                                size_t *count)
 {
-    if (!node) return;
+    if (!node || !items || !count) return;
     DECLARATIVE_SPACE_INDEX_OPERATION();
     items[(*count)++] = node;
     declarative_space_fill_node_index(node->left, items, count);

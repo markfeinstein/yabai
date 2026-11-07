@@ -308,13 +308,16 @@ static void hotkey_manager_dispose_resources(struct hotkey_manager_resources res
 
 static void hotkey_manager_stop_resources(struct hotkey_manager_resources *resources)
 {
+    if (!resources) return;
     if (resources->event_tap) CGEventTapEnable(resources->event_tap, false);
-    if (resources->runloop && resources->runloop_source) {
-        CFRunLoopRemoveSource(resources->runloop, resources->runloop_source, kCFRunLoopCommonModes);
-        CFRunLoopStop(resources->runloop);
-        CFRunLoopWakeUp(resources->runloop);
+    CFRunLoopRef runloop = resources->runloop;
+    CFRunLoopSourceRef source = resources->runloop_source;
+    if (runloop) {
+        if (source) CFRunLoopRemoveSource(runloop, source, kCFRunLoopCommonModes);
+        CFRunLoopStop(runloop);
+        CFRunLoopWakeUp(runloop);
     }
-    if (resources->thread_started) pthread_join(resources->thread, NULL);
+    if (resources->thread_started && resources->thread) pthread_join(resources->thread, NULL);
     resources->runloop = NULL;
     resources->thread = (pthread_t) {0};
     resources->thread_started = false;

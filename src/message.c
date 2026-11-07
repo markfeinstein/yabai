@@ -47,8 +47,10 @@ static char *(*message_string_copy)(char *) = string_copy;
 
 static bool message_assign_string(char **target, char *value)
 {
+    if (!target || !value) return false;
     char *copy = message_string_copy(value);
     if (!copy) return false;
+    free(*target);
     *target = copy;
     return true;
 }
@@ -2755,6 +2757,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_WINDOW_SUB_LAYER)) {
+            if (!acting_window) {
+                daemon_fail(rsp, "could not locate the window to act on!\n");
+                return;
+            }
             struct token value = get_token(&message);
             if (token_equals(value, ARGUMENT_WINDOW_LAYER_BELOW)) {
                 if (!window_manager_set_window_layer(acting_window, LAYER_BELOW)) {
@@ -2776,6 +2782,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_WINDOW_OPACITY)) {
+            if (!acting_window) {
+                daemon_fail(rsp, "could not locate the window to act on!\n");
+                return;
+            }
             struct token opacity_token = get_token(&message);
             float opacity;
             if (parse_window_opacity_token(opacity_token, &opacity)) {
@@ -2788,6 +2798,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", opacity_token.length, opacity_token.text, command.length, command.text, domain.length, domain.text);
             }
         } else if (token_equals(command, COMMAND_WINDOW_RAISE)) {
+            if (!acting_window) {
+                daemon_fail(rsp, "could not locate the window to act on!\n");
+                return;
+            }
             struct selector selector = parse_window_selector(rsp, &message, acting_window, true);
             uint32_t selector_wid = 0;
 
@@ -2803,6 +2817,10 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "could not raise window with id '%d' due to an error with the scripting-addition.\n", acting_window->id);
             }
         } else if (token_equals(command, COMMAND_WINDOW_LOWER)) {
+            if (!acting_window) {
+                daemon_fail(rsp, "could not locate the window to act on!\n");
+                return;
+            }
             struct selector selector = parse_window_selector(rsp, &message, acting_window, true);
             uint32_t selector_wid = 0;
 
