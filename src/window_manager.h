@@ -211,7 +211,7 @@ void window_manager_remove_lost_front_switched_event(struct window_manager *wm, 
 bool window_manager_add_lost_front_switched_event(struct window_manager *wm, ProcessSerialNumber *psn, uint64_t generation);
 bool window_manager_find_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_t window_id);
-void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);
+bool window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id);
 uint32_t window_manager_ax_window_id(AXUIElementRef window_ref);
 CF_RETURNS_RETAINED AXUIElementRef window_manager_copy_application_window_ref(struct application *application, uint32_t window_id);
 bool window_manager_replace_window_ref(struct window_manager *wm, struct window *window,

@@ -412,6 +412,7 @@ TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
     struct window_manager wm = {0};
     table_init(&wm.application, 1, hash_wm, compare_wm);
     table_init(&wm.window, 1, hash_wm, compare_wm);
+    table_init(&wm.window_lost_focused_event, 1, hash_wm, compare_wm);
     struct application application = { .pid = 91 };
     struct window window = { .id = 92 };
 
@@ -421,14 +422,20 @@ TEST_FUNC(window_manager_checked_publications_reject_bucket_failures,
     table_test_fail_allocation_after(0);
     TEST_CHECK(window_manager_add_window(&wm, &window), false);
     TEST_CHECK(table_find(&wm.window, &window.id) == NULL, true);
+    table_test_fail_allocation_after(0);
+    TEST_CHECK(window_manager_add_lost_focused_event(&wm, window.id), false);
+    TEST_CHECK(window_manager_find_lost_focused_event(&wm, window.id), false);
     table_test_fail_allocation_after(-1);
 
     TEST_CHECK(window_manager_add_application(&wm, &application), true);
     TEST_CHECK(window_manager_add_window(&wm, &window), true);
+    TEST_CHECK(window_manager_add_lost_focused_event(&wm, window.id), true);
     TEST_CHECK(table_find(&wm.application, &application.pid), &application);
     TEST_CHECK(table_find(&wm.window, &window.id), &window);
+    TEST_CHECK(window_manager_find_lost_focused_event(&wm, window.id), true);
     table_free(&wm.application);
     table_free(&wm.window);
+    table_free(&wm.window_lost_focused_event);
 });
 
 TEST_FUNC(window_management_rejects_zero_area_helpers_but_preserves_explicit_rules,

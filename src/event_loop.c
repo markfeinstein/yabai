@@ -1854,7 +1854,7 @@ static void event_loop_application_front_update_focus(struct application *applic
             window_manager_set_window_opacity(&g_window_manager, focused_window, g_window_manager.normal_window_opacity);
         }
 
-        window_manager_add_lost_focused_event(&g_window_manager, focused_window_id);
+        (void) window_manager_add_lost_focused_event(&g_window_manager, focused_window_id);
         window_manager_hide_active_window_highlight(&g_window_manager);
         (void) event_loop_try_adopt_focused_window(application, focused_window_id);
         return;
@@ -2293,7 +2293,7 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
 
     struct window *window = window_manager_find_window(&g_window_manager, window_id);
     if (!window) {
-        window_manager_add_lost_focused_event(&g_window_manager, window_id);
+        (void) window_manager_add_lost_focused_event(&g_window_manager, window_id);
         struct application *application = event_loop_application_for_window_id(window_id);
         if (application) (void) event_loop_try_adopt_focused_window(application, window_id);
         return;
@@ -2305,7 +2305,7 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
     }
 
     if (window_check_flag(window, WINDOW_MINIMIZE)) {
-        window_manager_add_lost_focused_event(&g_window_manager, window->id);
+        (void) window_manager_add_lost_focused_event(&g_window_manager, window->id);
         return;
     }
 

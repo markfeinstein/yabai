@@ -32,9 +32,8 @@ void table_init(struct table *table, int capacity, table_hash_func hash, table_c
 bool table_try_init(struct table *table, int capacity, table_hash_func hash, table_compare_func cmp);
 void table_free(struct table *table);
 
-#define table_add(table, key, value) _table_add(table, key, sizeof(*key), value)
+#define table_add(table, key, value) _table_try_add(table, key, sizeof(*key), value)
 #define table_try_add(table, key, value) _table_try_add(table, key, sizeof(*key), value)
-void _table_add(struct table *table, void *key, int key_size, void *value);
 bool _table_try_add(struct table *table, void *key, int key_size, void *value);
 bool table_replace(struct table *table, void *key, void *value);
 #ifdef TESTS
@@ -191,11 +190,6 @@ bool _table_try_add(struct table *table, void *key, int key_size, void *value)
         return false;
     }
     return true;
-}
-
-void _table_add(struct table *table, void *key, int key_size, void *value)
-{
-    (void) _table_try_add(table, key, key_size, value);
 }
 
 bool table_replace(struct table *table, void *key, void *value)

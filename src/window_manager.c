@@ -1227,6 +1227,13 @@ static void window_manager_animation_prune_failed_locked(struct window_animation
     }
 }
 
+static bool window_manager_animation_publish_new_locked(struct window_animation *animation)
+{
+    if (table_try_add(&g_window_manager.window_animations_table, &animation->wid, animation)) return true;
+    __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
+    return false;
+}
+
 static bool window_manager_animation_can_proxy(int window_count)
 {
     return window_count > 0 && window_count <= SA_SWAP_PROXY_ACTIVE_RECORD_LIMIT;
@@ -1260,34 +1267,34 @@ void window_manager_animate_window_list_async(struct window_capture *window_list
         context->animation_list[i].h = window_list[i].h;
         context->animation_list[i].cid = context->animation_connection;
 
-        bool add_to_table = true;
-        struct window_animation *existing_animation = table_find(&g_window_manager.window_animations_table, &context->animation_list[i].wid);
+        struct window_animation *animation = &context->animation_list[i];
+        struct window_animation *existing_animation = table_find(&g_window_manager.window_animations_table,
+                                                                  &animation->wid);
         if (existing_animation) {
-            window_manager_prepare_replacement_proxy(&context->animation_list[i].proxy,
-                                                     &existing_animation->proxy);
+            window_manager_prepare_replacement_proxy(&animation->proxy, &existing_animation->proxy);
 
             float alpha = 1.0f;
-            SLSGetWindowAlpha(context->animation_connection, context->animation_list[i].wid, &alpha);
-            if (!window_manager_create_window_proxy(context->animation_connection, alpha, &context->animation_list[i].proxy)) {
-                __atomic_store_n(&context->animation_list[i].skip, true, __ATOMIC_RELEASE);
-                add_to_table = false;
+            SLSGetWindowAlpha(context->animation_connection, animation->wid, &alpha);
+            if (!window_manager_create_window_proxy(context->animation_connection, alpha, &animation->proxy)) {
+                __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
+            } else if (!table_replace(&g_window_manager.window_animations_table, &animation->wid, animation)) {
+                window_manager_destroy_window_proxy(context->animation_connection, &animation->proxy);
+                __atomic_store_n(&animation->skip, true, __ATOMIC_RELEASE);
             } else {
                 __atomic_store_n(&existing_animation->skip, true, __ATOMIC_RELEASE);
 
                 CFTypeRef transaction = SLSTransactionCreate(context->animation_connection);
                 if (transaction) {
-                    SLSTransactionOrderWindowGroup(transaction, context->animation_list[i].proxy.id, 1, context->animation_list[i].wid);
+                    SLSTransactionOrderWindowGroup(transaction, animation->proxy.id, 1, animation->wid);
                     SLSTransactionSetWindowSystemAlpha(transaction, existing_animation->proxy.id, 0);
                     SLSTransactionCommit(transaction, 0);
                     CFRelease(transaction);
                 }
-                table_remove(&g_window_manager.window_animations_table, &context->animation_list[i].wid);
                 window_manager_destroy_window_proxy(existing_animation->cid, &existing_animation->proxy);
             }
-        } else {
-            build_jobs[build_job_count++] = &context->animation_list[i];
+        } else if (window_manager_animation_publish_new_locked(animation)) {
+            build_jobs[build_job_count++] = animation;
         }
-        if (add_to_table) table_add(&g_window_manager.window_animations_table, &context->animation_list[i].wid, &context->animation_list[i]);
     }
     pthread_mutex_unlock(&g_window_manager.window_animations_lock);
 
@@ -2421,9 +2428,9 @@ void window_manager_remove_lost_focused_event(struct window_manager *wm, uint32_
     table_remove(&wm->window_lost_focused_event, &window_id);
 }
 
-void window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id)
+bool window_manager_add_lost_focused_event(struct window_manager *wm, uint32_t window_id)
 {
-    table_add(&wm->window_lost_focused_event, &window_id, (void *)(intptr_t) 1);
+    return table_try_add(&wm->window_lost_focused_event, &window_id, (void *)(intptr_t) 1);
 }
 
 struct window *window_manager_find_window(struct window_manager *wm, uint32_t window_id)

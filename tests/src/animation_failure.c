@@ -456,6 +456,24 @@ TEST_FUNC(animation_final_frames_and_failed_owner_pruning,
     table_free(&g_window_manager.window_animations_table);
 });
 
+TEST_FUNC(animation_table_publication_failure_skips_before_proxy_build,
+{
+    TEST_SAVE(g_window_manager.window_animations_table);
+    g_window_manager.window_animations_table = (struct table) {0};
+    table_init(&g_window_manager.window_animations_table, 1, hash_wm, compare_wm);
+    g_window_manager.window_animations_table.max_load = 0.75f;
+
+    struct window_animation animation = { .wid = 77 };
+    table_test_fail_allocation_after(0);
+    TEST_CHECK(window_manager_animation_publish_new_locked(&animation), false);
+    table_test_fail_allocation_after(-1);
+
+    TEST_CHECK(__atomic_load_n(&animation.skip, __ATOMIC_ACQUIRE), true);
+    TEST_CHECK(animation.proxy.id, 0U);
+    TEST_CHECK(table_find(&g_window_manager.window_animations_table, &animation.wid) == NULL, true);
+    table_free(&g_window_manager.window_animations_table);
+});
+
 TEST_FUNC(animation_context_setup_allocation_and_connection_failures_cleanup,
 {
     TEST_OVERRIDE(window_manager_animation_allocate, animation_test_allocate);
