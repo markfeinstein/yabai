@@ -3,7 +3,7 @@
 
 extern bool g_verbose;
 
-static inline void
+static inline __attribute__((format(printf, 1, 2))) void
 debug(const char *format, ...)
 {
     if (!g_verbose) return;
@@ -14,7 +14,7 @@ debug(const char *format, ...)
     va_end(args);
 }
 
-static inline void
+static inline __attribute__((format(printf, 1, 2))) void
 warn(const char *format, ...)
 {
     va_list args;
@@ -23,7 +23,7 @@ warn(const char *format, ...)
     va_end(args);
 }
 
-static inline void
+static inline __attribute__((noreturn, format(printf, 1, 2))) void
 error(const char *format, ...)
 {
     va_list args;
@@ -34,7 +34,7 @@ error(const char *format, ...)
     exit(EXIT_FAILURE);
 }
 
-static inline void
+static inline __attribute__((noreturn, format(printf, 1, 2))) void
 require(const char *format, ...)
 {
     va_list args;
