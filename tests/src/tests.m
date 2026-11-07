@@ -1115,6 +1115,17 @@ TEST_FUNC(safe_exec_reports_child_outcomes,
     TEST_CHECK(safe_exec(success, true), 0);
     TEST_CHECK(safe_exec(failure, false), 1);
     TEST_CHECK(safe_exec(signaled, false), 1);
+
+    struct sigaction previous_action;
+    struct sigaction ignored_action = { .sa_handler = SIG_IGN };
+    sigemptyset(&ignored_action.sa_mask);
+    TEST_CHECK(sigaction(SIGCHLD, NULL, &previous_action), 0);
+    TEST_CHECK(sigaction(SIGCHLD, &ignored_action, NULL), 0);
+    TEST_CHECK(safe_exec(success, false), 0);
+    TEST_CHECK(safe_exec(success, true), 0);
+    TEST_CHECK(safe_exec(failure, false), 1);
+    TEST_CHECK(safe_exec(signaled, false), 1);
+    TEST_CHECK(sigaction(SIGCHLD, &previous_action, NULL), 0);
 });
 
 TEST_FUNC(socket_open_sets_cloexec,

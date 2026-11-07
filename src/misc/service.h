@@ -152,8 +152,94 @@ static char *plist_xml_escape(char *s)
 //          4. Running (Start / Stop)
 //
 
+/* The running daemon ignores SIGCHLD so fire-and-forget signal commands are
+ * reaped automatically. A direct waitpid therefore reports ECHILD. Use a
+ * short-lived helper with a private SIGCHLD disposition and return the actual
+ * command status through a close-on-exec pipe. */
+static int safe_exec_waitable(char *const argv[], bool suppress_output)
+{
+    int result_pipe[2] = { -1, -1 };
+    if (pipe(result_pipe) != 0 ||
+        fcntl(result_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
+        fcntl(result_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
+        if (result_pipe[0] >= 0) close(result_pipe[0]);
+        if (result_pipe[1] >= 0) close(result_pipe[1]);
+        return 1;
+    }
+
+    pid_t helper = fork();
+    if (helper == -1) {
+        close(result_pipe[0]);
+        close(result_pipe[1]);
+        return 1;
+    }
+
+    if (helper == 0) {
+        close(result_pipe[0]);
+        struct sigaction action = { .sa_handler = SIG_DFL };
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGCHLD, &action, NULL);
+
+        pid_t command = fork();
+        if (command == 0) {
+            close(result_pipe[1]);
+            if (suppress_output) {
+                int null_fd = open("/dev/null", O_WRONLY|O_APPEND);
+                if (null_fd == -1 || dup2(null_fd, STDOUT_FILENO) == -1 ||
+                    dup2(null_fd, STDERR_FILENO) == -1) _exit(127);
+                if (null_fd > STDERR_FILENO) close(null_fd);
+            }
+            extern char **environ;
+            execve(argv[0], argv, environ);
+            _exit(127);
+        }
+
+        int result = 1;
+        if (command != -1) {
+            int status = 0;
+            pid_t waited;
+            do {
+                waited = waitpid(command, &status, 0);
+            } while (waited == -1 && errno == EINTR);
+            if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
+        }
+
+        const char *bytes = (const char *) &result;
+        size_t remaining = sizeof(result);
+        while (remaining) {
+            ssize_t written = write(result_pipe[1], bytes, remaining);
+            if (written == -1 && errno == EINTR) continue;
+            if (written <= 0) break;
+            bytes += written;
+            remaining -= (size_t) written;
+        }
+        close(result_pipe[1]);
+        _exit(0);
+    }
+
+    close(result_pipe[1]);
+    int result = 1;
+    char *bytes = (char *) &result;
+    size_t received = 0;
+    while (received < sizeof(result)) {
+        ssize_t count = read(result_pipe[0], bytes + received, sizeof(result) - received);
+        if (count == -1 && errno == EINTR) continue;
+        if (count <= 0) break;
+        received += (size_t) count;
+    }
+    close(result_pipe[0]);
+
+    int helper_status = 0;
+    while (waitpid(helper, &helper_status, 0) == -1 && errno == EINTR) {}
+    return received == sizeof(result) ? result : 1;
+}
+
 static int safe_exec(char *const argv[], bool suppress_output)
 {
+    struct sigaction child_action;
+    if (sigaction(SIGCHLD, NULL, &child_action) != 0) return 1;
+    if (child_action.sa_handler == SIG_IGN) return safe_exec_waitable(argv, suppress_output);
+
     pid_t pid;
     posix_spawn_file_actions_t actions;
     int status = posix_spawn_file_actions_init(&actions);
