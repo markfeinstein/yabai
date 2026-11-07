@@ -4,7 +4,8 @@ TEST_FUNC(hotkey_config_parses_app_cases_modes_sequences_and_raw_keycodes,
         "{\"version\":3,\"keyboard\":{\"enabled\":true,"
         "\"bindings\":["
           "{\"key\":\"h\",\"modifiers\":[\"cmd\"],\"cases\":["
-            "{\"application\":{\"name\":\"Rex Beta\"},\"disposition\":\"remap\","
+            "{\"application\":{\"name\":\"Rex Beta\"},"
+             "\"window\":{\"title_prefix\":\"Settings - \"},\"disposition\":\"remap\","
              "\"action\":{\"type\":\"synthesize_key\",\"key\":\"h\",\"modifiers\":[\"ctrl\",\"alt\",\"cmd\"]}},"
             "{\"disposition\":\"consume_only\"}]},"
           "{\"keycode\":\"0x12\",\"modifiers\":[\"ctrl\"],\"repeat\":false,\"cases\":["
@@ -29,6 +30,7 @@ TEST_FUNC(hotkey_config_parses_app_cases_modes_sequences_and_raw_keycodes,
         TEST_CHECK(model->keyboard.mode_count, 1U);
         TEST_CHECK(model->keyboard.bindings[0].keystroke.keycode, kVK_ANSI_H);
         TEST_CHECK(model->keyboard.bindings[0].cases[0].disposition, HOTKEY_DISPOSITION_REMAP);
+        TEST_CHECK(strcmp(model->keyboard.bindings[0].cases[0].window.title_prefix, "Settings - "), 0);
         TEST_CHECK(model->keyboard.bindings[0].cases[0].actions[0].data.synthesize_key.modifiers,
                    HOTKEY_MODIFIER_CONTROL | HOTKEY_MODIFIER_OPTION | HOTKEY_MODIFIER_COMMAND);
         TEST_CHECK(model->keyboard.bindings[1].keystroke.keycode, 0x12);
@@ -88,6 +90,13 @@ TEST_FUNC(hotkey_config_rejects_versions_conflicts_conditions_actions_and_modes,
          "{\"disposition\":\"consume_only\"},{\"application\":{\"name\":\"Rex Beta\"},"
          "\"disposition\":\"pass_through\"}]}]}}",
          "$.keyboard.bindings[0].cases[0]"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":["
+         "{\"window\":{},\"disposition\":\"consume_only\"}]}]}}",
+         "$.keyboard.bindings[0].cases[0].window"},
+        {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":["
+         "{\"window\":{\"title\":\"Settings - Server\",\"title_prefix\":\"Settings - \"},"
+         "\"disposition\":\"consume_only\"}]}]}}",
+         "$.keyboard.bindings[0].cases[0].window"},
         {"{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"cases\":["
          "{\"disposition\":\"consume\",\"action\":{\"type\":\"unknown\"}}]}]}}",
          "$.keyboard.bindings[0].cases[0].action.type"},

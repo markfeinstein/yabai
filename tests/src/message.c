@@ -1981,7 +1981,7 @@ TEST_FUNC(message_keyboard_mode_query_is_strict_and_json_safe,
         TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
         struct hotkey_match_result direct_match;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_R,
-                                     0, NULL, NULL, &direct_match), true);
+                                     0, NULL, NULL, NULL, &direct_match), true);
         CGEventRef enter = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, true);
         CGEventSetFlags(enter, 0);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, enter, NULL) == NULL, true);

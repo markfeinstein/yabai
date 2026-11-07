@@ -1360,13 +1360,18 @@ static bool convert_hotkey_actions(struct model_builder *b, id object, struct ho
     return true;
 }
 
-static bool hotkey_application_condition_equal(const struct hotkey_application_condition *a,
-                                               const struct hotkey_application_condition *b)
+static bool hotkey_optional_string_equal(const char *a, const char *b)
 {
-    bool bundle_equal = (!a->bundle_id && !b->bundle_id) ||
-                        (a->bundle_id && b->bundle_id && !strcmp(a->bundle_id, b->bundle_id));
-    bool name_equal = (!a->name && !b->name) || (a->name && b->name && !strcmp(a->name, b->name));
-    return bundle_equal && name_equal;
+    return (!a && !b) || (a && b && !strcmp(a, b));
+}
+
+static bool hotkey_case_condition_equal(const struct hotkey_binding_case *a,
+                                        const struct hotkey_binding_case *b)
+{
+    return hotkey_optional_string_equal(a->application.bundle_id, b->application.bundle_id) &&
+           hotkey_optional_string_equal(a->application.name, b->application.name) &&
+           hotkey_optional_string_equal(a->window.title, b->window.title) &&
+           hotkey_optional_string_equal(a->window.title_prefix, b->window.title_prefix);
 }
 
 static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotkey_binding *binding,
@@ -1387,8 +1392,8 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
         if (![object isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding case must be an object");
         NSDictionary *item = object;
-        const char *keys[] = {"application", "disposition", "action", "transition"};
-        if (!hotkey_dictionary_has_only_keys(b, item, keys, 4, base)) return false;
+        const char *keys[] = {"application", "window", "disposition", "action", "transition"};
+        if (!hotkey_dictionary_has_only_keys(b, item, keys, 5, base)) return false;
         struct hotkey_binding_case *out = &binding->cases[i];
         out->transition_mode = HOTKEY_TRANSITION_NONE;
         id application = item[@"application"];
@@ -1414,14 +1419,40 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
                 if (!out->application.name)
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid application name");
             }
-        } else {
+        }
+        id window = item[@"window"];
+        if (window) {
+            char window_path[256]; snprintf(window_path, sizeof(window_path), "%s.window", base);
+            if (![window isKindOfClass:[NSDictionary class]])
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, window_path, "window condition must be an object");
+            const char *window_keys[] = {"title", "title_prefix"};
+            if (!hotkey_dictionary_has_only_keys(b, window, window_keys, 2, window_path)) return false;
+            if ((!window[@"title"] && !window[@"title_prefix"]) ||
+                (window[@"title"] && window[@"title_prefix"]))
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, window_path,
+                                     "window condition requires exactly one title selector");
+            if (window[@"title"]) {
+                char member[256]; snprintf(member, sizeof(member), "%s.title", window_path);
+                out->window.title = model_string(b, window[@"title"], DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
+                if (!out->window.title)
+                    return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid window title");
+            }
+            if (window[@"title_prefix"]) {
+                char member[256]; snprintf(member, sizeof(member), "%s.title_prefix", window_path);
+                out->window.title_prefix = model_string(b, window[@"title_prefix"],
+                                                        DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
+                if (!out->window.title_prefix)
+                    return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid window title prefix");
+            }
+        }
+        if (!application && !window) {
             if (wildcard_seen || i + 1 != binding->case_count)
-                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "default application case must be unique and last");
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "default binding case must be unique and last");
             wildcard_seen = true;
         }
         for (size_t j = 0; j < i; ++j) {
-            if (hotkey_application_condition_equal(&binding->cases[j].application, &out->application))
-                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "duplicate application case");
+            if (hotkey_case_condition_equal(&binding->cases[j], out))
+                return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "duplicate binding case");
         }
         static const char *dispositions[] = {"consume", "consume_only", "pass_through", "remap"};
         char disposition_path[256]; snprintf(disposition_path, sizeof(disposition_path), "%s.disposition", base);
@@ -2314,6 +2345,8 @@ static void destroy_hotkey_bindings(struct hotkey_binding *bindings, size_t coun
             struct hotkey_binding_case *item = &bindings[i].cases[j];
             release(item->application.bundle_id);
             release(item->application.name);
+            release(item->window.title);
+            release(item->window.title_prefix);
             release(item->actions);
             release(item->transition_name);
         }

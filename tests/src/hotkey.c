@@ -1,12 +1,15 @@
-TEST_FUNC(hotkey_matcher_selects_exact_application_before_default,
+TEST_FUNC(hotkey_matcher_selects_application_and_window_conditions_before_default,
 {
     const char json[] =
       "{\"version\":3,\"keyboard\":{\"bindings\":["
       "{\"key\":\"h\",\"modifiers\":[\"cmd\"],\"cases\":["
         "{\"application\":{\"bundle_id\":\"com.example.rex\",\"name\":\"Rex Beta\"},"
-         "\"disposition\":\"remap\",\"action\":{\"type\":\"synthesize_key\",\"key\":\"h\"}},"
+         "\"window\":{\"title\":\"Main\"},\"disposition\":\"remap\","
+         "\"action\":{\"type\":\"synthesize_key\",\"key\":\"h\"}},"
         "{\"disposition\":\"consume_only\"}]},"
       "{\"key\":\"j\",\"modifiers\":[\"ctrl\"],\"cases\":["
+        "{\"application\":{\"name\":\"Rex Beta\"},\"window\":{\"title_prefix\":\"Settings - \"},"
+         "\"disposition\":\"consume\",\"action\":{\"type\":\"focus_window\",\"direction\":\"south\",\"robust\":true}},"
         "{\"application\":{\"name\":\"Rex Beta\"},\"disposition\":\"pass_through\"},"
         "{\"disposition\":\"consume\",\"action\":{\"type\":\"focus_window\",\"direction\":\"south\",\"robust\":true}}]}]}}";
     struct declarative_config_model *model = NULL;
@@ -15,20 +18,62 @@ TEST_FUNC(hotkey_matcher_selects_exact_application_before_default,
     if (model) {
         struct hotkey_match_result match;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_H,
-                                     HOTKEY_MODIFIER_COMMAND, "com.example.rex", "Rex Beta", &match), true);
+                                     HOTKEY_MODIFIER_COMMAND, "com.example.rex", "Rex Beta", "Main", &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_REMAP);
         TEST_CHECK(match.repeat, true);
         TEST_CHECK(match.action_count, 1U);
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_H,
-                                     HOTKEY_MODIFIER_COMMAND, "com.apple.Safari", "Safari", &match), true);
+                                     HOTKEY_MODIFIER_COMMAND, "com.example.rex", "Rex Beta", "Other", &match), true);
+        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME_ONLY);
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_H,
+                                     HOTKEY_MODIFIER_COMMAND, "com.apple.Safari", "Safari", NULL, &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME_ONLY);
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_J,
-                                     HOTKEY_MODIFIER_CONTROL, NULL, "Rex Beta", &match), true);
-        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_PASS_THROUGH);
-        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_J,
-                                     HOTKEY_MODIFIER_CONTROL, NULL, "Mail", &match), true);
+                                     HOTKEY_MODIFIER_CONTROL, NULL, "Rex Beta", "Settings - Server", &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME);
         TEST_CHECK(match.actions[0].data.focus_window.robust, true);
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_J,
+                                     HOTKEY_MODIFIER_CONTROL, NULL, "Rex Beta", "yabai - calm-reef", &match), true);
+        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_PASS_THROUGH);
+        TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT, kVK_ANSI_J,
+                                     HOTKEY_MODIFIER_CONTROL, NULL, "Mail", "Inbox", &match), true);
+        TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME);
+        declarative_config_destroy(model);
+    }
+})
+
+TEST_FUNC(hotkey_callback_matches_cached_focused_window_title,
+{
+    const char json[] =
+      "{\"version\":3,\"keyboard\":{\"bindings\":[{\"key\":\"h\",\"modifiers\":[\"ctrl\"],\"cases\":["
+      "{\"window\":{\"title_prefix\":\"Settings - \"},\"disposition\":\"consume_only\"},"
+      "{\"disposition\":\"pass_through\"}]}]}}";
+    struct declarative_config_model *model = NULL;
+    struct declarative_error error = {0};
+    TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "window-title.jsonc", &model, &error), true);
+    if (model) {
+        hotkey_manager_install_config(&model->keyboard);
+        hotkey_manager_update_focused_window_title("Settings - Server");
+        CGEventRef settings = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_H, true);
+        CGEventRef settings_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_H, false);
+        CGEventSetFlags(settings, kCGEventFlagMaskControl);
+        CGEventSetFlags(settings_up, kCGEventFlagMaskControl);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, settings, NULL) == NULL, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, settings_up, NULL) == NULL, true);
+        CFRelease(settings);
+        CFRelease(settings_up);
+
+        hotkey_manager_update_focused_window_title("yabai - calm-reef");
+        CGEventRef terminal = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_H, true);
+        CGEventRef terminal_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_H, false);
+        CGEventSetFlags(terminal, kCGEventFlagMaskControl);
+        CGEventSetFlags(terminal_up, kCGEventFlagMaskControl);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, terminal, NULL) == terminal, true);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, terminal_up, NULL) == terminal_up, true);
+        CFRelease(terminal);
+        CFRelease(terminal_up);
+        hotkey_manager_install_config(NULL);
+        hotkey_manager_update_focused_window_title(NULL);
         declarative_config_destroy(model);
     }
 })
@@ -46,9 +91,9 @@ TEST_FUNC(hotkey_matcher_distinguishes_sided_modifiers_and_accepts_fn,
         uint16_t left = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_LEFT_COMMAND | HOTKEY_MODIFIER_FN;
         uint16_t right = HOTKEY_MODIFIER_COMMAND | HOTKEY_MODIFIER_RIGHT_COMMAND | HOTKEY_MODIFIER_FN;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
-                                     kVK_ANSI_H, left, NULL, NULL, &match), true);
+                                     kVK_ANSI_H, left, NULL, NULL, NULL, &match), true);
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
-                                     kVK_ANSI_H, right, NULL, NULL, &match), false);
+                                     kVK_ANSI_H, right, NULL, NULL, NULL, &match), false);
         declarative_config_destroy(model);
     }
 })
@@ -67,20 +112,20 @@ TEST_FUNC(hotkey_matcher_prefers_explicit_fn_then_normalizes_navigation_fallback
         struct hotkey_match_result match;
         uint16_t ctrl_fn = HOTKEY_MODIFIER_CONTROL | HOTKEY_MODIFIER_FN;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
-                                     kVK_RightArrow, ctrl_fn, NULL, NULL, &match), true);
+                                     kVK_RightArrow, ctrl_fn, NULL, NULL, NULL, &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_PASS_THROUGH);
 
         // Removing the explicit Fn binding exposes the ordinary navigation
         // binding through the implicit-Fn fallback.
         model->keyboard.binding_count = 1;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
-                                     kVK_RightArrow, ctrl_fn, NULL, NULL, &match), true);
+                                     kVK_RightArrow, ctrl_fn, NULL, NULL, NULL, &match), true);
         TEST_CHECK(match.disposition, HOTKEY_DISPOSITION_CONSUME_ONLY);
 
         // Fn remains an exact modifier for non-navigation keys.
         model->keyboard.binding_count = 3;
         TEST_CHECK(hotkey_test_match(&model->keyboard, HOTKEY_TRANSITION_DEFAULT,
-                                     kVK_ANSI_H, ctrl_fn, NULL, NULL, &match), false);
+                                     kVK_ANSI_H, ctrl_fn, NULL, NULL, NULL, &match), false);
         declarative_config_destroy(model);
     }
 })

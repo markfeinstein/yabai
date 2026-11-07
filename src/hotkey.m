@@ -47,6 +47,7 @@ struct hotkey_manager_state
     int active_mode;
     char front_bundle_id[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     char front_name[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
+    char front_window_title[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1];
     struct hotkey_manager_resources resources;
     uint64_t mode_generation;
     uint8_t delivery[UINT16_MAX + 1u];
@@ -146,11 +147,24 @@ static bool hotkey_application_matches(const struct hotkey_application_condition
     return true;
 }
 
+static bool hotkey_window_matches(const struct hotkey_window_condition *condition,
+                                  const char *title)
+{
+    if (!condition->title && !condition->title_prefix) return true;
+    if (!title) return false;
+    if (condition->title && strcmp(condition->title, title)) return false;
+    if (condition->title_prefix) {
+        size_t length = strlen(condition->title_prefix);
+        if (strncmp(condition->title_prefix, title, length)) return false;
+    }
+    return true;
+}
+
 // Returns 1 for a matching case, 0 when a binding owns the keystroke but no
-// application case matches, and -1 when no binding owns the keystroke.
+// case conditions match, and -1 when no binding owns the keystroke.
 static int hotkey_match_bindings(const struct hotkey_binding *bindings, size_t binding_count,
                                  uint16_t keycode, uint16_t modifiers,
-                                 const char *bundle_id, const char *name,
+                                 const char *bundle_id, const char *name, const char *window_title,
                                  struct hotkey_match_result *result)
 {
     for (size_t i = 0; i < binding_count; ++i) {
@@ -159,7 +173,8 @@ static int hotkey_match_bindings(const struct hotkey_binding *bindings, size_t b
             !hotkey_modifiers_match(binding->keystroke.modifiers, modifiers)) continue;
         for (size_t j = 0; j < binding->case_count; ++j) {
             const struct hotkey_binding_case *item = &binding->cases[j];
-            if (!hotkey_application_matches(&item->application, bundle_id, name)) continue;
+            if (!hotkey_application_matches(&item->application, bundle_id, name) ||
+                !hotkey_window_matches(&item->window, window_title)) continue;
             result->matched = true;
             result->repeat = binding->repeat;
             result->disposition = item->disposition;
@@ -175,7 +190,7 @@ static int hotkey_match_bindings(const struct hotkey_binding *bindings, size_t b
 
 static bool hotkey_match(const struct hotkey_config_model *config, int active_mode,
                          uint16_t keycode, uint16_t modifiers,
-                         const char *bundle_id, const char *name,
+                         const char *bundle_id, const char *name, const char *window_title,
                          struct hotkey_match_result *result)
 {
     *result = (struct hotkey_match_result) {
@@ -193,7 +208,7 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
     }
 
     int exact = hotkey_match_bindings(bindings, binding_count, keycode, modifiers,
-                                      bundle_id, name, result);
+                                      bundle_id, name, window_title, result);
     if (exact >= 0) return exact == 1;
 
     // macOS annotates arrow and navigation events with SecondaryFn (and often
@@ -203,7 +218,7 @@ static bool hotkey_match(const struct hotkey_config_model *config, int active_mo
     if ((modifiers & HOTKEY_MODIFIER_FN) && hotkey_keycode_has_implicit_fn(keycode)) {
         uint16_t normalized = modifiers & ~HOTKEY_MODIFIER_FN;
         return hotkey_match_bindings(bindings, binding_count, keycode, normalized,
-                                     bundle_id, name, result) == 1;
+                                     bundle_id, name, window_title, result) == 1;
     }
     return false;
 }
@@ -223,10 +238,11 @@ void hotkey_test_set_action_poster(bool (*poster)(void *))
 
 bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
                        uint16_t keycode, uint16_t modifiers,
-                       const char *bundle_id, const char *name,
+                       const char *bundle_id, const char *name, const char *window_title,
                        struct hotkey_match_result *result)
 {
-    return hotkey_match(config, active_mode, keycode, modifiers, bundle_id, name, result);
+    return hotkey_match(config, active_mode, keycode, modifiers,
+                        bundle_id, name, window_title, result);
 }
 
 int hotkey_test_active_mode(void)
@@ -364,6 +380,7 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
     bool matched = hotkey_match(config, active_mode, keycode, modifiers,
                                 hotkey_manager.front_bundle_id[0] ? hotkey_manager.front_bundle_id : NULL,
                                 hotkey_manager.front_name[0] ? hotkey_manager.front_name : NULL,
+                                hotkey_manager.front_window_title[0] ? hotkey_manager.front_window_title : NULL,
                                 &match);
     if (matched) {
         if (key_down && !repeat && match.transition_mode != HOTKEY_TRANSITION_NONE &&
@@ -578,6 +595,15 @@ static void hotkey_manager_set_frontmost(const char *bundle_id, const char *name
     pthread_mutex_lock(&hotkey_manager.lock);
     snprintf(hotkey_manager.front_bundle_id, sizeof(hotkey_manager.front_bundle_id), "%s", bundle_id ? bundle_id : "");
     snprintf(hotkey_manager.front_name, sizeof(hotkey_manager.front_name), "%s", name ? name : "");
+    hotkey_manager.front_window_title[0] = '\0';
+    pthread_mutex_unlock(&hotkey_manager.lock);
+}
+
+void hotkey_manager_update_focused_window_title(const char *title)
+{
+    pthread_mutex_lock(&hotkey_manager.lock);
+    snprintf(hotkey_manager.front_window_title, sizeof(hotkey_manager.front_window_title),
+             "%s", title ? title : "");
     pthread_mutex_unlock(&hotkey_manager.lock);
 }
 

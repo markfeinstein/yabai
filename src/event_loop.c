@@ -2339,6 +2339,15 @@ static void event_loop_window_focus_receive(struct window *window)
     window_did_receive_focus(&g_window_manager, &g_mouse_state, window);
 }
 
+static void event_loop_update_hotkey_focused_window(struct window *window)
+{
+    char title[DECLARATIVE_CONFIG_MAX_STRING_BYTES + 1] = {0};
+    if (window && window->title) {
+        (void)CFStringGetCString(window->title, title, sizeof(title), kCFStringEncodingUTF8);
+    }
+    hotkey_manager_update_focused_window_title(title);
+}
+
 static void event_loop_window_focus_signal(struct window *window)
 {
     event_signal_push(SIGNAL_WINDOW_FOCUSED, window);
@@ -2394,6 +2403,7 @@ static EVENT_HANDLER(WINDOW_FOCUSED)
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
 
     event_loop_window_focus_did_receive(window);
+    event_loop_update_hotkey_focused_window(window);
     event_loop_window_focus_push_signal(window);
     event_loop_window_focus_menu_dirty();
 }
@@ -2986,6 +2996,9 @@ static EVENT_HANDLER(WINDOW_TITLE_CHANGED)
     if (window->title) CFRelease(window->title);
 
     window->title = window_title(window);
+    if (window->id == g_window_manager.focused_window_id) {
+        event_loop_update_hotkey_focused_window(window);
+    }
 
     event_signal_push(SIGNAL_WINDOW_TITLE_CHANGED, window);
 }

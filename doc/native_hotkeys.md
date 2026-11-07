@@ -38,6 +38,7 @@ and transient; Space-policy mode remains managed by the `yabai -m mode` domain.
         "bundle_id": "com.example.Application",
         "name": "Compatibility Display Name"
       },
+      "window": { "title_prefix": "Settings - " },
       "disposition": "pass_through"
     },
     {
@@ -75,9 +76,17 @@ mutable; name-only matching exists for applications such as the current
 `Rex Beta` build whose compatibility configuration already uses its display
 name.
 
+A case may also contain a `window` condition with exactly one nonempty selector:
+`title` for an exact title or `title_prefix` for a prefix match. Application and
+window conditions on the same case must both match. Put more-specific window
+cases before a general application case; this lets a terminal window pass a
+chord through while an auxiliary settings window routes the same chord to
+native focus.
+
 Bindings with the same keycode and modifier set conflict within one input mode.
-Application alternatives therefore belong in one binding's ordered `cases`
-array. A default case is optional, unique, and last.
+Application and window alternatives therefore belong in one binding's ordered
+`cases` array. A case with neither condition is the optional default; it must be
+unique and last.
 
 ### Event dispositions
 
@@ -168,8 +177,9 @@ also include `shrink` and `grow`. Resize handles are `top`, `bottom`, `left`,
 3. A `kCGHIDEventTap` at the head of the HID stream listens only for key-down
    and key-up events. Disabled-by-timeout and disabled-by-user-input callbacks
    re-enable it.
-4. The callback reads only the immutable keymap, active mode, and cached
-   frontmost-app identity. It decides consume/pass-through synchronously,
+4. The callback reads only the immutable keymap, active mode, cached
+   frontmost-app identity, and cached focused-window title. It decides
+   consume/pass-through synchronously,
    performs mode transitions, copies at most 16 POD actions into a small job,
    and posts `HOTKEY_ACTION` to yabai's normal event loop.
 5. The event-loop worker executes typed operations directly against yabai's
@@ -248,11 +258,14 @@ instance plus yabai's existing lock file prevents duplicate daemons.
    `ctrl+alt+cmd+[KeyH] → client.sidebar.toggle`.
 4. Replace Rex and Neovim outer-edge helper calls with
    `yabai -m window --focus-robust DIRECTION`.
-5. Validate with `yabai --check-config PATH` and reload with
+5. Add the Rex `Settings - ` window cases before the general Rex pass-through
+   cases so Ctrl-H/J/K/L can leave Settings while terminal panes still receive
+   those chords unchanged.
+6. Validate with `yabai --check-config PATH` and reload with
    `yabai -m config reload`.
-6. Stop skhd and exercise the acceptance matrix before removing it.
-7. Remove the skhd package/service/generated config and activation hook.
-8. Remove `focus-window-direction` and the skhd-only helper applications for
+7. Stop skhd and exercise the acceptance matrix before removing it.
+8. Remove the skhd package/service/generated config and activation hook.
+9. Remove `focus-window-direction` and the skhd-only helper applications for
    relative Space focus, move-and-follow, layout cycling, adaptive resize,
    close-others, remapping, and restart.
 
@@ -275,11 +288,12 @@ Real macOS acceptance should use the signed application bundle, with skhd
 stopped, and verify:
 
 1. Cmd-H is consumed in Rex and non-Rex apps;
-2. Rex receives Ctrl-H/J/K/L and Ctrl-Backspace unchanged;
-3. robust focus reaches floating and unmanaged native windows;
-4. resize and service modes capture unbound keys;
-5. occupied-Space navigation skips empty Spaces and wraps;
-6. all nine focus and move-follow bindings work by physical keycode;
-7. reload failure preserves the old keymap and successful reload resets mode;
-8. launchd restart restores the tap without creating a duplicate process;
-9. synthetic Cmd-H remapping does not recurse.
+2. Rex terminal windows receive Ctrl-H/J/K/L and Ctrl-Backspace unchanged;
+3. Rex Settings windows route those chords through native directional focus;
+4. robust focus reaches floating and unmanaged native windows;
+5. resize and service modes capture unbound keys;
+6. occupied-Space navigation skips empty Spaces and wraps;
+7. all nine focus and move-follow bindings work by physical keycode;
+8. reload failure preserves the old keymap and successful reload resets mode;
+9. launchd restart restores the tap without creating a duplicate process;
+10. synthetic Cmd-H remapping does not recurse.

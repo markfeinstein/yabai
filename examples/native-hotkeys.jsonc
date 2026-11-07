@@ -31,6 +31,12 @@
         "key": "h",
         "modifiers": ["ctrl"],
         "cases": [
+          {
+            "application": { "name": "Rex Beta" },
+            "window": { "title_prefix": "Settings - " },
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "west", "robust": true }
+          },
           { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
           {
             "disposition": "consume",
@@ -42,6 +48,12 @@
         "key": "j",
         "modifiers": ["ctrl"],
         "cases": [
+          {
+            "application": { "name": "Rex Beta" },
+            "window": { "title_prefix": "Settings - " },
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "south", "robust": true }
+          },
           { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
           {
             "disposition": "consume",
@@ -53,6 +65,12 @@
         "key": "k",
         "modifiers": ["ctrl"],
         "cases": [
+          {
+            "application": { "name": "Rex Beta" },
+            "window": { "title_prefix": "Settings - " },
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "north", "robust": true }
+          },
           { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
           {
             "disposition": "consume",
@@ -64,6 +82,12 @@
         "key": "l",
         "modifiers": ["ctrl"],
         "cases": [
+          {
+            "application": { "name": "Rex Beta" },
+            "window": { "title_prefix": "Settings - " },
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "east", "robust": true }
+          },
           { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
           {
             "disposition": "consume",
@@ -75,6 +99,12 @@
         "key": "backspace",
         "modifiers": ["ctrl"],
         "cases": [
+          {
+            "application": { "name": "Rex Beta" },
+            "window": { "title_prefix": "Settings - " },
+            "disposition": "consume",
+            "action": { "type": "focus_window", "direction": "west", "robust": true }
+          },
           { "application": { "name": "Rex Beta" }, "disposition": "pass_through" },
           {
             "disposition": "consume",

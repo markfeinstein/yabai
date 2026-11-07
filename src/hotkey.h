@@ -135,9 +135,16 @@ struct hotkey_application_condition
     char *name;
 };
 
+struct hotkey_window_condition
+{
+    char *title;
+    char *title_prefix;
+};
+
 struct hotkey_binding_case
 {
     struct hotkey_application_condition application;
+    struct hotkey_window_condition window;
     enum hotkey_disposition disposition;
     struct hotkey_action *actions;
     size_t action_count;
@@ -187,6 +194,7 @@ void hotkey_manager_install_config(const struct hotkey_config_model *config);
 bool hotkey_manager_begin(void);
 void hotkey_manager_end(void);
 void hotkey_manager_update_frontmost_application(pid_t pid, const char *name);
+void hotkey_manager_update_focused_window_title(const char *title);
 bool hotkey_post_synthetic_keystroke(struct hotkey_keystroke keystroke);
 void hotkey_action_job_destroy(void *context);
 bool hotkey_action_execute_sequence(const struct hotkey_action *actions, size_t count);
@@ -195,7 +203,7 @@ bool hotkey_manager_copy_active_mode(char *buffer, size_t capacity);
 #ifdef TESTS
 bool hotkey_test_match(const struct hotkey_config_model *config, int active_mode,
                        uint16_t keycode, uint16_t modifiers,
-                       const char *bundle_id, const char *name,
+                       const char *bundle_id, const char *name, const char *window_title,
                        struct hotkey_match_result *result);
 int hotkey_test_active_mode(void);
 void hotkey_test_set_action_executor(bool (*executor)(const struct hotkey_action *, void *), void *context);
