@@ -43,6 +43,17 @@ static uint64_t g_mission_control_generation;
 static volatile uint64_t g_mission_control_poll_generation;
 static volatile uint64_t g_mission_control_poll_token;
 
+#define MISSION_CONTROL_BACKDROP_LEVEL 19
+#define MISSION_CONTROL_MAX_BACKDROPS 16
+#define MISSION_CONTROL_MAX_DISPLAYS 32
+
+static struct mission_control_backdrop_state {
+    uint32_t window_ids[MISSION_CONTROL_MAX_BACKDROPS];
+    uint32_t count;
+} g_mission_control_backdrops;
+
+static void mission_control_backdrop_prune(void);
+
 static uint64_t mission_control_next_generation(void)
 {
     if (++g_mission_control_generation == 0) ++g_mission_control_generation;
@@ -57,6 +68,8 @@ static void (*event_loop_test_mission_control_correct)(struct space_manager *, s
 static void (*event_loop_test_mission_control_menu_alpha)(int, int, float);
 static void (*event_loop_test_mission_control_menu_dirty)(uint32_t);
 static void (*event_loop_test_mission_control_reconcile)(void);
+static bool (*event_loop_test_mission_control_is_backdrop)(uint32_t);
+static bool (*event_loop_test_mission_control_window_exists)(uint32_t);
 static int event_loop_test_mission_control_poll_allocated;
 static int event_loop_test_mission_control_poll_freed;
 #endif
@@ -109,6 +122,67 @@ static void mission_control_request_reconcile(void)
     if (event_loop_test_mission_control_reconcile) { event_loop_test_mission_control_reconcile(); return; }
 #endif
     declarative_configuration_request_reconcile();
+}
+
+static bool mission_control_backdrop_matches(const char *owner, int level, CGRect bounds,
+                                              const CGRect *display_bounds, uint32_t display_count)
+{
+    if (!owner || strcmp(owner, "WindowManager") != 0 || level != MISSION_CONTROL_BACKDROP_LEVEL ||
+        !display_bounds || !display_count) return false;
+    for (uint32_t i = 0; i < display_count; ++i) {
+        if (CGRectEqualToRect(bounds, display_bounds[i])) return true;
+    }
+    return false;
+}
+
+static bool mission_control_window_exists(uint32_t window_id)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_window_exists) {
+        return event_loop_test_mission_control_window_exists(window_id);
+    }
+#endif
+    int window_connection = 0;
+    return window_id &&
+           SLSGetWindowOwner(g_connection, window_id, &window_connection) == kCGErrorSuccess &&
+           window_connection != 0;
+}
+
+static bool mission_control_window_is_backdrop(uint32_t window_id)
+{
+#ifdef TESTS
+    if (event_loop_test_mission_control_is_backdrop) {
+        return event_loop_test_mission_control_is_backdrop(window_id);
+    }
+#endif
+    int level = 0;
+    int window_connection = 0;
+    pid_t pid = 0;
+    CGRect bounds;
+    char process_name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    if (!window_id || SLSGetWindowLevel(g_connection, window_id, &level) != kCGErrorSuccess ||
+        SLSGetWindowOwner(g_connection, window_id, &window_connection) != kCGErrorSuccess ||
+        !window_connection ||
+        SLSConnectionGetPID(window_connection, &pid) != kCGErrorSuccess || pid <= 0 ||
+        proc_name(pid, process_name, sizeof(process_name)) <= 0 ||
+        SLSGetWindowBounds(g_connection, window_id, &bounds) != kCGErrorSuccess) return false;
+
+    CGDirectDisplayID displays[MISSION_CONTROL_MAX_DISPLAYS];
+    uint32_t display_count = 0;
+    if (CGGetActiveDisplayList(array_count(displays), displays, &display_count) != kCGErrorSuccess ||
+        !display_count) return false;
+
+    CGRect display_bounds[MISSION_CONTROL_MAX_DISPLAYS];
+    for (uint32_t i = 0; i < display_count; ++i) display_bounds[i] = CGDisplayBounds(displays[i]);
+    return mission_control_backdrop_matches(process_name, level, bounds, display_bounds, display_count);
+}
+
+static int mission_control_backdrop_find(uint32_t window_id)
+{
+    for (uint32_t i = 0; i < g_mission_control_backdrops.count; ++i) {
+        if (g_mission_control_backdrops.window_ids[i] == window_id) return (int) i;
+    }
+    return -1;
 }
 
 static struct mission_control_poll_context *mission_control_poll_context_create(void)
@@ -1918,6 +1992,7 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
 {
     struct application_front_switched_event event = *(struct application_front_switched_event *) context;
     free(context);
+    mission_control_backdrop_prune();
 
     struct application *application;
     struct application *deactivated_application;
@@ -4170,6 +4245,45 @@ static void mission_control_finish_exit(uint64_t generation)
     mission_control_request_reconcile();
 }
 
+static void mission_control_backdrop_prune(void)
+{
+    if (!g_mission_control_backdrops.count) return;
+
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < g_mission_control_backdrops.count; ++i) {
+        uint32_t window_id = g_mission_control_backdrops.window_ids[i];
+        if (mission_control_window_exists(window_id)) {
+            g_mission_control_backdrops.window_ids[count++] = window_id;
+        }
+    }
+    g_mission_control_backdrops.count = count;
+    if (!count && g_mission_control_session.active) {
+        mission_control_finish_exit(g_mission_control_session.generation);
+    }
+}
+
+static EVENT_HANDLER(MISSION_CONTROL_BACKDROP_CREATED)
+{
+    uint32_t window_id = (uint32_t) (uintptr_t) context;
+    mission_control_backdrop_prune();
+    if (!window_id || mission_control_backdrop_find(window_id) >= 0 ||
+        g_mission_control_backdrops.count == MISSION_CONTROL_MAX_BACKDROPS ||
+        !mission_control_window_is_backdrop(window_id)) return;
+
+    g_mission_control_backdrops.window_ids[g_mission_control_backdrops.count++] = window_id;
+    if (!g_mission_control_session.active) {
+        mission_control_begin_session(MISSION_CONTROL_MODE_SHOW, 0, 0, false);
+    } else {
+        window_manager_hide_active_window_highlight(&g_window_manager);
+    }
+}
+
+static EVENT_HANDLER(MISSION_CONTROL_BACKDROP_DESTROYED)
+{
+    uint32_t window_id = (uint32_t) (uintptr_t) context;
+    if (mission_control_backdrop_find(window_id) >= 0) mission_control_backdrop_prune();
+}
+
 static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
 {
     struct mission_control_poll_context event = context ? *(struct mission_control_poll_context *) context
@@ -5538,6 +5652,7 @@ void event_loop_end(struct event_loop *event_loop)
     pthread_join(event_loop->thread, NULL);
     if (event_loop == &g_event_loop) {
         g_mission_control_session = (struct mission_control_session_state) {0};
+        g_mission_control_backdrops = (struct mission_control_backdrop_state) {0};
         g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
         __atomic_store_n(&g_mission_control_poll_generation, 0, __ATOMIC_RELEASE);
         __atomic_store_n(&g_mission_control_poll_token, 0, __ATOMIC_RELEASE);

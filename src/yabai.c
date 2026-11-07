@@ -560,6 +560,13 @@ int main(int argc, char **argv)
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
+    // On macOS 27 the Dock no longer emits AXExpose notifications. WindowManager
+    // instead creates display-sized backdrop windows while Mission Control is active.
+    if (workspace_is_macos_golden_gate() || workspace_is_macos_future()) {
+        SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1325, NULL);
+        SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1326, NULL);
+    }
+
     if (workspace_is_macos_sequoia_or_newer()) {
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 804, NULL);
 

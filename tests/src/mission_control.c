@@ -327,6 +327,10 @@ static uint64_t mission_control_effect_poll_generation;
 static uint64_t mission_control_effect_poll_token;
 static int mission_control_effect_schedule_count;
 static double mission_control_effect_delay;
+static int mission_control_effect_highlight_hide;
+static int mission_control_effect_highlight_refresh;
+static bool mission_control_effect_backdrop_one_exists;
+static bool mission_control_effect_backdrop_two_exists;
 
 static void mission_control_effect_signal(enum signal_type type, void *context)
 {
@@ -361,6 +365,121 @@ static void mission_control_effect_schedule(uint64_t generation, uint64_t token,
     mission_control_effect_poll_token = token;
     mission_control_effect_delay = delay;
 }
+
+static void mission_control_effect_hide_highlight(struct window_manager *wm)
+{
+    ++mission_control_effect_highlight_hide;
+}
+
+static void mission_control_effect_refresh_highlight(struct window_manager *wm, uint32_t wid,
+                                                      const CGRect *frame)
+{
+    ++mission_control_effect_highlight_refresh;
+}
+
+static bool mission_control_effect_is_backdrop(uint32_t window_id)
+{
+    return window_id == 501 || window_id == 502;
+}
+
+static bool mission_control_effect_window_exists(uint32_t window_id)
+{
+    if (window_id == 501) return mission_control_effect_backdrop_one_exists;
+    if (window_id == 502) return mission_control_effect_backdrop_two_exists;
+    return false;
+}
+
+TEST_FUNC(mission_control_connection_window_payload_is_bounded_and_stable,
+    uint8_t payload[sizeof(uint64_t) + sizeof(uint32_t)] = {0};
+    uint32_t expected = 0xfedcba98U;
+    memcpy(payload + sizeof(uint64_t), &expected, sizeof(expected));
+    uint32_t actual = 0;
+    TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload), &actual), true);
+    TEST_CHECK(actual, expected);
+    TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload) - 1, &actual), false);
+    TEST_CHECK(mission_control_connection_window_id(NULL, sizeof(payload), &actual), false);
+    TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload), NULL), false);
+    memset(payload + sizeof(uint64_t), 0, sizeof(expected));
+    TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload), &actual), false);
+)
+
+TEST_FUNC(mission_control_backdrop_signature_requires_window_manager_display_cover,
+    CGRect displays[] = {
+        CGRectMake(0.0, 0.0, 1920.0, 1080.0),
+        CGRectMake(1920.0, -180.0, 1512.0, 982.0)
+    };
+    TEST_CHECK(mission_control_backdrop_matches("WindowManager", MISSION_CONTROL_BACKDROP_LEVEL,
+                                                displays[1], displays, array_count(displays)), true);
+    TEST_CHECK(mission_control_backdrop_matches("Dock", MISSION_CONTROL_BACKDROP_LEVEL,
+                                                displays[1], displays, array_count(displays)), false);
+    TEST_CHECK(mission_control_backdrop_matches("WindowManager", MISSION_CONTROL_BACKDROP_LEVEL - 1,
+                                                displays[1], displays, array_count(displays)), false);
+    TEST_CHECK(mission_control_backdrop_matches("WindowManager", MISSION_CONTROL_BACKDROP_LEVEL,
+                                                CGRectInset(displays[1], 1.0, 1.0),
+                                                displays, array_count(displays)), false);
+    TEST_CHECK(mission_control_backdrop_matches("WindowManager", MISSION_CONTROL_BACKDROP_LEVEL,
+                                                displays[1], NULL, 0), false);
+)
+
+TEST_FUNC(mission_control_backdrops_hide_until_the_last_window_disappears,
+    TEST_OVERRIDE(g_mission_control_session, (struct mission_control_session_state) {0});
+    TEST_OVERRIDE(g_mission_control_backdrops, (struct mission_control_backdrop_state) {0});
+    TEST_OVERRIDE(g_mission_control_mode, MISSION_CONTROL_MODE_INACTIVE);
+    TEST_OVERRIDE(g_window_manager.menubar_opacity, 1.0f);
+    TEST_OVERRIDE(event_loop_test_mission_control_is_backdrop, mission_control_effect_is_backdrop);
+    TEST_OVERRIDE(event_loop_test_mission_control_window_exists, mission_control_effect_window_exists);
+    TEST_OVERRIDE(window_manager_test_active_window_highlight_hide_observer,
+                  mission_control_effect_hide_highlight);
+    TEST_OVERRIDE(window_manager_test_active_window_highlight_refresh_observer,
+                  mission_control_effect_refresh_highlight);
+    TEST_OVERRIDE(event_loop_test_mission_control_signal, mission_control_effect_signal);
+    TEST_OVERRIDE(event_loop_test_mission_control_correct, mission_control_effect_correct_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_menu_dirty, mission_control_effect_dirty_fn);
+    TEST_OVERRIDE(event_loop_test_mission_control_reconcile, mission_control_effect_reconcile_fn);
+
+    mission_control_effect_enter = mission_control_effect_exit = 0;
+    mission_control_effect_correct = mission_control_effect_dirty = mission_control_effect_reconcile = 0;
+    mission_control_effect_highlight_hide = mission_control_effect_highlight_refresh = 0;
+    mission_control_effect_backdrop_one_exists = true;
+    mission_control_effect_backdrop_two_exists = true;
+
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_CREATED((void *) (uintptr_t) 501, 0);
+    TEST_CHECK(g_mission_control_session.active, true);
+    TEST_CHECK(g_mission_control_mode, MISSION_CONTROL_MODE_SHOW);
+    TEST_CHECK(g_mission_control_backdrops.count, 1U);
+    TEST_CHECK(mission_control_effect_highlight_hide, 1);
+    TEST_CHECK(mission_control_effect_enter, 1);
+
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_CREATED((void *) (uintptr_t) 501, 0);
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_CREATED((void *) (uintptr_t) 999, 0);
+    TEST_CHECK(g_mission_control_backdrops.count, 1U);
+    TEST_CHECK(mission_control_effect_highlight_hide, 1);
+
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_CREATED((void *) (uintptr_t) 502, 0);
+    TEST_CHECK(g_mission_control_backdrops.count, 2U);
+    TEST_CHECK(mission_control_effect_highlight_hide, 2);
+    TEST_CHECK(mission_control_effect_enter, 1);
+
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_DESTROYED((void *) (uintptr_t) 501, 0);
+    TEST_CHECK(g_mission_control_backdrops.count, 2U);
+    TEST_CHECK(g_mission_control_session.active, true);
+
+    mission_control_effect_backdrop_one_exists = false;
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_DESTROYED((void *) (uintptr_t) 501, 0);
+    TEST_CHECK(g_mission_control_backdrops.count, 1U);
+    TEST_CHECK(g_mission_control_session.active, true);
+
+    mission_control_effect_backdrop_two_exists = false;
+    EVENT_HANDLER_MISSION_CONTROL_BACKDROP_DESTROYED((void *) (uintptr_t) 502, 0);
+    TEST_CHECK(g_mission_control_backdrops.count, 0U);
+    TEST_CHECK(g_mission_control_session.active, false);
+    TEST_CHECK(g_mission_control_mode, MISSION_CONTROL_MODE_INACTIVE);
+    TEST_CHECK(mission_control_effect_highlight_refresh, 1);
+    TEST_CHECK(mission_control_effect_exit, 1);
+    TEST_CHECK(mission_control_effect_correct, 1);
+    TEST_CHECK(mission_control_effect_dirty, 1);
+    TEST_CHECK(mission_control_effect_reconcile, 1);
+)
 
 TEST_FUNC(mission_control_linearized_contexts_polls_and_side_effects,
     TEST_OVERRIDE(g_mission_control_generation, UINT64_MAX);

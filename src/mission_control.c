@@ -2,12 +2,26 @@ extern struct event_loop g_event_loop;
 extern enum mission_control_mode g_mission_control_mode;
 extern volatile uint64_t __last_cmd_tab_time;
 
+static bool mission_control_connection_window_id(const void *data, size_t data_length, uint32_t *wid)
+{
+    if (!data || !wid || data_length < sizeof(uint64_t) + sizeof(uint32_t)) return false;
+    memcpy(wid, (const uint8_t *) data + sizeof(uint64_t), sizeof(*wid));
+    return *wid != 0;
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static __attribute__((unused)) CONNECTION_CALLBACK(connection_handler)
 {
     if (type == 1204) {
         event_loop_post(&g_event_loop, MISSION_CONTROL_ENTER, NULL, 0);
+    } else if (type == 1325 || type == 1326) {
+        uint32_t wid;
+        if (mission_control_connection_window_id(data, data_length, &wid)) {
+            enum event_type event = type == 1325 ? MISSION_CONTROL_BACKDROP_CREATED
+                                                 : MISSION_CONTROL_BACKDROP_DESTROYED;
+            event_loop_post(&g_event_loop, event, (void *) (uintptr_t) wid, 0);
+        }
     } else if (type == 1327) {
         uint64_t sid; memcpy(&sid, data, sizeof(uint64_t));
         event_loop_post(&g_event_loop, SLS_SPACE_CREATED, (void *) (intptr_t) sid , 0);
