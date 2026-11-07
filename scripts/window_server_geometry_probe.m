@@ -376,7 +376,7 @@ static bool emit_point(const char *fixture_id, const char *point_role, CGPoint p
     bool legacy_local = legacy_contains && local_point_matches(point, basic.legacy.window_point, legacy_bounds);
     bool geometry_local = geometry_contains && local_point_matches(point, basic.geometry.window_point, geometry_bounds);
 
-    sls_find_window_by_geometry_fn geometry = window_server_hit_test_geometry();
+    window_server_hit_test_geometry_fn geometry = window_server_hit_test_geometry();
     uint64_t *legacy_ns = calloc((size_t)iterations, sizeof(*legacy_ns));
     uint64_t *geometry_ns = calloc((size_t)iterations, sizeof(*geometry_ns));
     if (!legacy_ns || !geometry_ns) { free(legacy_ns); free(geometry_ns); return false; }
