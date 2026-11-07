@@ -176,6 +176,21 @@ TEST_FUNC(display_visible_frame_property_selection_and_serialization_are_explici
         fclose(parse_response);
     }
 
+    char invalid_properties[][32] = { "frame,", ",frame", "frame,,visible-frame" };
+    for (size_t i = 0; i < array_count(invalid_properties); ++i) {
+        parse_response = tmpfile();
+        TEST_CHECK(parse_response != NULL, true);
+        if (!parse_response) continue;
+        struct properties properties = parse_properties(parse_response,
+                                                        (struct token) { .text = invalid_properties[i],
+                                                                         .length = (int) strlen(invalid_properties[i]) },
+                                                        display_property_val, display_property_str,
+                                                        array_count(display_property_str));
+        TEST_CHECK(properties.did_parse, true);
+        TEST_CHECK(properties.did_error, true);
+        fclose(parse_response);
+    }
+
     char *output = NULL;
     size_t output_length = 0;
     FILE *stream = open_memstream(&output, &output_length);

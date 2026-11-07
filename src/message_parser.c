@@ -630,22 +630,23 @@ static struct properties parse_properties(FILE *rsp, struct token token, uint64_
     struct properties result = { .token = token, .did_error = false };
 
     if ((result.did_parse = token_is_valid(token) && !token_prefix(token, "--"))) {
-        for (int i = 0, cursor = 0; i < token.length; ++i) {
-            if (i+1 == token.length) {
-                if (!parse_property(&result, token.text+cursor, property_val, property_str, property_count)) {
-                    daemon_fail(rsp, "'%.*s' is not a valid property.\n", i-cursor+1, token.text+cursor);
-                    result.did_error = true;
-                }
-            } else if (token.text[i] == ',') {
+        for (int i = 0, cursor = 0; i <= token.length; ++i) {
+            if (i != token.length && token.text[i] != ',') continue;
+
+            int length = i - cursor;
+            if (length == 0) {
+                daemon_fail(rsp, "property list contains an empty property.\n");
+                result.did_error = true;
+            } else {
+                char separator = token.text[i];
                 token.text[i] = '\0';
-
-                if (!parse_property(&result, token.text+cursor, property_val, property_str, property_count)) {
-                    daemon_fail(rsp, "'%.*s' is not a valid property.\n", i-cursor+1, token.text+cursor);
+                if (!parse_property(&result, token.text + cursor, property_val, property_str, property_count)) {
+                    daemon_fail(rsp, "'%.*s' is not a valid property.\n", length, token.text + cursor);
                     result.did_error = true;
                 }
-
-                cursor = i+1;
+                token.text[i] = separator;
             }
+            cursor = i + 1;
         }
     }
 

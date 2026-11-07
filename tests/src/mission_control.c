@@ -401,6 +401,23 @@ TEST_FUNC(mission_control_connection_window_payload_is_bounded_and_stable,
     TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload), NULL), false);
     memset(payload + sizeof(uint64_t), 0, sizeof(expected));
     TEST_CHECK(mission_control_connection_window_id(payload, sizeof(payload), &actual), false);
+
+    uint32_t direct_window = 0x12345678U;
+    TEST_CHECK(mission_control_connection_direct_window_id(&direct_window, sizeof(direct_window), &actual), true);
+    TEST_CHECK(actual, direct_window);
+    TEST_CHECK(mission_control_connection_direct_window_id(&direct_window, sizeof(direct_window) - 1, &actual), false);
+    TEST_CHECK(mission_control_connection_direct_window_id(NULL, sizeof(direct_window), &actual), false);
+    direct_window = 0;
+    TEST_CHECK(mission_control_connection_direct_window_id(&direct_window, sizeof(direct_window), &actual), false);
+
+    uint64_t expected_space = UINT64_MAX - 42;
+    uint64_t actual_space = 0;
+    TEST_CHECK(mission_control_connection_space_id(&expected_space, sizeof(expected_space), &actual_space), true);
+    TEST_CHECK(actual_space, expected_space);
+    TEST_CHECK(mission_control_connection_space_id(&expected_space, sizeof(expected_space) - 1, &actual_space), false);
+    TEST_CHECK(mission_control_connection_space_id(NULL, sizeof(expected_space), &actual_space), false);
+    expected_space = 0;
+    TEST_CHECK(mission_control_connection_space_id(&expected_space, sizeof(expected_space), &actual_space), false);
 )
 
 TEST_FUNC(mission_control_backdrop_signature_requires_window_manager_display_cover,

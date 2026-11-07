@@ -230,11 +230,27 @@ void mission_control_schedule_poll(double delay)
     });
 }
 
+static bool mission_control_connection_copy_value(const void *data, size_t data_length,
+                                                  size_t offset, void *value, size_t value_size)
+{
+    if (!data || !value || offset > data_length || value_size > data_length - offset) return false;
+    memcpy(value, (const uint8_t *) data + offset, value_size);
+    return true;
+}
+
 static bool mission_control_connection_window_id(const void *data, size_t data_length, uint32_t *wid)
 {
-    if (!data || !wid || data_length < sizeof(uint64_t) + sizeof(uint32_t)) return false;
-    memcpy(wid, (const uint8_t *) data + sizeof(uint64_t), sizeof(*wid));
-    return *wid != 0;
+    return mission_control_connection_copy_value(data, data_length, sizeof(uint64_t), wid, sizeof(*wid)) && *wid != 0;
+}
+
+static bool mission_control_connection_direct_window_id(const void *data, size_t data_length, uint32_t *wid)
+{
+    return mission_control_connection_copy_value(data, data_length, 0, wid, sizeof(*wid)) && *wid != 0;
+}
+
+static bool mission_control_connection_space_id(const void *data, size_t data_length, uint64_t *sid)
+{
+    return mission_control_connection_copy_value(data, data_length, 0, sid, sizeof(*sid)) && *sid != 0;
 }
 
 #pragma clang diagnostic push
@@ -250,24 +266,20 @@ static __attribute__((unused)) CONNECTION_CALLBACK(connection_handler)
                                                  : MISSION_CONTROL_BACKDROP_DESTROYED;
             event_loop_post(&g_event_loop, event, (void *) (uintptr_t) wid, 0);
         }
-    } else if (type == 1327) {
-        uint64_t sid; memcpy(&sid, data, sizeof(uint64_t));
-        event_loop_post(&g_event_loop, SLS_SPACE_CREATED, (void *) (intptr_t) sid , 0);
-    } else if (type == 1328) {
-        uint64_t sid; memcpy(&sid, data, sizeof(uint64_t));
-        event_loop_post(&g_event_loop, SLS_SPACE_DESTROYED, (void *) (intptr_t) sid, 0);
-    } else if (type == 808) {
-        uint32_t wid; memcpy(&wid, data, sizeof(uint32_t));
-        event_loop_post(&g_event_loop, SLS_WINDOW_ORDERED, (void *) (intptr_t) wid, 0);
-    } else if (type == 815) {
-        uint32_t wid; memcpy(&wid, data, sizeof(uint32_t));
-        event_loop_post(&g_event_loop, SLS_WINDOW_IS_VISIBLE, (void *) (intptr_t) wid, 0);
-    } else if (type == 816) {
-        uint32_t wid; memcpy(&wid, data, sizeof(uint32_t));
-        event_loop_post(&g_event_loop, SLS_WINDOW_IS_INVISIBLE, (void *) (intptr_t) wid, 0);
-    } else if (type == 804) {
-        uint32_t wid; memcpy(&wid, data, sizeof(uint32_t));
-        event_loop_post(&g_event_loop, SLS_WINDOW_DESTROYED, (void *) (intptr_t) wid, 0);
+    } else if (type == 1327 || type == 1328) {
+        uint64_t sid;
+        if (mission_control_connection_space_id(data, data_length, &sid)) {
+            enum event_type event = type == 1327 ? SLS_SPACE_CREATED : SLS_SPACE_DESTROYED;
+            event_loop_post(&g_event_loop, event, (void *) (uintptr_t) sid, 0);
+        }
+    } else if (type == 808 || type == 815 || type == 816 || type == 804) {
+        uint32_t wid;
+        if (mission_control_connection_direct_window_id(data, data_length, &wid)) {
+            enum event_type event = type == 808 ? SLS_WINDOW_ORDERED :
+                                    type == 815 ? SLS_WINDOW_IS_VISIBLE :
+                                    type == 816 ? SLS_WINDOW_IS_INVISIBLE : SLS_WINDOW_DESTROYED;
+            event_loop_post(&g_event_loop, event, (void *) (uintptr_t) wid, 0);
+        }
     } else if (type == 1202) {
         __atomic_store_n(&__last_cmd_tab_time, read_os_timer(), __ATOMIC_RELEASE);
     }
