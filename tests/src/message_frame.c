@@ -125,8 +125,12 @@ TEST_FUNC(daemon_response_buffer_preserves_exact_bytes,
 {
     static const char expected[] = { DAEMON_MESSAGE_FAILURE_MARKER, 'a', '\0', 'b', '\n' };
     struct daemon_response_buffer response = {};
+    g_daemon_response_test_last_allocation = 0;
+    g_daemon_response_test_last_reallocation = 0;
 
     TEST_CHECK(daemon_response_buffer_open(&response), true);
+    TEST_CHECK(g_daemon_response_test_last_allocation, (size_t) DAEMON_RESPONSE_INITIAL_BYTES);
+    TEST_CHECK(response.capacity, (size_t) DAEMON_RESPONSE_INITIAL_BYTES);
     if (response.stream) {
         TEST_CHECK(fwrite(expected, 1, sizeof(expected), response.stream), sizeof(expected));
         TEST_CHECK(daemon_response_buffer_finalize(&response), true);
@@ -134,6 +138,32 @@ TEST_FUNC(daemon_response_buffer_preserves_exact_bytes,
         TEST_CHECK(memcmp(response.bytes, expected, sizeof(expected)), 0);
     }
 
+    daemon_response_buffer_destroy(&response);
+});
+
+TEST_FUNC(daemon_response_buffer_grows_lazily_and_bounds_allocation_failures,
+{
+    struct daemon_response_buffer response = {};
+    g_daemon_response_test_last_reallocation = 0;
+    TEST_CHECK(daemon_response_buffer_open(&response), true);
+    if (response.stream) {
+        TEST_CHECK(fseek(response.stream, (long) DAEMON_RESPONSE_INITIAL_BYTES, SEEK_SET), 0);
+        TEST_CHECK(fputc('x', response.stream), 'x');
+        TEST_CHECK(daemon_response_buffer_finalize(&response), true);
+        TEST_CHECK(response.length, (size_t) DAEMON_RESPONSE_INITIAL_BYTES + 1);
+        TEST_CHECK(response.capacity, (size_t) DAEMON_RESPONSE_INITIAL_BYTES * 2);
+        TEST_CHECK(g_daemon_response_test_last_reallocation, response.capacity);
+    }
+    daemon_response_buffer_destroy(&response);
+
+    TEST_CHECK(daemon_response_buffer_open(&response), true);
+    if (response.stream) {
+        g_daemon_response_test_fail_realloc = true;
+        TEST_CHECK(fseek(response.stream, (long) DAEMON_RESPONSE_INITIAL_BYTES, SEEK_SET), 0);
+        (void) fputc('x', response.stream);
+        TEST_CHECK(daemon_response_buffer_finalize(&response), false);
+        g_daemon_response_test_fail_realloc = false;
+    }
     daemon_response_buffer_destroy(&response);
 });
 
@@ -174,7 +204,7 @@ TEST_FUNC(daemon_response_buffer_overflow_selects_failure_response,
         bool failed = false;
         TEST_CHECK(fseek(response.stream, (long) DAEMON_RESPONSE_MAX_BYTES, SEEK_SET), 0);
         (void) fputc('x', response.stream);
-        TEST_CHECK(fflush(response.stream) != 0, true);
+        (void) fflush(response.stream);
         TEST_CHECK(ferror(response.stream) != 0, true);
         TEST_CHECK(daemon_response_buffer_send_until(fd[0], &response,
                                                      socket_io_deadline_after_ms(500)), false);

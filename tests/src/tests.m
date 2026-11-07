@@ -20,21 +20,33 @@ static void *event_queue_test_allocate(size_t size)
 
 #define EVENT_QUEUE_ALLOCATE(size) event_queue_test_allocate(size)
 static bool g_daemon_response_test_fail_allocate;
-static bool g_daemon_response_test_fail_fmemopen;
+static bool g_daemon_response_test_fail_realloc;
+static bool g_daemon_response_test_fail_funopen;
+static size_t g_daemon_response_test_last_allocation;
+static size_t g_daemon_response_test_last_reallocation;
 static void *daemon_response_test_allocate(size_t size)
 {
+    g_daemon_response_test_last_allocation = size;
     return g_daemon_response_test_fail_allocate ? NULL : malloc(size);
 }
-static FILE *daemon_response_test_fmemopen(void *bytes, size_t size, const char *mode)
+static void *daemon_response_test_realloc(void *bytes, size_t size)
 {
-    if (g_daemon_response_test_fail_fmemopen) {
+    g_daemon_response_test_last_reallocation = size;
+    return g_daemon_response_test_fail_realloc ? NULL : realloc(bytes, size);
+}
+static FILE *daemon_response_test_funopen(const void *cookie,
+                                          int (*writefn)(void *, const char *, int),
+                                          fpos_t (*seekfn)(void *, fpos_t, int))
+{
+    if (g_daemon_response_test_fail_funopen) {
         errno = ENOMEM;
         return NULL;
     }
-    return fmemopen(bytes, size, mode);
+    return funopen(cookie, NULL, writefn, seekfn, NULL);
 }
 #define DAEMON_RESPONSE_ALLOCATE(size) daemon_response_test_allocate(size)
-#define DAEMON_RESPONSE_FMEMOPEN(bytes, size, mode) daemon_response_test_fmemopen(bytes, size, mode)
+#define DAEMON_RESPONSE_REALLOC(bytes, size) daemon_response_test_realloc((bytes), (size))
+#define DAEMON_RESPONSE_FUNOPEN(cookie, writefn, seekfn) daemon_response_test_funopen((cookie), (writefn), (seekfn))
 
 static bool g_test_buffer_realloc_fail;
 static void *test_buffer_realloc(void *pointer, size_t size)

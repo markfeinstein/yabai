@@ -159,7 +159,7 @@ TEST_FUNC(daemon_io_response_failures_skip_or_preserve_handler_and_static_fallba
         daemon_io_test_response_size = 0;
         daemon_io_handle_message_test_hook = daemon_io_test_handler;
         g_daemon_response_test_fail_allocate = failure == 0;
-        g_daemon_response_test_fail_fmemopen = failure == 1;
+        g_daemon_response_test_fail_funopen = failure == 1;
         daemon_io_fail_response_finalize = failure == 2;
         TEST_CHECK(daemon_message_admission_acquire(&g_daemon_message_admission), true);
         TEST_CHECK(daemon_io_enqueue_fd(pair[0]), true);
@@ -179,7 +179,7 @@ TEST_FUNC(daemon_io_response_failures_skip_or_preserve_handler_and_static_fallba
         close(pair[1]);
     }
     g_daemon_response_test_fail_allocate = false;
-    g_daemon_response_test_fail_fmemopen = false;
+    g_daemon_response_test_fail_funopen = false;
     daemon_io_fail_response_finalize = false;
     daemon_io_test_stop(saved_event_loop, saved_admission);
 });
