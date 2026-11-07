@@ -142,6 +142,7 @@ macho-parser: build
 syntax:
 	$(CC) -fsyntax-only runner.c -std=c11 -Wall -Wextra -Werror
 	python3 -c 'compile(open("integration/private_api_smoke.py", encoding="utf-8").read(), "private_api_smoke.py", "exec")'
+	python3 ../scripts/analyzer_signatures.py --self-test
 	$(CC) -fsyntax-only ../src/menu_bar_model.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror
