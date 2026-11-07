@@ -1113,6 +1113,8 @@ TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777\n}\n", 777), true);
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 778\n}\n", 777), false);
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777x\n}\n", 777), false);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tsubprocesses = {\n\t\tpid = 777\n\t}\n}\n", 777), false);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tpid-local endpoints = {\n\t}\n\tpid = 777\n}\n", 777), true);
 
     const char *unmanaged_labels[] = { NULL, "", "0", "application.com.asmvik.yabai.123" };
     for (size_t i = 0; i < array_count(unmanaged_labels); ++i) {
@@ -1141,6 +1143,27 @@ TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
     TEST_CHECK(g_service_quit_test_exec_call_count, 0);
     TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    g_service_quit_test_capture_result = SAFE_EXEC_TIMED_OUT;
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 0);
+
+    char *oversized_description = malloc(SERVICE_PRINT_CAPACITY + 1);
+    TEST_CHECK(oversized_description != NULL, true);
+    if (oversized_description) {
+        memset(oversized_description, 'x', SERVICE_PRINT_CAPACITY);
+        oversized_description[SERVICE_PRINT_CAPACITY] = '\0';
+        service_quit_test_reset();
+        g_service_quit_test_capture_output = oversized_description;
+        TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                                   service_quit_test_exec, service_quit_test_capture),
+                   SERVICE_QUIT_FAILED);
+        TEST_CHECK(g_service_quit_test_exec_call_count, 0);
+        free(oversized_description);
+    }
 
     service_quit_test_reset();
     g_service_quit_test_exec_results[0] = 7;
@@ -1193,6 +1216,14 @@ TEST_FUNC(service_restart_requires_the_owning_launchd_job,
                                                  service_restart_test_spawn),
                SERVICE_RESTART_UNMANAGED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
+
+    service_quit_test_reset();
+    g_service_quit_test_capture_result = SAFE_EXEC_TIMED_OUT;
+    TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_spawn),
+               SERVICE_RESTART_FAILED);
     TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
 
     service_quit_test_reset();
@@ -1262,7 +1293,7 @@ TEST_FUNC(safe_exec_deadline_bounds_stalled_commands,
     TEST_CHECK(sigaction(SIGCHLD, &ignored_action, NULL), 0);
 
     uint64_t start = socket_io_monotonic_ns();
-    TEST_CHECK(safe_exec_until(stalled, true, 200), 1);
+    TEST_CHECK(safe_exec_until(stalled, true, 200), SAFE_EXEC_TIMED_OUT);
     uint64_t elapsed_ms = (socket_io_monotonic_ns() - start) / 1000000ULL;
     TEST_CHECK(elapsed_ms < 1000 + SAFE_EXEC_TIMEOUT_GRACE_MS, true);
 

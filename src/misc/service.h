@@ -153,7 +153,8 @@ static char *plist_xml_escape(char *s)
 //
 
 /* Run argv[0] and return its exit status, or 1 when it cannot be started,
- * is terminated by a signal, or its status cannot be collected.
+ * is terminated by a signal, or its status cannot be collected. A bounded
+ * call that exceeds its deadline returns SAFE_EXEC_TIMED_OUT instead.
  *
  * The running daemon ignores SIGCHLD so fire-and-forget signal commands are
  * reaped automatically, which makes a direct waitpid report ECHILD. Commands
@@ -168,6 +169,7 @@ static char *plist_xml_escape(char *s)
  * stops waiting after a short grace period and kills its own unreaped helper,
  * which covers descendants that keep the output pipe open. */
 #define SAFE_EXEC_TIMEOUT_GRACE_MS 2000
+#define SAFE_EXEC_TIMED_OUT (-1)
 
 struct safe_exec_request
 {
@@ -180,12 +182,16 @@ struct safe_exec_request
 };
 
 static volatile pid_t safe_exec_helper_command_pid;
+static volatile sig_atomic_t safe_exec_helper_alarm_fired;
 
 static void safe_exec_helper_alarm(int signo)
 {
     (void) signo;
     pid_t command = safe_exec_helper_command_pid;
-    if (command > 0) kill(command, SIGKILL);
+    if (command > 0) {
+        safe_exec_helper_alarm_fired = 1;
+        kill(command, SIGKILL);
+    }
 }
 
 static bool safe_exec_pipe(int fds[2])
@@ -284,6 +290,7 @@ static void safe_exec_helper_child(const struct safe_exec_request *request, int 
             waited = waitpid(command, &status, 0);
         } while (waited == -1 && errno == EINTR);
         if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
+        if (safe_exec_helper_alarm_fired) result = SAFE_EXEC_TIMED_OUT;
     }
 
     safe_exec_write_all(result_fd, &result, sizeof(result));
@@ -402,7 +409,8 @@ static int safe_exec_run(const struct safe_exec_request *request)
         struct timespec pause = { .tv_nsec = 10000000L };
         nanosleep(&pause, NULL);
     } while (true);
-    return !timed_out && received == sizeof(result) ? result : 1;
+    if (timed_out) return SAFE_EXEC_TIMED_OUT;
+    return received == sizeof(result) ? result : 1;
 }
 
 static int safe_exec_capture_until(char *const argv[], bool suppress_stderr,
@@ -713,19 +721,20 @@ static bool service_quit_label_is_managed(const char *label)
            strncmp(label, "application.", 12) != 0;
 }
 
+/* launchctl print renders the job's own properties one tab deep; nested
+ * dictionaries such as endpoints or spawned subprocesses are indented
+ * further and must not be mistaken for the job's PID. */
 static bool service_print_output_has_pid(const char *output, pid_t pid)
 {
     if (!output || pid <= 0) return false;
     const char *cursor = output;
     while (*cursor) {
-        while (*cursor == ' ' || *cursor == '\t') ++cursor;
-        if (strncmp(cursor, "pid =", 5) == 0) {
-            cursor += 5;
-            while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (cursor[0] == '\t' && strncmp(cursor + 1, "pid = ", 6) == 0) {
+            const char *number = cursor + 7;
             errno = 0;
             char *end = NULL;
-            long value = strtol(cursor, &end, 10);
-            if (errno == 0 && end != cursor && value == (long) pid &&
+            long value = strtol(number, &end, 10);
+            if (errno == 0 && end != number && value == (long) pid &&
                 (*end == '\0' || *end == '\n' || *end == '\r')) return true;
         }
         cursor = strchr(cursor, '\n');
@@ -735,28 +744,81 @@ static bool service_print_output_has_pid(const char *output, pid_t pid)
     return false;
 }
 
-/* Stop the launchd job that actually owns this process. XPC_SERVICE_NAME is
- * inherited environment and therefore only a candidate label: verify that the
- * active job reports this PID before changing its state. Disabling before
+enum service_job_ownership
+{
+    SERVICE_JOB_OWNED,
+    SERVICE_JOB_NOT_OWNED,
+    SERVICE_JOB_UNKNOWN
+};
+
+#define SERVICE_PRINT_CAPACITY (64 * 1024)
+
+/* XPC_SERVICE_NAME is inherited environment and therefore only a candidate
+ * label: the job must currently report this PID before it may be changed.
+ * A job that launchd does not know, or that runs another PID, is not ours.
+ * A timed-out query or output that filled the buffer is inconclusive, and
+ * callers must not guess: quitting directly beneath a KeepAlive job would
+ * be respawned, while changing someone else's job would be worse. */
+static enum service_job_ownership service_job_ownership(const char *service_target, pid_t pid,
+                                                        service_capture_fn capture_fn)
+{
+    char *description = malloc(SERVICE_PRINT_CAPACITY);
+    if (!description) return SERVICE_JOB_UNKNOWN;
+
+    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
+    int result = capture_fn((char *const *) print_args, true, description, SERVICE_PRINT_CAPACITY);
+
+    enum service_job_ownership ownership;
+    if (result == SAFE_EXEC_TIMED_OUT) {
+        ownership = SERVICE_JOB_UNKNOWN;
+    } else if (result != 0) {
+        ownership = SERVICE_JOB_NOT_OWNED;
+    } else if (service_print_output_has_pid(description, pid)) {
+        ownership = SERVICE_JOB_OWNED;
+    } else if (strlen(description) >= SERVICE_PRINT_CAPACITY - 1) {
+        ownership = SERVICE_JOB_UNKNOWN;
+    } else {
+        ownership = SERVICE_JOB_NOT_OWNED;
+    }
+
+    free(description);
+    return ownership;
+}
+
+/* Build the gui-domain target for a candidate launchd label. Returns false
+ * for labels that cannot belong to a managed job (unset, launchd's "0"
+ * placeholder, or RunningBoard's per-launch application.* jobs). */
+static bool service_managed_target(const char *label, uid_t uid, char *target, size_t capacity,
+                                   bool *too_long)
+{
+    *too_long = false;
+    if (!service_quit_label_is_managed(label)) return false;
+    int length = snprintf(target, capacity, "gui/%u/%s", (unsigned int) uid, label);
+    if (length < 0 || (size_t) length >= capacity) {
+        *too_long = true;
+        return false;
+    }
+    return true;
+}
+
+/* Stop the launchd job that actually owns this process. Disabling before
  * bootout prevents KeepAlive from racing the requested termination with a
  * replacement; restore the enabled state if bootout is rejected. */
 static enum service_quit_result service_stop_for_quit_with_exec(const char *label, uid_t uid,
                                                                 pid_t pid, service_exec_fn exec_fn,
                                                                 service_capture_fn capture_fn)
 {
-    if (!service_quit_label_is_managed(label)) return SERVICE_QUIT_DIRECT;
-
     char service_target[MAXLEN];
-    int length = snprintf(service_target, sizeof(service_target), "gui/%u/%s",
-                          (unsigned int) uid, label);
-    if (length < 0 || length >= (int) sizeof(service_target)) return SERVICE_QUIT_FAILED;
+    bool too_long;
+    if (!service_managed_target(label, uid, service_target, sizeof(service_target), &too_long)) {
+        return too_long ? SERVICE_QUIT_FAILED : SERVICE_QUIT_DIRECT;
+    }
 
-    char service_description[8192];
-    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    int print_result = capture_fn((char *const *) print_args, true,
-                                  service_description, sizeof(service_description));
-    if (print_result != 0) return SERVICE_QUIT_DIRECT;
-    if (!service_print_output_has_pid(service_description, pid)) return SERVICE_QUIT_DIRECT;
+    switch (service_job_ownership(service_target, pid, capture_fn)) {
+    case SERVICE_JOB_OWNED: break;
+    case SERVICE_JOB_NOT_OWNED: return SERVICE_QUIT_DIRECT;
+    case SERVICE_JOB_UNKNOWN: return SERVICE_QUIT_FAILED;
+    }
 
     const char *const disable_args[] = { _PATH_LAUNCHCTL, "disable", service_target, NULL };
     if (exec_fn((char *const *) disable_args, false) != 0) return SERVICE_QUIT_FAILED;
@@ -794,19 +856,16 @@ static enum service_restart_result service_restart_for_menu_with_ops(const char 
                                                                      service_capture_fn capture_fn,
                                                                      service_spawn_fn spawn_fn)
 {
-    if (!service_quit_label_is_managed(label)) return SERVICE_RESTART_UNMANAGED;
-
     char service_target[MAXLEN];
-    int length = snprintf(service_target, sizeof(service_target), "gui/%u/%s",
-                          (unsigned int) uid, label);
-    if (length < 0 || length >= (int) sizeof(service_target)) return SERVICE_RESTART_FAILED;
+    bool too_long;
+    if (!service_managed_target(label, uid, service_target, sizeof(service_target), &too_long)) {
+        return too_long ? SERVICE_RESTART_FAILED : SERVICE_RESTART_UNMANAGED;
+    }
 
-    char service_description[8192];
-    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    if (capture_fn((char *const *) print_args, true, service_description,
-                   sizeof(service_description)) != 0 ||
-        !service_print_output_has_pid(service_description, pid)) {
-        return SERVICE_RESTART_UNMANAGED;
+    switch (service_job_ownership(service_target, pid, capture_fn)) {
+    case SERVICE_JOB_OWNED: break;
+    case SERVICE_JOB_NOT_OWNED: return SERVICE_RESTART_UNMANAGED;
+    case SERVICE_JOB_UNKNOWN: return SERVICE_RESTART_FAILED;
     }
 
     const char *const restart_args[] = { _PATH_LAUNCHCTL, "kickstart", "-k", service_target, NULL };
