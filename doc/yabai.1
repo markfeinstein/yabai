@@ -881,7 +881,7 @@ To assign Mission Control Space 9 to the horizontal accordion layout with the de
 .sp
 Each \f(CRrules\fP entry accepts exactly \f(CRlabel\fP, \f(CRone_shot\fP, \f(CRmatch\fP and \f(CReffects\fP. \f(CRmatch\fP is required and nonempty. \f(CRlabel\fP is optional, nonempty, unique within the file and at most 1,024 UTF\-8 bytes. \f(CRone_shot\fP is an optional boolean, defaulting to \f(CRfalse\fP. \f(CReffects\fP is optional and may be empty, so an effectless persistent rule is valid.
 .sp
-\f(CRmatch\fP accepts \f(CRapp\fP, \f(CRtitle\fP, \f(CRrole\fP and \f(CRsubrole\fP. Each matcher is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, which defaults to \f(CRfalse\fP. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role or subrole without app or title.
+\f(CRmatch\fP accepts \f(CRapp\fP, \f(CRtitle\fP, \f(CRrole\fP, \f(CRsubrole\fP and \f(CRidentifier\fP. Each matcher is an exact object with required nonempty \f(CRpattern\fP and optional boolean \f(CRexclude\fP, which defaults to \f(CRfalse\fP. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role, subrole or identifier without app or title.
 .sp
 \f(CReffects\fP accepts:
 .sp
@@ -1936,6 +1936,7 @@ WINDOW
     },
     "role": string,
     "subrole": string,
+    "identifier": string,
     "root\-window": bool,
     "parent": number or null,
     "display": number,
@@ -1999,6 +2000,7 @@ The properties that contain incorrect information for windows with \f(CRhas\-ax\
 {
     "role": string,
     "subrole": string,
+    "identifier": string,
     "can\-move": bool,
     "can\-resize": bool
 }
@@ -2075,6 +2077,11 @@ If \fI!\fP is present, invert the match.
 .RS 4
 .URL "https://developer.apple.com/documentation/applicationservices/carbon_accessibility/subroles?language=objc" "Accessibility subrole of window" "."
 If \fI!\fP is present, invert the match.
+.RE
+.sp
+\fBidentifier[!]=\fI<REGEX>\fP\fP
+.RS 4
+Accessibility identifier of window. If \fI!\fP is present, invert the match.
 .RE
 .sp
 \fBdisplay=\fI[^]<DISPLAY_SEL>\fP\fP
@@ -2162,6 +2169,7 @@ System Integrity Protection must be partially disabled.
     "title": string,
     "role": string,
     "subrole": string,
+    "identifier": string,
     "display": number,
     "space": number,
     "follow_space": bool,

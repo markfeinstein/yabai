@@ -209,6 +209,11 @@ bool window_manager_rule_matches_window(struct rule *rule, struct window *window
     int regex_match_subrole = rule_check_flag(rule, RULE_SUBROLE_EXCLUDE) ? REGEX_MATCH_YES : REGEX_MATCH_NO;
     if (regex_match(rule_check_flag(rule, RULE_SUBROLE_VALID), &rule->subrole_regex, window_subrole) == regex_match_subrole) return false;
 
+    if (rule_check_flag(rule, RULE_IDENTIFIER_VALID)) {
+        int regex_match_identifier = rule_check_flag(rule, RULE_IDENTIFIER_EXCLUDE) ? REGEX_MATCH_YES : REGEX_MATCH_NO;
+        if (regex_match(true, &rule->identifier_regex, window_identifier_ts(window)) == regex_match_identifier) return false;
+    }
+
     return true;
 }
 

@@ -154,6 +154,8 @@ static struct declarative_rule_model declarative_rule_test_model(void)
     model.matchers[2] = (struct declarative_matcher) { "^AXWindow$", false };
     model.matcher_present[3] = true;
     model.matchers[3] = (struct declarative_matcher) { "Dialog", true };
+    model.matcher_present[4] = true;
+    model.matchers[4] = (struct declarative_matcher) { "Settings", false };
     model.display_present = true;
     model.display_index = 1;
     model.space_present = true;
@@ -189,6 +191,8 @@ TEST_FUNC(declarative_rule_preparation_resolves_orders_fingerprints_and_effects,
     TEST_CHECK(rule_check_flag(rule, RULE_ROLE_VALID), true);
     TEST_CHECK(rule_check_flag(rule, RULE_SUBROLE_VALID), true);
     TEST_CHECK(rule_check_flag(rule, RULE_SUBROLE_EXCLUDE), true);
+    TEST_CHECK(rule_check_flag(rule, RULE_IDENTIFIER_VALID), true);
+    TEST_CHECK(strcmp(rule->identifier, "Settings"), 0);
     TEST_CHECK(rule_check_flag(rule, RULE_ONE_SHOT), true);
     TEST_CHECK(rule_effects_check_flag(&rule->effects, RULE_FOLLOW_SPACE), true);
     TEST_CHECK(rule_effects_check_flag(&rule->effects, RULE_OPACITY), true);
@@ -306,9 +310,9 @@ TEST_FUNC(declarative_rule_unavailable_targets_preserve_rules_precedence_and_ind
 
 TEST_FUNC(declarative_rule_preparation_supports_each_matcher_independently,
 {
-    enum rule_flag valid_flags[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID };
-    enum rule_flag exclude_flags[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
-    for (int matcher = 0; matcher < 4; ++matcher) {
+    enum rule_flag valid_flags[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID, RULE_IDENTIFIER_VALID };
+    enum rule_flag exclude_flags[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE, RULE_IDENTIFIER_EXCLUDE };
+    for (int matcher = 0; matcher < 5; ++matcher) {
         struct declarative_rule_model model = {0};
         model.matcher_present[matcher] = true;
         model.matchers[matcher] = (struct declarative_matcher) { ".+", true };
@@ -317,14 +321,14 @@ TEST_FUNC(declarative_rule_preparation_supports_each_matcher_independently,
                                             DISPLAY_ARRANGEMENT_ORDER_DEFAULT, 1, NULL, 0, &prepared), DECLARATIVE_RULE_PREPARE_OK);
         TEST_CHECK(rule_check_flag(&prepared.live[0], valid_flags[matcher]), true);
         TEST_CHECK(rule_check_flag(&prepared.live[0], exclude_flags[matcher]), true);
-        char *template_patterns[] = { prepared.templates[0].app, prepared.templates[0].title, prepared.templates[0].role, prepared.templates[0].subrole };
-        char *live_patterns[] = { prepared.live[0].app, prepared.live[0].title, prepared.live[0].role, prepared.live[0].subrole };
-        regex_t *template_regexes[] = { &prepared.templates[0].app_regex, &prepared.templates[0].title_regex, &prepared.templates[0].role_regex, &prepared.templates[0].subrole_regex };
-        regex_t *live_regexes[] = { &prepared.live[0].app_regex, &prepared.live[0].title_regex, &prepared.live[0].role_regex, &prepared.live[0].subrole_regex };
+        char *template_patterns[] = { prepared.templates[0].app, prepared.templates[0].title, prepared.templates[0].role, prepared.templates[0].subrole, prepared.templates[0].identifier };
+        char *live_patterns[] = { prepared.live[0].app, prepared.live[0].title, prepared.live[0].role, prepared.live[0].subrole, prepared.live[0].identifier };
+        regex_t *template_regexes[] = { &prepared.templates[0].app_regex, &prepared.templates[0].title_regex, &prepared.templates[0].role_regex, &prepared.templates[0].subrole_regex, &prepared.templates[0].identifier_regex };
+        regex_t *live_regexes[] = { &prepared.live[0].app_regex, &prepared.live[0].title_regex, &prepared.live[0].role_regex, &prepared.live[0].subrole_regex, &prepared.live[0].identifier_regex };
         TEST_CHECK(template_patterns[matcher] != live_patterns[matcher], true);
         TEST_CHECK(regexec(template_regexes[matcher], "match", 0, NULL, 0), 0);
         TEST_CHECK(regexec(live_regexes[matcher], "match", 0, NULL, 0), 0);
-        for (int other = 0; other < 4; ++other) {
+        for (int other = 0; other < 5; ++other) {
             if (other != matcher) TEST_CHECK(rule_check_flag(&prepared.live[0], valid_flags[other]), false);
         }
         declarative_prepared_rules_destroy(&prepared);
@@ -359,7 +363,7 @@ TEST_FUNC(declarative_rule_preparation_bounds_every_matcher_before_compilation,
 {
     size_t outstanding = declarative_rules_test_outstanding_allocations();
     int rule_count = buf_len(g_window_manager.rules);
-    for (int matcher = 0; matcher < 4; ++matcher) {
+    for (int matcher = 0; matcher < 5; ++matcher) {
         struct declarative_rule_model model = {0};
         model.matcher_present[matcher] = true;
         model.matchers[matcher].pattern = "((a{255}){255}){255}";
@@ -422,7 +426,7 @@ TEST_FUNC(declarative_rule_maximum_preparation_and_destruction_tracks_every_allo
         for (size_t i = 0; i < count; ++i) {
             snprintf(labels[i], sizeof(*labels), "maximum-rule-%zu", i);
             models[i].label = labels[i];
-            for (int matcher = 0; matcher < 4; ++matcher) {
+            for (int matcher = 0; matcher < 5; ++matcher) {
                 models[i].matcher_present[matcher] = true;
                 models[i].matchers[matcher] = (struct declarative_matcher) { "^.*$", matcher & 1 };
             }

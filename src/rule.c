@@ -62,6 +62,7 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
     char *title      = rule->title;
     char *role       = rule->role;
     char *srole      = rule->subrole;
+    char *identifier = rule->identifier;
     char *scratchpad = rule->effects.scratchpad;
     uint32_t did = rule->target_unavailable ? 0 : rule->effects.did;
     uint64_t sid = rule->target_unavailable ? 0 : rule->effects.sid;
@@ -71,11 +72,13 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
     char *escaped_title      = title      ? ts_string_escape(title)      : NULL;
     char *escaped_role       = role       ? ts_string_escape(role)       : NULL;
     char *escaped_srole      = srole      ? ts_string_escape(srole)      : NULL;
+    char *escaped_identifier = identifier ? ts_string_escape(identifier) : NULL;
     char *escaped_scratchpad = scratchpad ? ts_string_escape(scratchpad) : NULL;
 
     fprintf(rsp,
             "{\n"
             "\t\"index\":%d,\n"
+            "\t\"%s\":\"%s\",\n"
             "\t\"%s\":\"%s\",\n"
             "\t\"%s\":\"%s\",\n"
             "\t\"%s\":\"%s\",\n"
@@ -101,6 +104,7 @@ void rule_serialize(FILE *rsp, struct rule *rule, int index)
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_TITLE].query_name, escaped_title ? escaped_title : title ? title : "",
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_ROLE].query_name, escaped_role ? escaped_role : role ? role : "",
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SUBROLE].query_name, escaped_srole ? escaped_srole : srole ? srole : "",
+            declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_IDENTIFIER].query_name, escaped_identifier ? escaped_identifier : identifier ? identifier : "",
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_DISPLAY].query_name, did ? display_manager_display_id_arrangement(did) : 0,
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_SPACE].query_name, sid ? space_manager_mission_control_index(sid) : 0,
             declarative_rule_field_descriptors[DECLARATIVE_RULE_FIELD_FOLLOW].query_name, json_bool(rule_effects_check_flag(&rule->effects, RULE_FOLLOW_SPACE)),
@@ -659,14 +663,16 @@ void rule_destroy(struct rule *rule)
 {
     if (rule_check_flag(rule, RULE_APP_VALID))     regfree(&rule->app_regex);
     if (rule_check_flag(rule, RULE_TITLE_VALID))   regfree(&rule->title_regex);
-    if (rule_check_flag(rule, RULE_ROLE_VALID))    regfree(&rule->role_regex);
-    if (rule_check_flag(rule, RULE_SUBROLE_VALID)) regfree(&rule->subrole_regex);
+    if (rule_check_flag(rule, RULE_ROLE_VALID))       regfree(&rule->role_regex);
+    if (rule_check_flag(rule, RULE_SUBROLE_VALID))    regfree(&rule->subrole_regex);
+    if (rule_check_flag(rule, RULE_IDENTIFIER_VALID)) regfree(&rule->identifier_regex);
 
     rule_free(rule->label);
     rule_free(rule->app);
     rule_free(rule->title);
     rule_free(rule->role);
     rule_free(rule->subrole);
+    rule_free(rule->identifier);
 
     rule_free(rule->effects.scratchpad);
     rule_free(rule->display_uuid);

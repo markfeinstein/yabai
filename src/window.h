@@ -39,6 +39,7 @@ static CFStringRef ax_window_notification[] =
     WINDOW_PROPERTY_ENTRY("frame",                WINDOW_PROPERTY_FRAME,               0x000000020) \
     WINDOW_PROPERTY_ENTRY("role",                 WINDOW_PROPERTY_ROLE,                0x000000040) \
     WINDOW_PROPERTY_ENTRY("subrole",              WINDOW_PROPERTY_SUBROLE,             0x000000080) \
+    WINDOW_PROPERTY_ENTRY("identifier",           WINDOW_PROPERTY_IDENTIFIER,          0x2000000000) \
     WINDOW_PROPERTY_ENTRY("root-window",          WINDOW_PROPERTY_ROOT_WINDOW,         0x000000100) \
     WINDOW_PROPERTY_ENTRY("parent",               WINDOW_PROPERTY_PARENT,              0x200000000) \
     WINDOW_PROPERTY_ENTRY("display",              WINDOW_PROPERTY_DISPLAY,             0x000000200) \
@@ -109,6 +110,7 @@ enum window_ax_snapshot_slot
     WINDOW_AX_ROLE_SLOT,
     WINDOW_AX_SUBROLE_SLOT,
     WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_IDENTIFIER_SLOT,
     WINDOW_AX_PARENT_SLOT,
     WINDOW_AX_MINIMIZED_SLOT,
     WINDOW_AX_FULLSCREEN_SLOT,
@@ -122,6 +124,7 @@ enum window_ax_snapshot_field
     WINDOW_AX_ROLE       = 1u << WINDOW_AX_ROLE_SLOT,
     WINDOW_AX_SUBROLE    = 1u << WINDOW_AX_SUBROLE_SLOT,
     WINDOW_AX_TITLE      = 1u << WINDOW_AX_TITLE_SLOT,
+    WINDOW_AX_IDENTIFIER = 1u << WINDOW_AX_IDENTIFIER_SLOT,
     WINDOW_AX_PARENT     = 1u << WINDOW_AX_PARENT_SLOT,
     WINDOW_AX_MINIMIZED  = 1u << WINDOW_AX_MINIMIZED_SLOT,
     WINDOW_AX_FULLSCREEN = 1u << WINDOW_AX_FULLSCREEN_SLOT
@@ -137,6 +140,7 @@ struct window_ax_snapshot
     CFStringRef role;
     CFStringRef subrole;
     CFStringRef title;
+    CFStringRef identifier;
     AXUIElementRef parent;
     bool minimized;
     bool fullscreen;
@@ -150,6 +154,7 @@ struct window
     uint32_t *volatile id_ptr;
     CFStringRef role;
     CFStringRef subrole;
+    CFStringRef identifier;
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
@@ -252,6 +257,8 @@ char *window_role_ts(struct window *window);
 CFStringRef window_ax_subrole(struct window *window);
 CFStringRef window_subrole(struct window *window);
 char *window_subrole_ts(struct window *window);
+CFStringRef window_identifier(struct window *window);
+char *window_identifier_ts(struct window *window);
 bool window_ax_can_move(struct window *window);
 bool window_can_move(struct window *window);
 bool window_ax_can_resize(struct window *window);

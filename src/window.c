@@ -521,6 +521,13 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
         did_output = true;
     }
 
+    if (flags & WINDOW_PROPERTY_IDENTIFIER) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        fprintf(rsp, "\t\"identifier\":\"%s\"", "");
+        did_output = true;
+    }
+
     if (flags & WINDOW_PROPERTY_ROOT_WINDOW) {
         if (did_output) fprintf(rsp, ",\n");
 
@@ -905,6 +912,15 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
         did_output = true;
     }
 
+    if (flags & WINDOW_PROPERTY_IDENTIFIER) {
+        if (did_output) fprintf(rsp, ",\n");
+
+        char *identifier = window_identifier_ts(window);
+        char *escaped_identifier = identifier ? ts_string_escape(identifier) : NULL;
+        fprintf(rsp, "\t\"identifier\":\"%s\"", escaped_identifier ? escaped_identifier : identifier ? identifier : "");
+        did_output = true;
+    }
+
     if (flags & WINDOW_PROPERTY_ROOT_WINDOW) {
         if (did_output) fprintf(rsp, ",\n");
 
@@ -1162,6 +1178,7 @@ static const CFStringRef window_ax_snapshot_attribute[WINDOW_AX_SNAPSHOT_SLOT_CO
     [WINDOW_AX_ROLE_SLOT]       = kAXRoleAttribute,
     [WINDOW_AX_SUBROLE_SLOT]    = kAXSubroleAttribute,
     [WINDOW_AX_TITLE_SLOT]      = kAXTitleAttribute,
+    [WINDOW_AX_IDENTIFIER_SLOT] = kAXIdentifierAttribute,
     [WINDOW_AX_PARENT_SLOT]     = kAXParentAttribute,
     [WINDOW_AX_MINIMIZED_SLOT]  = kAXMinimizedAttribute,
     [WINDOW_AX_FULLSCREEN_SLOT] = kAXFullscreenAttribute
@@ -1220,6 +1237,10 @@ static AXError window_ax_snapshot_store_value(struct window_ax_snapshot *snapsho
     case WINDOW_AX_TITLE_SLOT:
         if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
         snapshot->title = (CFStringRef) CFRetain(value);
+        break;
+    case WINDOW_AX_IDENTIFIER_SLOT:
+        if (!cf_is_type(value, CFStringGetTypeID())) return kAXErrorIllegalArgument;
+        snapshot->identifier = (CFStringRef) CFRetain(value);
         break;
     case WINDOW_AX_PARENT_SLOT:
         if (!cf_is_type(value, AXUIElementGetTypeID())) return kAXErrorIllegalArgument;
@@ -1344,6 +1365,7 @@ void window_ax_snapshot_destroy(struct window_ax_snapshot *snapshot)
     if (snapshot->role) CFRelease(snapshot->role);
     if (snapshot->subrole) CFRelease(snapshot->subrole);
     if (snapshot->title) CFRelease(snapshot->title);
+    if (snapshot->identifier) CFRelease(snapshot->identifier);
     if (snapshot->parent) CFRelease(snapshot->parent);
     memset(snapshot, 0, sizeof(*snapshot));
 }
@@ -1732,6 +1754,19 @@ char *window_subrole_ts(struct window *window)
     return result;
 }
 
+CFStringRef window_identifier(struct window *window)
+{
+    return window->identifier;
+}
+
+char *window_identifier_ts(struct window *window)
+{
+    CFStringRef identifier = window_identifier(window);
+    if (!identifier) return ts_string_copy("");
+
+    return ts_cfstring_copy(identifier);
+}
+
 bool window_is_real(struct window *window)
 {
     bool win = false;
@@ -1808,8 +1843,8 @@ struct window *window_create_with_server_record(struct application *application,
     window->id_ptr = &window->id;
 
     const uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE |
-                               WINDOW_AX_SUBROLE | WINDOW_AX_TITLE | WINDOW_AX_PARENT |
-                               WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+                               WINDOW_AX_SUBROLE | WINDOW_AX_TITLE | WINDOW_AX_IDENTIFIER |
+                               WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
     struct window_ax_snapshot snapshot = {0};
     (void) window_ax_snapshot_read(window->ref, requested, &snapshot);
 
@@ -1819,6 +1854,8 @@ struct window *window_create_with_server_record(struct application *application,
     snapshot.role = NULL;
     window->subrole = snapshot.subrole;
     snapshot.subrole = NULL;
+    window->identifier = snapshot.identifier;
+    snapshot.identifier = NULL;
     window->title = snapshot.title;
     snapshot.title = NULL;
 
@@ -1884,6 +1921,7 @@ void window_destroy(struct window *window)
     window->id = 0;
     if (window->role) CFRelease(window->role);
     if (window->subrole) CFRelease(window->subrole);
+    if (window->identifier) CFRelease(window->identifier);
     if (window->title) CFRelease(window->title);
     if (window->ref) {
 #ifdef TESTS

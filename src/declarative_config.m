@@ -3,7 +3,7 @@
 #include <math.h>
 
 _Static_assert(DECLARATIVE_CONFIG_COUNT == 52, "config inventory changed without declarative coverage");
-_Static_assert(DECLARATIVE_RULE_FIELD_COUNT == 17, "rule inventory changed without declarative coverage");
+_Static_assert(DECLARATIVE_RULE_FIELD_COUNT == 18, "rule inventory changed without declarative coverage");
 
 enum { VALIDATOR_BOOL, VALIDATOR_FFM, VALIDATOR_DISPLAY_ORDER, VALIDATOR_WINDOW_ORIGIN, VALIDATOR_FOCUS_FALLBACK, VALIDATOR_WINDOW_PLACEMENT, VALIDATOR_INSERT_POINT, VALIDATOR_OPACITY_DURATION, VALIDATOR_NONNEGATIVE, VALIDATOR_POSITIVE, VALIDATOR_EASING, VALIDATOR_SHADOW, VALIDATOR_MENUBAR, VALIDATOR_MENUBAR_INTERFACE, VALIDATOR_MENUBAR_STYLE, VALIDATOR_SPACE_FILTER, VALIDATOR_UNIT_FLOAT, VALIDATOR_POSITIVE_UNIT, VALIDATOR_NONZERO_U32, VALIDATOR_INT, VALIDATOR_NONNEGATIVE_INT, VALIDATOR_LAYOUT, VALIDATOR_SPLIT_RATIO, VALIDATOR_SPLIT_TYPE, VALIDATOR_AUTO_BALANCE, VALIDATOR_MOUSE_MOD, VALIDATOR_MOUSE_ACTION, VALIDATOR_DROP_ACTION, VALIDATOR_EXTERNAL_BAR };
 enum { SETTER_DEBUG_OUTPUT, SETTER_MFF, SETTER_MANAGE, SETTER_WINDOW_SUBLAYER_AUTO, SETTER_FFM, SETTER_DISPLAY_ORDER, SETTER_WINDOW_ORIGIN, SETTER_WINDOW_FOCUS_FALLBACK, SETTER_WINDOW_PLACEMENT, SETTER_INSERT_POINT, SETTER_WINDOW_ZOOM_PERSIST, SETTER_OPACITY, SETTER_OPACITY_DURATION, SETTER_ANIMATION_DURATION, SETTER_ANIMATION_EASING, SETTER_SHADOW, SETTER_MENUBAR, SETTER_MENUBAR_INTERFACE, SETTER_MENUBAR_STYLE, SETTER_SPACE_FILTER, SETTER_MENUBAR_OPACITY, SETTER_ACTIVE_WINDOW_OPACITY, SETTER_NORMAL_WINDOW_OPACITY, SETTER_ACTIVE_WINDOW_HIGHLIGHT, SETTER_ACTIVE_WINDOW_HIGHLIGHT_COLOR, SETTER_ACTIVE_WINDOW_HIGHLIGHT_RADIUS, SETTER_ACTIVE_WINDOW_HIGHLIGHT_WIDTH, SETTER_INSERT_FEEDBACK_COLOR, SETTER_INSERT_FEEDBACK_RADIUS, SETTER_INSERT_FEEDBACK_WIDTH, SETTER_TOP_PADDING, SETTER_BOTTOM_PADDING, SETTER_LEFT_PADDING, SETTER_RIGHT_PADDING, SETTER_LAYOUT, SETTER_WINDOW_GAP, SETTER_ACCORDION_PADDING, SETTER_SINGLE_WINDOW_MAX_WIDTH, SETTER_SINGLE_WINDOW_MIN_WIDTH, SETTER_SINGLE_WINDOW_WIDTH_RATIO, SETTER_SPLIT_RATIO, SETTER_SPLIT_TYPE, SETTER_AUTO_BALANCE, SETTER_NATIVE_EDGE_RESIZE, SETTER_MOUSE_BSP_LIVE_RESIZE, SETTER_MOUSE_MOD, SETTER_MOUSE_ACTION1, SETTER_MOUSE_ACTION2, SETTER_MOUSE_DROP_ACTION, SETTER_EXTERNAL_BAR, SETTER_DIRECT_SPACE_SWITCH, SETTER_SKIP_SPACE_ANIMATION };
@@ -1917,7 +1917,7 @@ static bool convert_rules(struct model_builder *b, id object) {
     if (!b->model->rules)
         return false;
     NSMutableSet *labels = [NSMutableSet set];
-    NSString *names[] = {@"app", @"title", @"role", @"subrole"};
+    NSString *names[] = {@"app", @"title", @"role", @"subrole", @"identifier"};
     for (size_t i = 0; i < b->model->rule_count; ++i) {
         char base[80];
         snprintf(base, sizeof(base), "$.rules[%zu]", i);
@@ -1960,7 +1960,7 @@ static bool convert_rules(struct model_builder *b, id object) {
         NSDictionary *m = match;
         for (NSString *k in m) {
             int mi = -1;
-            for (int j = 0; j < 4; ++j)
+            for (int j = 0; j < 5; ++j)
                 if ([k isEqualToString:names[j]])
                     mi = j;
             if (mi < 0) {
@@ -2337,7 +2337,7 @@ void declarative_config_destroy(struct declarative_config_model *m) {
         for (size_t i = 0; i < m->rule_count; ++i) {
             struct declarative_rule_model *r = &m->rules[i];
             release(r->label);
-            for (int j = 0; j < 4; ++j)
+            for (int j = 0; j < 5; ++j)
                 release(r->matchers[j].pattern);
             release(r->scratchpad);
         }

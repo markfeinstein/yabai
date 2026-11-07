@@ -305,10 +305,10 @@ enum declarative_rule_matcher_copy_result
 static enum declarative_rule_matcher_copy_result
 declarative_rule_copy_matcher(struct rule *rule, int index, const char *pattern, bool exclude)
 {
-    char **strings[] = { &rule->app, &rule->title, &rule->role, &rule->subrole };
-    regex_t *regexes[] = { &rule->app_regex, &rule->title_regex, &rule->role_regex, &rule->subrole_regex };
-    enum rule_flag valid[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID };
-    enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
+    char **strings[] = { &rule->app, &rule->title, &rule->role, &rule->subrole, &rule->identifier };
+    regex_t *regexes[] = { &rule->app_regex, &rule->title_regex, &rule->role_regex, &rule->subrole_regex, &rule->identifier_regex };
+    enum rule_flag valid[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID, RULE_IDENTIFIER_VALID };
+    enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE, RULE_IDENTIFIER_EXCLUDE };
     if (pattern_compile(regexes[index], pattern) != PATTERN_COMPILE_OK) {
         return DECLARATIVE_RULE_MATCHER_COPY_INVALID;
     }
@@ -335,17 +335,18 @@ static bool declarative_rule_clone(const struct rule *source, struct rule *desti
     destination->warning_state = source->warning_state;
     destination->effects = source->effects;
     destination->effects.scratchpad = NULL;
-    destination->flags = source->flags & ~(RULE_APP_VALID | RULE_TITLE_VALID | RULE_ROLE_VALID | RULE_SUBROLE_VALID | RULE_ONE_SHOT_REMOVE);
+    destination->flags = source->flags & ~(RULE_APP_VALID | RULE_TITLE_VALID | RULE_ROLE_VALID | RULE_SUBROLE_VALID |
+                                           RULE_IDENTIFIER_VALID | RULE_ONE_SHOT_REMOVE);
 
     if ((source->label && !(destination->label = declarative_rule_strdup(source->label))) ||
         (source->display_uuid && !(destination->display_uuid = declarative_rule_strdup(source->display_uuid))) ||
         (source->space_uuid && !(destination->space_uuid = declarative_rule_strdup(source->space_uuid))) ||
         (source->effects.scratchpad && !(destination->effects.scratchpad = declarative_rule_strdup(source->effects.scratchpad)))) goto fail;
 
-    const char *patterns[] = { source->app, source->title, source->role, source->subrole };
-    enum rule_flag valid[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID };
-    enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE };
-    for (int i = 0; i < 4; ++i) {
+    const char *patterns[] = { source->app, source->title, source->role, source->subrole, source->identifier };
+    enum rule_flag valid[] = { RULE_APP_VALID, RULE_TITLE_VALID, RULE_ROLE_VALID, RULE_SUBROLE_VALID, RULE_IDENTIFIER_VALID };
+    enum rule_flag excluded[] = { RULE_APP_EXCLUDE, RULE_TITLE_EXCLUDE, RULE_ROLE_EXCLUDE, RULE_SUBROLE_EXCLUDE, RULE_IDENTIFIER_EXCLUDE };
+    for (int i = 0; i < 5; ++i) {
         if (rule_check_flag((struct rule *) source, valid[i]) &&
             declarative_rule_copy_matcher(destination, i, patterns[i],
                                           rule_check_flag((struct rule *) source, excluded[i])) !=
@@ -370,7 +371,7 @@ static enum declarative_rule_prepare_result declarative_rule_from_model(const st
     rule->generation = generation;
     rule->target_unavailable = target_unavailable;
     if (model->label && !(rule->label = declarative_rule_strdup(model->label))) goto allocation_failure;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         if (model->matcher_present[i]) {
             enum declarative_rule_matcher_copy_result copy =
                 declarative_rule_copy_matcher(rule, i, model->matchers[i].pattern,

@@ -78,6 +78,7 @@ static CFTypeRef window_ax_snapshot_test_value(CFStringRef attribute)
         return CFRetain(window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED
                         ? (CFTypeRef) kCFNull : (CFTypeRef) CFSTR("snapshot-title"));
     }
+    if (CFEqual(attribute, kAXIdentifierAttribute)) return CFRetain(CFSTR("snapshot-identifier"));
     if (CFEqual(attribute, kAXParentAttribute)) {
         if (window_ax_snapshot_test_mode == WINDOW_AX_SNAPSHOT_TEST_MIXED) {
             return CFRetain(CFSTR("not-an-ax-element"));
@@ -207,7 +208,8 @@ TEST_FUNC(window_ax_snapshot_reads_and_owns_valid_batch_values,
     window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_VALID);
     AXUIElementRef ref = AXUIElementCreateApplication(getpid());
     uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
-                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+                         WINDOW_AX_TITLE | WINDOW_AX_IDENTIFIER | WINDOW_AX_PARENT |
+                         WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
     struct window_ax_snapshot snapshot = {0};
 
     TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), true);
@@ -223,6 +225,8 @@ TEST_FUNC(window_ax_snapshot_reads_and_owns_valid_batch_values,
     if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXStandardWindowSubrole), true);
     TEST_CHECK(snapshot.title != NULL, true);
     if (snapshot.title) TEST_CHECK(CFEqual(snapshot.title, CFSTR("snapshot-title")), true);
+    TEST_CHECK(snapshot.identifier != NULL, true);
+    if (snapshot.identifier) TEST_CHECK(CFEqual(snapshot.identifier, CFSTR("snapshot-identifier")), true);
     TEST_CHECK(snapshot.parent != NULL, true);
     if (snapshot.parent) TEST_CHECK(CFGetTypeID(snapshot.parent), AXUIElementGetTypeID());
     TEST_CHECK(snapshot.minimized, false);
@@ -239,6 +243,7 @@ TEST_FUNC(window_ax_snapshot_reads_and_owns_valid_batch_values,
     TEST_CHECK(snapshot.requested, 0U);
     TEST_CHECK(snapshot.valid, 0U);
     TEST_CHECK(snapshot.role == NULL, true);
+    TEST_CHECK(snapshot.identifier == NULL, true);
     TEST_CHECK(snapshot.parent == NULL, true);
     window_ax_snapshot_destroy(&snapshot);
     CFRelease(ref);
@@ -250,12 +255,13 @@ TEST_FUNC(window_ax_snapshot_validates_slots_and_couples_frame_fallback,
     window_ax_snapshot_test_begin(WINDOW_AX_SNAPSHOT_TEST_MIXED);
     AXUIElementRef ref = AXUIElementCreateApplication(getpid());
     uint32_t requested = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_ROLE | WINDOW_AX_SUBROLE |
-                         WINDOW_AX_TITLE | WINDOW_AX_PARENT | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+                         WINDOW_AX_TITLE | WINDOW_AX_IDENTIFIER | WINDOW_AX_PARENT |
+                         WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
     struct window_ax_snapshot snapshot = {0};
 
     TEST_CHECK(window_ax_snapshot_read(ref, requested, &snapshot), false);
     uint32_t expected_valid = WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_SUBROLE |
-                              WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
+                              WINDOW_AX_IDENTIFIER | WINDOW_AX_MINIMIZED | WINDOW_AX_FULLSCREEN;
     TEST_CHECK(snapshot.valid, expected_valid);
     TEST_CHECK(snapshot.position.x, 40.0);
     TEST_CHECK(snapshot.position.y, 50.0);
@@ -266,6 +272,8 @@ TEST_FUNC(window_ax_snapshot_validates_slots_and_couples_frame_fallback,
     TEST_CHECK(snapshot.subrole != NULL, true);
     if (snapshot.subrole) TEST_CHECK(CFEqual(snapshot.subrole, kAXDialogSubrole), true);
     TEST_CHECK(snapshot.slot_error[WINDOW_AX_TITLE_SLOT], kAXErrorCannotComplete);
+    TEST_CHECK(snapshot.slot_error[WINDOW_AX_IDENTIFIER_SLOT], kAXErrorSuccess);
+    TEST_CHECK(snapshot.identifier != NULL, true);
     TEST_CHECK(snapshot.slot_error[WINDOW_AX_PARENT_SLOT], kAXErrorIllegalArgument);
     TEST_CHECK(snapshot.slot_error[WINDOW_AX_MINIMIZED_SLOT], kAXErrorSuccess);
     TEST_CHECK(snapshot.minimized, true);
@@ -659,6 +667,8 @@ TEST_FUNC(window_create_uses_one_complete_snapshot_and_independent_capabilities,
         if (window->subrole) TEST_CHECK(CFEqual(window->subrole, kAXStandardWindowSubrole), true);
         TEST_CHECK(window->title != NULL, true);
         if (window->title) TEST_CHECK(CFEqual(window->title, CFSTR("snapshot-title")), true);
+        TEST_CHECK(window->identifier != NULL, true);
+        if (window->identifier) TEST_CHECK(CFEqual(window->identifier, CFSTR("snapshot-identifier")), true);
         TEST_CHECK(window->is_root, true);
         TEST_CHECK(window_check_flag(window, WINDOW_SHADOW), true);
         TEST_CHECK(window_check_flag(window, WINDOW_MOVABLE), true);
@@ -672,7 +682,7 @@ TEST_FUNC(window_create_uses_one_complete_snapshot_and_independent_capabilities,
     TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
     TEST_CHECK(window_ax_snapshot_test_single_calls, 0);
     TEST_CHECK(window_ax_snapshot_test_last_options, 0U);
-    TEST_CHECK(window_ax_snapshot_test_last_attribute_count, 8L);
+    TEST_CHECK(window_ax_snapshot_test_last_attribute_count, 9L);
     TEST_CHECK(window_ax_snapshot_test_attribute_order_valid, true);
     TEST_CHECK(window_create_test_parent_calls, 1);
     TEST_CHECK(window_create_test_shadow_calls, 1);
@@ -706,6 +716,8 @@ TEST_FUNC(window_create_preserves_partial_snapshot_root_and_space_fallbacks,
         TEST_CHECK(window->subrole != NULL, true);
         if (window->subrole) TEST_CHECK(CFEqual(window->subrole, kAXDialogSubrole), true);
         TEST_CHECK(window->title == NULL, true);
+        TEST_CHECK(window->identifier != NULL, true);
+        if (window->identifier) TEST_CHECK(CFEqual(window->identifier, CFSTR("snapshot-identifier")), true);
         TEST_CHECK(window->is_root, false);
         TEST_CHECK(window_check_flag(window, WINDOW_MINIMIZE), true);
         TEST_CHECK(window_check_flag(window, WINDOW_FULLSCREEN), true);
@@ -734,10 +746,11 @@ TEST_FUNC(window_create_preserves_partial_snapshot_root_and_space_fallbacks,
         TEST_CHECK(window_check_flag(window, WINDOW_FULLSCREEN), true);
         TEST_CHECK(window->role != NULL, true);
         if (window->role) TEST_CHECK(CFEqual(window->role, kAXWindowRole), true);
+        TEST_CHECK(window->identifier == NULL, true);
         window_destroy(window);
     }
     TEST_CHECK(window_ax_snapshot_test_multiple_calls, 1);
-    TEST_CHECK(window_ax_snapshot_test_single_calls, 8);
+    TEST_CHECK(window_ax_snapshot_test_single_calls, 9);
     TEST_CHECK(window_create_test_space_calls, 1);
     TEST_CHECK(window_create_test_space_fullscreen_calls, 1);
     TEST_CHECK(window_create_test_last_space_id, 44ULL);

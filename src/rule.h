@@ -18,9 +18,11 @@ enum rule_flag
     RULE_APP_EXCLUDE     = 0x010,
     RULE_TITLE_EXCLUDE   = 0x020,
     RULE_ROLE_EXCLUDE    = 0x040,
-    RULE_SUBROLE_EXCLUDE = 0x080,
-    RULE_ONE_SHOT        = 0x100,
-    RULE_ONE_SHOT_REMOVE = 0x200
+    RULE_SUBROLE_EXCLUDE    = 0x080,
+    RULE_ONE_SHOT           = 0x100,
+    RULE_ONE_SHOT_REMOVE    = 0x200,
+    RULE_IDENTIFIER_VALID   = 0x400,
+    RULE_IDENTIFIER_EXCLUDE = 0x800
 };
 
 enum rule_effects_flag
@@ -102,10 +104,12 @@ struct rule
     char *title;
     char *role;
     char *subrole;
+    char *identifier;
     regex_t app_regex;
     regex_t title_regex;
     regex_t role_regex;
     regex_t subrole_regex;
+    regex_t identifier_regex;
     struct rule_effects effects;
     uint16_t flags;
     enum rule_owner owner;

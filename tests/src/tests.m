@@ -1398,6 +1398,7 @@ TEST_FUNC(serialization_string_escaping_is_strict,
     ts_reset();
     struct rule rule = {0};
     rule.label = json_input;
+    rule.identifier = json_input;
     rule.effects.scratchpad = json_input;
     FILE *rule_file = tmpfile();
     TEST_CHECK(rule_file != NULL, true);
@@ -1407,16 +1408,20 @@ TEST_FUNC(serialization_string_escaping_is_strict,
     fread(rule_buffer, 1, sizeof(rule_buffer)-1, rule_file);
     fclose(rule_file);
     char expected_rule_label[256];
+    char expected_rule_identifier[256];
     char expected_rule_scratchpad[256];
     snprintf(expected_rule_label, sizeof(expected_rule_label), "\"label\":\"%s\"", expected_json);
+    snprintf(expected_rule_identifier, sizeof(expected_rule_identifier), "\"identifier\":\"%s\"", expected_json);
     snprintf(expected_rule_scratchpad, sizeof(expected_rule_scratchpad), "\"scratchpad\":\"%s\"", expected_json);
     TEST_CHECK(strstr(rule_buffer, expected_rule_label) != NULL, true);
+    TEST_CHECK(strstr(rule_buffer, expected_rule_identifier) != NULL, true);
     TEST_CHECK(strstr(rule_buffer, expected_rule_scratchpad) != NULL, true);
     NSData *rule_data = [NSData dataWithBytes:rule_buffer length:strlen(rule_buffer)];
     NSError *rule_error = nil;
     NSDictionary *rule_json = [NSJSONSerialization JSONObjectWithData:rule_data options:0 error:&rule_error];
     TEST_CHECK(rule_json != nil, true);
     TEST_CHECK([[rule_json objectForKey:@"label"] isEqualToString:json_original], true);
+    TEST_CHECK([[rule_json objectForKey:@"identifier"] isEqualToString:json_original], true);
     TEST_CHECK([[rule_json objectForKey:@"scratchpad"] isEqualToString:json_original], true);
 
     struct signal signal = {0};
@@ -1470,18 +1475,21 @@ TEST_FUNC(serialization_string_escaping_is_strict,
 
     const UInt8 role_bytes[] = { 'r', 'o', 'l', 'e', '"', '\\', '\n', '\t', 0x01 };
     const UInt8 subrole_bytes[] = { 's', 'u', 'b', 'r', 'o', 'l', 'e', '"', '\\', '\n', '\t', 0x02 };
+    const UInt8 identifier_bytes[] = { 'i', 'd', 'e', 'n', 't', 'i', 'f', 'i', 'e', 'r', '"', '\\', '\n', '\t', 0x03 };
     struct window role_window = {0};
     role_window.role = CFStringCreateWithBytes(NULL, role_bytes, sizeof(role_bytes), kCFStringEncodingUTF8, false);
     role_window.subrole = CFStringCreateWithBytes(NULL, subrole_bytes, sizeof(subrole_bytes), kCFStringEncodingUTF8, false);
+    role_window.identifier = CFStringCreateWithBytes(NULL, identifier_bytes, sizeof(identifier_bytes), kCFStringEncodingUTF8, false);
     TEST_CHECK(role_window.role != NULL, true);
     TEST_CHECK(role_window.subrole != NULL, true);
+    TEST_CHECK(role_window.identifier != NULL, true);
 
-    if (role_window.role && role_window.subrole) {
+    if (role_window.role && role_window.subrole && role_window.identifier) {
         ts_reset();
         FILE *role_file = tmpfile();
         TEST_CHECK(role_file != NULL, true);
         if (role_file) {
-            window_serialize(role_file, &role_window, WINDOW_PROPERTY_ROLE | WINDOW_PROPERTY_SUBROLE);
+            window_serialize(role_file, &role_window, WINDOW_PROPERTY_ROLE | WINDOW_PROPERTY_SUBROLE | WINDOW_PROPERTY_IDENTIFIER);
             rewind(role_file);
             char role_buffer[2048] = {0};
             fread(role_buffer, 1, sizeof(role_buffer) - 1, role_file);
@@ -1493,11 +1501,13 @@ TEST_FUNC(serialization_string_escaping_is_strict,
             TEST_CHECK(role_json != nil, true);
             TEST_CHECK([[role_json objectForKey:@"role"] isEqualToString:(NSString *) role_window.role], true);
             TEST_CHECK([[role_json objectForKey:@"subrole"] isEqualToString:(NSString *) role_window.subrole], true);
+            TEST_CHECK([[role_json objectForKey:@"identifier"] isEqualToString:(NSString *) role_window.identifier], true);
         }
     }
 
     if (role_window.role) CFRelease(role_window.role);
     if (role_window.subrole) CFRelease(role_window.subrole);
+    if (role_window.identifier) CFRelease(role_window.identifier);
 
     struct space_label *saved_space_labels = g_space_manager.labels;
     g_space_manager.labels = NULL;
@@ -1545,13 +1555,14 @@ TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_string
         if (value) {
             window.role = CFStringCreateWithCString(NULL, value, kCFStringEncodingUTF8);
             window.subrole = CFStringCreateWithCString(NULL, value, kCFStringEncodingUTF8);
+            window.identifier = CFStringCreateWithCString(NULL, value, kCFStringEncodingUTF8);
         }
 
         ts_reset();
         FILE *file = tmpfile();
         TEST_CHECK(file != NULL, true);
         if (file) {
-            window_serialize(file, &window, WINDOW_PROPERTY_SCRATCHPAD | WINDOW_PROPERTY_ROLE | WINDOW_PROPERTY_SUBROLE);
+            window_serialize(file, &window, WINDOW_PROPERTY_SCRATCHPAD | WINDOW_PROPERTY_ROLE | WINDOW_PROPERTY_SUBROLE | WINDOW_PROPERTY_IDENTIFIER);
             rewind(file);
             char buffer[2048] = {0};
             fread(buffer, 1, sizeof(buffer) - 1, file);
@@ -1565,10 +1576,12 @@ TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_string
             TEST_CHECK([[json objectForKey:@"scratchpad"] isEqualToString:expected], true);
             TEST_CHECK([[json objectForKey:@"role"] isEqualToString:expected], true);
             TEST_CHECK([[json objectForKey:@"subrole"] isEqualToString:expected], true);
+            TEST_CHECK([[json objectForKey:@"identifier"] isEqualToString:expected], true);
         }
 
         if (window.role) CFRelease(window.role);
         if (window.subrole) CFRelease(window.subrole);
+        if (window.identifier) CFRelease(window.identifier);
     }
 
     struct space_label *saved_space_labels = g_space_manager.labels;

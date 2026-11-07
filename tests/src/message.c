@@ -1778,7 +1778,7 @@ TEST_FUNC(message_rule_filter_diagnostic_lists_all_matchers,
         rewind(response);
         char output[256] = {0};
         fread(output, 1, sizeof(output) - 1, response);
-        TEST_CHECK(strstr(output, "'app[!]=..', 'title[!]=..', 'role[!]=..', or 'subrole[!]=..'") != NULL, true);
+        TEST_CHECK(strstr(output, "'app[!]=..', 'title[!]=..', 'role[!]=..', 'subrole[!]=..', or 'identifier[!]=..'") != NULL, true);
         fclose(response);
     }
     rule_destroy(&rule);
@@ -1787,6 +1787,14 @@ TEST_FUNC(message_rule_filter_diagnostic_lists_all_matchers,
     message = role_filter + strlen(role_filter) + 1;
     memset(&rule, 0, sizeof(rule));
     TEST_CHECK(parse_rule(NULL, &message, &rule, message_test_token(role_filter)), true);
+    rule_destroy(&rule);
+
+    char identifier_filter[] = "identifier=Settings\0manage=off\0\0";
+    message = identifier_filter + strlen(identifier_filter) + 1;
+    memset(&rule, 0, sizeof(rule));
+    TEST_CHECK(parse_rule(NULL, &message, &rule, message_test_token(identifier_filter)), true);
+    TEST_CHECK(rule_check_flag(&rule, RULE_IDENTIFIER_VALID), true);
+    TEST_CHECK(strcmp(rule.identifier, "Settings"), 0);
     rule_destroy(&rule);
 });
 

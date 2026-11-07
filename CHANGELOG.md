@@ -6,6 +6,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- Match window rules by Accessibility identifier and expose that identifier in window queries.
 - Expand native keyboard workflows with layout-aware key names, F-key/navigation/keypad names, Fn/Hyper and sided modifiers, idle mode timeouts, mode query/menu/signal status, cross-display robust focus, and in-process `yabai_command` actions.
 
 ### Fixed

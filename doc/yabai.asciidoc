@@ -345,7 +345,7 @@ Native rules
 
 Each `rules` entry accepts exactly `label`, `one_shot`, `match` and `effects`. `match` is required and nonempty. `label` is optional, nonempty, unique within the file and at most 1,024 UTF-8 bytes. `one_shot` is an optional boolean, defaulting to `false`. `effects` is optional and may be empty, so an effectless persistent rule is valid.
 
-`match` accepts `app`, `title`, `role` and `subrole`. Each matcher is an exact object with required nonempty `pattern` and optional boolean `exclude`, which defaults to `false`. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role or subrole without app or title.
+`match` accepts `app`, `title`, `role`, `subrole` and `identifier`. Each matcher is an exact object with required nonempty `pattern` and optional boolean `exclude`, which defaults to `false`. Patterns use POSIX extended regular expressions and are compiled during schema validation. A rule may use role, subrole or identifier without app or title.
 
 `effects` accepts:
 
@@ -1023,6 +1023,7 @@ WINDOW
     },
     "role": string,
     "subrole": string,
+    "identifier": string,
     "root-window": bool,
     "parent": number or null,
     "display": number,
@@ -1072,6 +1073,7 @@ The properties that contain incorrect information for windows with `has-ax-refer
 {
     "role": string,
     "subrole": string,
+    "identifier": string,
     "can-move": bool,
     "can-resize": bool
 }
@@ -1128,6 +1130,9 @@ ARGUMENT
 *subrole[!]='<REGEX>'*::
     https://developer.apple.com/documentation/applicationservices/carbon_accessibility/subroles?language=objc[Accessibility subrole of window]. If '!' is present, invert the match.
 
+*identifier[!]='<REGEX>'*::
+    Accessibility identifier of window. If '!' is present, invert the match.
+
 *display='[^]<DISPLAY_SEL>'*::
     Send window to display. If '^' is present, follow focus.
 
@@ -1182,6 +1187,7 @@ DATAFORMAT
     "title": string,
     "role": string,
     "subrole": string,
+    "identifier": string,
     "display": number,
     "space": number,
     "follow_space": bool,

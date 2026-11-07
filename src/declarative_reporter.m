@@ -47,7 +47,7 @@ static bool declarative_report_path_token_known(const char *token, size_t length
     static const char *known[] = {
         "version", "config", "spaces", "modes", "active_mode", "selected_mode", "rules",
         "name", "scaffold", "match", "settings", "effects", "label", "one_shot",
-        "app", "title", "role", "subrole", "pattern", "exclude",
+        "app", "title", "role", "subrole", "identifier", "pattern", "exclude",
         "display", "space", "follow", "grid", "opacity", "manage", "sticky",
         "mouse_follows_focus", "sub_layer", "native_fullscreen", "scratchpad", "index",
         "uuid", "external_bar", "mode", "top_padding", "bottom_padding", "left_padding",

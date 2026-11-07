@@ -3114,7 +3114,7 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
     const char *const known_keys[] = {
         ARGUMENT_RULE_KEY_LABEL, ARGUMENT_RULE_KEY_SCRATCHPAD, ARGUMENT_RULE_KEY_APP,
         ARGUMENT_RULE_KEY_TITLE, ARGUMENT_RULE_KEY_ROLE, ARGUMENT_RULE_KEY_SUBROLE,
-        ARGUMENT_RULE_KEY_DISPLAY, ARGUMENT_RULE_KEY_SPACE, ARGUMENT_RULE_KEY_GRID,
+        ARGUMENT_RULE_KEY_IDENTIFIER, ARGUMENT_RULE_KEY_DISPLAY, ARGUMENT_RULE_KEY_SPACE, ARGUMENT_RULE_KEY_GRID,
         ARGUMENT_RULE_KEY_OPACITY, ARGUMENT_RULE_KEY_MANAGE, ARGUMENT_RULE_KEY_STICKY,
         ARGUMENT_RULE_KEY_MFF, ARGUMENT_RULE_KEY_SUB_LAYER, ARGUMENT_RULE_KEY_FULLSCR
     };
@@ -3224,6 +3224,19 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
             if (exclusion) rule_set_flag(rule, RULE_SUBROLE_EXCLUDE);
             if (message_compile_pattern(rsp, &rule->subrole_regex, key, value)) {
                 rule_set_flag(rule, RULE_SUBROLE_VALID);
+            } else {
+                did_parse = false;
+            }
+        } else if (string_equals(key, ARGUMENT_RULE_KEY_IDENTIFIER)) {
+            has_filter = true;
+            if (!message_assign_string(&rule->identifier, value)) {
+                daemon_fail(rsp, "could not allocate value for key '%s'\n", key);
+                did_parse = false;
+                continue;
+            }
+            if (exclusion) rule_set_flag(rule, RULE_IDENTIFIER_EXCLUDE);
+            if (message_compile_pattern(rsp, &rule->identifier_regex, key, value)) {
+                rule_set_flag(rule, RULE_IDENTIFIER_VALID);
             } else {
                 did_parse = false;
             }
@@ -3344,7 +3357,7 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
     }
 
     if (!has_filter) {
-        daemon_fail(rsp, "missing required key-value pair 'app[!]=..', 'title[!]=..', 'role[!]=..', or 'subrole[!]=..'\n");
+        daemon_fail(rsp, "missing required key-value pair 'app[!]=..', 'title[!]=..', 'role[!]=..', 'subrole[!]=..', or 'identifier[!]=..'\n");
         did_parse = false;
     }
 

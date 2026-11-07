@@ -269,6 +269,31 @@ static char *window_manager_test_string_copy_failure(char *value)
     return NULL;
 }
 
+TEST_FUNC(rule_identifier_matcher_uses_cached_accessibility_identifier,
+{
+    struct application application = { .name = "Rex Beta" };
+    struct window window = {
+        .application = &application,
+        .identifier = CFSTR("com_apple_SwiftUI_Settings_window")
+    };
+    struct rule rule = {
+        .identifier = strdup("Settings"),
+        .flags = RULE_IDENTIFIER_VALID
+    };
+    TEST_CHECK(rule.identifier != NULL, true);
+    TEST_CHECK(pattern_compile(&rule.identifier_regex, rule.identifier), PATTERN_COMPILE_OK);
+    TEST_CHECK(window_manager_rule_matches_window(&rule, &window, "", "AXWindow", "AXStandardWindow"), true);
+
+    window.identifier = CFSTR("session-AppWindow-1");
+    TEST_CHECK(window_manager_rule_matches_window(&rule, &window, "", "AXWindow", "AXStandardWindow"), false);
+
+    rule_set_flag(&rule, RULE_IDENTIFIER_EXCLUDE);
+    TEST_CHECK(window_manager_rule_matches_window(&rule, &window, "", "AXWindow", "AXStandardWindow"), true);
+    window.identifier = CFSTR("com_apple_SwiftUI_Settings_window");
+    TEST_CHECK(window_manager_rule_matches_window(&rule, &window, "", "AXWindow", "AXStandardWindow"), false);
+    rule_destroy(&rule);
+});
+
 TEST_FUNC(rule_scratchpad_allocation_failure_preserves_fold_and_one_shot,
 {
     TEST_SAVE(rule_effects_string_copy);
