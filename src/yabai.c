@@ -391,6 +391,19 @@ static bool menu_bar_startup_staging_seal_on_event_loop(void *context)
     return menu_bar_manager_startup_staging_seal();
 }
 
+static bool declarative_startup_inventory_on_event_loop(void *context)
+{
+    (void) context;
+    if (!declarative_installed_generation()) {
+        window_manager_init(&g_window_manager);
+        if (!space_manager_begin(&g_space_manager)) return false;
+    }
+    window_manager_begin(&g_space_manager, &g_window_manager);
+    return true;
+}
+
+static bool declarative_startup_inventory_done;
+
 static void declarative_startup_inventory(void *context)
 {
     (void) context;
@@ -400,7 +413,21 @@ static void declarative_startup_inventory(void *context)
         return;
     }
 #endif
-    window_manager_begin(&g_space_manager, &g_window_manager);
+    //
+    // NOTE(asmvik): window_manager_init/space_manager_begin/window_manager_begin write
+    // g_window_manager and g_space_manager, which the event-loop thread, the mouse-handler
+    // thread, and WindowServer/Carbon callback threads can already observe or mutate once
+    // the event loop is running and notifications are registered. Perform the entire
+    // inventory on the event-loop thread so it is serialized with every other access
+    // instead of racing with it from the main thread, and do so before any notification,
+    // hotkey, or mouse-handler registration is reachable. declarative_startup_complete
+    // also invokes this as its inventory step, so guard against running it twice.
+    //
+    if (declarative_startup_inventory_done) return;
+    if (!event_loop_perform_sync(&g_event_loop, declarative_startup_inventory_on_event_loop, NULL)) {
+        error("yabai: could not start space manager! abort..\n");
+    }
+    declarative_startup_inventory_done = true;
 }
 
 static bool declarative_startup_rebuild_notifications(void *context)
@@ -533,6 +560,14 @@ int main(int argc, char **argv)
     }
     observe_application_responsiveness();
 
+    //
+    // NOTE(asmvik): Establish the window/space inventory on the event-loop thread (see
+    // declarative_startup_inventory) after the process inventory exists but before
+    // registering anything below that can deliver WindowServer notifications, hotkeys,
+    // or mouse events referencing g_window_manager or g_space_manager from another thread.
+    //
+    declarative_startup_inventory(NULL);
+
     bool native_installed = declarative_installed_generation() != 0;
     if (!(native_installed ? display_manager_observe() : display_manager_begin(&g_display_manager))) {
         error("yabai: could not start display manager! abort..\n");
@@ -573,13 +608,6 @@ int main(int argc, char **argv)
         // NOTE: Only delivered for windows subscribed to, which is every window from Sequoia on.
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 815, NULL);
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 816, NULL);
-    }
-
-    if (!native_installed) {
-        window_manager_init(&g_window_manager);
-        if (!space_manager_begin(&g_space_manager)) {
-            error("yabai: could not start space manager! abort..\n");
-        }
     }
 
     struct declarative_startup_completion_ops completion = declarative_startup_production_completion_ops();
