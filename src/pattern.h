@@ -3,6 +3,11 @@
 
 #include <regex.h>
 
+#include "message_frame.h"
+
+#define PATTERN_COST_LIMIT ((double) DAEMON_MESSAGE_MAX_LENGTH * 8.0)
+#define PATTERN_MAX_DEPTH 64
+
 enum pattern_compile_result
 {
     PATTERN_COMPILE_OK,

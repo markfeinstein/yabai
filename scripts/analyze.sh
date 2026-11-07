@@ -13,19 +13,32 @@ case "$arch" in
 esac
 
 xcrun_bin=${XCRUN:-xcrun}
-if ! "$xcrun_bin" clang --analyze \
-    -Xanalyzer -analyzer-opt-analyze-headers \
-    -Xanalyzer -analyzer-output=plist-multi-file \
-    "$root/src/manifest.m" \
-    -fno-objc-arc -arch "$arch" -mmacosx-version-min=14.0 \
-    -F/System/Library/PrivateFrameworks \
-    -o "$tmp/report.plist" >"$tmp/analyzer.log" 2>&1; then
-    cat "$tmp/analyzer.log" >&2
-    exit 1
-fi
-
-"${PYTHON:-python3}" "$root/scripts/analyzer_signatures.py" \
-    "$root" "$tmp/report.plist" >"$tmp/current.txt"
+sources='src/manifest.m
+src/menu_bar_model.c
+src/pattern.c
+src/window_constraints.c
+src/window_server_classifier.c
+src/window_server_hit_test.c'
+: >"$tmp/current.unsorted"
+index=0
+printf '%s\n' "$sources" | while IFS= read -r source; do
+    report="$tmp/report-$index.plist"
+    log="$tmp/analyzer-$index.log"
+    if ! "$xcrun_bin" clang --analyze \
+        -Xanalyzer -analyzer-opt-analyze-headers \
+        -Xanalyzer -analyzer-output=plist-multi-file \
+        "$root/$source" \
+        -fno-objc-arc -arch "$arch" -mmacosx-version-min=14.0 \
+        -F/System/Library/PrivateFrameworks \
+        -o "$report" >"$log" 2>&1; then
+        cat "$log" >&2
+        exit 1
+    fi
+    "${PYTHON:-python3}" "$root/scripts/analyzer_signatures.py" \
+        "$root" "$report" >>"$tmp/current.unsorted"
+    index=$((index + 1))
+done
+sort -u "$tmp/current.unsorted" >"$tmp/current.txt"
 
 if [ ! -f "$baseline" ]; then
     echo "missing analyzer baseline: $baseline" >&2

@@ -5,6 +5,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef int32_t (*window_server_hit_test_legacy_fn)(
+    int, int, int, int, CGPoint *, CGPoint *, uint32_t *, int *);
+typedef CGError (*window_server_hit_test_geometry_fn)(
+    int32_t, uint32_t, int32_t, int32_t, const CGPoint *, CGPoint *, uint32_t *, int32_t *);
+
+#ifdef TESTS
+extern window_server_hit_test_legacy_fn window_server_hit_test_legacy_impl;
+extern window_server_hit_test_geometry_fn window_server_hit_test_geometry_test_impl;
+extern bool window_server_hit_test_geometry_test_available;
+#endif
+
 struct window_server_hit_test_request
 {
     int32_t connection;

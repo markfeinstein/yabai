@@ -16,8 +16,10 @@ OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests
 MODEL = $(OUT)/menu_bar_model.o
 RUNNER = $(OUT)/runner.o
+PATTERN = $(OUT)/pattern.o
 CONSTRAINTS = $(OUT)/window_constraints.o
 CLASSIFIER = $(OUT)/window_server_classifier.o
+HIT_TEST = $(OUT)/window_server_hit_test.o
 CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h ../scripts/native_tab_event_recorder_core.c ../scripts/native_tab_event_recorder_core.h ../scripts/native_tile_diagnostic_core.c ../scripts/native_tile_diagnostic_core.h ../scripts/display_cadence_diagnostic_core.c ../scripts/display_cadence_diagnostic_core.h
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
@@ -36,14 +38,20 @@ $(MODEL): ../src/menu_bar_model.c ../src/menu_bar_model.h | $(OUT)
 $(RUNNER): runner.c runner.h makefile | $(OUT)
 	$(CC) -c runner.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
 
+$(PATTERN): ../src/pattern.c ../src/pattern.h ../src/message_frame.h makefile | $(OUT)
+	$(CC) -c ../src/pattern.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
+
 $(CONSTRAINTS): ../src/window_constraints.c ../src/window_constraints.h makefile | $(OUT)
 	$(CC) -c ../src/window_constraints.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
 
 $(CLASSIFIER): ../src/window_server_classifier.c ../src/window_server_classifier.h makefile | $(OUT)
 	$(CC) -c ../src/window_server_classifier.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
 
-$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) $(RUNNER) $(CONSTRAINTS) $(CLASSIFIER) makefile | $(OUT)
-	$(CC) ./src/tests.m $(MODEL) $(RUNNER) $(CONSTRAINTS) $(CLASSIFIER) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
+$(HIT_TEST): ../src/window_server_hit_test.c ../src/window_server_hit_test.h makefile | $(OUT)
+	$(CC) -c ../src/window_server_hit_test.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -DTESTS -std=c11 -Wall -Wextra -Werror -MMD -MP
+
+$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) makefile | $(OUT)
+	$(CC) ./src/tests.m $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
 
 core-build: $(CORE)
 
@@ -144,6 +152,7 @@ syntax:
 	python3 -c 'compile(open("integration/private_api_smoke.py", encoding="utf-8").read(), "private_api_smoke.py", "exec")'
 	python3 ../scripts/analyzer_signatures.py --self-test
 	$(CC) -fsyntax-only ../src/menu_bar_model.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../src/pattern.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/macho_parser.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/scan_sa_core.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../scripts/window_server_tag_corpus_core.c -std=c11 -Wall -Wextra -Werror
@@ -177,4 +186,4 @@ integration-hide-on-close:
 
 test-all: run run-asan run-tsan arch-arm64 arch-x86_64 syntax
 
--include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(CONSTRAINTS:.o=.d) $(CLASSIFIER:.o=.d) $(OUT)/macho_parser_production.d
+-include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(PATTERN:.o=.d) $(CONSTRAINTS:.o=.d) $(CLASSIFIER:.o=.d) $(HIT_TEST:.o=.d) $(OUT)/macho_parser_production.d

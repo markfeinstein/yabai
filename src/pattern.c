@@ -1,5 +1,4 @@
 #include "pattern.h"
-#include "message_frame.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -10,9 +9,6 @@
 // follow one another. A short pattern can therefore require quadratic or
 // multiplicative memory. Keep enough budget for any literal accepted by the
 // daemon protocol, while refusing structures that expand far beyond it.
-#define PATTERN_COST_LIMIT ((double) DAEMON_MESSAGE_MAX_LENGTH * 8.0)
-#define PATTERN_MAX_DEPTH 64
-
 struct pattern_cost
 {
     double work;

@@ -9,32 +9,27 @@ extern OSStatus SLSFindWindowAndOwner(int cid, int filter_window_id, int flags, 
                                       CGPoint *screen_point, CGPoint *window_point,
                                       uint32_t *window_id, int *window_cid);
 
-typedef CGError (*sls_find_window_by_geometry_fn)(
-    int32_t cid, uint32_t filter_window_id, int32_t flags, int32_t reserved,
-    const CGPoint *screen_point, CGPoint *window_point,
-    uint32_t *window_id, int32_t *window_cid);
-
 #ifndef TESTS
-static sls_find_window_by_geometry_fn window_server_hit_test_geometry_impl;
+static window_server_hit_test_geometry_fn window_server_hit_test_geometry_impl;
 static pthread_once_t window_server_hit_test_geometry_once = PTHREAD_ONCE_INIT;
 
 static void window_server_hit_test_resolve_geometry(void)
 {
-    window_server_hit_test_geometry_impl = (sls_find_window_by_geometry_fn)
+    window_server_hit_test_geometry_impl = (window_server_hit_test_geometry_fn)
         dlsym(RTLD_DEFAULT, "SLSFindWindowByGeometry");
 }
 #endif
 
 #ifdef TESTS
-static OSStatus (*window_server_hit_test_legacy_impl)(int, int, int, int, CGPoint *, CGPoint *, uint32_t *, int *) =
-    SLSFindWindowAndOwner;
-static sls_find_window_by_geometry_fn window_server_hit_test_geometry_test_impl;
-static bool window_server_hit_test_geometry_test_available;
+window_server_hit_test_legacy_fn window_server_hit_test_legacy_impl =
+    (window_server_hit_test_legacy_fn) SLSFindWindowAndOwner;
+window_server_hit_test_geometry_fn window_server_hit_test_geometry_test_impl;
+bool window_server_hit_test_geometry_test_available;
 #else
 #define window_server_hit_test_legacy_impl SLSFindWindowAndOwner
 #endif
 
-static sls_find_window_by_geometry_fn window_server_hit_test_geometry(void)
+static window_server_hit_test_geometry_fn window_server_hit_test_geometry(void)
 {
 #ifdef TESTS
     return window_server_hit_test_geometry_test_available
@@ -96,7 +91,7 @@ void window_server_hit_test_compare(const struct window_server_hit_test_request 
     if (!comparison) return;
     *comparison = (struct window_server_hit_test_comparison) {0};
     window_server_hit_test_legacy(request, &comparison->legacy);
-    sls_find_window_by_geometry_fn geometry = window_server_hit_test_geometry();
+    window_server_hit_test_geometry_fn geometry = window_server_hit_test_geometry();
     comparison->geometry_available = geometry != NULL;
     if (!request || !geometry) return;
     comparison->geometry.invoked = true;
