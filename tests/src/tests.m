@@ -1245,8 +1245,39 @@ TEST_FUNC(safe_exec_reports_child_outcomes,
 
     char output[8];
     char *captured[] = { "/bin/sh", "-c", "printf abcdefgh; printf hidden >&2", NULL };
-    TEST_CHECK(safe_exec_capture(captured, true, output, sizeof(output)), 0);
+    TEST_CHECK(safe_exec_capture_until(captured, true, output, sizeof(output), 0), 0);
     TEST_CHECK(strcmp(output, "abcdefg"), 0);
+});
+
+TEST_FUNC(safe_exec_deadline_bounds_stalled_commands,
+{
+    char *stalled[] = { "/bin/sleep", "30", NULL };
+    char *quick[] = { "/bin/sh", "-c", "exit 3", NULL };
+    char *daemonized[] = { "/bin/sh", "-c", "printf ready; /bin/sleep 3 & exit 0", NULL };
+
+    struct sigaction previous_action;
+    struct sigaction ignored_action = { .sa_handler = SIG_IGN };
+    sigemptyset(&ignored_action.sa_mask);
+    TEST_CHECK(sigaction(SIGCHLD, NULL, &previous_action), 0);
+    TEST_CHECK(sigaction(SIGCHLD, &ignored_action, NULL), 0);
+
+    uint64_t start = socket_io_monotonic_ns();
+    TEST_CHECK(safe_exec_until(stalled, true, 200), 1);
+    uint64_t elapsed_ms = (socket_io_monotonic_ns() - start) / 1000000ULL;
+    TEST_CHECK(elapsed_ms < 1000 + SAFE_EXEC_TIMEOUT_GRACE_MS, true);
+
+    TEST_CHECK(safe_exec_until(quick, true, 5000), 3);
+
+    /* A background descendant inherits stdout; capture must still return
+     * once the direct command exits instead of waiting for pipe EOF. */
+    char output[16];
+    start = socket_io_monotonic_ns();
+    TEST_CHECK(safe_exec_capture_until(daemonized, true, output, sizeof(output), 5000), 0);
+    elapsed_ms = (socket_io_monotonic_ns() - start) / 1000000ULL;
+    TEST_CHECK(elapsed_ms < 5000, true);
+    TEST_CHECK(strcmp(output, "ready"), 0);
+
+    TEST_CHECK(sigaction(SIGCHLD, &previous_action, NULL), 0);
 });
 
 TEST_FUNC(socket_open_sets_cloexec,

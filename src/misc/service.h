@@ -160,7 +160,15 @@ static char *plist_xml_escape(char *s)
  * therefore run under a short-lived helper with a private SIGCHLD disposition;
  * the helper returns the command status through a close-on-exec pipe. The
  * daemon is multithreaded, so only async-signal-safe calls run between fork
- * and exec or _exit. */
+ * and exec or _exit.
+ *
+ * A nonzero timeout bounds the whole call. The helper kills the command when
+ * SIGALRM fires; it observes exit with WNOWAIT and disarms the alarm before
+ * reaping, so the signal can never reach a recycled PID. The caller also
+ * stops waiting after a short grace period and kills its own unreaped helper,
+ * which covers descendants that keep the output pipe open. */
+#define SAFE_EXEC_TIMEOUT_GRACE_MS 2000
+
 struct safe_exec_request
 {
     char *const *argv;
@@ -168,7 +176,17 @@ struct safe_exec_request
     bool discard_stderr;
     char *output;
     size_t capacity;
+    uint32_t timeout_ms;
 };
+
+static volatile pid_t safe_exec_helper_command_pid;
+
+static void safe_exec_helper_alarm(int signo)
+{
+    (void) signo;
+    pid_t command = safe_exec_helper_command_pid;
+    if (command > 0) kill(command, SIGKILL);
+}
 
 static bool safe_exec_pipe(int fds[2])
 {
@@ -206,18 +224,6 @@ static void safe_exec_write_all(int fd, const void *buffer, size_t length)
     }
 }
 
-static size_t safe_exec_read_all(int fd, void *buffer, size_t length)
-{
-    char *bytes = buffer;
-    size_t received = 0;
-    while (received < length) {
-        ssize_t count = read(fd, bytes + received, length - received);
-        if (count == -1 && errno == EINTR) continue;
-        if (count <= 0) break;
-        received += (size_t) count;
-    }
-    return received;
-}
 
 __attribute__((noreturn))
 static void safe_exec_command_child(const struct safe_exec_request *request, int output_fd)
@@ -242,12 +248,36 @@ static void safe_exec_helper_child(const struct safe_exec_request *request, int 
     sigemptyset(&action.sa_mask);
     sigaction(SIGCHLD, &action, NULL);
 
+    sigset_t alarm_set;
+    sigemptyset(&alarm_set);
+    sigaddset(&alarm_set, SIGALRM);
+    sigprocmask(SIG_BLOCK, &alarm_set, NULL);
+
     pid_t command = fork();
-    if (command == 0) safe_exec_command_child(request, output_fd);
+    if (command == 0) {
+        sigprocmask(SIG_UNBLOCK, &alarm_set, NULL);
+        safe_exec_command_child(request, output_fd);
+    }
     if (output_fd >= 0) close(output_fd);
 
     int result = 1;
     if (command != -1) {
+        if (request->timeout_ms) {
+            safe_exec_helper_command_pid = command;
+            struct sigaction alarm_action = { .sa_handler = safe_exec_helper_alarm };
+            sigemptyset(&alarm_action.sa_mask);
+            sigaction(SIGALRM, &alarm_action, NULL);
+            alarm((request->timeout_ms + 999) / 1000);
+            sigprocmask(SIG_UNBLOCK, &alarm_set, NULL);
+
+            siginfo_t info;
+            while (waitid(P_PID, (id_t) command, &info, WEXITED | WNOWAIT) == -1 && errno == EINTR) {}
+
+            sigprocmask(SIG_BLOCK, &alarm_set, NULL);
+            alarm(0);
+            safe_exec_helper_command_pid = 0;
+        }
+
         int status = 0;
         pid_t waited;
         do {
@@ -291,52 +321,133 @@ static int safe_exec_run(const struct safe_exec_request *request)
         return 1;
     }
 
-    if (capture) {
-        size_t stored = 0;
-        char buffer[1024];
-        for (;;) {
-            ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
-            if (count == -1 && errno == EINTR) continue;
-            if (count <= 0) break;
-            size_t available = request->capacity - 1 - stored;
-            size_t copy = (size_t) count < available ? (size_t) count : available;
-            memcpy(request->output + stored, buffer, copy);
-            stored += copy;
-        }
-        request->output[stored] = '\0';
-        safe_exec_close(&output_pipe[0]);
-    }
-
+    uint64_t deadline = request->timeout_ms
+                      ? socket_io_deadline_after_ms(request->timeout_ms + SAFE_EXEC_TIMEOUT_GRACE_MS)
+                      : UINT64_MAX;
     int result = 1;
-    size_t received = safe_exec_read_all(result_pipe[0], &result, sizeof(result));
-    safe_exec_close(&result_pipe[0]);
+    size_t received = 0;
+    size_t stored = 0;
+    bool timed_out = false;
+    while (result_pipe[0] >= 0 || output_pipe[0] >= 0) {
+        struct pollfd fds[2];
+        nfds_t count = 0;
+        if (result_pipe[0] >= 0) fds[count++] = (struct pollfd) { .fd = result_pipe[0], .events = POLLIN };
+        if (output_pipe[0] >= 0) fds[count++] = (struct pollfd) { .fd = output_pipe[0], .events = POLLIN };
 
+        /* Once the status arrives the command has exited; drain only output
+         * that is already buffered so an inheriting descendant cannot stall. */
+        int timeout = -1;
+        if (result_pipe[0] < 0) {
+            timeout = 0;
+        } else if (deadline != UINT64_MAX) {
+            uint64_t now = socket_io_monotonic_ns();
+            if (!now || now >= deadline) {
+                timed_out = true;
+                break;
+            }
+            uint64_t remaining_ms = (deadline - now + 999999ULL) / 1000000ULL;
+            timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
+        }
+
+        int ready = poll(fds, count, timeout);
+        if (ready == -1 && errno == EINTR) continue;
+        if (ready <= 0) {
+            if (result_pipe[0] >= 0) timed_out = true;
+            break;
+        }
+
+        for (nfds_t i = 0; i < count; ++i) {
+            if (!(fds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) continue;
+            if (fds[i].fd == result_pipe[0]) {
+                ssize_t bytes = read(result_pipe[0], (char *) &result + received, sizeof(result) - received);
+                if (bytes == -1 && errno == EINTR) continue;
+                if (bytes > 0) received += (size_t) bytes;
+                if (bytes <= 0 || received == sizeof(result)) safe_exec_close(&result_pipe[0]);
+            } else {
+                char buffer[1024];
+                ssize_t bytes = read(output_pipe[0], buffer, sizeof(buffer));
+                if (bytes == -1 && errno == EINTR) continue;
+                if (bytes <= 0) {
+                    safe_exec_close(&output_pipe[0]);
+                    continue;
+                }
+                if (!capture) continue;
+                size_t available = request->capacity - 1 - stored;
+                size_t copy = (size_t) bytes < available ? (size_t) bytes : available;
+                memcpy(request->output + stored, buffer, copy);
+                stored += copy;
+            }
+        }
+    }
+    if (capture) request->output[stored] = '\0';
+    safe_exec_close(&result_pipe[0]);
+    safe_exec_close(&output_pipe[0]);
+
+    if (timed_out) kill(helper, SIGKILL);
+    /* SIGCHLD is ignored by the daemon. Some macOS versions keep a helper
+     * zombie visible while waitpid(..., 0) blocks waiting for its automatic
+     * reap. Never let that cleanup freeze the caller after the status pipe
+     * has closed. Poll for a bounded grace period instead. */
+    uint64_t reap_deadline = socket_io_deadline_after_ms(SAFE_EXEC_TIMEOUT_GRACE_MS);
     int helper_status = 0;
-    while (waitpid(helper, &helper_status, 0) == -1 && errno == EINTR) {}
-    return received == sizeof(result) ? result : 1;
+    pid_t reaped;
+    do {
+        reaped = waitpid(helper, &helper_status, WNOHANG);
+        if (reaped == helper || (reaped == -1 && errno == ECHILD)) break;
+        if (reaped == -1 && errno != EINTR) break;
+        if (socket_io_monotonic_ns() >= reap_deadline) {
+            kill(helper, SIGKILL);
+            break;
+        }
+        struct timespec pause = { .tv_nsec = 10000000L };
+        nanosleep(&pause, NULL);
+    } while (true);
+    return !timed_out && received == sizeof(result) ? result : 1;
 }
 
-static int safe_exec_capture(char *const argv[], bool suppress_stderr,
-                             char *output, size_t capacity)
+static int safe_exec_capture_until(char *const argv[], bool suppress_stderr,
+                                   char *output, size_t capacity, uint32_t timeout_ms)
 {
     if (!output || capacity == 0) return 1;
     struct safe_exec_request request = {
         .argv = argv,
         .discard_stderr = suppress_stderr,
         .output = output,
-        .capacity = capacity
+        .capacity = capacity,
+        .timeout_ms = timeout_ms
+    };
+    return safe_exec_run(&request);
+}
+
+static int safe_exec_until(char *const argv[], bool suppress_output, uint32_t timeout_ms)
+{
+    struct safe_exec_request request = {
+        .argv = argv,
+        .discard_stdout = suppress_output,
+        .discard_stderr = suppress_output,
+        .timeout_ms = timeout_ms
     };
     return safe_exec_run(&request);
 }
 
 static int safe_exec(char *const argv[], bool suppress_output)
 {
-    struct safe_exec_request request = {
-        .argv = argv,
-        .discard_stdout = suppress_output,
-        .discard_stderr = suppress_output
-    };
-    return safe_exec_run(&request);
+    return safe_exec_until(argv, suppress_output, 0);
+}
+
+/* Menu actions run on the main thread; launchd must answer within this bound
+ * or the action reports failure instead of freezing the menu bar. */
+#define SERVICE_MENU_COMMAND_TIMEOUT_MS 5000
+
+static int service_menu_exec(char *const argv[], bool suppress_output)
+{
+    return safe_exec_until(argv, suppress_output, SERVICE_MENU_COMMAND_TIMEOUT_MS);
+}
+
+static int service_menu_capture(char *const argv[], bool suppress_stderr, char *output, size_t capacity)
+{
+    return safe_exec_capture_until(argv, suppress_stderr, output, capacity,
+                                   SERVICE_MENU_COMMAND_TIMEOUT_MS);
 }
 
 static char *populate_plist_path(void)
@@ -661,7 +772,7 @@ static enum service_quit_result service_stop_for_quit_with_exec(const char *labe
 static enum service_quit_result service_stop_for_quit(void)
 {
     return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
-                                           safe_exec, safe_exec_capture);
+                                           service_menu_exec, service_menu_capture);
 }
 
 enum service_restart_result
@@ -707,7 +818,7 @@ static enum service_restart_result service_restart_for_menu_with_ops(const char 
 static enum service_restart_result service_restart_for_menu(void)
 {
     return service_restart_for_menu_with_ops(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
-                                             safe_exec_capture, service_spawn);
+                                             service_menu_capture, service_spawn);
 }
 
 static int service_stop(void)
