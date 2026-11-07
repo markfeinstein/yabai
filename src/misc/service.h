@@ -427,17 +427,24 @@ static int service_restart(void)
 
 typedef int service_exec_fn(char *const argv[], bool suppress_output);
 
-/* Stop a launchd-managed instance from inside yabai itself. Disabling the job
- * before bootout prevents launchd from racing the requested termination with a
- * replacement process. A missing or unloaded service means this process was
- * started independently and can be terminated directly by the caller. */
-static int service_stop_for_quit_with_exec(const char *yabai_plist_path, uid_t uid,
-                                           bool service_installed, service_exec_fn exec_fn)
+static bool service_quit_label_is_managed(const char *label)
 {
-    if (!service_installed) return 0;
+    return label && label[0] && !string_equals(label, "0") &&
+           strncmp(label, "application.", 12) != 0;
+}
+
+/* Stop the launchd job that actually owns this process. XPC_SERVICE_NAME is
+ * supplied by launchd and supports both yabai's built-in label and external
+ * launch-agent definitions such as org.nixos.yabai. Disabling before bootout
+ * prevents KeepAlive from racing the requested termination with a replacement. */
+static int service_stop_for_quit_with_exec(const char *label, uid_t uid, service_exec_fn exec_fn)
+{
+    if (!service_quit_label_is_managed(label)) return 0;
 
     char service_target[MAXLEN];
-    snprintf(service_target, sizeof(service_target), "gui/%u/%s", (unsigned int) uid, _NAME_YABAI_PLIST);
+    int length = snprintf(service_target, sizeof(service_target), "gui/%u/%s",
+                          (unsigned int) uid, label);
+    if (length < 0 || length >= (int) sizeof(service_target)) return 1;
 
     const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
     if (exec_fn((char *const *) print_args, true) != 0) return 0;
@@ -446,21 +453,13 @@ static int service_stop_for_quit_with_exec(const char *yabai_plist_path, uid_t u
     int result = exec_fn((char *const *) disable_args, false);
     if (result != 0) return result;
 
-    char domain_target[MAXLEN];
-    snprintf(domain_target, sizeof(domain_target), "gui/%u", (unsigned int) uid);
-    const char *const bootout_args[] = {
-        _PATH_LAUNCHCTL, "bootout", domain_target, yabai_plist_path, NULL
-    };
+    const char *const bootout_args[] = { _PATH_LAUNCHCTL, "bootout", service_target, NULL };
     return exec_fn((char *const *) bootout_args, false);
 }
 
 static int service_stop_for_quit(void)
 {
-    char *yabai_plist_path = populate_plist_path();
-    int result = service_stop_for_quit_with_exec(yabai_plist_path, getuid(),
-                                                 file_exists(yabai_plist_path), safe_exec);
-    free(yabai_plist_path);
-    return result;
+    return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), safe_exec);
 }
 
 static int service_stop(void)
