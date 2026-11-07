@@ -1012,6 +1012,8 @@ static int g_service_quit_test_exec_results[3];
 static int g_service_quit_test_capture_call_count;
 static int g_service_quit_test_capture_result;
 static const char *g_service_quit_test_capture_output;
+static int g_service_restart_test_spawn_call_count;
+static int g_service_restart_test_spawn_result;
 static bool g_service_quit_test_valid;
 
 static int service_quit_test_exec(char *const argv[], bool suppress_output)
@@ -1048,6 +1050,19 @@ static int service_quit_test_capture(char *const argv[], bool suppress_stderr,
     return g_service_quit_test_capture_result;
 }
 
+static int service_restart_test_spawn(char *const argv[])
+{
+    ++g_service_restart_test_spawn_call_count;
+    if (!argv || !argv[0] || strcmp(argv[0], _PATH_LAUNCHCTL) != 0 ||
+        !argv[1] || strcmp(argv[1], "kickstart") != 0 ||
+        !argv[2] || strcmp(argv[2], "-k") != 0 ||
+        !argv[3] || strcmp(argv[3], "gui/501/org.nixos.yabai") != 0 || argv[4]) {
+        g_service_quit_test_valid = false;
+        return 1;
+    }
+    return g_service_restart_test_spawn_result;
+}
+
 static void service_quit_test_reset(void)
 {
     g_service_quit_test_exec_call_count = 0;
@@ -1055,6 +1070,8 @@ static void service_quit_test_reset(void)
     g_service_quit_test_capture_call_count = 0;
     g_service_quit_test_capture_result = 0;
     g_service_quit_test_capture_output = "service = {\n\tpid = 777\n}\n";
+    g_service_restart_test_spawn_call_count = 0;
+    g_service_restart_test_spawn_result = 0;
     g_service_quit_test_valid = true;
 }
 
@@ -1157,6 +1174,45 @@ TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
                SERVICE_QUIT_FAILED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 0);
     TEST_CHECK(g_service_quit_test_exec_call_count, 0);
+});
+
+TEST_FUNC(service_restart_requires_the_owning_launchd_job,
+{
+    service_quit_test_reset();
+    TEST_CHECK(service_restart_for_menu_with_ops(NULL, 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_spawn),
+               SERVICE_RESTART_UNMANAGED);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 0);
+    TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
+
+    service_quit_test_reset();
+    g_service_quit_test_capture_output = "service = {\n\tpid = 999\n}\n";
+    TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_spawn),
+               SERVICE_RESTART_UNMANAGED);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
+
+    service_quit_test_reset();
+    g_service_restart_test_spawn_result = 7;
+    TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_spawn),
+               SERVICE_RESTART_FAILED);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_restart_test_spawn_call_count, 1);
+    TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_spawn),
+               SERVICE_RESTART_REQUESTED);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_restart_test_spawn_call_count, 1);
+    TEST_CHECK(g_service_quit_test_valid, true);
 });
 
 TEST_FUNC(safe_exec_reports_child_outcomes,

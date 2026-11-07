@@ -73,6 +73,7 @@ enum yb_menu_bar_control_kind
     YB_MENU_BAR_CONTROL_SET_STYLE,
     YB_MENU_BAR_CONTROL_SET_FILTER,
     YB_MENU_BAR_CONTROL_RELOAD_CONFIG,
+    YB_MENU_BAR_CONTROL_RESTART,
     YB_MENU_BAR_CONTROL_QUIT
 };
 
@@ -1520,6 +1521,14 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     [reload setAccessibilityLabel:@"Reload yabai configuration"];
     [_menu addItem:reload];
 
+    YBMenuBarActionTarget *restart_target = yb_action_target(YB_MENU_BAR_CONTROL_RESTART,
+                                                             _snapshot->generation);
+    NSMenuItem *restart = yb_menu_item(@"Restart yabai", @selector(performMenuAction:),
+                                       self, restart_target);
+    [restart setToolTip:@"Restart yabai through its active launchd service."];
+    [restart setAccessibilityLabel:@"Restart yabai"];
+    [_menu addItem:restart];
+
     YBMenuBarActionTarget *quit_target = yb_action_target(YB_MENU_BAR_CONTROL_QUIT,
                                                           _snapshot->generation);
     NSMenuItem *quit = yb_menu_item(@"Quit yabai", @selector(performMenuAction:), self, quit_target);
@@ -1883,6 +1892,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     case YB_MENU_BAR_CONTROL_RELOAD_CONFIG:
         action.type = MENU_BAR_ACTION_RELOAD_CONFIG;
         break;
+    case YB_MENU_BAR_CONTROL_RESTART:
+        action.type = MENU_BAR_ACTION_RESTART;
+        break;
     case YB_MENU_BAR_CONTROL_QUIT:
         action.type = MENU_BAR_ACTION_QUIT;
         break;
@@ -1906,6 +1918,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                      filter:target->yb_filter];
     if ((kind == YB_MENU_BAR_CONTROL_FOCUS_SPACE ||
          kind == YB_MENU_BAR_CONTROL_RELOAD_CONFIG ||
+         kind == YB_MENU_BAR_CONTROL_RESTART ||
          kind == YB_MENU_BAR_CONTROL_QUIT) && _is_tracking_menu) {
         [_menu cancelTrackingWithoutAnimation];
     }

@@ -74,11 +74,13 @@ static void menu_bar_manager_deliver_notification(const char *subtitle, const ch
 #ifdef TESTS
 static bool (*menu_bar_manager_reload_config)(FILE *, struct declarative_reload_summary *) =
     declarative_config_reload_with_summary;
+static enum service_restart_result (*menu_bar_manager_restart_service)(void) = service_restart_for_menu;
 static enum service_quit_result (*menu_bar_manager_stop_service)(void) = service_stop_for_quit;
 static void (*menu_bar_manager_quit)(void) = menu_bar_request_quit;
 static void (*menu_bar_manager_notify)(const char *, const char *) = menu_bar_manager_deliver_notification;
 #else
 #define menu_bar_manager_reload_config declarative_config_reload_with_summary
+#define menu_bar_manager_restart_service service_restart_for_menu
 #define menu_bar_manager_stop_service service_stop_for_quit
 #define menu_bar_manager_quit menu_bar_request_quit
 #define menu_bar_manager_notify menu_bar_manager_deliver_notification
@@ -1367,6 +1369,24 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG |
                                     MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE |
                                     MENU_BAR_DIRTY_WINDOW);
+    } break;
+    case MENU_BAR_ACTION_RESTART: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        switch (menu_bar_manager_restart_service()) {
+        case SERVICE_RESTART_REQUESTED:
+            break;
+        case SERVICE_RESTART_UNMANAGED:
+            menu_bar_manager_set_action_failure(action->generation, "yabai is not managed by launchd");
+            menu_bar_manager_notify("service", "Could not restart yabai because it is not running as a managed launchd service.");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION);
+            break;
+        case SERVICE_RESTART_FAILED:
+            menu_bar_manager_set_action_failure(action->generation, "could not restart launchd service");
+            menu_bar_manager_notify("service", "Could not restart the launchd service. yabai is still running.");
+            menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION);
+            break;
+        }
     } break;
     case MENU_BAR_ACTION_QUIT: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;

@@ -624,6 +624,7 @@ static int service_restart(void)
 
 typedef int service_exec_fn(char *const argv[], bool suppress_output);
 typedef int service_capture_fn(char *const argv[], bool suppress_stderr, char *output, size_t capacity);
+typedef int service_spawn_fn(char *const argv[]);
 
 enum service_quit_result
 {
@@ -698,6 +699,52 @@ static enum service_quit_result service_stop_for_quit(void)
 {
     return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
                                            safe_exec, safe_exec_capture);
+}
+
+enum service_restart_result
+{
+    SERVICE_RESTART_REQUESTED,
+    SERVICE_RESTART_UNMANAGED,
+    SERVICE_RESTART_FAILED
+};
+
+static int service_spawn(char *const argv[])
+{
+    pid_t pid = 0;
+    extern char **environ;
+    return posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+}
+
+static enum service_restart_result service_restart_for_menu_with_ops(const char *label, uid_t uid,
+                                                                     pid_t pid,
+                                                                     service_capture_fn capture_fn,
+                                                                     service_spawn_fn spawn_fn)
+{
+    if (!service_quit_label_is_managed(label)) return SERVICE_RESTART_UNMANAGED;
+
+    char service_target[MAXLEN];
+    int length = snprintf(service_target, sizeof(service_target), "gui/%u/%s",
+                          (unsigned int) uid, label);
+    if (length < 0 || length >= (int) sizeof(service_target)) return SERVICE_RESTART_FAILED;
+
+    char service_description[8192];
+    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
+    if (capture_fn((char *const *) print_args, true, service_description,
+                   sizeof(service_description)) != 0 ||
+        !service_print_output_has_pid(service_description, pid)) {
+        return SERVICE_RESTART_UNMANAGED;
+    }
+
+    const char *const restart_args[] = { _PATH_LAUNCHCTL, "kickstart", "-k", service_target, NULL };
+    return spawn_fn((char *const *) restart_args) == 0
+         ? SERVICE_RESTART_REQUESTED
+         : SERVICE_RESTART_FAILED;
+}
+
+static enum service_restart_result service_restart_for_menu(void)
+{
+    return service_restart_for_menu_with_ops(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
+                                             safe_exec_capture, service_spawn);
 }
 
 static int service_stop(void)

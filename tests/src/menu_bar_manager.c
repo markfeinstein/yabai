@@ -74,6 +74,8 @@ static uint64_t g_menu_bar_manager_test_focused_space_id;
 static enum space_op_error g_menu_bar_manager_test_focus_result;
 static int g_menu_bar_manager_test_reload_call_count;
 static bool g_menu_bar_manager_test_reload_result;
+static int g_menu_bar_manager_test_restart_service_call_count;
+static enum service_restart_result g_menu_bar_manager_test_restart_service_result;
 static int g_menu_bar_manager_test_stop_service_call_count;
 static enum service_quit_result g_menu_bar_manager_test_stop_service_result;
 static int g_menu_bar_manager_test_quit_call_count;
@@ -92,6 +94,12 @@ static bool menu_bar_manager_test_reload(FILE *response,
                  "Configuration reloaded. Changed: window_gap, rules.");
     }
     return g_menu_bar_manager_test_reload_result;
+}
+
+static enum service_restart_result menu_bar_manager_test_restart_service(void)
+{
+    ++g_menu_bar_manager_test_restart_service_call_count;
+    return g_menu_bar_manager_test_restart_service_result;
 }
 
 static enum service_quit_result menu_bar_manager_test_stop_service(void)
@@ -456,6 +464,8 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_focus_result = SPACE_OP_ERROR_SUCCESS;
     g_menu_bar_manager_test_reload_call_count = 0;
     g_menu_bar_manager_test_reload_result = true;
+    g_menu_bar_manager_test_restart_service_call_count = 0;
+    g_menu_bar_manager_test_restart_service_result = SERVICE_RESTART_REQUESTED;
     g_menu_bar_manager_test_stop_service_call_count = 0;
     g_menu_bar_manager_test_stop_service_result = SERVICE_QUIT_DIRECT;
     g_menu_bar_manager_test_quit_call_count = 0;
@@ -463,6 +473,7 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_notification_subtitle[0] = '\0';
     g_menu_bar_manager_test_notification_message[0] = '\0';
     menu_bar_manager_reload_config = menu_bar_manager_test_reload;
+    menu_bar_manager_restart_service = menu_bar_manager_test_restart_service;
     menu_bar_manager_stop_service = menu_bar_manager_test_stop_service;
     menu_bar_manager_quit = menu_bar_manager_test_quit;
     menu_bar_manager_notify = menu_bar_manager_test_notify;
@@ -482,6 +493,7 @@ static void menu_bar_manager_test_install_native_seams(void)
     g_menu_bar_manager_native.window_space_list = menu_bar_manager_test_window_space_list;
     g_menu_bar_manager_native.focus_space = menu_bar_manager_test_focus_space;
     menu_bar_manager_reload_config = menu_bar_manager_test_reload;
+    menu_bar_manager_restart_service = menu_bar_manager_test_restart_service;
     menu_bar_manager_stop_service = menu_bar_manager_test_stop_service;
     menu_bar_manager_quit = menu_bar_manager_test_quit;
     menu_bar_manager_notify = menu_bar_manager_test_notify;
@@ -1002,6 +1014,51 @@ TEST_FUNC(menu_bar_manager_reload_and_quit_actions_are_generation_safe, {
     TEST_CHECK_STRING(g_menu_bar_manager_test_notification_subtitle, "service");
     TEST_CHECK_STRING(g_menu_bar_manager_test_notification_message,
                       "Could not stop the launchd service. yabai is still running.");
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_ACTION);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
+TEST_FUNC(menu_bar_manager_restart_action_is_generation_safe_and_reports_failures, {
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_install_native_seams();
+    menu_bar_manager_test_set_enabled_snapshot(5, 5);
+
+    struct menu_bar_action *stale = menu_bar_manager_test_action(MENU_BAR_ACTION_RESTART, 4);
+    menu_bar_manager_handle_action(stale);
+    TEST_CHECK(g_menu_bar_manager_test_restart_service_call_count, 0);
+
+    struct menu_bar_action *restart = menu_bar_manager_test_action(MENU_BAR_ACTION_RESTART, 5);
+    menu_bar_manager_handle_action(restart);
+    TEST_CHECK(g_menu_bar_manager_test_restart_service_call_count, 1);
+    TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 0);
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, 0U);
+
+    g_menu_bar_manager_test_restart_service_result = SERVICE_RESTART_UNMANAGED;
+    struct menu_bar_action *unmanaged = menu_bar_manager_test_action(MENU_BAR_ACTION_RESTART, 5);
+    menu_bar_manager_handle_action(unmanaged);
+    TEST_CHECK(g_menu_bar_manager_test_restart_service_call_count, 2);
+    TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text, "yabai is not managed by launchd");
+    TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 1);
+    TEST_CHECK_STRING(g_menu_bar_manager_test_notification_subtitle, "service");
+    TEST_CHECK_STRING(g_menu_bar_manager_test_notification_message,
+                      "Could not restart yabai because it is not running as a managed launchd service.");
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_ACTION);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    g_menu_bar_manager_test_restart_service_result = SERVICE_RESTART_FAILED;
+    struct menu_bar_action *failed = menu_bar_manager_test_action(MENU_BAR_ACTION_RESTART, 5);
+    menu_bar_manager_handle_action(failed);
+    TEST_CHECK(g_menu_bar_manager_test_restart_service_call_count, 3);
+    TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text, "could not restart launchd service");
+    TEST_CHECK(g_menu_bar_manager_test_notification_call_count, 2);
+    TEST_CHECK_STRING(g_menu_bar_manager_test_notification_message,
+                      "Could not restart the launchd service. yabai is still running.");
     TEST_CHECK(g_menu_bar_manager.dirty_reasons, MENU_BAR_DIRTY_ACTION);
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
 
