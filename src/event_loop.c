@@ -365,7 +365,11 @@ static bool native_move_observe(struct mouse_state *mouse_state, struct window *
         return false;
     }
 
-    return state->claimed;
+    if (!state->claimed) {
+        state->claimed = true;
+        window_manager_hide_active_window_highlight(&g_window_manager);
+    }
+    return true;
 }
 
 static bool native_move_drag(struct mouse_state *mouse_state, int64_t button)
@@ -373,17 +377,13 @@ static bool native_move_drag(struct mouse_state *mouse_state, int64_t button)
     struct native_move_state *state = &mouse_state->native_move;
     if (!state->window_id || state->button != button) return false;
     state->dragging = true;
-    if (!state->claimed) {
-        struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
-        if (mouse_state->native_resize.window_id == state->window_id ||
-            !native_move_window_is_valid(mouse_state, window)) {
-            native_move_clear(mouse_state);
-            return false;
-        }
-        state->claimed = true;
-        window_manager_hide_active_window_highlight(&g_window_manager);
+    struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
+    if (mouse_state->native_resize.window_id == state->window_id ||
+        !native_move_window_is_valid(mouse_state, window)) {
+        native_move_clear(mouse_state);
+        return false;
     }
-    return true;
+    return state->claimed;
 }
 
 static void native_move_end(struct mouse_state *mouse_state, int64_t button)

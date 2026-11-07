@@ -160,7 +160,7 @@ TEST_FUNC(active_window_highlight_window_events_use_cached_frame,
     TEST_RESTORE(window_manager_test_active_window_highlight_refresh_observer);
 });
 
-TEST_FUNC(active_window_highlight_native_move_hides_on_first_drag_until_release,
+TEST_FUNC(active_window_highlight_native_move_waits_for_window_motion_before_hiding,
 {
     struct table saved_windows = g_window_manager.window;
     TEST_SAVE(g_mouse_state);
@@ -185,13 +185,18 @@ TEST_FUNC(active_window_highlight_native_move_hides_on_first_drag_until_release,
     active_window_highlight_hide_calls = 0;
 
     native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft);
-    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft), true);
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft), false);
     TEST_CHECK(g_mouse_state.native_move.dragging, true);
-    TEST_CHECK(g_mouse_state.native_move.claimed, true);
-    TEST_CHECK(active_window_highlight_hide_calls, 1);
+    TEST_CHECK(g_mouse_state.native_move.claimed, false);
+    TEST_CHECK(active_window_highlight_hide_calls, 0);
+    native_move_end(&g_mouse_state, kCGMouseButtonLeft);
+    TEST_CHECK(active_window_highlight_refresh_calls, 0);
 
+    native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft);
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft), false);
     window.frame.origin = CGPointMake(110.0, 210.0);
     TEST_CHECK(native_move_observe(&g_mouse_state, &window), true);
+    TEST_CHECK(g_mouse_state.native_move.claimed, true);
     TEST_CHECK(active_window_highlight_hide_calls, 1);
     TEST_CHECK(active_window_highlight_refresh_calls, 0);
     TEST_CHECK(native_move_observe(&g_mouse_state, &window), true);
