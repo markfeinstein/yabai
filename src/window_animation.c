@@ -318,10 +318,23 @@ static void (*window_manager_animation_retry_scheduler)(struct window_animation_
 #define window_manager_animation_retry_scheduler window_manager_animation_dispatch_retry
 #endif
 
+//
+// NOTE(asmvik): Teardown retries indefinitely with a capped backoff (window_manager_retry_delay_ms
+// tops out at 6.4s) because giving up and freeing the animation context without completing
+// teardown would leave the real window hidden behind a stuck proxy. Log once after enough
+// attempts that the condition is almost certainly not transient, so a window stuck behind
+// its animation proxy is discoverable instead of silently retrying forever.
+//
+#define WINDOW_ANIMATION_TEARDOWN_STUCK_WARNING_ATTEMPTS 10
+
 static void window_manager_animation_retry(struct window_animation_context *context)
 {
     uint64_t delay = window_manager_retry_delay_ms(context->teardown_attempts);
     if (context->teardown_attempts != UINT8_MAX) ++context->teardown_attempts;
+    if (context->teardown_attempts == WINDOW_ANIMATION_TEARDOWN_STUCK_WARNING_ATTEMPTS) {
+        warn("%s: animation teardown has retried %d times; a window may be stuck behind its animation proxy\n",
+             __FUNCTION__, context->teardown_attempts);
+    }
     window_manager_animation_retry_scheduler(context, delay);
 }
 

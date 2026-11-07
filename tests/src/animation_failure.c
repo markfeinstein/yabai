@@ -581,6 +581,41 @@ TEST_FUNC(animation_teardown_has_single_non_callback_owner,
     TEST_RESTORE(window_manager_animation_retry_scheduler);
 });
 
+TEST_FUNC(animation_retry_keeps_scheduling_and_counting_past_the_stuck_warning_threshold,
+{
+    //
+    // The stuck-animation warning at WINDOW_ANIMATION_TEARDOWN_STUCK_WARNING_ATTEMPTS is
+    // observability only: it must not change the retry count, the scheduled delay, or
+    // whether retries continue past that attempt, up to and including saturation at
+    // UINT8_MAX.
+    //
+    TEST_OVERRIDE(window_manager_animation_retry_scheduler, animation_test_retry_schedule);
+    struct window_animation_context context = {0};
+    animation_test_scheduled_context = NULL;
+    animation_test_scheduled_delay = 0;
+
+    for (int i = 0; i < 20; ++i) {
+        uint8_t before = context.teardown_attempts;
+        window_manager_animation_retry(&context);
+        TEST_CHECK(animation_test_scheduled_context == &context, true);
+        TEST_CHECK(animation_test_scheduled_delay, window_manager_retry_delay_ms(before));
+        if (before != UINT8_MAX) {
+            TEST_CHECK(context.teardown_attempts, (uint8_t) (before + 1));
+        } else {
+            TEST_CHECK(context.teardown_attempts, UINT8_MAX);
+        }
+    }
+    TEST_CHECK(context.teardown_attempts > WINDOW_ANIMATION_TEARDOWN_STUCK_WARNING_ATTEMPTS, true);
+
+    struct window_animation_context saturated = { .teardown_attempts = UINT8_MAX };
+    window_manager_animation_retry(&saturated);
+    TEST_CHECK(saturated.teardown_attempts, UINT8_MAX);
+    TEST_CHECK(animation_test_scheduled_context == &saturated, true);
+    TEST_CHECK(animation_test_scheduled_delay, 6400ULL);
+
+    TEST_RESTORE(window_manager_animation_retry_scheduler);
+});
+
 static int animation_test_teardown_order[8];
 static int animation_test_teardown_order_count;
 static bool animation_test_teardown_stop_retry;
