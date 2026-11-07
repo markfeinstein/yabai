@@ -1,6 +1,8 @@
 #ifndef WINDOW_MANAGER_H
 #define WINDOW_MANAGER_H
 
+#include "focus_follows_mouse.h"
+
 #define kCPSAllWindows    0x100
 #define kCPSUserGenerated 0x200
 #define kCPSNoWindows     0x400
@@ -44,16 +46,6 @@ static const char *purify_mode_str[] =
     "float",
     "off"
 };
-
-enum ffm_mode
-{
-    FFM_DISABLED,
-    FFM_AUTOFOCUS,
-    FFM_AUTORAISE
-};
-
-typedef uint32_t ffm_atomic_mode;
-_Static_assert(FFM_AUTORAISE <= UINT32_MAX, "ffm mode must fit its atomic storage");
 
 static const char *ffm_mode_str[] =
 {
@@ -120,10 +112,15 @@ struct window_manager
     bool enable_mff;
     bool disable_management;
     bool disable_window_sublayer_auto;
-    enum ffm_mode configured_ffm_mode;
-    ffm_atomic_mode effective_ffm_mode;
-    uint32_t ffm_menu_suspend_count;
-    uint32_t ffm_anonymous_menu_suspend_count;
+    union {
+        struct {
+            enum ffm_mode configured_ffm_mode;
+            ffm_atomic_mode effective_ffm_mode;
+            uint32_t ffm_menu_suspend_count;
+            uint32_t ffm_anonymous_menu_suspend_count;
+        };
+        struct focus_follows_mouse_state ffm_state;
+    };
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
     enum window_focus_fallback window_focus_fallback;

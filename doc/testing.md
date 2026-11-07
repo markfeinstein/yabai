@@ -77,16 +77,18 @@ behavior remains covered by the existing rule and scaffold suites.
 ## Independent compilation boundaries
 
 `src/pattern.c`, `src/window_constraints.c`, `src/window_server_classifier.c`,
-and `src/window_server_hit_test.c` compile as ordinary C objects alongside
-`menu_bar_model.c`, rather than being included by `src/manifest.m`. The daemon
+`src/window_server_hit_test.c`, and `src/focus_follows_mouse.c` compile as
+ordinary C objects alongside `menu_bar_model.c`, rather than being included by
+`src/manifest.m`. The daemon
 and core tests link these modules separately in every
 build/sanitizer/architecture configuration. Source/header dependencies and
 generated `.d` files preserve incremental rebuilds; repository fixtures verify
 that a module change recompiles its object and relinks without rebuilding
 unrelated modules or OSAX artifacts. These are incremental boundary
 extractions, not a wholesale rewrite of the manifest. Existing matcher,
-constraint, classifier, and hit-test behavior and public interfaces are
-unchanged; their tests exercise the separately linked implementations.
+constraint, classifier, hit-test, and focus-follows-mouse behavior and public
+interfaces are unchanged; their tests exercise the separately linked
+implementations.
 
 ## Snapshot lookup performance
 

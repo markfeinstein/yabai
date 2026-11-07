@@ -231,6 +231,7 @@ for config in debug release asan tsan; do
     test -f "$WORK/bin/$config/pattern.o"
     test -f "$WORK/bin/$config/window_constraints.o"
     test -f "$WORK/bin/$config/window_server_hit_test.o"
+    test -f "$WORK/bin/$config/focus_follows_mouse.o"
     test ! -e "$WORK/bin/$config/osax/payload"
     test ! -e "$WORK/bin/$config/osax/loader"
 done
@@ -256,14 +257,14 @@ test ! -s "$XCRUN_LOG"
 
 # A standalone module source/header change rebuilds only that object and
 # relinks once, without rebuilding unrelated modules or the scripting addition.
-for module in pattern window_constraints window_server_classifier window_server_hit_test; do
+for module in pattern window_constraints window_server_classifier window_server_hit_test focus_follows_mouse; do
     for extension in c h; do
         /bin/sleep 1
         touch "src/$module.$extension"
         run_make release >/dev/null
         grep -F "xcrun-arg:./src/$module.c" "$XCRUN_LOG" >/dev/null
         grep -F 'xcrun-arg:./src/manifest.m' "$XCRUN_LOG" >/dev/null
-        for other in menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test; do
+        for other in menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test focus_follows_mouse; do
             [ "$module" = "$other" ] || ! grep -F "xcrun-arg:./src/$other.c" "$XCRUN_LOG"
         done
         ! grep -F 'xcrun-arg:./src/osax/payload.m' "$XCRUN_LOG"

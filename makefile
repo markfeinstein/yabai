@@ -42,7 +42,7 @@ FUZZ_CONFIG    = $(FUZZ_PATH)/declarative-config-fuzz
 FUZZ_FLAGS     = -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 FUZZ_CONFIG_FLAGS = $(FUZZ_FLAGS) -DTESTS -Wno-unused-function -Wno-unused-parameter -Wno-deprecated-declarations $(FRAMEWORK_PATH) $(FRAMEWORK)
 YABAI_COMMON   = ./src/manifest.m
-YABAI_MODULES  = menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test
+YABAI_MODULES  = menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test focus_follows_mouse
 YABAI_MODULE_SOURCES = $(foreach module,$(YABAI_MODULES),./src/$(module).c ./src/$(module).h)
 YABAI_DEPS     = $(filter-out $(YABAI_MODULE_SOURCES),$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
 DEBUG_MODULES  = $(addprefix $(BUILD_PATH)/debug/,$(addsuffix .o,$(YABAI_MODULES)))

@@ -20,6 +20,7 @@ PATTERN = $(OUT)/pattern.o
 CONSTRAINTS = $(OUT)/window_constraints.o
 CLASSIFIER = $(OUT)/window_server_classifier.o
 HIT_TEST = $(OUT)/window_server_hit_test.o
+FFM_STATE = $(OUT)/focus_follows_mouse.o
 CORE_DEPS = $(wildcard ./src/*.c ./src/*.m ../src/*.c ../src/*.h ../src/*.m ../src/misc/*.c ../src/misc/*.h ../src/misc/*.m ../src/osax/*.h) ../scripts/window_server_tag_corpus_core.c ../scripts/window_server_tag_corpus_core.h ../scripts/native_tab_event_recorder_core.c ../scripts/native_tab_event_recorder_core.h ../scripts/native_tile_diagnostic_core.c ../scripts/native_tile_diagnostic_core.h ../scripts/display_cadence_diagnostic_core.c ../scripts/display_cadence_diagnostic_core.h
 SANITIZERS_ordinary =
 SANITIZERS_asan = -fsanitize=address,undefined
@@ -50,8 +51,11 @@ $(CLASSIFIER): ../src/window_server_classifier.c ../src/window_server_classifier
 $(HIT_TEST): ../src/window_server_hit_test.c ../src/window_server_hit_test.h makefile | $(OUT)
 	$(CC) -c ../src/window_server_hit_test.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -DTESTS -std=c11 -Wall -Wextra -Werror -MMD -MP
 
-$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) makefile | $(OUT)
-	$(CC) ./src/tests.m $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
+$(FFM_STATE): ../src/focus_follows_mouse.c ../src/focus_follows_mouse.h makefile | $(OUT)
+	$(CC) -c ../src/focus_follows_mouse.c -o '$@' $(ARCH_FLAG) $(SANITIZERS) -std=c11 -Wall -Wextra -Werror -MMD -MP
+
+$(CORE): ./src/tests.m $(CORE_DEPS) $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) $(FFM_STATE) makefile | $(OUT)
+	$(CC) ./src/tests.m $(MODEL) $(RUNNER) $(PATTERN) $(CONSTRAINTS) $(CLASSIFIER) $(HIT_TEST) $(FFM_STATE) -o '$@' $(BASE_FLAGS) $(SANITIZERS) $(FRAMEWORKS)
 
 core-build: $(CORE)
 
@@ -165,6 +169,7 @@ syntax:
 	$(CC) -fsyntax-only ../src/window_constraints.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_corner_geometry.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ../src/window_server_hit_test.c -std=c11 -Wall -Wextra -Werror
+	$(CC) -fsyntax-only ../src/focus_follows_mouse.c -std=c11 -Wall -Wextra -Werror
 	$(CC) -fsyntax-only ./src/public_header_compile.c -std=c11 -Wall -Wextra -Werror
 
 arch-arm64:
@@ -186,4 +191,4 @@ integration-hide-on-close:
 
 test-all: run run-asan run-tsan arch-arm64 arch-x86_64 syntax
 
--include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(PATTERN:.o=.d) $(CONSTRAINTS:.o=.d) $(CLASSIFIER:.o=.d) $(HIT_TEST:.o=.d) $(OUT)/macho_parser_production.d
+-include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(PATTERN:.o=.d) $(CONSTRAINTS:.o=.d) $(CLASSIFIER:.o=.d) $(HIT_TEST:.o=.d) $(FFM_STATE:.o=.d) $(OUT)/macho_parser_production.d

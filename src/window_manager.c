@@ -396,7 +396,7 @@ static void (*window_manager_test_effective_ffm_load_observer)(enum ffm_mode);
 
 enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm)
 {
-    enum ffm_mode mode = (enum ffm_mode) __atomic_load_n(&wm->effective_ffm_mode, __ATOMIC_ACQUIRE);
+    enum ffm_mode mode = focus_follows_mouse_effective_mode(wm ? &wm->ffm_state : NULL);
 #ifdef TESTS
     if (window_manager_test_effective_ffm_load_observer) window_manager_test_effective_ffm_load_observer(mode);
 #endif
@@ -405,58 +405,40 @@ enum ffm_mode window_manager_effective_ffm_mode(const struct window_manager *wm)
 
 void window_manager_recompute_effective_ffm_mode(struct window_manager *wm)
 {
-    enum ffm_mode mode = wm->ffm_menu_suspend_count ? FFM_DISABLED : wm->configured_ffm_mode;
-    __atomic_store_n(&wm->effective_ffm_mode, (ffm_atomic_mode) mode, __ATOMIC_RELEASE);
+    focus_follows_mouse_recompute(wm ? &wm->ffm_state : NULL);
 }
 
 bool window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode)
 {
-    wm->configured_ffm_mode = mode;
-    window_manager_recompute_effective_ffm_mode(wm);
-    return true;
+    return focus_follows_mouse_set_mode(wm ? &wm->ffm_state : NULL, mode);
 }
 
 void window_manager_ffm_menu_opened(struct window_manager *wm)
 {
-    if (wm->ffm_anonymous_menu_suspend_count == UINT32_MAX || wm->ffm_menu_suspend_count == UINT32_MAX) return;
-    ++wm->ffm_anonymous_menu_suspend_count;
-    ++wm->ffm_menu_suspend_count;
-    window_manager_recompute_effective_ffm_mode(wm);
+    focus_follows_mouse_anonymous_menu_opened(wm ? &wm->ffm_state : NULL);
 }
 
 void window_manager_ffm_menu_closed(struct window_manager *wm)
 {
-    if (wm->ffm_anonymous_menu_suspend_count == 0) return;
-    --wm->ffm_anonymous_menu_suspend_count;
-    if (wm->ffm_menu_suspend_count != 0) --wm->ffm_menu_suspend_count;
-    window_manager_recompute_effective_ffm_mode(wm);
+    focus_follows_mouse_anonymous_menu_closed(wm ? &wm->ffm_state : NULL);
 }
 
 void window_manager_ffm_application_menu_opened(struct window_manager *wm, struct application *application)
 {
-    if (!application || application->ffm_menu_suspend_count == UINT32_MAX || wm->ffm_menu_suspend_count == UINT32_MAX) return;
-    ++application->ffm_menu_suspend_count;
-    ++wm->ffm_menu_suspend_count;
-    window_manager_recompute_effective_ffm_mode(wm);
+    focus_follows_mouse_application_menu_opened(wm ? &wm->ffm_state : NULL,
+                                                 application ? &application->ffm_menu_suspend_count : NULL);
 }
 
 void window_manager_ffm_application_menu_closed(struct window_manager *wm, struct application *application)
 {
-    if (!application || application->ffm_menu_suspend_count == 0) return;
-    --application->ffm_menu_suspend_count;
-    if (wm->ffm_menu_suspend_count != 0) --wm->ffm_menu_suspend_count;
-    window_manager_recompute_effective_ffm_mode(wm);
+    focus_follows_mouse_application_menu_closed(wm ? &wm->ffm_state : NULL,
+                                                 application ? &application->ffm_menu_suspend_count : NULL);
 }
 
 void window_manager_ffm_application_terminated(struct window_manager *wm, struct application *application)
 {
-    if (!application || application->ffm_menu_suspend_count == 0) return;
-    uint32_t released = application->ffm_menu_suspend_count;
-    application->ffm_menu_suspend_count = 0;
-    wm->ffm_menu_suspend_count = released >= wm->ffm_menu_suspend_count
-                               ? 0
-                               : wm->ffm_menu_suspend_count - released;
-    window_manager_recompute_effective_ffm_mode(wm);
+    focus_follows_mouse_application_terminated(wm ? &wm->ffm_state : NULL,
+                                                application ? &application->ffm_menu_suspend_count : NULL);
 }
 
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled)
