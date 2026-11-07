@@ -44,6 +44,19 @@ static bool notify_init(void)
     return true;
 }
 
+static bool notify_set_identity_image(NSUserNotification *notification, NSImage *image)
+{
+    if (!notification || !image) return false;
+    @try {
+        [notification setValue:image forKey:@"_identityImage"];
+        [notification setValue:@(false) forKey:@"_identityImageHasBorder"];
+        return true;
+    } @catch (NSException *exception) {
+        (void) exception;
+        return false;
+    }
+}
+
 static NSUserNotification *notify_create_notification(const char *subtitle,
                                                        NSString *informative_text)
 {
@@ -52,8 +65,7 @@ static NSUserNotification *notify_create_notification(const char *subtitle,
     notification.title = @"yabai";
     if (subtitle && subtitle[0]) notification.subtitle = [NSString stringWithUTF8String:subtitle];
     notification.informativeText = informative_text;
-    [notification setValue:g_notify_img forKey:@"_identityImage"];
-    [notification setValue:@(false) forKey:@"_identityImageHasBorder"];
+    (void) notify_set_identity_image(notification, g_notify_img);
     return notification;
 }
 

@@ -261,7 +261,11 @@ static bool menu_bar_manager_resize(void **items, size_t item_size, size_t *capa
 {
     if (needed <= *capacity) return true;
 
-    size_t new_capacity = *capacity ? *capacity * 2 : 4;
+    size_t new_capacity = 4;
+    if (*capacity) {
+        if (*capacity > SIZE_MAX / 2) return false;
+        new_capacity = *capacity * 2;
+    }
     while (new_capacity < needed) {
         if (new_capacity > SIZE_MAX / 2) return false;
         new_capacity *= 2;

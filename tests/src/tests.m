@@ -1075,7 +1075,20 @@ TEST_FUNC(notification_uses_yabai_icon_and_omits_empty_subtitle,
         NSUserNotification *subtitled = notify_create_notification("service", @"Could not quit.");
         TEST_CHECK([[subtitled subtitle] isEqualToString:@"service"], true);
         [subtitled release];
+
+        NSObject *unsupported = [[NSObject alloc] init];
+        TEST_CHECK(notify_set_identity_image((NSUserNotification *) unsupported, g_notify_img), false);
+        [unsupported release];
     }
+});
+
+TEST_FUNC(menu_bar_manager_resize_rejects_capacity_overflow_before_multiplication,
+{
+    void *items = NULL;
+    size_t capacity = SIZE_MAX / 2 + 1;
+    TEST_CHECK(menu_bar_manager_resize(&items, sizeof(uint32_t), &capacity, capacity + 1), false);
+    TEST_CHECK(items == NULL, true);
+    TEST_CHECK(capacity, SIZE_MAX / 2 + 1);
 });
 
 TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
