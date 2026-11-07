@@ -2235,3 +2235,24 @@ TEST_FUNC(window_frame_refreshes_stale_ref_after_any_write_error,
     frame_stale_test_fresh = NULL;
     table_free(&g_window_manager.managed_window);
 });
+
+TEST_FUNC(window_zoom_commands_drop_stale_managed_ownership_instead_of_dereferencing_null,
+{
+    struct window_manager manager = {0};
+    struct window_node root = { .window_list = { 7 }, .window_order = { 7 }, .window_count = 1 };
+    struct view view = { .layout = VIEW_BSP, .root = &root };
+    struct window window = { .id = 42 };
+    table_init(&manager.managed_window, 4, hash_wm, compare_wm);
+
+    table_add(&manager.managed_window, &window.id, &view);
+    TEST_CHECK(window_manager_find_managed_window(&manager, &window), &view);
+    window_manager_toggle_window_zoom_parent(&manager, &window);
+    TEST_CHECK(window_manager_find_managed_window(&manager, &window) == NULL, true);
+
+    table_add(&manager.managed_window, &window.id, &view);
+    TEST_CHECK(window_manager_find_managed_window(&manager, &window), &view);
+    window_manager_toggle_window_zoom_fullscreen(&manager, &window);
+    TEST_CHECK(window_manager_find_managed_window(&manager, &window) == NULL, true);
+
+    table_free(&manager.managed_window);
+})

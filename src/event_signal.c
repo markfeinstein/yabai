@@ -1,3 +1,5 @@
+#include <inttypes.h>
+
 extern struct signal *g_signal_event[SIGNAL_TYPE_COUNT];
 extern struct memory_pool g_signal_storage;
 extern struct process_manager g_process_manager;
@@ -269,7 +271,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[0] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_WINDOW_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", window->id);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, window->id);
 
         es->app   = window->application->name;
         es->title = window_title_ts(window);
@@ -281,7 +283,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[0] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_WINDOW_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", window->id);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, window->id);
 
         es->app = window->application ? ts_string_copy(window->application->name) : "<unknown>";
         es->active = g_window_manager.focused_window_id == window->id;
@@ -296,7 +298,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[0] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_WINDOW_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", window->id);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, window->id);
 
         es->app   = window->application->name;
         es->title = window_title_ts(window);
@@ -312,7 +314,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[1] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s",   "YABAI_SPACE_ID");
-        snprintf(es->arg_value[0], arg_size, "%lld", sid);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu64, sid);
         snprintf(es->arg_name[1],  arg_size, "%s",   "YABAI_SPACE_INDEX");
         snprintf(es->arg_value[1], arg_size, "%d",   index);
     } break;
@@ -323,7 +325,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[0] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s",   "YABAI_SPACE_ID");
-        snprintf(es->arg_value[0], arg_size, "%lld", sid);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu64, sid);
     } break;
     case SIGNAL_SPACE_CHANGED: {
         uint64_t sid        = g_space_manager.current_space_id;
@@ -343,9 +345,9 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[3] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s",   "YABAI_SPACE_ID");
-        snprintf(es->arg_value[0], arg_size, "%lld", sid);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu64, sid);
         snprintf(es->arg_name[1],  arg_size, "%s",   "YABAI_RECENT_SPACE_ID");
-        snprintf(es->arg_value[1], arg_size, "%lld", recent_sid);
+        snprintf(es->arg_value[1], arg_size, "%" PRIu64, recent_sid);
 
         snprintf(es->arg_name[2],  arg_size, "%s", "YABAI_SPACE_INDEX");
         snprintf(es->arg_value[2], arg_size, "%d", index);
@@ -364,7 +366,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[1] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_DISPLAY_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", did);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, did);
         snprintf(es->arg_name[1],  arg_size, "%s", "YABAI_DISPLAY_INDEX");
         snprintf(es->arg_value[1], arg_size, "%d", index);
     } break;
@@ -375,7 +377,7 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[0] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_DISPLAY_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", did);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, did);
     } break;
     case SIGNAL_DISPLAY_CHANGED: {
         uint32_t did        = g_display_manager.current_display_id;
@@ -395,9 +397,9 @@ void event_signal_push(enum signal_type type, void *context)
         es->arg_value[3] = ts_alloc_unaligned(arg_size);
 
         snprintf(es->arg_name[0],  arg_size, "%s", "YABAI_DISPLAY_ID");
-        snprintf(es->arg_value[0], arg_size, "%d", did);
+        snprintf(es->arg_value[0], arg_size, "%" PRIu32, did);
         snprintf(es->arg_name[1],  arg_size, "%s", "YABAI_RECENT_DISPLAY_ID");
-        snprintf(es->arg_value[1], arg_size, "%d", recent_did);
+        snprintf(es->arg_value[1], arg_size, "%" PRIu32, recent_did);
 
         snprintf(es->arg_name[2],  arg_size, "%s", "YABAI_DISPLAY_INDEX");
         snprintf(es->arg_value[2], arg_size, "%d", index);

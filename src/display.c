@@ -4,6 +4,8 @@ extern int g_connection;
 static CGRect display_bounds_platform_display_bounds(uint32_t did);
 static CGRect display_bounds_platform_visible_frame(uint32_t did);
 
+#include <inttypes.h>
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static DISPLAY_EVENT_HANDLER(display_handler)
@@ -30,7 +32,7 @@ void display_serialize(FILE *rsp, uint32_t did, uint64_t flags)
     fprintf(rsp, "{\n");
 
     if (flags & DISPLAY_PROPERTY_ID) {
-        fprintf(rsp, "\t\"id\":%d", did);
+        fprintf(rsp, "\t\"id\":%" PRIu32, did);
         did_output = true;
     }
 

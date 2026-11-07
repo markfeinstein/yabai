@@ -1,3 +1,5 @@
+#include <inttypes.h>
+
 extern struct window_manager g_window_manager;
 extern int g_layer_normal_window_level;
 extern int g_layer_below_window_level;
@@ -452,7 +454,7 @@ void window_nonax_serialize_with_context(FILE *rsp, uint32_t wid, uint64_t flags
     fprintf(rsp, "{\n");
 
     if (flags & WINDOW_PROPERTY_ID) {
-        fprintf(rsp, "\t\"id\":%d", wid);
+        fprintf(rsp, "\t\"id\":%" PRIu32, wid);
         did_output = true;
     }
 
@@ -837,7 +839,7 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
     fprintf(rsp, "{\n");
 
     if (flags & WINDOW_PROPERTY_ID) {
-        fprintf(rsp, "\t\"id\":%d", window->id);
+        fprintf(rsp, "\t\"id\":%" PRIu32, window->id);
         did_output = true;
     }
 

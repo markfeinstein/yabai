@@ -826,3 +826,18 @@ TEST_FUNC(view_remove_promotes_internal_sibling_geometry,
     TEST_CHECK(legacy_allocation_test_outstanding(), outstanding_before);
     view_test_set_platform_ops(NULL);
 });
+
+TEST_FUNC(view_remove_rejects_inconsistent_stack_membership_without_mutation,
+{
+    struct window_node root = {
+        .window_list = { 41, 42 },
+        .window_order = { 41, 43 },
+        .window_count = 2
+    };
+    struct window_node before = root;
+    struct view view = { .layout = VIEW_STACK, .root = &root };
+    struct window window = { .id = 42 };
+
+    TEST_CHECK(view_remove_window_node(&view, &window), NULL);
+    TEST_CHECK(memcmp(&root, &before, sizeof(root)), 0);
+})

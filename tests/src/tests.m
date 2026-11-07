@@ -1604,6 +1604,44 @@ TEST_FUNC(window_and_space_serializers_round_trip_safe_escaped_and_absent_string
     g_space_manager.labels = saved_space_labels;
 });
 
+TEST_FUNC(identifier_serializers_preserve_full_unsigned_domains,
+{
+    char *output = NULL;
+    size_t output_length = 0;
+    FILE *stream = open_memstream(&output, &output_length);
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        struct window window = { .id = UINT32_MAX };
+        window_serialize(stream, &window, WINDOW_PROPERTY_ID);
+        TEST_CHECK(fclose(stream), 0);
+        TEST_CHECK(strstr(output, "\"id\":4294967295") != NULL, true);
+        free(output);
+    }
+
+    output = NULL;
+    output_length = 0;
+    stream = open_memstream(&output, &output_length);
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        display_serialize(stream, UINT32_MAX, DISPLAY_PROPERTY_ID);
+        TEST_CHECK(fclose(stream), 0);
+        TEST_CHECK(strstr(output, "\"id\":4294967295") != NULL, true);
+        free(output);
+    }
+
+    output = NULL;
+    output_length = 0;
+    stream = open_memstream(&output, &output_length);
+    TEST_CHECK(stream != NULL, true);
+    if (stream) {
+        struct view view = { .sid = UINT64_MAX };
+        view_serialize(stream, &view, SPACE_PROPERTY_ID);
+        TEST_CHECK(fclose(stream), 0);
+        TEST_CHECK(strstr(output, "\"id\":18446744073709551615") != NULL, true);
+        free(output);
+    }
+})
+
 TEST_FUNC(view_stack_window_node_rejects_full_node_without_mutation,
 {
     struct window_node node = {0};

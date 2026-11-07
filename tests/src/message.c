@@ -562,6 +562,46 @@ TEST_FUNC(event_signal_pool_drops_records_when_full_without_overwriting,
     }
 });
 
+TEST_FUNC(event_signal_identifiers_preserve_full_unsigned_domains,
+{
+    bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(8));
+    TEST_CHECK(temp_storage_ready, true);
+    if (!temp_storage_ready) return result;
+
+    enum signal_type display_type = SIGNAL_DISPLAY_REMOVED;
+    enum signal_type space_type = SIGNAL_SPACE_DESTROYED;
+    struct memory_pool saved_storage = g_signal_storage;
+    struct signal *saved_display_signals = g_signal_event[display_type];
+    struct signal *saved_space_signals = g_signal_event[space_type];
+    struct event_signal storage = {0};
+    g_signal_storage = (struct memory_pool) {
+        .memory = &storage, .size = sizeof(storage), .used = 0
+    };
+    g_signal_event[display_type] = NULL;
+    g_signal_event[space_type] = NULL;
+    TEST_CHECK(buf_try_push(g_signal_event[display_type], ((struct signal) {0})), true);
+    TEST_CHECK(buf_try_push(g_signal_event[space_type], ((struct signal) {0})), true);
+
+    ts_reset();
+    event_signal_push(display_type, (void *)(uintptr_t)UINT32_MAX);
+    TEST_CHECK(storage.arg_value[0] != NULL, true);
+    if (storage.arg_value[0]) TEST_CHECK(strcmp(storage.arg_value[0], "4294967295"), 0);
+
+    memset(&storage, 0, sizeof(storage));
+    g_signal_storage.used = 0;
+    ts_reset();
+    event_signal_push(space_type, (void *)(uintptr_t)UINT64_MAX);
+    TEST_CHECK(storage.arg_value[0] != NULL, true);
+    if (storage.arg_value[0]) TEST_CHECK(strcmp(storage.arg_value[0], "18446744073709551615"), 0);
+
+    buf_free(g_signal_event[display_type]);
+    buf_free(g_signal_event[space_type]);
+    g_signal_event[display_type] = saved_display_signals;
+    g_signal_event[space_type] = saved_space_signals;
+    g_signal_storage = saved_storage;
+    ts_reset();
+})
+
 TEST_FUNC(event_signal_dispatch_uses_isolated_spawn_environment_and_descriptors,
 {
     int descriptor = open("/dev/null", O_RDONLY);

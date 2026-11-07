@@ -4159,7 +4159,11 @@ void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct 
     if (!view || view->layout != VIEW_BSP) return;
 
     struct window_node *node = view_find_window_node(view, window->id);
-    assert(node);
+    if (!node) {
+        warn("%s: managed-window ownership is stale; dropping it before zoom-parent\n", __FUNCTION__);
+        window_manager_remove_managed_window(wm, window->id);
+        return;
+    }
 
     struct window_node *flush_node = window_node_toggle_zoom_parent(node);
     if (!flush_node) return;
@@ -4179,7 +4183,11 @@ void window_manager_toggle_window_zoom_fullscreen(struct window_manager *wm, str
     if (!view || view->layout != VIEW_BSP) return;
 
     struct window_node *node = view_find_window_node(view, window->id);
-    assert(node);
+    if (!node) {
+        warn("%s: managed-window ownership is stale; dropping it before zoom-fullscreen\n", __FUNCTION__);
+        window_manager_remove_managed_window(wm, window->id);
+        return;
+    }
 
     if (node == view->root) {
         if (!view_toggle_single_window_zoom(view)) return;

@@ -1,3 +1,5 @@
+#include <inttypes.h>
+
 extern int g_connection;
 extern struct display_manager g_display_manager;
 extern struct space_manager g_space_manager;
@@ -869,23 +871,23 @@ struct window_node *view_remove_window_node(struct view *view, struct window *wi
 
     if (node->window_count > 1) {
         uint32_t prev_order_head = node->window_order[0];
-        bool removed_entry = false;
-        bool removed_order = false;
+        int entry_index = -1;
+        int order_index = -1;
 
         for (int i = 0; i < node->window_count; ++i) {
-            if (!removed_entry && node->window_list[i] == window->id) {
-                memmove(node->window_list + i, node->window_list + i + 1, sizeof(uint32_t) * (node->window_count - i - 1));
-                removed_entry = true;
-            }
-
-            if (!removed_order && node->window_order[i] == window->id) {
-                memmove(node->window_order + i, node->window_order + i + 1, sizeof(uint32_t) * (node->window_count - i - 1));
-                removed_order = true;
-            }
+            if (entry_index < 0 && node->window_list[i] == window->id) entry_index = i;
+            if (order_index < 0 && node->window_order[i] == window->id) order_index = i;
         }
 
-        assert(removed_entry);
-        assert(removed_order);
+        if (entry_index < 0 || order_index < 0) {
+            warn("%s: refusing to mutate inconsistent stack membership\n", __FUNCTION__);
+            return NULL;
+        }
+
+        memmove(node->window_list + entry_index, node->window_list + entry_index + 1,
+                sizeof(uint32_t) * (node->window_count - entry_index - 1));
+        memmove(node->window_order + order_index, node->window_order + order_index + 1,
+                sizeof(uint32_t) * (node->window_count - order_index - 1));
         --node->window_count;
         insert_feedback_rekey(node, prev_order_head);
 
@@ -1256,7 +1258,7 @@ void view_serialize_with_context(FILE *rsp, struct view *view, uint64_t flags,
     fprintf(rsp, "{\n");
 
     if (flags & SPACE_PROPERTY_ID) {
-        fprintf(rsp, "\t\"id\":%lld", view->sid);
+        fprintf(rsp, "\t\"id\":%" PRIu64, view->sid);
         did_output = true;
     }
 
