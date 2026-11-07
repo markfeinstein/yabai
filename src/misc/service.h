@@ -188,7 +188,7 @@ static char *populate_plist_path(void)
         error("yabai: unable to retrieve home directory! abort..\n");
     }
 
-    int size = strlen(_PATH_YABAI_PLIST)-2 + strlen(home) + 1;
+    size_t size = strlen(_PATH_YABAI_PLIST)-2 + strlen(home) + 1;
     char *result = malloc(size);
     if (!result) {
         error("yabai: could not allocate memory for plist path! abort..\n");

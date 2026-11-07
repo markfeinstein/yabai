@@ -113,7 +113,7 @@ bool workspace_application_is_observable(struct process *process)
 {
     NSRunningApplication *application = __atomic_load_n(&process->ns_application, __ATOMIC_RELAXED);
     if (application) {
-        process_policy_store(process, [application activationPolicy]);
+        process_policy_store(process, (int) [application activationPolicy]);
         return process_policy_load(process) == NSApplicationActivationPolicyRegular;
     } else {
         process_policy_store(process, NSApplicationActivationPolicyProhibited);

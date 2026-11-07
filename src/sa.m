@@ -116,7 +116,7 @@ static int (*scripting_addition_close_file)(FILE *) = fclose;
 #define scripting_addition_close_file fclose
 #endif
 
-static bool scripting_addition_write_file(char *buffer, unsigned int size, char *file, char *file_mode)
+static bool scripting_addition_write_file(char *buffer, size_t size, char *file, char *file_mode)
 {
     FILE *handle = fopen(file, file_mode);
     if (!handle) return false;
@@ -259,7 +259,7 @@ static bool scripting_addition_handshake_fd(int sockfd, char *version, size_t ve
 }
 
 static bool scripting_addition_request_handshake_with_timeout(char *version, size_t version_capacity,
-                                                              uint32_t *attrib, uint64_t timeout_ms)
+                                                              uint32_t *attrib, uint32_t timeout_ms)
 {
     int sockfd;
     bool result = false;

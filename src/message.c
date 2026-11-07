@@ -309,7 +309,7 @@ static struct token get_token(char **message)
     while (**message) {
         ++(*message);
     }
-    token.length = *message - token.text;
+    token.length = (int) (*message - token.text);
 
     if ((*message)[0] == '\0' && (*message)[1] != '\0') {
         ++(*message);

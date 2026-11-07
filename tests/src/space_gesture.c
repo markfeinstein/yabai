@@ -113,7 +113,7 @@ static void test_space_gesture_post_event(CGEventTapLocation tap, CGEventRef eve
     if (tap != kCGSessionEventTap) ++g_space_gesture_test_bad_tap_count;
     if (g_space_gesture_test_post_count < (int) (sizeof(g_space_gesture_test_post_types) / sizeof(g_space_gesture_test_post_types[0]))) {
         g_space_gesture_test_post_types[g_space_gesture_test_post_count] = CGEventGetIntegerValueField(event, 55);
-        g_space_gesture_test_post_phases[g_space_gesture_test_post_count] = CGEventGetIntegerValueField(event, 132);
+        g_space_gesture_test_post_phases[g_space_gesture_test_post_count] = (uint32_t) CGEventGetIntegerValueField(event, 132);
     }
     ++g_space_gesture_test_post_count;
 }

@@ -177,7 +177,7 @@ void insert_feedback_show(struct window_node *node)
                                                                               g_window_manager.insert_feedback_width,
                                                                               g_window_manager.insert_feedback_radius);
     CGFloat width = geometry.stroke_width;
-    CGFloat clip_x, clip_y, clip_w, clip_h;
+    CGFloat clip_x = 0, clip_y = 0, clip_w = 0, clip_h = 0;
     CGFloat midx = CGRectGetMidX(frame);
     CGFloat midy = CGRectGetMidY(frame);
 

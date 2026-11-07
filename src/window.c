@@ -161,7 +161,7 @@ uint64_t window_space(uint32_t wid)
     CFArrayRef space_list_ref = SLSCopySpacesForWindows(g_connection, 0x7, window_list_ref);
     if (!space_list_ref) goto err;
 
-    int count = CFArrayGetCount(space_list_ref);
+    CFIndex count = CFArrayGetCount(space_list_ref);
     if (!count) goto free;
 
     CFNumberRef id_ref = CFArrayGetValueAtIndex(space_list_ref, 0);
@@ -757,18 +757,18 @@ void window_serialize_with_context(FILE *rsp, struct window *window, uint64_t fl
 
     flags = window_serialization_flags(flags);
 
-    uint64_t sid;
-    int level;
-    int sub_level;
-    uint32_t parent_wid;
-    uint64_t tags;
-    bool parent_known;
-    bool tags_known;
+    uint64_t sid = 0;
+    int level = 0;
+    int sub_level = 0;
+    uint32_t parent_wid = 0;
+    uint64_t tags = 0;
+    bool parent_known = false;
+    bool tags_known = false;
     bool has_shadow = false;
-    struct view *view;
-    struct window_node *node;
-    bool is_minimized;
-    bool is_sticky;
+    struct view *view = NULL;
+    struct window_node *node = NULL;
+    bool is_minimized = false;
+    bool is_sticky = false;
     const struct window_server_window_record *record = window_serialization_record(context, window->id);
 
     bool needs_sid = (flags & WINDOW_PROPERTY_DISPLAY) ||

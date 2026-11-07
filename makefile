@@ -2,7 +2,8 @@ FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
 FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
 MACOS_MIN_VERSION = 14.0
-COMMON_FLAGS   = -std=c11 -Wall -Wextra -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64
+STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32
+COMMON_FLAGS   = -std=c11 -Wall -Wextra $(STRICT_WARNING_FLAGS) -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64
 INFO_PLIST_LINK_FLAGS = -sectcreate __TEXT __info_plist $(INFO_PLIST)
 DEBUG_FLAGS    = $(COMMON_FLAGS) -O0
 RELEASE_FLAGS  = $(COMMON_FLAGS) -DNDEBUG -O3

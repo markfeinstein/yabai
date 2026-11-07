@@ -563,7 +563,7 @@ static inline char *cfstring_copy(CFStringRef string)
 
 static inline char *ts_string_copy(char *s)
 {
-    int length = strlen(s);
+    size_t length = strlen(s);
     char *result = ts_alloc_unaligned(length + 1);
 
     memcpy(result, s, length);
@@ -573,7 +573,7 @@ static inline char *ts_string_copy(char *s)
 
 static inline char *string_copy(char *s)
 {
-    int length = strlen(s);
+    size_t length = strlen(s);
     char *result = malloc(length + 1);
     if (!result) return NULL;
 

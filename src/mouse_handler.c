@@ -189,12 +189,12 @@ static MOUSE_HANDLER(mouse_handler)
         handler_context->direct_swipe_fired = false;
     } break;
     case /* kCGSEventDockControl */ 30: {
-        int hid_type = CGEventGetIntegerValueField(event, /* kCGEventGestureHIDType */ 110);
+        int64_t hid_type = CGEventGetIntegerValueField(event, /* kCGEventGestureHIDType */ 110);
         if (hid_type != /* kIOHIDEventTypeDockSwipe */ 23) break;
-        int motion = CGEventGetIntegerValueField(event, /* kCGEventGestureSwipeMotion */ 123);
+        int64_t motion = CGEventGetIntegerValueField(event, /* kCGEventGestureSwipeMotion */ 123);
         if (motion != /* kCGGestureMotionHorizontal */ 1) break;
 
-        int phase = CGEventGetIntegerValueField(event, /* kCGEventGesturePhase */ 132);
+        int64_t phase = CGEventGetIntegerValueField(event, /* kCGEventGesturePhase */ 132);
         bool direct = g_space_manager.direct_space_switch &&
                       handler_context->direct_space_switch_available;
         if (!direct) {

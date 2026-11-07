@@ -1553,7 +1553,7 @@ TEST_FUNC(single_root_transfer_capacity_is_atomic_and_max_minus_one_commits,
         struct window_node src_before = src_root, dst_before = dst_root;
         struct view src_view_before = src, dst_view_before = dst;
         int layer_before = window.layer;
-        uint32_t src_flags_before = src.flags, dst_flags_before = dst.flags;
+        uint64_t src_flags_before = src.flags, dst_flags_before = dst.flags;
         transfer_test_layer_calls = transfer_test_update_calls = transfer_test_flush_calls = 0;
         transfer_test_src_flush_calls = transfer_test_dst_flush_calls = 0;
         transfer_test_node_flush_calls = 0;

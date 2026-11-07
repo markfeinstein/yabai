@@ -1817,7 +1817,7 @@ bool window_manager_set_window_layer(struct window *window, int layer)
     CFArrayRef window_list = SLSCopyAssociatedWindows(g_connection, window->id);
     if (!window_list) return result;
 
-    int window_count = CFArrayGetCount(window_list);
+    int window_count = (int) CFArrayGetCount(window_list);
     if (!window_count) {
         CFRelease(window_list);
         return result;
@@ -2937,7 +2937,7 @@ struct window **window_manager_add_application_windows(struct space_manager *sm,
         uint64_t origin_sid = 0;
         bool origin_fixed = false;
         window_manager_capture_window_origin(&origin_sid, &origin_fixed);
-        int window_count = CFArrayGetCount(window_list);
+        int window_count = (int) CFArrayGetCount(window_list);
         for (int i = 0; i < window_count; ++i) {
             AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list, i);
             uint32_t window_id = window_manager_ax_window_id(window_ref);
@@ -3146,7 +3146,7 @@ bool window_manager_add_existing_application_windows(struct space_manager *sm, s
 #else
     CFArrayRef window_list_ref = application_window_list(application);
 #endif
-    int window_count = window_list_ref ? CFArrayGetCount(window_list_ref) : 0;
+    int window_count = window_list_ref ? (int) CFArrayGetCount(window_list_ref) : 0;
 
     for (int i = 0; i < window_count; ++i) {
         AXUIElementRef window_ref = CFArrayGetValueAtIndex(window_list_ref, i);

@@ -6,11 +6,12 @@ CONFIG ?= ordinary
 ARCH ?=
 CC ?= clang
 ARCH_FLAG = $(if $(ARCH),-arch $(ARCH),)
+STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32
 # Test fixtures deliberately use partial zero-initialized aggregates, legacy
 # compatibility APIs, and callback signatures with unused parameters. Keep
 # those narrow exceptions while making every other core-test warning fatal.
 TEST_WARNING_FLAGS = -Werror -Wno-missing-field-initializers -Wno-unused-parameter -Wno-deprecated-declarations
-BASE_FLAGS = $(ARCH_FLAG) -DTESTS -DPROFILE=1 -std=c11 -Wall -Wextra $(TEST_WARNING_FLAGS)
+BASE_FLAGS = $(ARCH_FLAG) -DTESTS -DPROFILE=1 -std=c11 -Wall -Wextra $(STRICT_WARNING_FLAGS) $(TEST_WARNING_FLAGS)
 FRAMEWORKS = -F/System/Library/PrivateFrameworks -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 OUT = ./bin/$(CONFIG)$(if $(ARCH),-$(ARCH),)
 CORE = $(OUT)/tests

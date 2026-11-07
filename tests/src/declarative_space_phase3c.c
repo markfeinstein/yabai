@@ -444,7 +444,7 @@ TEST_FUNC(declarative_space_phase3c_generated_postcommit_outcome_matrix,
     size_t cases_run = 0;
     for (size_t i = 0; i < sizeof(outcomes)/sizeof(outcomes[0]); ++i) {
         declarative_space_test_set_admission(8000 + i, true);
-        uint64_t sid = 6000 + i; uint32_t old_wid = 500 + i, new_wid = 700 + i;
+        uint64_t sid = 6000 + i; uint32_t old_wid = (uint32_t) (500 + i), new_wid = (uint32_t) (700 + i);
         struct window_node *old_root = calloc(1, sizeof(*old_root)); old_root->window_count = 1;
         old_root->window_list[0] = old_root->window_order[0] = old_wid;
         old_root->insert_dir = STACK;

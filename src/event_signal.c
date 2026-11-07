@@ -129,10 +129,10 @@ void event_signal_flush(void)
 {
     if (!g_signal_storage.used) return;
 
-    int size  = sizeof(struct event_signal);
-    int count = g_signal_storage.used / size;
+    uint64_t size  = sizeof(struct event_signal);
+    uint64_t count = g_signal_storage.used / size;
 
-    for (int i = 0; i < count; ++i) {
+    for (uint64_t i = 0; i < count; ++i) {
         struct event_signal *es = g_signal_storage.memory + (i * size);
 
         int signal_count = buf_len(g_signal_event[es->type]);

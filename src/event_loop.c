@@ -3012,7 +3012,7 @@ static EVENT_HANDLER(ACTIVE_WINDOW_HIGHLIGHT_REFRESH)
 
 static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 {
-    uint32_t wid = (uint64_t)(intptr_t) context;
+    uint32_t wid = (uint32_t)(uintptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
     struct window_node *node = table_find(&g_window_manager.insert_feedback, &wid);
     if (node) SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
@@ -3114,7 +3114,7 @@ static void event_loop_debug_window_visibility(const char *event_name, uint32_t 
 // so the window may have been ordered back in (or out) by the time one is handled.
 static EVENT_HANDLER(SLS_WINDOW_IS_INVISIBLE)
 {
-    uint32_t wid = (uint64_t)(intptr_t) context;
+    uint32_t wid = (uint32_t)(uintptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
 
     struct window *window = window_manager_find_window(&g_window_manager, wid);
@@ -3193,7 +3193,7 @@ static uint64_t event_loop_window_order_in_space(struct window *window)
 
 static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
 {
-    uint32_t wid = (uint64_t)(intptr_t) context;
+    uint32_t wid = (uint32_t)(uintptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
 
     struct window *window = window_manager_find_window(&g_window_manager, wid);
@@ -3221,7 +3221,7 @@ static EVENT_HANDLER(SLS_WINDOW_IS_VISIBLE)
 
 static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
 {
-    uint32_t wid = (uint64_t)(intptr_t) context;
+    uint32_t wid = (uint32_t)(uintptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
 
     struct window *window = window_manager_find_window(&g_window_manager, wid);
@@ -4090,7 +4090,7 @@ static EVENT_HANDLER(MOUSE_MOVED)
 
             CFArrayRef window_list = SLSCopyAssociatedWindows(g_connection, window->id);
             if (window_list) {
-                int window_count = CFArrayGetCount(window_list);
+                int window_count = (int) CFArrayGetCount(window_list);
 
                 uint32_t child_wid;
                 for (int i = 0; i < window_count; ++i) {
