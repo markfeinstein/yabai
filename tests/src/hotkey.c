@@ -199,6 +199,19 @@ TEST_FUNC(hotkey_callback_preserves_key_delivery_across_mode_changes,
     }
 })
 
+static uint64_t hotkey_timeout_test_generations[4];
+static uint32_t hotkey_timeout_test_durations[4];
+static int hotkey_timeout_test_count;
+
+static void hotkey_timeout_test_schedule(uint64_t generation, uint32_t timeout_ms)
+{
+    if (hotkey_timeout_test_count < (int)array_count(hotkey_timeout_test_generations)) {
+        hotkey_timeout_test_generations[hotkey_timeout_test_count] = generation;
+        hotkey_timeout_test_durations[hotkey_timeout_test_count] = timeout_ms;
+        ++hotkey_timeout_test_count;
+    }
+}
+
 TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
 {
     const char json[] =
@@ -209,6 +222,10 @@ TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
     struct declarative_error error = {0};
     TEST_CHECK(declarative_config_parse_bytes((const uint8_t *)json, strlen(json), "timeout.jsonc", &model, &error), true);
     if (model) {
+        memset(hotkey_timeout_test_generations, 0, sizeof(hotkey_timeout_test_generations));
+        memset(hotkey_timeout_test_durations, 0, sizeof(hotkey_timeout_test_durations));
+        hotkey_timeout_test_count = 0;
+        hotkey_test_mode_timeout_scheduler = hotkey_timeout_test_schedule;
         hotkey_manager_install_config(&model->keyboard);
         CGEventRef enter = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, true);
         CGEventSetFlags(enter, 0);
@@ -218,18 +235,23 @@ TEST_FUNC(hotkey_input_mode_timeout_returns_to_default,
         CGEventRef enter_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_R, false);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, enter_up, NULL) == NULL, true);
         CFRelease(enter_up);
-        usleep(25000);
+        TEST_CHECK(hotkey_timeout_test_count, 1);
+        TEST_CHECK(hotkey_timeout_test_durations[0], 40U);
         CGEventRef activity = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, true);
         CGEventSetFlags(activity, 0);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, activity, NULL) == NULL, true);
         CFRelease(activity);
-        usleep(25000);
+        TEST_CHECK(hotkey_timeout_test_count, 2);
+        TEST_CHECK(hotkey_timeout_test_durations[1], 40U);
+        TEST_CHECK(hotkey_timeout_test_generations[1] > hotkey_timeout_test_generations[0], true);
+        hotkey_manager_fire_mode_timeout(hotkey_timeout_test_generations[0]);
         TEST_CHECK(hotkey_test_active_mode(), 0);
-        usleep(30000);
+        hotkey_manager_fire_mode_timeout(hotkey_timeout_test_generations[1]);
         TEST_CHECK(hotkey_test_active_mode(), HOTKEY_TRANSITION_DEFAULT);
         CGEventRef activity_up = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_Z, false);
         TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, activity_up, NULL) == NULL, true);
         CFRelease(activity_up);
+        hotkey_test_mode_timeout_scheduler = NULL;
         hotkey_manager_install_config(NULL);
         declarative_config_destroy(model);
     }

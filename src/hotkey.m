@@ -63,6 +63,7 @@ static struct hotkey_manager_state hotkey_manager = {
 static bool (*hotkey_key_state)(CGKeyCode) = NULL;
 static void (*hotkey_test_reconcile_locked_hook)(void);
 static void (*hotkey_test_reconcile_observer)(bool);
+static void (*hotkey_test_mode_timeout_scheduler)(uint64_t, uint32_t);
 #endif
 
 static bool hotkey_modifier_key_is_down(CGKeyCode keycode)
@@ -262,21 +263,32 @@ static void hotkey_manager_post_mode_changed(void)
     (void)event_loop_try_post(&g_event_loop, HOTKEY_MODE_CHANGED, name, 0);
 }
 
+static void hotkey_manager_fire_mode_timeout(uint64_t generation)
+{
+    bool changed = false;
+    pthread_mutex_lock(&hotkey_manager.lock);
+    if (hotkey_manager.mode_generation == generation && hotkey_manager.active_mode >= 0) {
+        hotkey_manager.active_mode = HOTKEY_TRANSITION_DEFAULT;
+        ++hotkey_manager.mode_generation;
+        changed = true;
+        debug("keyboard input mode timed out; returning to default\n");
+    }
+    pthread_mutex_unlock(&hotkey_manager.lock);
+    if (changed) hotkey_manager_post_mode_changed();
+}
+
 static void hotkey_manager_schedule_mode_timeout(uint64_t generation, uint32_t timeout_ms)
 {
     if (!generation || !timeout_ms) return;
+#ifdef TESTS
+    if (hotkey_test_mode_timeout_scheduler) {
+        hotkey_test_mode_timeout_scheduler(generation, timeout_ms);
+        return;
+    }
+#endif
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_ms * NSEC_PER_MSEC),
                    dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-        bool changed = false;
-        pthread_mutex_lock(&hotkey_manager.lock);
-        if (hotkey_manager.mode_generation == generation && hotkey_manager.active_mode >= 0) {
-            hotkey_manager.active_mode = HOTKEY_TRANSITION_DEFAULT;
-            ++hotkey_manager.mode_generation;
-            changed = true;
-            debug("keyboard input mode timed out; returning to default\n");
-        }
-        pthread_mutex_unlock(&hotkey_manager.lock);
-        if (changed) hotkey_manager_post_mode_changed();
+        hotkey_manager_fire_mode_timeout(generation);
     });
 }
 
