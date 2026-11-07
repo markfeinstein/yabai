@@ -184,7 +184,7 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft,
                                 CGPointMake(150.0, 220.0));
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
-                                CGPointMake(160.0, 230.0)), false);
+                                CGPointMake(170.0, 240.0)), false);
     TEST_CHECK(g_mouse_state.native_move.dragging, true);
     TEST_CHECK(g_mouse_state.native_move.claimed, false);
     TEST_CHECK(active_window_highlight_refresh_calls, 0);
@@ -192,6 +192,10 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     window.frame.origin = CGPointMake(110.0, 210.0);
     TEST_CHECK(native_move_observe(&g_mouse_state, &window), true);
     TEST_CHECK(g_mouse_state.native_move.claimed, true);
+    TEST_CHECK(CGPointEqualToPoint(g_mouse_state.native_move.down_location,
+                                   CGPointMake(170.0, 240.0)), true);
+    TEST_CHECK(CGRectEqualToRect(g_mouse_state.native_move.initial_frame,
+                                 window.frame), true);
     TEST_CHECK(active_window_highlight_refresh_calls, 1);
     TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
                                  CGRectMake(110.0, 210.0, 300.0, 150.0)), true);
@@ -200,7 +204,7 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
                                 CGPointMake(190.0, 260.0)), true);
     TEST_CHECK(active_window_highlight_refresh_calls, 2);
     TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
-                                 CGRectMake(140.0, 240.0, 300.0, 150.0)), true);
+                                 CGRectMake(130.0, 230.0, 300.0, 150.0)), true);
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonRight,
                                 CGPointMake(210.0, 280.0)), false);
     TEST_CHECK(active_window_highlight_refresh_calls, 2);
