@@ -13,12 +13,16 @@ case "$arch" in
 esac
 
 xcrun_bin=${XCRUN:-xcrun}
-sources='src/manifest.m
-src/menu_bar_model.c
-src/pattern.c
-src/window_constraints.c
-src/window_server_classifier.c
-src/window_server_hit_test.c'
+modules=$(awk '$1 == "YABAI_MODULES" && $2 == "=" { for (i = 3; i <= NF; ++i) print $i }' "$root/makefile")
+if [ -z "$modules" ]; then
+    echo "could not read YABAI_MODULES from makefile" >&2
+    exit 1
+fi
+sources='src/manifest.m'
+for module in $modules; do
+    sources="$sources
+src/$module.c"
+done
 : >"$tmp/current.unsorted"
 index=0
 printf '%s\n' "$sources" | while IFS= read -r source; do
