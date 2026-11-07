@@ -1,5 +1,121 @@
 extern struct event_loop g_event_loop;
+extern struct window_manager g_window_manager;
 extern volatile uint32_t __pending_window_focus;
+
+#define APPLICATION_RESPONSIVENESS_STATE_CAPACITY 1024
+
+struct application_responsiveness_state
+{
+    ProcessSerialNumber psn;
+    uint64_t generation;
+    bool occupied;
+    bool pending;
+    bool unresponsive;
+};
+
+static struct
+{
+    pthread_mutex_t lock;
+    struct application_responsiveness_state entries[APPLICATION_RESPONSIVENESS_STATE_CAPACITY];
+    uint64_t generation;
+    uint32_t pending_count;
+} application_responsiveness = {
+    .lock = PTHREAD_MUTEX_INITIALIZER
+};
+
+static uint64_t application_responsiveness_next_generation(void)
+{
+    if (!++application_responsiveness.generation) ++application_responsiveness.generation;
+    return application_responsiveness.generation;
+}
+
+bool application_responsiveness_record(ProcessSerialNumber psn, bool unresponsive)
+{
+    pthread_mutex_lock(&application_responsiveness.lock);
+    struct application_responsiveness_state *available = NULL;
+    for (size_t i = 0; i < APPLICATION_RESPONSIVENESS_STATE_CAPACITY; ++i) {
+        struct application_responsiveness_state *entry = &application_responsiveness.entries[i];
+        if (entry->occupied && psn_equals(&entry->psn, &psn)) {
+            available = entry;
+            break;
+        }
+        if (!entry->occupied && !available) available = entry;
+    }
+    if (available) {
+        bool already_pending = available->occupied && available->pending;
+        *available = (struct application_responsiveness_state) {
+            .psn = psn,
+            .generation = application_responsiveness_next_generation(),
+            .occupied = true,
+            .pending = true,
+            .unresponsive = unresponsive
+        };
+        if (!already_pending) {
+            __atomic_add_fetch(&application_responsiveness.pending_count, 1, __ATOMIC_RELEASE);
+        }
+    }
+    pthread_mutex_unlock(&application_responsiveness.lock);
+    return available != NULL;
+}
+
+size_t application_responsiveness_drain(void)
+{
+    if (!__atomic_load_n(&application_responsiveness.pending_count, __ATOMIC_ACQUIRE)) return 0;
+    size_t applied = 0;
+    for (size_t i = 0; i < APPLICATION_RESPONSIVENESS_STATE_CAPACITY; ++i) {
+        pthread_mutex_lock(&application_responsiveness.lock);
+        struct application_responsiveness_state snapshot = application_responsiveness.entries[i];
+        pthread_mutex_unlock(&application_responsiveness.lock);
+        if (!snapshot.occupied || !snapshot.pending) continue;
+
+        pid_t pid = process_pid_for_psn(snapshot.psn);
+        struct application *application = pid > 0
+                                        ? window_manager_find_application(&g_window_manager, pid)
+                                        : NULL;
+
+        pthread_mutex_lock(&application_responsiveness.lock);
+        struct application_responsiveness_state *entry = &application_responsiveness.entries[i];
+        if (!entry->occupied || !entry->pending || entry->generation != snapshot.generation) {
+            pthread_mutex_unlock(&application_responsiveness.lock);
+            continue;
+        }
+        if (pid <= 0) {
+            *entry = (struct application_responsiveness_state) {0};
+            __atomic_sub_fetch(&application_responsiveness.pending_count, 1, __ATOMIC_RELEASE);
+            pthread_mutex_unlock(&application_responsiveness.lock);
+            continue;
+        }
+        if (!application) {
+            pthread_mutex_unlock(&application_responsiveness.lock);
+            continue;
+        }
+        *entry = (struct application_responsiveness_state) {0};
+        __atomic_sub_fetch(&application_responsiveness.pending_count, 1, __ATOMIC_RELEASE);
+        pthread_mutex_unlock(&application_responsiveness.lock);
+
+        if (application_is_unresponsive(application) != snapshot.unresponsive) {
+            application_set_unresponsive(application, snapshot.unresponsive);
+            debug("%s: %s (%d) is %s\n", __FUNCTION__,
+                  application->name ? application->name : "<unknown>", application->pid,
+                  snapshot.unresponsive ? "unresponsive" : "responsive");
+            if (!snapshot.unresponsive) {
+                application->ax_retry = true;
+                window_manager_request_application_refresh(&g_window_manager, application);
+            }
+        }
+        ++applied;
+    }
+    return applied;
+}
+
+void application_responsiveness_reset(void)
+{
+    pthread_mutex_lock(&application_responsiveness.lock);
+    memset(application_responsiveness.entries, 0, sizeof(application_responsiveness.entries));
+    application_responsiveness.generation = 0;
+    __atomic_store_n(&application_responsiveness.pending_count, 0, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&application_responsiveness.lock);
+}
 
 static void application_post_window_focused(uint32_t window_id)
 {

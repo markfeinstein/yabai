@@ -3179,9 +3179,9 @@ TEST_FUNC(application_responsiveness_events_gate_ax_and_schedule_recovery,
     };
     TEST_CHECK(window_manager_add_application(&g_window_manager, &application), true);
 
-    struct application_responsiveness_event *event = malloc(sizeof(*event));
-    *event = (struct application_responsiveness_event){.psn = psn, .unresponsive = true};
-    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(event, 0);
+    application_responsiveness_reset();
+    TEST_CHECK(application_responsiveness_record(psn, true), true);
+    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(NULL, 0);
     TEST_CHECK(application_is_unresponsive(&application), true);
     TEST_CHECK(application_focused_window(&application), 0U);
     TEST_CHECK(application_window_list(&application) == NULL, true);
@@ -3201,14 +3201,54 @@ TEST_FUNC(application_responsiveness_events_gate_ax_and_schedule_recovery,
     TEST_CHECK(window_ax_can_move(&window), false);
     TEST_CHECK(window_manager_close_window(&window), false);
 
-    event = malloc(sizeof(*event));
-    *event = (struct application_responsiveness_event){.psn = psn, .unresponsive = false};
-    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(event, 0);
+    TEST_CHECK(application_responsiveness_record(psn, false), true);
+    EVENT_HANDLER_APPLICATION_RESPONSIVENESS_CHANGED(NULL, 0);
     TEST_CHECK(application_is_unresponsive(&application), false);
     TEST_CHECK(application.ax_retry, true);
     TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 1);
     TEST_CHECK(g_window_manager.applications_to_refresh[0] == &application, true);
 
+    application_responsiveness_reset();
+    table_free(&g_window_manager.application);
+    buf_free(g_window_manager.applications_to_refresh);
+    g_window_manager.application = saved_applications;
+    g_window_manager.applications_to_refresh = saved_refresh;
+})
+
+TEST_FUNC(application_responsiveness_state_survives_rejected_post_and_late_discovery,
+{
+    TEST_SAVE(g_event_loop);
+    struct table saved_applications = g_window_manager.application;
+    struct application **saved_refresh = g_window_manager.applications_to_refresh;
+    g_event_loop = (struct event_loop) {0};
+    g_window_manager.application = (struct table) {0};
+    g_window_manager.applications_to_refresh = NULL;
+    table_init(&g_window_manager.application, 4, hash_wm, compare_wm);
+    application_responsiveness_reset();
+
+    ProcessSerialNumber psn = {0};
+    GetCurrentProcess(&psn);
+    uint8_t payload[0x10 + sizeof(psn)] = {0};
+    memcpy(payload + 0x10, &psn, sizeof(psn));
+    application_responsiveness_handler(750, payload, sizeof(payload), NULL);
+    TEST_CHECK(application_responsiveness_drain(), 0U);
+
+    struct application application = {
+        .psn = psn,
+        .pid = getpid(),
+        .name = "late-responsive-fixture"
+    };
+    TEST_CHECK(window_manager_add_application(&g_window_manager, &application), true);
+    TEST_CHECK(application_responsiveness_drain(), 1U);
+    TEST_CHECK(application_is_unresponsive(&application), true);
+
+    application_responsiveness_handler(751, payload, sizeof(payload), NULL);
+    TEST_CHECK(application_responsiveness_drain(), 1U);
+    TEST_CHECK(application_is_unresponsive(&application), false);
+    TEST_CHECK(application.ax_retry, true);
+    TEST_CHECK(buf_len(g_window_manager.applications_to_refresh), 1);
+
+    application_responsiveness_reset();
     table_free(&g_window_manager.application);
     buf_free(g_window_manager.applications_to_refresh);
     g_window_manager.application = saved_applications;

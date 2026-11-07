@@ -62,18 +62,21 @@ static void application_responsiveness_handler(uint32_t type, void *data, size_t
     (void)context;
     if ((type != 750 && type != 751) || !data ||
         data_length < 0x10 + sizeof(ProcessSerialNumber)) return;
-    struct application_responsiveness_event *event = malloc(sizeof(*event));
-    if (!event) return;
-    memcpy(&event->psn, (const uint8_t *)data + 0x10, sizeof(event->psn));
-    event->unresponsive = type == 750;
+    struct application_responsiveness_event event = {
+        .unresponsive = type == 750
+    };
+    memcpy(&event.psn, (const uint8_t *)data + 0x10, sizeof(event.psn));
 #ifdef TESTS
     if (yabai_test_responsiveness_observer) {
-        yabai_test_responsiveness_observer(event);
-        free(event);
+        yabai_test_responsiveness_observer(&event);
         return;
     }
 #endif
-    (void)event_loop_try_post(&g_event_loop, APPLICATION_RESPONSIVENESS_CHANGED, event, 0);
+    if (!application_responsiveness_record(event.psn, event.unresponsive)) {
+        warn("yabai: responsiveness state capacity exhausted; AX calls retain their previous state\n");
+        return;
+    }
+    (void)event_loop_try_post(&g_event_loop, APPLICATION_RESPONSIVENESS_CHANGED, NULL, 0);
 }
 
 #ifndef TESTS

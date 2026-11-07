@@ -1,6 +1,8 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
+#include <stddef.h>
+
 #define OBSERVER_CALLBACK(name) void name(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *context)
 typedef OBSERVER_CALLBACK(observer_callback);
 
@@ -115,6 +117,9 @@ static inline void application_set_unresponsive(struct application *application,
     if (application) __atomic_store_n(&application->is_unresponsive, unresponsive, __ATOMIC_RELEASE);
 }
 
+bool application_responsiveness_record(ProcessSerialNumber psn, bool unresponsive);
+size_t application_responsiveness_drain(void);
+void application_responsiveness_reset(void);
 bool application_is_frontmost(struct application *application);
 bool application_is_hidden(struct application *application);
 uint32_t application_focused_window(struct application *application);
