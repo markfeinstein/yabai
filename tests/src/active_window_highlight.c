@@ -3,6 +3,15 @@ static int active_window_highlight_hide_calls;
 static uint32_t active_window_highlight_refresh_target_wid;
 static CGRect active_window_highlight_refresh_target_frame;
 static bool active_window_highlight_refresh_target_frame_valid;
+static CGEventRef active_window_highlight_cursor_sample_event;
+
+static CGEventRef active_window_highlight_test_cursor_event(CGEventSourceRef source)
+{
+    (void) source;
+    return active_window_highlight_cursor_sample_event
+         ? (CGEventRef) CFRetain(active_window_highlight_cursor_sample_event)
+         : NULL;
+}
 
 static void active_window_highlight_test_refresh_observer(struct window_manager *wm,
                                                            uint32_t target_wid,
@@ -167,6 +176,7 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     TEST_SAVE(g_window_manager.focused_window_id);
     TEST_SAVE(g_mission_control_mode);
     TEST_SAVE(window_manager_test_active_window_highlight_refresh_observer);
+    TEST_SAVE(event_loop_test_native_move_cursor_event);
 
     g_window_manager.window = (struct table) {0};
     table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
@@ -179,12 +189,19 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
     g_mouse_state = (struct mouse_state) { .active_button = MOUSE_BUTTON_NONE };
     window_manager_test_active_window_highlight_refresh_observer = active_window_highlight_test_refresh_observer;
+    event_loop_test_native_move_cursor_event = active_window_highlight_test_cursor_event;
     active_window_highlight_refresh_calls = 0;
+    active_window_highlight_cursor_sample_event = CGEventCreateMouseEvent(
+        NULL, kCGEventMouseMoved, CGPointMake(175.0, 245.0), kCGMouseButtonLeft);
+    TEST_CHECK(active_window_highlight_cursor_sample_event != NULL, true);
+    if (active_window_highlight_cursor_sample_event) {
+        CGEventSetTimestamp(active_window_highlight_cursor_sample_event, 1000);
+    }
 
     native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft,
                                 CGPointMake(150.0, 220.0));
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
-                                CGPointMake(160.0, 230.0)), false);
+                                CGPointMake(170.0, 240.0), 900), false);
     TEST_CHECK(g_mouse_state.native_move.dragging, true);
     TEST_CHECK(g_mouse_state.native_move.claimed, false);
     TEST_CHECK(active_window_highlight_refresh_calls, 0);
@@ -192,17 +209,28 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     window.frame.origin = CGPointMake(110.0, 210.0);
     TEST_CHECK(native_move_observe(&g_mouse_state, &window), true);
     TEST_CHECK(g_mouse_state.native_move.claimed, true);
+    TEST_CHECK(g_mouse_state.native_move.anchor_time, 1000U);
+    TEST_CHECK(CGPointEqualToPoint(g_mouse_state.native_move.down_location,
+                                   CGPointMake(175.0, 245.0)), true);
+    TEST_CHECK(CGRectEqualToRect(g_mouse_state.native_move.initial_frame,
+                                 window.frame), true);
     TEST_CHECK(active_window_highlight_refresh_calls, 1);
     TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
                                  CGRectMake(110.0, 210.0, 300.0, 150.0)), true);
 
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
-                                CGPointMake(190.0, 260.0)), true);
+                                CGPointMake(170.0, 240.0), 950), false);
+    TEST_CHECK(active_window_highlight_refresh_calls, 1);
+    TEST_CHECK(CGPointEqualToPoint(g_mouse_state.native_move.drag_location,
+                                   CGPointMake(175.0, 245.0)), true);
+
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
+                                CGPointMake(195.0, 265.0), 1100), true);
     TEST_CHECK(active_window_highlight_refresh_calls, 2);
     TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
-                                 CGRectMake(140.0, 240.0, 300.0, 150.0)), true);
+                                 CGRectMake(130.0, 230.0, 300.0, 150.0)), true);
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonRight,
-                                CGPointMake(210.0, 280.0)), false);
+                                CGPointMake(210.0, 280.0), 1200), false);
     TEST_CHECK(active_window_highlight_refresh_calls, 2);
 
     window.frame.origin = CGPointMake(138.0, 238.0);
@@ -215,14 +243,19 @@ TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmatio
     native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft,
                                 CGPointMake(180.0, 250.0));
     TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
-                                CGPointMake(190.0, 260.0)), false);
+                                CGPointMake(190.0, 260.0), 1300), false);
     g_mouse_state.native_resize.window_id = window.id;
     TEST_CHECK(native_move_observe(&g_mouse_state, &window), false);
     TEST_CHECK(g_mouse_state.native_move.claimed, false);
     TEST_CHECK(active_window_highlight_refresh_calls, 3);
 
+    if (active_window_highlight_cursor_sample_event) {
+        CFRelease(active_window_highlight_cursor_sample_event);
+        active_window_highlight_cursor_sample_event = NULL;
+    }
     table_free(&g_window_manager.window);
     g_window_manager.window = saved_windows;
+    TEST_RESTORE(event_loop_test_native_move_cursor_event);
     TEST_RESTORE(window_manager_test_active_window_highlight_refresh_observer);
     TEST_RESTORE(g_mission_control_mode);
     TEST_RESTORE(g_window_manager.focused_window_id);
