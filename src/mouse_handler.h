@@ -69,6 +69,17 @@ struct mouse_click_state
     CGEventRef down_event;
 };
 
+struct native_move_state
+{
+    uint32_t window_id;
+    int64_t button;
+    CGPoint down_location;
+    CGPoint drag_location;
+    CGRect initial_frame;
+    bool dragging;
+    bool claimed;
+};
+
 struct native_resize_state
 {
     uint32_t window_id;
@@ -103,6 +114,7 @@ struct mouse_state
     enum mouse_mode drop_action;
     bool native_edge_resize;
     bool bsp_live_resize;
+    struct native_move_state native_move;
     struct native_resize_state native_resize;
     enum mouse_mode current_action;
     int64_t active_button;

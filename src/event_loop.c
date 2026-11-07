@@ -322,6 +322,100 @@ static EVENT_HANDLER(MANAGED_WINDOW_CORRECTION_HINT)
 static void managed_window_correction_clear(struct window *window);
 static void managed_window_correction_schedule_application(struct application *application);
 
+static void native_move_clear(struct mouse_state *mouse_state)
+{
+    mouse_state->native_move = (struct native_move_state) {0};
+    mouse_state->drag_clamp_valid = false;
+}
+
+static void native_move_candidate_begin(struct mouse_state *mouse_state, struct window *window,
+                                        int64_t button, CGPoint point)
+{
+    native_move_clear(mouse_state);
+    if (!window || button != kCGMouseButtonLeft) return;
+
+    mouse_state->native_move = (struct native_move_state) {
+        .window_id = window->id,
+        .button = button,
+        .down_location = point,
+        .drag_location = point,
+        .initial_frame = window->frame
+    };
+}
+
+static bool native_move_window_is_valid(const struct mouse_state *mouse_state,
+                                        struct window *window)
+{
+    const struct native_move_state *state = &mouse_state->native_move;
+    return state->window_id && window && window->id == state->window_id &&
+           window->id == g_window_manager.focused_window_id &&
+           mouse_state->current_action == MOUSE_MODE_NONE &&
+           !mission_control_is_active() &&
+           !window_check_flag(window, WINDOW_FULLSCREEN) &&
+           !window_check_flag(window, WINDOW_MINIMIZE) &&
+           !window_check_flag(window, WINDOW_ORDERED_OUT);
+}
+
+static CGRect native_move_predicted_frame(const struct native_move_state *state)
+{
+    CGRect frame = state->initial_frame;
+    frame.origin.x += state->drag_location.x - state->down_location.x;
+    frame.origin.y += state->drag_location.y - state->down_location.y;
+    return frame;
+}
+
+static bool native_move_refresh_active_window_highlight(struct mouse_state *mouse_state)
+{
+    struct native_move_state *state = &mouse_state->native_move;
+    struct window *window = window_manager_find_window(&g_window_manager, state->window_id);
+    if (!native_move_window_is_valid(mouse_state, window)) {
+        native_move_clear(mouse_state);
+        return false;
+    }
+
+    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
+                                                              window->id,
+                                                              native_move_predicted_frame(state));
+    return true;
+}
+
+static bool native_move_observe(struct mouse_state *mouse_state, struct window *window)
+{
+    struct native_move_state *state = &mouse_state->native_move;
+    if (!state->window_id || state->window_id != window->id || !state->dragging ||
+        mouse_state->native_resize.window_id == window->id) return false;
+    if (!native_move_window_is_valid(mouse_state, window)) {
+        native_move_clear(mouse_state);
+        return false;
+    }
+
+    state->claimed = true;
+    return native_move_refresh_active_window_highlight(mouse_state);
+}
+
+static bool native_move_drag(struct mouse_state *mouse_state, int64_t button, CGPoint point)
+{
+    struct native_move_state *state = &mouse_state->native_move;
+    if (!state->window_id || state->button != button) return false;
+    state->drag_location = point;
+    state->dragging = true;
+    return state->claimed && native_move_refresh_active_window_highlight(mouse_state);
+}
+
+static void native_move_end(struct mouse_state *mouse_state, int64_t button)
+{
+    struct native_move_state state = mouse_state->native_move;
+    if (!state.window_id || state.button != button) return;
+    native_move_clear(mouse_state);
+    if (!state.claimed) return;
+
+    struct window *window = window_manager_find_window(&g_window_manager, state.window_id);
+    if (!window || window->id != g_window_manager.focused_window_id) return;
+    window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
+                                                              window->id,
+                                                              window_ax_frame(window));
+}
+
 static uint32_t native_resize_next_generation(struct native_resize_state *state)
 {
     if (++state->generation == 0) ++state->generation;
@@ -2380,8 +2474,9 @@ static void managed_window_correction_schedule_application(struct application *a
 
 static void window_event_refresh_active_window_highlight(struct window *window)
 {
-    if (window->id == g_window_manager.focused_window_id &&
-        !native_resize_suppress_highlight(window->id)) {
+    if (window->id != g_window_manager.focused_window_id) return;
+    if (native_move_observe(&g_mouse_state, window)) return;
+    if (!native_resize_suppress_highlight(window->id)) {
         window_manager_refresh_active_window_highlight_for_frame(&g_window_manager,
                                                                   window->id,
                                                                   window->frame);
@@ -2501,6 +2596,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
     bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
     window->frame = new_frame;
+    if (g_mouse_state.native_move.window_id == window->id) native_move_clear(&g_mouse_state);
     window_event_refresh_active_window_highlight(window);
 
     if (was_fullscreen != is_fullscreen) {
@@ -3505,6 +3601,7 @@ static EVENT_HANDLER(NATIVE_RESIZE_CANCEL)
 {
     (void) context;
     (void) param1;
+    native_move_clear(&g_mouse_state);
     native_resize_abort(&g_mouse_state, true);
 }
 
@@ -3617,6 +3714,7 @@ static EVENT_HANDLER(MOUSE_DOWN)
 {
     enum mouse_mode action = (enum mouse_mode) param1;
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
+    native_move_end(&g_mouse_state, g_mouse_state.native_move.button);
     if (!mission_control_is_active() && mouse_drag_button_is_valid(button) &&
         mouse_drag_has_lost_release(&g_mouse_state, button)) {
         debug("%s: recovering drag whose mouse-up was lost..\n", __FUNCTION__);
@@ -3624,6 +3722,16 @@ static EVENT_HANDLER(MOUSE_DOWN)
     }
     if (!mouse_drag_action_is_valid(action)) {
         native_resize_candidate_begin(context);
+        if (g_window_manager.enable_active_window_highlight &&
+            !g_mouse_state.native_resize.window_id && button == kCGMouseButtonLeft &&
+            !mission_control_is_active()) {
+            CGPoint point = CGEventGetLocation(context);
+            struct window *window = window_manager_find_window(&g_window_manager,
+                                                                g_window_manager.focused_window_id);
+            if (window && CGRectContainsPoint(window->frame, point)) {
+                native_move_candidate_begin(&g_mouse_state, window, button, point);
+            }
+        }
         goto out;
     }
     native_resize_abort(&g_mouse_state, true);
@@ -3647,6 +3755,7 @@ static EVENT_HANDLER(MOUSE_UP)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
     native_resize_mouse_up(button);
+    native_move_end(&g_mouse_state, button);
     if (mouse_drag_event_is_owner(&g_mouse_state, button)) {
         CGPoint point = CGEventGetLocation(context);
         debug("%s: %.2f, %.2f\n", __FUNCTION__, point.x, point.y);
@@ -3658,7 +3767,12 @@ static EVENT_HANDLER(MOUSE_UP)
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
-    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) goto out;
+    CGPoint point = CGEventGetLocation(context);
+    if (!mouse_drag_event_is_owner(&g_mouse_state, button)) {
+        if (mission_control_is_active()) native_move_clear(&g_mouse_state);
+        else (void) native_move_drag(&g_mouse_state, button, point);
+        goto out;
+    }
     if (mission_control_is_active()) goto abort;
     struct window *drag_window = g_mouse_state.window;
     if (!drag_window) goto abort;
@@ -3673,7 +3787,6 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         goto abort;
     }
 
-    CGPoint point = CGEventGetLocation(context);
     debug("%s: %.2f, %.2f\n", __FUNCTION__, point.x, point.y);
     g_mouse_state.drag_location = point;
 

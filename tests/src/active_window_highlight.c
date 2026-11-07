@@ -160,6 +160,75 @@ TEST_FUNC(active_window_highlight_window_events_use_cached_frame,
     TEST_RESTORE(window_manager_test_active_window_highlight_refresh_observer);
 });
 
+TEST_FUNC(active_window_highlight_native_move_tracks_cursor_after_ax_confirmation,
+{
+    struct table saved_windows = g_window_manager.window;
+    TEST_SAVE(g_mouse_state);
+    TEST_SAVE(g_window_manager.focused_window_id);
+    TEST_SAVE(g_mission_control_mode);
+    TEST_SAVE(window_manager_test_active_window_highlight_refresh_observer);
+
+    g_window_manager.window = (struct table) {0};
+    table_init(&g_window_manager.window, 4, hash_wm, compare_wm);
+    struct window window = {
+        .id = 42,
+        .frame = CGRectMake(100.0, 200.0, 300.0, 150.0)
+    };
+    table_add(&g_window_manager.window, &window.id, &window);
+    g_window_manager.focused_window_id = window.id;
+    g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+    g_mouse_state = (struct mouse_state) { .active_button = MOUSE_BUTTON_NONE };
+    window_manager_test_active_window_highlight_refresh_observer = active_window_highlight_test_refresh_observer;
+    active_window_highlight_refresh_calls = 0;
+
+    native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft,
+                                CGPointMake(150.0, 220.0));
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
+                                CGPointMake(160.0, 230.0)), false);
+    TEST_CHECK(g_mouse_state.native_move.dragging, true);
+    TEST_CHECK(g_mouse_state.native_move.claimed, false);
+    TEST_CHECK(active_window_highlight_refresh_calls, 0);
+
+    window.frame.origin = CGPointMake(110.0, 210.0);
+    TEST_CHECK(native_move_observe(&g_mouse_state, &window), true);
+    TEST_CHECK(g_mouse_state.native_move.claimed, true);
+    TEST_CHECK(active_window_highlight_refresh_calls, 1);
+    TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
+                                 CGRectMake(110.0, 210.0, 300.0, 150.0)), true);
+
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
+                                CGPointMake(190.0, 260.0)), true);
+    TEST_CHECK(active_window_highlight_refresh_calls, 2);
+    TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
+                                 CGRectMake(140.0, 240.0, 300.0, 150.0)), true);
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonRight,
+                                CGPointMake(210.0, 280.0)), false);
+    TEST_CHECK(active_window_highlight_refresh_calls, 2);
+
+    window.frame.origin = CGPointMake(138.0, 238.0);
+    native_move_end(&g_mouse_state, kCGMouseButtonLeft);
+    TEST_CHECK(g_mouse_state.native_move.window_id, 0U);
+    TEST_CHECK(active_window_highlight_refresh_calls, 3);
+    TEST_CHECK(CGRectEqualToRect(active_window_highlight_refresh_target_frame,
+                                 window.frame), true);
+
+    native_move_candidate_begin(&g_mouse_state, &window, kCGMouseButtonLeft,
+                                CGPointMake(180.0, 250.0));
+    TEST_CHECK(native_move_drag(&g_mouse_state, kCGMouseButtonLeft,
+                                CGPointMake(190.0, 260.0)), false);
+    g_mouse_state.native_resize.window_id = window.id;
+    TEST_CHECK(native_move_observe(&g_mouse_state, &window), false);
+    TEST_CHECK(g_mouse_state.native_move.claimed, false);
+    TEST_CHECK(active_window_highlight_refresh_calls, 3);
+
+    table_free(&g_window_manager.window);
+    g_window_manager.window = saved_windows;
+    TEST_RESTORE(window_manager_test_active_window_highlight_refresh_observer);
+    TEST_RESTORE(g_mission_control_mode);
+    TEST_RESTORE(g_window_manager.focused_window_id);
+    TEST_RESTORE(g_mouse_state);
+});
+
 TEST_FUNC(active_window_highlight_manager_routes_enable_refresh_and_hide,
 {
     __auto_type saved_refresh = window_manager_test_active_window_highlight_refresh_observer;
