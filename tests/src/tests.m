@@ -1007,34 +1007,54 @@ TEST_FUNC(config_file_execution_preserves_literal_path,
     }
 });
 
-static int g_service_quit_test_call_count;
-static int g_service_quit_test_results[3];
+static int g_service_quit_test_exec_call_count;
+static int g_service_quit_test_exec_results[3];
+static int g_service_quit_test_capture_call_count;
+static int g_service_quit_test_capture_result;
+static const char *g_service_quit_test_capture_output;
 static bool g_service_quit_test_valid;
 
 static int service_quit_test_exec(char *const argv[], bool suppress_output)
 {
-    int call = g_service_quit_test_call_count++;
+    int call = g_service_quit_test_exec_call_count++;
     if (call >= 3 || !argv || !argv[0] || strcmp(argv[0], _PATH_LAUNCHCTL) != 0) {
         g_service_quit_test_valid = false;
         return 1;
     }
 
-    const char *expected_command = call == 0 ? "print" : call == 1 ? "disable" : "bootout";
+    const char *expected_command = call == 0 ? "disable" : call == 1 ? "bootout" : "enable";
     const char *expected_target = "gui/501/org.nixos.yabai";
-    bool expected_suppression = call == 0;
     if (!argv[1] || strcmp(argv[1], expected_command) != 0 ||
-        !argv[2] || strcmp(argv[2], expected_target) != 0 || argv[3] ||
-        suppress_output != expected_suppression) {
+        !argv[2] || strcmp(argv[2], expected_target) != 0 || argv[3] || suppress_output) {
         g_service_quit_test_valid = false;
     }
 
-    return g_service_quit_test_results[call];
+    return g_service_quit_test_exec_results[call];
+}
+
+static int service_quit_test_capture(char *const argv[], bool suppress_stderr,
+                                     char *output, size_t capacity)
+{
+    ++g_service_quit_test_capture_call_count;
+    const char *expected_target = "gui/501/org.nixos.yabai";
+    if (!argv || !argv[0] || strcmp(argv[0], _PATH_LAUNCHCTL) != 0 ||
+        !argv[1] || strcmp(argv[1], "print") != 0 ||
+        !argv[2] || strcmp(argv[2], expected_target) != 0 || argv[3] ||
+        !suppress_stderr || !output || !capacity) {
+        g_service_quit_test_valid = false;
+        return 1;
+    }
+    snprintf(output, capacity, "%s", g_service_quit_test_capture_output ?: "");
+    return g_service_quit_test_capture_result;
 }
 
 static void service_quit_test_reset(void)
 {
-    g_service_quit_test_call_count = 0;
-    memset(g_service_quit_test_results, 0, sizeof(g_service_quit_test_results));
+    g_service_quit_test_exec_call_count = 0;
+    memset(g_service_quit_test_exec_results, 0, sizeof(g_service_quit_test_exec_results));
+    g_service_quit_test_capture_call_count = 0;
+    g_service_quit_test_capture_result = 0;
+    g_service_quit_test_capture_output = "service = {\n\tpid = 777\n}\n";
     g_service_quit_test_valid = true;
 }
 
@@ -1058,51 +1078,72 @@ TEST_FUNC(notification_uses_yabai_icon_and_omits_empty_subtitle,
     }
 });
 
-TEST_FUNC(service_quit_disables_active_launchd_job_before_bootout,
+TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
 {
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777\n}\n", 777), true);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 778\n}\n", 777), false);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777x\n}\n", 777), false);
+
     const char *unmanaged_labels[] = { NULL, "", "0", "application.com.asmvik.yabai.123" };
     for (size_t i = 0; i < array_count(unmanaged_labels); ++i) {
         service_quit_test_reset();
-        TEST_CHECK(service_stop_for_quit_with_exec(unmanaged_labels[i], 501,
-                                                   service_quit_test_exec), SERVICE_QUIT_DIRECT);
-        TEST_CHECK(g_service_quit_test_call_count, 0);
+        TEST_CHECK(service_stop_for_quit_with_exec(unmanaged_labels[i], 501, 777,
+                                                   service_quit_test_exec, service_quit_test_capture),
+                   SERVICE_QUIT_DIRECT);
+        TEST_CHECK(g_service_quit_test_capture_call_count, 0);
+        TEST_CHECK(g_service_quit_test_exec_call_count, 0);
     }
 
     service_quit_test_reset();
-    g_service_quit_test_results[0] = 1;
-    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), SERVICE_QUIT_DIRECT);
-    TEST_CHECK(g_service_quit_test_call_count, 1);
+    g_service_quit_test_capture_result = 1;
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_DIRECT);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 0);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
-    g_service_quit_test_results[1] = 7;
-    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
-    TEST_CHECK(g_service_quit_test_call_count, 2);
+    g_service_quit_test_capture_output = "service = {\n\tpid = 999\n}\n";
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_DIRECT);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 1);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 0);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
-    g_service_quit_test_results[2] = 9;
-    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
-    TEST_CHECK(g_service_quit_test_call_count, 3);
+    g_service_quit_test_exec_results[0] = 7;
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 1);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
-    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501,
-                                               service_quit_test_exec),
+    g_service_quit_test_exec_results[1] = 9;
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 3);
+    TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
                SERVICE_QUIT_BOOTOUT_REQUESTED);
-    TEST_CHECK(g_service_quit_test_call_count, 3);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 2);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     char oversized_label[MAXLEN + 1];
     memset(oversized_label, 'x', sizeof(oversized_label) - 1);
     oversized_label[sizeof(oversized_label) - 1] = '\0';
     service_quit_test_reset();
-    TEST_CHECK(service_stop_for_quit_with_exec(oversized_label, 501,
-                                               service_quit_test_exec), SERVICE_QUIT_FAILED);
-    TEST_CHECK(g_service_quit_test_call_count, 0);
+    TEST_CHECK(service_stop_for_quit_with_exec(oversized_label, 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_capture_call_count, 0);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 0);
 });
 
 TEST_FUNC(safe_exec_reports_child_outcomes,
@@ -1125,7 +1166,18 @@ TEST_FUNC(safe_exec_reports_child_outcomes,
     TEST_CHECK(safe_exec(success, true), 0);
     TEST_CHECK(safe_exec(failure, false), 1);
     TEST_CHECK(safe_exec(signaled, false), 1);
+
+    struct sigaction no_wait_action = { .sa_handler = SIG_DFL, .sa_flags = SA_NOCLDWAIT };
+    sigemptyset(&no_wait_action.sa_mask);
+    TEST_CHECK(sigaction(SIGCHLD, &no_wait_action, NULL), 0);
+    TEST_CHECK(safe_exec(success, false), 0);
+    TEST_CHECK(safe_exec(failure, false), 1);
     TEST_CHECK(sigaction(SIGCHLD, &previous_action, NULL), 0);
+
+    char output[8];
+    char *captured[] = { "/bin/sh", "-c", "printf abcdefgh; printf hidden >&2", NULL };
+    TEST_CHECK(safe_exec_capture(captured, true, output, sizeof(output)), 0);
+    TEST_CHECK(strcmp(output, "abcdefg"), 0);
 });
 
 TEST_FUNC(socket_open_sets_cloexec,

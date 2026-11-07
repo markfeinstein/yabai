@@ -234,11 +234,122 @@ static int safe_exec_waitable(char *const argv[], bool suppress_output)
     return received == sizeof(result) ? result : 1;
 }
 
+static int safe_exec_capture(char *const argv[], bool suppress_stderr,
+                             char *output, size_t capacity)
+{
+    if (!output || capacity == 0) return 1;
+    output[0] = '\0';
+
+    int result_pipe[2] = { -1, -1 };
+    int output_pipe[2] = { -1, -1 };
+    if (pipe(result_pipe) != 0 || pipe(output_pipe) != 0 ||
+        fcntl(result_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
+        fcntl(result_pipe[1], F_SETFD, FD_CLOEXEC) == -1 ||
+        fcntl(output_pipe[0], F_SETFD, FD_CLOEXEC) == -1 ||
+        fcntl(output_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
+        if (result_pipe[0] >= 0) close(result_pipe[0]);
+        if (result_pipe[1] >= 0) close(result_pipe[1]);
+        if (output_pipe[0] >= 0) close(output_pipe[0]);
+        if (output_pipe[1] >= 0) close(output_pipe[1]);
+        return 1;
+    }
+
+    pid_t helper = fork();
+    if (helper == -1) {
+        close(result_pipe[0]);
+        close(result_pipe[1]);
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        return 1;
+    }
+
+    if (helper == 0) {
+        close(result_pipe[0]);
+        close(output_pipe[0]);
+        struct sigaction action = { .sa_handler = SIG_DFL };
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGCHLD, &action, NULL);
+
+        pid_t command = fork();
+        if (command == 0) {
+            close(result_pipe[1]);
+            if (dup2(output_pipe[1], STDOUT_FILENO) == -1) _exit(127);
+            if (output_pipe[1] > STDERR_FILENO) close(output_pipe[1]);
+            if (suppress_stderr) {
+                int null_fd = open("/dev/null", O_WRONLY|O_APPEND);
+                if (null_fd == -1 || dup2(null_fd, STDERR_FILENO) == -1) _exit(127);
+                if (null_fd > STDERR_FILENO) close(null_fd);
+            }
+            extern char **environ;
+            execve(argv[0], argv, environ);
+            _exit(127);
+        }
+
+        close(output_pipe[1]);
+        int result = 1;
+        if (command != -1) {
+            int status = 0;
+            pid_t waited;
+            do {
+                waited = waitpid(command, &status, 0);
+            } while (waited == -1 && errno == EINTR);
+            if (waited == command && WIFEXITED(status)) result = WEXITSTATUS(status);
+        }
+
+        const char *bytes = (const char *) &result;
+        size_t remaining = sizeof(result);
+        while (remaining) {
+            ssize_t written = write(result_pipe[1], bytes, remaining);
+            if (written == -1 && errno == EINTR) continue;
+            if (written <= 0) break;
+            bytes += written;
+            remaining -= (size_t) written;
+        }
+        close(result_pipe[1]);
+        _exit(0);
+    }
+
+    close(result_pipe[1]);
+    close(output_pipe[1]);
+    size_t stored = 0;
+    char buffer[1024];
+    for (;;) {
+        ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
+        if (count == -1 && errno == EINTR) continue;
+        if (count <= 0) break;
+        size_t available = capacity - 1 - stored;
+        size_t copy = (size_t) count < available ? (size_t) count : available;
+        if (copy) {
+            memcpy(output + stored, buffer, copy);
+            stored += copy;
+        }
+    }
+    close(output_pipe[0]);
+    output[stored] = '\0';
+
+    int result = 1;
+    char *bytes = (char *) &result;
+    size_t received = 0;
+    while (received < sizeof(result)) {
+        ssize_t count = read(result_pipe[0], bytes + received, sizeof(result) - received);
+        if (count == -1 && errno == EINTR) continue;
+        if (count <= 0) break;
+        received += (size_t) count;
+    }
+    close(result_pipe[0]);
+
+    int helper_status = 0;
+    while (waitpid(helper, &helper_status, 0) == -1 && errno == EINTR) {}
+    return received == sizeof(result) ? result : 1;
+}
+
 static int safe_exec(char *const argv[], bool suppress_output)
 {
     struct sigaction child_action;
     if (sigaction(SIGCHLD, NULL, &child_action) != 0) return 1;
-    if (child_action.sa_handler == SIG_IGN) return safe_exec_waitable(argv, suppress_output);
+    if (child_action.sa_handler == SIG_IGN || (child_action.sa_flags & SA_NOCLDWAIT)) {
+        return safe_exec_waitable(argv, suppress_output);
+    }
 
     pid_t pid;
     posix_spawn_file_actions_t actions;
@@ -512,6 +623,7 @@ static int service_restart(void)
 }
 
 typedef int service_exec_fn(char *const argv[], bool suppress_output);
+typedef int service_capture_fn(char *const argv[], bool suppress_stderr, char *output, size_t capacity);
 
 enum service_quit_result
 {
@@ -526,12 +638,36 @@ static bool service_quit_label_is_managed(const char *label)
            strncmp(label, "application.", 12) != 0;
 }
 
+static bool service_print_output_has_pid(const char *output, pid_t pid)
+{
+    if (!output || pid <= 0) return false;
+    const char *cursor = output;
+    while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (strncmp(cursor, "pid =", 5) == 0) {
+            cursor += 5;
+            while (*cursor == ' ' || *cursor == '\t') ++cursor;
+            errno = 0;
+            char *end = NULL;
+            long value = strtol(cursor, &end, 10);
+            if (errno == 0 && end != cursor && value == (long) pid &&
+                (*end == '\0' || *end == '\n' || *end == '\r')) return true;
+        }
+        cursor = strchr(cursor, '\n');
+        if (!cursor) break;
+        ++cursor;
+    }
+    return false;
+}
+
 /* Stop the launchd job that actually owns this process. XPC_SERVICE_NAME is
- * supplied by launchd and supports both yabai's built-in label and external
- * launch-agent definitions such as org.nixos.yabai. Disabling before bootout
- * prevents KeepAlive from racing the requested termination with a replacement. */
+ * inherited environment and therefore only a candidate label: verify that the
+ * active job reports this PID before changing its state. Disabling before
+ * bootout prevents KeepAlive from racing the requested termination with a
+ * replacement; restore the enabled state if bootout is rejected. */
 static enum service_quit_result service_stop_for_quit_with_exec(const char *label, uid_t uid,
-                                                                service_exec_fn exec_fn)
+                                                                pid_t pid, service_exec_fn exec_fn,
+                                                                service_capture_fn capture_fn)
 {
     if (!service_quit_label_is_managed(label)) return SERVICE_QUIT_DIRECT;
 
@@ -540,21 +676,28 @@ static enum service_quit_result service_stop_for_quit_with_exec(const char *labe
                           (unsigned int) uid, label);
     if (length < 0 || length >= (int) sizeof(service_target)) return SERVICE_QUIT_FAILED;
 
+    char service_description[8192];
     const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    if (exec_fn((char *const *) print_args, true) != 0) return SERVICE_QUIT_DIRECT;
+    int print_result = capture_fn((char *const *) print_args, true,
+                                  service_description, sizeof(service_description));
+    if (print_result != 0) return SERVICE_QUIT_DIRECT;
+    if (!service_print_output_has_pid(service_description, pid)) return SERVICE_QUIT_DIRECT;
 
     const char *const disable_args[] = { _PATH_LAUNCHCTL, "disable", service_target, NULL };
     if (exec_fn((char *const *) disable_args, false) != 0) return SERVICE_QUIT_FAILED;
 
     const char *const bootout_args[] = { _PATH_LAUNCHCTL, "bootout", service_target, NULL };
-    return exec_fn((char *const *) bootout_args, false) == 0
-         ? SERVICE_QUIT_BOOTOUT_REQUESTED
-         : SERVICE_QUIT_FAILED;
+    if (exec_fn((char *const *) bootout_args, false) == 0) return SERVICE_QUIT_BOOTOUT_REQUESTED;
+
+    const char *const enable_args[] = { _PATH_LAUNCHCTL, "enable", service_target, NULL };
+    (void) exec_fn((char *const *) enable_args, false);
+    return SERVICE_QUIT_FAILED;
 }
 
 static enum service_quit_result service_stop_for_quit(void)
 {
-    return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), safe_exec);
+    return service_stop_for_quit_with_exec(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
+                                           safe_exec, safe_exec_capture);
 }
 
 static int service_stop(void)
