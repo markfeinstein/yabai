@@ -71,7 +71,9 @@ enum yb_menu_bar_control_kind
     YB_MENU_BAR_CONTROL_FOCUS_SPACE = 0,
     YB_MENU_BAR_CONTROL_OPEN_MENU,
     YB_MENU_BAR_CONTROL_SET_STYLE,
-    YB_MENU_BAR_CONTROL_SET_FILTER
+    YB_MENU_BAR_CONTROL_SET_FILTER,
+    YB_MENU_BAR_CONTROL_RELOAD_CONFIG,
+    YB_MENU_BAR_CONTROL_QUIT
 };
 
 @class YBMenuBarController;
@@ -1508,6 +1510,22 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 
     [style_root setSubmenu:style_menu];
     [_menu addItem:style_root];
+
+    [_menu addItem:[NSMenuItem separatorItem]];
+    YBMenuBarActionTarget *reload_target = yb_action_target(YB_MENU_BAR_CONTROL_RELOAD_CONFIG,
+                                                            _snapshot->generation);
+    NSMenuItem *reload = yb_menu_item(@"Reload Configuration", @selector(performMenuAction:),
+                                      self, reload_target);
+    [reload setToolTip:@"Reload the installed native JSONC configuration."];
+    [reload setAccessibilityLabel:@"Reload yabai configuration"];
+    [_menu addItem:reload];
+
+    YBMenuBarActionTarget *quit_target = yb_action_target(YB_MENU_BAR_CONTROL_QUIT,
+                                                          _snapshot->generation);
+    NSMenuItem *quit = yb_menu_item(@"Quit yabai", @selector(performMenuAction:), self, quit_target);
+    [quit setToolTip:@"Stop the running yabai application."];
+    [quit setAccessibilityLabel:@"Quit yabai"];
+    [_menu addItem:quit];
 }
 
 - (YBMenuBarScreenCell *)screenCellForDisplay:(const struct menu_bar_display *)display
@@ -1862,6 +1880,12 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         action.type = MENU_BAR_ACTION_SET_SPACE_FILTER;
         action.data.set_space_filter.filter = filter;
         break;
+    case YB_MENU_BAR_CONTROL_RELOAD_CONFIG:
+        action.type = MENU_BAR_ACTION_RELOAD_CONFIG;
+        break;
+    case YB_MENU_BAR_CONTROL_QUIT:
+        action.type = MENU_BAR_ACTION_QUIT;
+        break;
     default:
         return;
     }
@@ -1880,7 +1904,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                       space:target->yb_space_id
                       style:target->yb_style
                      filter:target->yb_filter];
-    if (kind == YB_MENU_BAR_CONTROL_FOCUS_SPACE && _is_tracking_menu) {
+    if ((kind == YB_MENU_BAR_CONTROL_FOCUS_SPACE ||
+         kind == YB_MENU_BAR_CONTROL_RELOAD_CONFIG ||
+         kind == YB_MENU_BAR_CONTROL_QUIT) && _is_tracking_menu) {
         [_menu cancelTrackingWithoutAnimation];
     }
 }
@@ -2209,6 +2235,20 @@ menu_bar_accessibility_preferences_changed(void)
         dispatch_async_f(dispatch_get_main_queue(), controller,
                          menu_bar_accessibility_preferences_changed_main);
     }
+}
+
+static void
+menu_bar_quit_main(void *context)
+{
+    (void) context;
+    [NSApp terminate:nil];
+}
+
+void
+menu_bar_request_quit(void)
+{
+    if (pthread_main_np()) menu_bar_quit_main(NULL);
+    else dispatch_async_f(dispatch_get_main_queue(), NULL, menu_bar_quit_main);
 }
 
 void

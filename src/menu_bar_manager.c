@@ -1,4 +1,5 @@
 #include "menu_bar_manager.h"
+#include "declarative_install.h"
 #include "event_loop.h"
 #include "space_manager.h"
 
@@ -64,6 +65,14 @@ struct menu_bar_manager_native_seams
 
 static struct menu_bar_manager_state g_menu_bar_manager;
 static struct menu_bar_manager_native_seams g_menu_bar_manager_native;
+
+#ifdef TESTS
+static bool (*menu_bar_manager_reload_config)(FILE *) = declarative_config_reload;
+static void (*menu_bar_manager_quit)(void) = menu_bar_request_quit;
+#else
+#define menu_bar_manager_reload_config declarative_config_reload
+#define menu_bar_manager_quit menu_bar_request_quit
+#endif
 
 static bool menu_bar_manager_valid_enabled(enum menu_bar_enabled enabled)
 {
@@ -1330,6 +1339,21 @@ enum menu_bar_tracking_transition menu_bar_manager_handle_action(struct menu_bar
             menu_bar_manager_set_action_failure(action->generation, "invalid menu bar space filter");
             menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG);
         }
+    } break;
+    case MENU_BAR_ACTION_RELOAD_CONFIG: {
+        if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;
+
+        if (menu_bar_manager_reload_config(NULL)) {
+            menu_bar_manager_clear_action_failure();
+        } else {
+            menu_bar_manager_set_action_failure(action->generation, "configuration reload failed");
+        }
+        menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG |
+                                    MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_SPACE |
+                                    MENU_BAR_DIRTY_WINDOW);
+    } break;
+    case MENU_BAR_ACTION_QUIT: {
+        if (menu_bar_manager_action_in_enabled_lifecycle(action)) menu_bar_manager_quit();
     } break;
     case MENU_BAR_ACTION_MENU_TRACKING_CHANGED: {
         if (!menu_bar_manager_action_in_enabled_lifecycle(action)) break;

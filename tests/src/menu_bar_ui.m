@@ -606,7 +606,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     NSMenu *menu = menu_bar_ui_state(controller).menu;
 
     TEST_CHECK(menu != nil);
-    TEST_CHECK([menu numberOfItems] == 8);
+    TEST_CHECK([menu numberOfItems] == 11);
 
     NSMenuItem *title = [menu itemAtIndex:0];
     TEST_CHECK([[title title] isEqualToString:@"yabai Spaces"]);
@@ -654,7 +654,19 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK([expanded state] == NSControlStateValueOn);
     [controller performMenuAction:automatic];
 
-    TEST_CHECK(log.count == 3);
+    TEST_CHECK([[menu itemAtIndex:8] isSeparatorItem]);
+    NSMenuItem *reload = [menu itemAtIndex:9];
+    NSMenuItem *quit = [menu itemAtIndex:10];
+    TEST_CHECK([[reload title] isEqualToString:@"Reload Configuration"]);
+    TEST_CHECK([reload action] == @selector(performMenuAction:));
+    TEST_CHECK([[reload accessibilityLabel] isEqualToString:@"Reload yabai configuration"]);
+    TEST_CHECK([[quit title] isEqualToString:@"Quit yabai"]);
+    TEST_CHECK([quit action] == @selector(performMenuAction:));
+    TEST_CHECK([[quit accessibilityLabel] isEqualToString:@"Quit yabai"]);
+    [controller performMenuAction:reload];
+    [controller performMenuAction:quit];
+
+    TEST_CHECK(log.count == 5);
     TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[0] == 60);
     TEST_CHECK(log.space_id[0] == 84);
@@ -662,10 +674,16 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK(log.generation[1] == 60);
     TEST_CHECK(log.type[2] == MENU_BAR_ACTION_SET_STYLE);
     TEST_CHECK(log.generation[2] == 60);
+    TEST_CHECK(log.type[3] == MENU_BAR_ACTION_RELOAD_CONFIG);
+    TEST_CHECK(log.generation[3] == 60);
+    TEST_CHECK(log.type[4] == MENU_BAR_ACTION_QUIT);
+    TEST_CHECK(log.generation[4] == 60);
     for (size_t i = 0; i < log.count; ++i) {
         TEST_CHECK(log.type[i] == MENU_BAR_ACTION_FOCUS_SPACE ||
                    log.type[i] == MENU_BAR_ACTION_SET_STYLE ||
                    log.type[i] == MENU_BAR_ACTION_SET_SPACE_FILTER ||
+                   log.type[i] == MENU_BAR_ACTION_RELOAD_CONFIG ||
+                   log.type[i] == MENU_BAR_ACTION_QUIT ||
                    log.type[i] == MENU_BAR_ACTION_MENU_TRACKING_CHANGED);
     }
     TEST_CHECK(!menu_bar_ui_state(controller).has_status_item);
@@ -1018,7 +1036,7 @@ test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
     TEST_CHECK(![[button toolTip] containsString:@"space 5"]);
 
     NSMenu *menu = menu_bar_ui_state(controller).menu;
-    TEST_CHECK([menu numberOfItems] == 12);
+    TEST_CHECK([menu numberOfItems] == 15);
     NSMenuItem *first_display = [menu itemAtIndex:2];
     NSMenuItem *second_display = [menu itemAtIndex:6];
     TEST_CHECK([[first_display title] containsString:@"Display 1"]);
@@ -1032,7 +1050,7 @@ test_automatic_layout_uses_width_budget_and_accessibility_summary(void)
     TEST_CHECK([[[menu itemAtIndex:7] title] containsString:@"4 chat"]);
     TEST_CHECK([[[menu itemAtIndex:8] title] containsString:@"5 focus"]);
 
-    NSMenu *style_menu = [[menu itemAtIndex:[menu numberOfItems] - 1] submenu];
+    NSMenu *style_menu = [[menu itemAtIndex:[menu numberOfItems] - 4] submenu];
     TEST_CHECK(style_menu != nil);
     TEST_CHECK([[style_menu itemAtIndex:0] state] == NSControlStateValueOn);
     TEST_CHECK([[style_menu itemAtIndex:1] state] == NSControlStateValueOff);

@@ -72,6 +72,21 @@ static int g_menu_bar_manager_test_topology_call_count;
 static int g_menu_bar_manager_test_focus_call_count;
 static uint64_t g_menu_bar_manager_test_focused_space_id;
 static enum space_op_error g_menu_bar_manager_test_focus_result;
+static int g_menu_bar_manager_test_reload_call_count;
+static bool g_menu_bar_manager_test_reload_result;
+static int g_menu_bar_manager_test_quit_call_count;
+
+static bool menu_bar_manager_test_reload(FILE *response)
+{
+    (void) response;
+    ++g_menu_bar_manager_test_reload_call_count;
+    return g_menu_bar_manager_test_reload_result;
+}
+
+static void menu_bar_manager_test_quit(void)
+{
+    ++g_menu_bar_manager_test_quit_call_count;
+}
 
 static CFArrayRef menu_bar_manager_test_managed_display_spaces(void)
 {
@@ -413,6 +428,11 @@ static void menu_bar_manager_test_reset(void)
     g_menu_bar_manager_test_focus_call_count = 0;
     g_menu_bar_manager_test_focused_space_id = 0;
     g_menu_bar_manager_test_focus_result = SPACE_OP_ERROR_SUCCESS;
+    g_menu_bar_manager_test_reload_call_count = 0;
+    g_menu_bar_manager_test_reload_result = true;
+    g_menu_bar_manager_test_quit_call_count = 0;
+    menu_bar_manager_reload_config = menu_bar_manager_test_reload;
+    menu_bar_manager_quit = menu_bar_manager_test_quit;
 }
 
 static void menu_bar_manager_test_install_native_seams(void)
@@ -428,6 +448,8 @@ static void menu_bar_manager_test_install_native_seams(void)
     g_menu_bar_manager_native.space_window_list = menu_bar_manager_test_space_window_list;
     g_menu_bar_manager_native.window_space_list = menu_bar_manager_test_window_space_list;
     g_menu_bar_manager_native.focus_space = menu_bar_manager_test_focus_space;
+    menu_bar_manager_reload_config = menu_bar_manager_test_reload;
+    menu_bar_manager_quit = menu_bar_manager_test_quit;
 }
 
 static void menu_bar_manager_test_begin_queue(void)
@@ -875,6 +897,46 @@ TEST_FUNC(menu_bar_manager_focus_action_switches_space, {
     TEST_CHECK(g_menu_bar_manager.dirty_reasons,
                MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_FOCUS | MENU_BAR_DIRTY_SPACE);
     TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    menu_bar_manager_test_end_queue();
+    menu_bar_manager_test_reset();
+});
+
+TEST_FUNC(menu_bar_manager_reload_and_quit_actions_are_generation_safe, {
+    menu_bar_manager_test_reset();
+    menu_bar_manager_test_begin_queue();
+    menu_bar_manager_test_install_native_seams();
+    menu_bar_manager_test_set_enabled_snapshot(5, 5);
+
+    struct menu_bar_action *stale_reload = menu_bar_manager_test_action(MENU_BAR_ACTION_RELOAD_CONFIG, 4);
+    menu_bar_manager_handle_action(stale_reload);
+    struct menu_bar_action *stale_quit = menu_bar_manager_test_action(MENU_BAR_ACTION_QUIT, 4);
+    menu_bar_manager_handle_action(stale_quit);
+    TEST_CHECK(g_menu_bar_manager_test_reload_call_count, 0);
+    TEST_CHECK(g_menu_bar_manager_test_quit_call_count, 0);
+
+    g_menu_bar_manager_test_reload_result = false;
+    struct menu_bar_action *failed_reload = menu_bar_manager_test_action(MENU_BAR_ACTION_RELOAD_CONFIG, 5);
+    menu_bar_manager_handle_action(failed_reload);
+    TEST_CHECK(g_menu_bar_manager_test_reload_call_count, 1);
+    TEST_CHECK_STRING(g_menu_bar_manager.action_failure_text, "configuration reload failed");
+    TEST_CHECK(g_menu_bar_manager.dirty_reasons,
+               MENU_BAR_DIRTY_ACTION | MENU_BAR_DIRTY_CONFIG | MENU_BAR_DIRTY_TOPOLOGY |
+               MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    g_menu_bar_manager.refresh_pending = false;
+    g_menu_bar_manager.dirty_reasons = 0;
+    g_menu_bar_manager_test_reload_result = true;
+    struct menu_bar_action *reload = menu_bar_manager_test_action(MENU_BAR_ACTION_RELOAD_CONFIG, 5);
+    menu_bar_manager_handle_action(reload);
+    TEST_CHECK(g_menu_bar_manager_test_reload_call_count, 2);
+    TEST_CHECK(g_menu_bar_manager.action_failure_text == NULL, true);
+    TEST_CHECK(menu_bar_manager_test_count_events(MENU_BAR_REFRESH), 1);
+
+    struct menu_bar_action *quit = menu_bar_manager_test_action(MENU_BAR_ACTION_QUIT, 5);
+    menu_bar_manager_handle_action(quit);
+    TEST_CHECK(g_menu_bar_manager_test_quit_call_count, 1);
 
     menu_bar_manager_test_end_queue();
     menu_bar_manager_test_reset();

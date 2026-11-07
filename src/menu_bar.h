@@ -29,6 +29,8 @@ enum menu_bar_action_type
     MENU_BAR_ACTION_FOCUS_SPACE,
     MENU_BAR_ACTION_SET_STYLE,
     MENU_BAR_ACTION_SET_SPACE_FILTER,
+    MENU_BAR_ACTION_RELOAD_CONFIG,
+    MENU_BAR_ACTION_QUIT,
     MENU_BAR_ACTION_MENU_TRACKING_CHANGED
 };
 
@@ -110,6 +112,9 @@ void menu_bar_publish_snapshot(struct menu_bar_snapshot *snapshot);
  * changes. This never requests a new model or WindowServer inventory snapshot. */
 void menu_bar_accessibility_preferences_changed(void);
 void menu_bar_keyboard_mode_changed(const char *name);
+
+/* Thread-safe request to terminate the AppKit application on the main thread. */
+void menu_bar_request_quit(void);
 
 #ifdef __cplusplus
 }
