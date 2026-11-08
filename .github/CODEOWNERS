@@ -1,0 +1,5 @@
+# Release signing changes require explicit review by the certificate owner.
+/.github/workflows/release.yml @markfeinstein
+/assets/Info.plist @markfeinstein
+/nix/packages/app-bundle.nix @markfeinstein
+/nix/packages/prebuilt-app.nix @markfeinstein

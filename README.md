@@ -51,7 +51,7 @@ The flake supports `aarch64-darwin` and `x86_64-darwin`. It requires the Xcode c
 
 ### Home Manager
 
-The flake exports `homeManagerModules.yabai`. The module defaults to `head`, which means the exact source revision pinned by the consumer's `yabai` flake input; updating that input advances the build. Source builds are ad-hoc signed development bundles until CI publishes immutable Developer ID-signed artifacts.
+The flake exports `homeManagerModules.yabai`. The module defaults to `head`, which means the exact source revision pinned by the consumer's `yabai` flake input; updating that input advances the build. Source builds are ad-hoc signed development bundles. Version tags publish immutable Developer ID-signed `Yabai.app` archives through the protected `release-signing` GitHub environment.
 
 ```nix
 {
@@ -115,13 +115,13 @@ services.yabai.install = {
 };
 ```
 
-A future signed release uses an archive whose root contains `Yabai.app`:
+A signed release uses an archive whose root contains `Yabai.app`:
 
 ```nix
 services.yabai.install = {
   source = "release";
   release = {
-    url = "https://github.com/markfeinstein/yabai/releases/download/v7.2.0/Yabai.zip";
+    url = "https://github.com/markfeinstein/yabai/releases/download/v7.2.0/Yabai-v7.2.0.zip";
     hash = "sha256-...";
     version = "7.2.0";
     # appPath = "Yabai.app"; # relative to the unpacked archive root
@@ -129,7 +129,29 @@ services.yabai.install = {
 };
 ```
 
-Nightly builds use the equivalent `install.nightly` options. Artifact hashes are mandatory: the module never follows an unpinned mutable download. The archive is verified with `codesign --verify --deep --strict` while packaging and is not stripped, re-signed, or otherwise modified.
+Nightly builds use the equivalent `install.nightly` options. Artifact hashes are mandatory: the module never follows an unpinned mutable download. Release and nightly packages require the Developer ID identity `com.markfeinstein.yabai` from Apple team `GYXXG6S7KM`; the executable and enclosing bundle are checked against that requirement before and after the archive is copied into the Nix store. The archive is not stripped, re-signed, or otherwise modified.
+
+### Protected release signing
+
+Pushing a `v<major>.<minor>.<patch>` tag starts `.github/workflows/release.yml`. An unprivileged job builds and tests the universal binary, stages `Yabai.app`, and uploads a one-day unsigned artifact. The release job cannot read signing or notarization credentials until the `release-signing` environment is approved. It imports the certificate into an ephemeral keychain, signs both the executable and bundle as `com.markfeinstein.yabai` with hardened runtime and a secure timestamp, verifies the Apple team and designated requirement, and submits a temporary ZIP to Apple's automated notary service. An accepted submission is logged, stapled to `Yabai.app`, validated with `stapler` and Gatekeeper, and repackaged as `Yabai-<tag>.zip` with its SHA-256 checksum. Temporary signing and notarization credentials are deleted before the runner exits.
+
+Configure the `release-signing` environment with these non-secret variables:
+
+- `SIGNING_IDENTIFIER=com.markfeinstein.yabai`
+- `APPLE_TEAM_ID=GYXXG6S7KM`
+- `SIGNING_IDENTITY_SHA1` set to the Developer ID Application certificate fingerprint
+- `APPLE_NOTARY_KEY_ID` set to the App Store Connect Team API Key ID
+- `APPLE_NOTARY_ISSUER_ID` set to the App Store Connect Team API Issuer ID
+
+Configure these environment secrets without placing any value in the repository:
+
+- `MACOS_CERTIFICATE_P12_BASE64`, containing the exported Developer ID Application identity
+- `MACOS_CERTIFICATE_PASSWORD`, containing the P12 export password
+- `APPLE_NOTARY_API_KEY_BASE64`, containing the one-time-download App Store Connect Team API private key
+
+Individual App Store Connect API keys cannot authenticate `notarytool`; use a Team Key with the least role that permits notarization. Because notarization requires hardened runtime, exercise the notarized build on a prepared Mac before treating a release as validated, including Accessibility-driven window management and any optional scripting-addition workflow. The workflow submits once, records the submission ID, and waits up to 20 minutes. If waiting times out, Apple continues processing the existing submission and the workflow fails without resubmitting it. Submission, result, and notary log JSON are retained as a workflow artifact for 30 days. The notary service typically completes within 5–15 minutes, but only an `Accepted` result can reach release publication.
+
+The environment should require the certificate owner as reviewer, permit self-review when that owner is the sole maintainer, and restrict deployments to `v*` tags. After publishing, calculate the unpacked Nix hash for the immutable release URL and pin it in `services.yabai.install.release.hash`.
 
 The module manages only the user service. It intentionally does not install the optional scripting addition, which requires root access and a separate SIP-aware system configuration.
 

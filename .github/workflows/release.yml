@@ -1,0 +1,297 @@
+name: signed-release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build unsigned application
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must match v<major>.<minor>.<patch>" >&2
+            exit 1
+          fi
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          make test
+          make release
+          for arch in arm64 x86_64; do
+            lipo bin/release/yabai -verify_arch "$arch"
+          done
+
+      - name: Stage unsigned application
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          app="$RUNNER_TEMP/unsigned/Yabai.app"
+          mkdir -p "$app/Contents/MacOS"
+          install -m 0755 bin/release/yabai "$app/Contents/MacOS/yabai"
+          install -m 0644 assets/Info.plist "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName Yabai" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $version" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $version" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$app/Contents/Info.plist"
+          /usr/bin/plutil -lint "$app/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = \
+            com.markfeinstein.yabai
+          /usr/bin/ditto -c -k --keepParent "$app" "$RUNNER_TEMP/unsigned-Yabai.zip"
+
+      - name: Upload unsigned application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-yabai
+          path: ${{ runner.temp }}/unsigned-Yabai.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    name: Sign, notarize, and publish application
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: release-signing
+    permissions:
+      contents: write
+    env:
+      SIGNING_IDENTIFIER: ${{ vars.SIGNING_IDENTIFIER }}
+      SIGNING_IDENTITY: ${{ vars.SIGNING_IDENTITY_SHA1 }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+    steps:
+      - name: Download unsigned application
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-yabai
+          path: ${{ runner.temp }}/download
+
+      - name: Extract unsigned application
+        run: |
+          set -euo pipefail
+          /usr/bin/ditto -x -k \
+            "$RUNNER_TEMP/download/unsigned-Yabai.zip" \
+            "$RUNNER_TEMP/signing"
+          app="$RUNNER_TEMP/signing/Yabai.app"
+          test -d "$app"
+          test -x "$app/Contents/MacOS/yabai"
+          /usr/bin/xattr -cr "$app"
+          echo "SIGNED_APP=$app" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID identity
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${CERTIFICATE_BASE64:?missing MACOS_CERTIFICATE_P12_BASE64}"
+          : "${CERTIFICATE_PASSWORD:?missing MACOS_CERTIFICATE_PASSWORD}"
+          : "${SIGNING_IDENTIFIER:?missing SIGNING_IDENTIFIER}"
+          : "${SIGNING_IDENTITY:?missing SIGNING_IDENTITY_SHA1}"
+          : "${APPLE_TEAM_ID:?missing APPLE_TEAM_ID}"
+
+          certificate="$RUNNER_TEMP/developer-id-application.p12"
+          intermediate="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          keychain="$RUNNER_TEMP/yabai-signing.keychain-db"
+          keychain_password=$(/usr/bin/openssl rand -hex 32)
+          echo "::add-mask::$keychain_password"
+
+          printf '%s' "$CERTIFICATE_BASE64" | /usr/bin/base64 --decode -o "$certificate"
+          /usr/bin/curl --fail --location --silent --show-error --max-time 60 \
+            --output "$intermediate" \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          printf '%s  %s\n' \
+            F16CD3C54C7F83CEA4BF1A3E6A0819C8AAA8E4A1528FD144715F350643D2DF3A \
+            "$intermediate" | /usr/bin/shasum -a 256 -c -
+
+          /usr/bin/security create-keychain -p "$keychain_password" "$keychain"
+          /usr/bin/security set-keychain-settings -lut 21600 "$keychain"
+          /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
+          /usr/bin/security import "$intermediate" -k "$keychain"
+          /usr/bin/security import "$certificate" \
+            -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          /usr/bin/security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$keychain_password" \
+            "$keychain"
+          /usr/bin/security list-keychains -d user -s "$keychain"
+          /usr/bin/security find-identity -v -p codesigning "$keychain" \
+            | /usr/bin/grep -F "$SIGNING_IDENTITY"
+
+          {
+            echo "SIGNING_KEYCHAIN=$keychain"
+            echo "SIGNING_CERTIFICATE=$certificate"
+            echo "SIGNING_INTERMEDIATE=$intermediate"
+          } >> "$GITHUB_ENV"
+
+      - name: Sign application
+        run: |
+          set -euo pipefail
+          executable="$SIGNED_APP/Contents/MacOS/yabai"
+          /usr/bin/codesign \
+            --force \
+            --sign "$SIGNING_IDENTITY" \
+            --keychain "$SIGNING_KEYCHAIN" \
+            --identifier "$SIGNING_IDENTIFIER" \
+            --options runtime \
+            --timestamp \
+            "$executable"
+          /usr/bin/codesign \
+            --force \
+            --sign "$SIGNING_IDENTITY" \
+            --keychain "$SIGNING_KEYCHAIN" \
+            --identifier "$SIGNING_IDENTIFIER" \
+            --options runtime \
+            --timestamp \
+            "$SIGNED_APP"
+
+      - name: Verify signed application
+        run: |
+          set -euo pipefail
+          executable="$SIGNED_APP/Contents/MacOS/yabai"
+          requirement="identifier \"$SIGNING_IDENTIFIER\" and anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
+          /usr/bin/codesign --verify --strict --verbose=4 -R "=$requirement" "$executable"
+          /usr/bin/codesign --verify --deep --strict --verbose=4 -R "=$requirement" "$SIGNED_APP"
+          /usr/bin/codesign -dvvv -r- "$executable"
+          /usr/bin/codesign -dvvv -r- "$SIGNED_APP"
+          "$executable" --version
+
+      - name: Submit application for notarization
+        env:
+          NOTARY_API_KEY_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          : "${NOTARY_API_KEY_BASE64:?missing APPLE_NOTARY_API_KEY_BASE64}"
+          : "${APPLE_NOTARY_KEY_ID:?missing APPLE_NOTARY_KEY_ID}"
+          : "${APPLE_NOTARY_ISSUER_ID:?missing APPLE_NOTARY_ISSUER_ID}"
+
+          notarization="$RUNNER_TEMP/notarization"
+          api_key="$RUNNER_TEMP/AuthKey_$APPLE_NOTARY_KEY_ID.p8"
+          archive="$notarization/Yabai-notarization.zip"
+          submission="$notarization/submission.json"
+          mkdir -p "$notarization"
+          printf '%s' "$NOTARY_API_KEY_BASE64" | /usr/bin/base64 --decode -o "$api_key"
+          /bin/chmod 0600 "$api_key"
+          /usr/bin/grep -q '^-----BEGIN PRIVATE KEY-----$' "$api_key"
+          {
+            echo "NOTARY_API_KEY=$api_key"
+            echo "NOTARY_DIRECTORY=$notarization"
+          } >> "$GITHUB_ENV"
+          /usr/bin/ditto -c -k --keepParent "$SIGNED_APP" "$archive"
+
+          xcrun notarytool submit "$archive" \
+            --key "$api_key" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --no-progress \
+            --output-format json > "$submission"
+          submission_id=$(/usr/bin/plutil -extract id raw -o - "$submission")
+          test -n "$submission_id"
+          echo "NOTARY_SUBMISSION_ID=$submission_id" >> "$GITHUB_ENV"
+          echo "Apple notary submission: $submission_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for notarization
+        run: |
+          set -euo pipefail
+          result="$NOTARY_DIRECTORY/result.json"
+          log="$NOTARY_DIRECTORY/log.json"
+          wait_status=0
+          xcrun notarytool wait "$NOTARY_SUBMISSION_ID" \
+            --key "$NOTARY_API_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --timeout 20m \
+            --no-progress \
+            --output-format json > "$result" || wait_status=$?
+
+          if [ "$wait_status" -ne 0 ]; then
+            xcrun notarytool log "$NOTARY_SUBMISSION_ID" "$log" \
+              --key "$NOTARY_API_KEY" \
+              --key-id "$APPLE_NOTARY_KEY_ID" \
+              --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            echo "Notarization wait failed or timed out for submission $NOTARY_SUBMISSION_ID." >&2
+            echo "Apple continues processing a timed-out submission; do not resubmit it automatically." >&2
+            exit "$wait_status"
+          fi
+
+          status=$(/usr/bin/plutil -extract status raw -o - "$result")
+          xcrun notarytool log "$NOTARY_SUBMISSION_ID" "$log" \
+            --key "$NOTARY_API_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID"
+          if [ "$status" != Accepted ]; then
+            echo "Apple rejected notarization for submission $NOTARY_SUBMISSION_ID: $status" >&2
+            exit 1
+          fi
+          test "$(/usr/bin/plutil -extract status raw -o - "$log")" = Accepted
+
+      - name: Upload notarization evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notarization-${{ github.ref_name }}
+          path: ${{ runner.temp }}/notarization/*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Staple and validate notarization ticket
+        run: |
+          set -euo pipefail
+          xcrun stapler staple -v "$SIGNED_APP"
+          xcrun stapler validate -v "$SIGNED_APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=4 "$SIGNED_APP"
+          /usr/sbin/spctl --assess --type execute --verbose=4 "$SIGNED_APP"
+
+      - name: Create notarized release archive
+        id: archive
+        run: |
+          set -euo pipefail
+          asset="Yabai-$GITHUB_REF_NAME.zip"
+          checksum="$asset.sha256"
+          /usr/bin/ditto -c -k --keepParent "$SIGNED_APP" "$asset"
+          /usr/bin/shasum -a 256 "$asset" > "$checksum"
+          {
+            echo "asset=$asset"
+            echo "checksum=$checksum"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.archive.outputs.asset }}
+          CHECKSUM: ${{ steps.archive.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$ASSET" \
+            "$CHECKSUM"
+
+      - name: Delete temporary signing material
+        if: ${{ always() }}
+        run: |
+          if test -n "${SIGNING_KEYCHAIN:-}"; then
+            /usr/bin/security delete-keychain "$SIGNING_KEYCHAIN" || true
+          fi
+          test -z "${SIGNING_CERTIFICATE:-}" || /bin/rm -f "$SIGNING_CERTIFICATE"
+          test -z "${SIGNING_INTERMEDIATE:-}" || /bin/rm -f "$SIGNING_INTERMEDIATE"
+          test -z "${NOTARY_API_KEY:-}" || /bin/rm -f "$NOTARY_API_KEY"
