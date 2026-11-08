@@ -706,7 +706,6 @@ static int service_restart(void)
 
 typedef int service_exec_fn(char *const argv[], bool suppress_output);
 typedef int service_capture_fn(char *const argv[], bool suppress_stderr, char *output, size_t capacity);
-typedef int service_spawn_fn(char *const argv[]);
 
 enum service_quit_result
 {
@@ -844,17 +843,15 @@ enum service_restart_result
     SERVICE_RESTART_FAILED
 };
 
-static int service_spawn(char *const argv[])
-{
-    pid_t pid = 0;
-    extern char **environ;
-    return posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
-}
-
+/* Restart the launchd job that owns this process. kickstart -k makes launchd
+ * terminate this process with SIGTERM, which yabai leaves at its default
+ * action, so waiting for launchctl cannot deadlock: either launchd kills us
+ * mid-wait (success), or launchctl reports a rejection that the menu can
+ * show, or the bounded wait expires. */
 static enum service_restart_result service_restart_for_menu_with_ops(const char *label, uid_t uid,
                                                                      pid_t pid,
                                                                      service_capture_fn capture_fn,
-                                                                     service_spawn_fn spawn_fn)
+                                                                     service_exec_fn exec_fn)
 {
     char service_target[MAXLEN];
     bool too_long;
@@ -869,7 +866,7 @@ static enum service_restart_result service_restart_for_menu_with_ops(const char 
     }
 
     const char *const restart_args[] = { _PATH_LAUNCHCTL, "kickstart", "-k", service_target, NULL };
-    return spawn_fn((char *const *) restart_args) == 0
+    return exec_fn((char *const *) restart_args, false) == 0
          ? SERVICE_RESTART_REQUESTED
          : SERVICE_RESTART_FAILED;
 }
@@ -877,7 +874,7 @@ static enum service_restart_result service_restart_for_menu_with_ops(const char 
 static enum service_restart_result service_restart_for_menu(void)
 {
     return service_restart_for_menu_with_ops(getenv("XPC_SERVICE_NAME"), getuid(), getpid(),
-                                             service_menu_capture, service_spawn);
+                                             service_menu_capture, service_menu_exec);
 }
 
 static int service_stop(void)
