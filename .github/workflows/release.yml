@@ -352,6 +352,16 @@ jobs:
             echo "checksum=$checksum"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Upload notarized release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets-${{ needs.build.outputs.release_tag }}
+          path: |
+            ${{ steps.archive.outputs.asset }}
+            ${{ steps.archive.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -361,6 +371,7 @@ jobs:
           set -euo pipefail
           if [ "$RELEASE_CHANNEL" = nightly ]; then
             gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Nightly $BUILD_VERSION" \
               --prerelease \
@@ -369,6 +380,7 @@ jobs:
               "$CHECKSUM"
           else
             gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "$RELEASE_TAG" \
               --generate-notes \
