@@ -9,7 +9,7 @@ let
   infoPlist = (formats.plist { }).generate "Info.plist" {
     CFBundleDevelopmentRegion = "en";
     CFBundleExecutable = "yabai";
-    CFBundleIdentifier = "com.asmvik.yabai";
+    CFBundleIdentifier = "com.markfeinstein.yabai";
     CFBundleInfoDictionaryVersion = "6.0";
     CFBundleName = "Yabai";
     CFBundlePackageType = "APPL";
@@ -38,7 +38,7 @@ stdenvNoCC.mkDerivation {
     # publishes immutable Developer ID-signed application bundles. Give the
     # bundle a coherent ad-hoc identity without pretending it is a release.
     /usr/bin/codesign --force --sign - --timestamp=none \
-      --identifier com.asmvik.yabai "$app/Contents/MacOS/yabai"
+      --identifier com.markfeinstein.yabai "$app/Contents/MacOS/yabai"
     /usr/bin/codesign --force --sign - --timestamp=none "$app"
 
     ln -s ../Applications/Yabai.app/Contents/MacOS/yabai "$out/bin/yabai"

@@ -92,7 +92,7 @@ case " $* " in
             if [ "$previous" = -R ]; then requirement=$arg; break; fi
             previous=$arg
         done
-        [ "$requirement" = "${TRUSTED_REQUIREMENT:-certificate leaf = H\"AAAA\"}" ]
+        [ "$requirement" = "=${TRUSTED_REQUIREMENT:-certificate leaf = H\"AAAA\"}" ]
         grep -q '^# fixture-signature:AAAA$' "$target"
         [ "$count" != "${FAIL_VERIFY_AT:-0}" ]
         ;;

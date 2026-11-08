@@ -104,6 +104,8 @@ assert nightlyPackage.installSource == "nightly";
 assert nightlyPackage.version == "7.2.0-nightly";
 assert releasePackage.installSource == "release";
 assert releasePackage.version == "7.2.0";
+assert releasePackage.signingIdentifier == "com.markfeinstein.yabai";
+assert releasePackage.teamIdentifier == "GYXXG6S7KM";
 assert stableService.config.services.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert toString head.config.xdg.configFile."yabai/yabai.jsonc".source != "";

@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>yabai</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.asmvik.yabai</string>
+	<string>com.markfeinstein.yabai</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
