@@ -664,7 +664,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK([[reload accessibilityLabel] isEqualToString:@"Reload yabai configuration"]);
     TEST_CHECK([[restart title] isEqualToString:@"Restart yabai"]);
     TEST_CHECK([restart action] == @selector(performMenuAction:));
-    TEST_CHECK([[restart toolTip] isEqualToString:@"Restart yabai through its active launchd service."]);
+    TEST_CHECK([[restart toolTip] isEqualToString:@"Restart yabai through its launchd service, or relaunch it directly."]);
     TEST_CHECK([[restart accessibilityLabel] isEqualToString:@"Restart yabai"]);
     TEST_CHECK([[quit title] isEqualToString:@"Quit yabai"]);
     TEST_CHECK([quit action] == @selector(performMenuAction:));

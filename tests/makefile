@@ -6,7 +6,7 @@ CONFIG ?= ordinary
 ARCH ?=
 CC ?= clang
 ARCH_FLAG = $(if $(ARCH),-arch $(ARCH),)
-STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32
+STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32 -Wshadow
 # Test fixtures deliberately use partial zero-initialized aggregates, legacy
 # compatibility APIs, and callback signatures with unused parameters. Keep
 # those narrow exceptions while making every other core-test warning fatal.

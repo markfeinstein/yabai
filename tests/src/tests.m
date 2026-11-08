@@ -1012,8 +1012,8 @@ static int g_service_quit_test_exec_results[3];
 static int g_service_quit_test_capture_call_count;
 static int g_service_quit_test_capture_result;
 static const char *g_service_quit_test_capture_output;
-static int g_service_restart_test_spawn_call_count;
-static int g_service_restart_test_spawn_result;
+static int g_service_restart_test_exec_call_count;
+static int g_service_restart_test_exec_result;
 static bool g_service_quit_test_valid;
 
 static int service_quit_test_exec(char *const argv[], bool suppress_output)
@@ -1050,17 +1050,17 @@ static int service_quit_test_capture(char *const argv[], bool suppress_stderr,
     return g_service_quit_test_capture_result;
 }
 
-static int service_restart_test_spawn(char *const argv[])
+static int service_restart_test_exec(char *const argv[], bool suppress_output)
 {
-    ++g_service_restart_test_spawn_call_count;
+    ++g_service_restart_test_exec_call_count;
     if (!argv || !argv[0] || strcmp(argv[0], _PATH_LAUNCHCTL) != 0 ||
         !argv[1] || strcmp(argv[1], "kickstart") != 0 ||
         !argv[2] || strcmp(argv[2], "-k") != 0 ||
-        !argv[3] || strcmp(argv[3], "gui/501/org.nixos.yabai") != 0 || argv[4]) {
+        !argv[3] || strcmp(argv[3], "gui/501/org.nixos.yabai") != 0 || argv[4] || suppress_output) {
         g_service_quit_test_valid = false;
         return 1;
     }
-    return g_service_restart_test_spawn_result;
+    return g_service_restart_test_exec_result;
 }
 
 static void service_quit_test_reset(void)
@@ -1070,8 +1070,8 @@ static void service_quit_test_reset(void)
     g_service_quit_test_capture_call_count = 0;
     g_service_quit_test_capture_result = 0;
     g_service_quit_test_capture_output = "service = {\n\tpid = 777\n}\n";
-    g_service_restart_test_spawn_call_count = 0;
-    g_service_restart_test_spawn_result = 0;
+    g_service_restart_test_exec_call_count = 0;
+    g_service_restart_test_exec_result = 0;
     g_service_quit_test_valid = true;
 }
 
@@ -1113,6 +1113,8 @@ TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777\n}\n", 777), true);
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 778\n}\n", 777), false);
     TEST_CHECK(service_print_output_has_pid("service = {\n\tpid = 777x\n}\n", 777), false);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tsubprocesses = {\n\t\tpid = 777\n\t}\n}\n", 777), false);
+    TEST_CHECK(service_print_output_has_pid("service = {\n\tpid-local endpoints = {\n\t}\n\tpid = 777\n}\n", 777), true);
 
     const char *unmanaged_labels[] = { NULL, "", "0", "application.com.asmvik.yabai.123" };
     for (size_t i = 0; i < array_count(unmanaged_labels); ++i) {
@@ -1141,6 +1143,27 @@ TEST_FUNC(service_quit_verifies_owner_and_restores_failed_bootout,
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
     TEST_CHECK(g_service_quit_test_exec_call_count, 0);
     TEST_CHECK(g_service_quit_test_valid, true);
+
+    service_quit_test_reset();
+    g_service_quit_test_capture_result = SAFE_EXEC_TIMED_OUT;
+    TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                               service_quit_test_exec, service_quit_test_capture),
+               SERVICE_QUIT_FAILED);
+    TEST_CHECK(g_service_quit_test_exec_call_count, 0);
+
+    char *oversized_description = malloc(SERVICE_PRINT_CAPACITY + 1);
+    TEST_CHECK(oversized_description != NULL, true);
+    if (oversized_description) {
+        memset(oversized_description, 'x', SERVICE_PRINT_CAPACITY);
+        oversized_description[SERVICE_PRINT_CAPACITY] = '\0';
+        service_quit_test_reset();
+        g_service_quit_test_capture_output = oversized_description;
+        TEST_CHECK(service_stop_for_quit_with_exec("org.nixos.yabai", 501, 777,
+                                                   service_quit_test_exec, service_quit_test_capture),
+                   SERVICE_QUIT_FAILED);
+        TEST_CHECK(g_service_quit_test_exec_call_count, 0);
+        free(oversized_description);
+    }
 
     service_quit_test_reset();
     g_service_quit_test_exec_results[0] = 7;
@@ -1181,38 +1204,126 @@ TEST_FUNC(service_restart_requires_the_owning_launchd_job,
     service_quit_test_reset();
     TEST_CHECK(service_restart_for_menu_with_ops(NULL, 501, 777,
                                                  service_quit_test_capture,
-                                                 service_restart_test_spawn),
+                                                 service_restart_test_exec),
                SERVICE_RESTART_UNMANAGED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 0);
-    TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
+    TEST_CHECK(g_service_restart_test_exec_call_count, 0);
 
     service_quit_test_reset();
     g_service_quit_test_capture_output = "service = {\n\tpid = 999\n}\n";
     TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
                                                  service_quit_test_capture,
-                                                 service_restart_test_spawn),
+                                                 service_restart_test_exec),
                SERVICE_RESTART_UNMANAGED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
-    TEST_CHECK(g_service_restart_test_spawn_call_count, 0);
+    TEST_CHECK(g_service_restart_test_exec_call_count, 0);
 
     service_quit_test_reset();
-    g_service_restart_test_spawn_result = 7;
+    g_service_quit_test_capture_result = SAFE_EXEC_TIMED_OUT;
     TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
                                                  service_quit_test_capture,
-                                                 service_restart_test_spawn),
+                                                 service_restart_test_exec),
+               SERVICE_RESTART_FAILED);
+    TEST_CHECK(g_service_restart_test_exec_call_count, 0);
+
+    service_quit_test_reset();
+    g_service_restart_test_exec_result = 7;
+    TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
+                                                 service_quit_test_capture,
+                                                 service_restart_test_exec),
                SERVICE_RESTART_FAILED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
-    TEST_CHECK(g_service_restart_test_spawn_call_count, 1);
+    TEST_CHECK(g_service_restart_test_exec_call_count, 1);
     TEST_CHECK(g_service_quit_test_valid, true);
 
     service_quit_test_reset();
     TEST_CHECK(service_restart_for_menu_with_ops("org.nixos.yabai", 501, 777,
                                                  service_quit_test_capture,
-                                                 service_restart_test_spawn),
+                                                 service_restart_test_exec),
                SERVICE_RESTART_REQUESTED);
     TEST_CHECK(g_service_quit_test_capture_call_count, 1);
-    TEST_CHECK(g_service_restart_test_spawn_call_count, 1);
+    TEST_CHECK(g_service_restart_test_exec_call_count, 1);
     TEST_CHECK(g_service_quit_test_valid, true);
+});
+
+static char *g_service_relaunch_test_argv[32];
+static int g_service_relaunch_test_argc;
+static int g_service_relaunch_test_result;
+
+static int service_relaunch_test_spawn(char *const argv[])
+{
+    g_service_relaunch_test_argc = 0;
+    while (argv[g_service_relaunch_test_argc] && g_service_relaunch_test_argc < 31) {
+        g_service_relaunch_test_argv[g_service_relaunch_test_argc] = strdup(argv[g_service_relaunch_test_argc]);
+        ++g_service_relaunch_test_argc;
+    }
+    g_service_relaunch_test_argv[g_service_relaunch_test_argc] = NULL;
+    return g_service_relaunch_test_result;
+}
+
+static void service_relaunch_test_reset(void)
+{
+    for (int i = 0; i < g_service_relaunch_test_argc; ++i) free(g_service_relaunch_test_argv[i]);
+    g_service_relaunch_test_argc = 0;
+    g_service_relaunch_test_result = 0;
+}
+
+TEST_FUNC(service_relaunch_reopens_unmanaged_instances,
+{
+    char bundle[PATH_MAX];
+    TEST_CHECK(service_bundle_path("/Applications/Yabai.app/Contents/MacOS/yabai", bundle, sizeof(bundle)), true);
+    TEST_CHECK(strcmp(bundle, "/Applications/Yabai.app"), 0);
+    TEST_CHECK(service_bundle_path("/usr/local/bin/yabai", bundle, sizeof(bundle)), false);
+
+    /* LaunchServices instances reopen the bundle as a new instance. */
+    char *argv[] = { "/Applications/Yabai.app/Contents/MacOS/yabai", "-psn_0_1", NULL };
+    service_relaunch_test_reset();
+    TEST_CHECK(service_relaunch_unmanaged_with_ops("application.com.asmvik.yabai.1.2", 4242,
+                                                   "/Applications/Yabai.app/Contents/MacOS/yabai",
+                                                   2, argv, service_relaunch_test_spawn), true);
+    TEST_CHECK(g_service_relaunch_test_argc, 9);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[0], "/bin/sh"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[4], "4242"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[6], "/usr/bin/open"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[7], "-n"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[8], "/Applications/Yabai.app"), 0);
+
+    /* Command-line instances rerun the executable with their arguments. */
+    char *cli_argv[] = { "yabai", "--config-jsonc", "/tmp/a b.jsonc", NULL };
+    service_relaunch_test_reset();
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "/usr/local/bin/yabai",
+                                                   3, cli_argv, service_relaunch_test_spawn), true);
+    TEST_CHECK(g_service_relaunch_test_argc, 9);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[6], "/usr/local/bin/yabai"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[7], "--config-jsonc"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[8], "/tmp/a b.jsonc"), 0);
+
+    service_relaunch_test_reset();
+    g_service_relaunch_test_result = 1;
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "/usr/local/bin/yabai",
+                                                   1, cli_argv, service_relaunch_test_spawn), false);
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "", 1, cli_argv,
+                                                   service_relaunch_test_spawn), false);
+    service_relaunch_test_reset();
+
+    /* The real helper script waits for the PID, then execs the command. */
+    char marker[] = "/tmp/yabai-relaunch-test.XXXXXX";
+    int fd = mkstemp(marker);
+    TEST_CHECK(fd >= 0, true);
+    if (fd >= 0) {
+        close(fd);
+        unlink(marker);
+        char *touch_argv[] = { "touch", marker, NULL };
+        TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 999999, "/usr/bin/touch",
+                                                       2, touch_argv, service_spawn_detached), true);
+        bool created = false;
+        for (int i = 0; i < 50 && !created; ++i) {
+            created = access(marker, F_OK) == 0;
+            if (!created) usleep(100000);
+        }
+        TEST_CHECK(created, true);
+        unlink(marker);
+    }
 });
 
 TEST_FUNC(safe_exec_reports_child_outcomes,
@@ -1245,8 +1356,39 @@ TEST_FUNC(safe_exec_reports_child_outcomes,
 
     char output[8];
     char *captured[] = { "/bin/sh", "-c", "printf abcdefgh; printf hidden >&2", NULL };
-    TEST_CHECK(safe_exec_capture(captured, true, output, sizeof(output)), 0);
+    TEST_CHECK(safe_exec_capture_until(captured, true, output, sizeof(output), 0), 0);
     TEST_CHECK(strcmp(output, "abcdefg"), 0);
+});
+
+TEST_FUNC(safe_exec_deadline_bounds_stalled_commands,
+{
+    char *stalled[] = { "/bin/sleep", "30", NULL };
+    char *quick[] = { "/bin/sh", "-c", "exit 3", NULL };
+    char *daemonized[] = { "/bin/sh", "-c", "printf ready; /bin/sleep 3 & exit 0", NULL };
+
+    struct sigaction previous_action;
+    struct sigaction ignored_action = { .sa_handler = SIG_IGN };
+    sigemptyset(&ignored_action.sa_mask);
+    TEST_CHECK(sigaction(SIGCHLD, NULL, &previous_action), 0);
+    TEST_CHECK(sigaction(SIGCHLD, &ignored_action, NULL), 0);
+
+    uint64_t start = socket_io_monotonic_ns();
+    TEST_CHECK(safe_exec_until(stalled, true, 200), SAFE_EXEC_TIMED_OUT);
+    uint64_t elapsed_ms = (socket_io_monotonic_ns() - start) / 1000000ULL;
+    TEST_CHECK(elapsed_ms < 1000 + SAFE_EXEC_TIMEOUT_GRACE_MS, true);
+
+    TEST_CHECK(safe_exec_until(quick, true, 5000), 3);
+
+    /* A background descendant inherits stdout; capture must still return
+     * once the direct command exits instead of waiting for pipe EOF. */
+    char output[16];
+    start = socket_io_monotonic_ns();
+    TEST_CHECK(safe_exec_capture_until(daemonized, true, output, sizeof(output), 5000), 0);
+    elapsed_ms = (socket_io_monotonic_ns() - start) / 1000000ULL;
+    TEST_CHECK(elapsed_ms < 5000, true);
+    TEST_CHECK(strcmp(output, "ready"), 0);
+
+    TEST_CHECK(sigaction(SIGCHLD, &previous_action, NULL), 0);
 });
 
 TEST_FUNC(socket_open_sets_cloexec,

@@ -1358,13 +1358,13 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
 
     struct token command;
     uint32_t acting_did = display_manager_active_display_id();
-    struct selector selector = parse_display_selector(NULL, &message, acting_did, true);
+    struct selector acting_selector = parse_display_selector(NULL, &message, acting_did, true);
 
-    if (selector.did_parse) {
-        acting_did = selector.did;
+    if (acting_selector.did_parse) {
+        acting_did = acting_selector.did;
         command = get_token(&message);
     } else {
-        command = selector.token;
+        command = acting_selector.token;
     }
 
     if (!acting_did) {
@@ -1443,13 +1443,13 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
 
     struct token command;
     uint64_t acting_sid = message_space_active();
-    struct selector selector = parse_space_selector(NULL, &message, acting_sid, true);
+    struct selector acting_selector = parse_space_selector(NULL, &message, acting_sid, true);
 
-    if (selector.did_parse) {
-        acting_sid = selector.sid;
+    if (acting_selector.did_parse) {
+        acting_sid = acting_selector.sid;
         command = get_token(&message);
     } else {
-        command = selector.token;
+        command = acting_selector.token;
     }
 
     if (!acting_sid) {
@@ -1774,13 +1774,13 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
     struct window *acting_window = message_window_selector_is_absolute_id(message)
                                   ? NULL
                                   : window_manager_focused_window(&g_window_manager);
-    struct selector selector = parse_window_selector(NULL, &message, acting_window, true);
+    struct selector acting_selector = parse_window_selector(NULL, &message, acting_window, true);
 
-    if (selector.did_parse) {
-        acting_window = selector.window;
+    if (acting_selector.did_parse) {
+        acting_window = acting_selector.window;
         command = get_token(&message);
     } else {
-        command = selector.token;
+        command = acting_selector.token;
     }
 
     for (; token_is_valid(command); command = get_token(&message)) {
