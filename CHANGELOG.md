@@ -16,12 +16,15 @@ all fork changes through this release.
 - Export a Home Manager module that builds the pinned source revision by default and can select an explicit commit or pinned signed nightly/release application archive.
 - Match window rules by Accessibility identifier and expose that identifier in window queries.
 - Expand native keyboard workflows with layout-aware key names, F-key/navigation/keypad names, Fn/Hyper and sided modifiers, idle mode timeouts, mode query/menu/signal status, cross-display robust focus, and in-process `yabai_command` actions.
+- Ship a full-bleed macOS application and notification icon, and let the menu-bar restart action relaunch unmanaged yabai instances.
 
 ### Fixed
 - Give the native menu-bar status item a stable AppKit autosave identity so Bartender and macOS preserve one item instead of accumulating and misplacing `Item-N` identities across restarts.
 - Let the Home Manager service launch a stable copied `Yabai.app` executable so macOS privacy grants and the managed LaunchAgent identify the same application.
 - Treat the `SecondaryFn` flag that macOS adds to navigation events without a physical Fn press as optional unless a binding explicitly requires Fn, restoring Ctrl+Arrow Space switching.
 - Reject the impossible zero value returned by the optional WindowServer iterator Space-count getter on macOS 27.2, preserving the authoritative per-window Space-membership fallback.
+- Bound menu-initiated launchctl commands, verify launchd job ownership consistently, and report rejected restart requests.
+- Preserve complete truncated JSON error paths and type-check daemon failure format strings at compile time.
 
 ### Changed
 - Track WindowServer app-unresponsive/app-responsive notifications on macOS 14 and 15, avoiding Accessibility reads and writes while an application is hung and refreshing it after recovery; newer WindowServer generations retain the existing bounded behavior pending ABI evidence.
@@ -134,6 +137,8 @@ all fork changes through this release.
   moving windows between Spaces on Apple Silicon.
 - Apply the Tahoe compatibility path to newer macOS versions by default.
 
+- Extract managed-window frame correction from the event loop, enable shadow-variable diagnostics, and expand the JSONC structural parser for maintainability without changing configuration semantics.
+
 ### Release engineering
 - Reset the fork version line to 0.0.1 with a tracked `VERSION` source shared by C builds, Nix packages, application metadata, and release validation.
 - Add distinct stable release and nightly identities. Stable tags use `v<version>`; nightly tags use `nightly-YYYYMMDD` and produce `<version>-nightly.<date>.<commit>` binaries.
@@ -161,6 +166,8 @@ describe the resulting user-visible state.
 - `feat(config): describe menu reload changes`
 - `feat(menu-bar): add restart action`
 - `feat(nix): add Home Manager install profiles`
+- `feat(menu-bar): relaunch unmanaged instances on restart`
+- `feat(assets): ship a macOS application icon`
 
 #### Correctness and reliability
 - `fix(window): stabilize highlights and wake restoration`
@@ -216,6 +223,10 @@ describe the resulting user-visible state.
 - `fix(highlight): align overlay bounds to pixel grid`
 - `fix(nix): support stable Home Manager app paths`
 - `fix(menu-bar): stabilize status item identity`
+- `fix(service): bound menu launchctl commands with deadlines`
+- `fix(service): report rejected menu restarts`
+- `fix(config): mark truncated JSON error paths`
+- `fix(notify): use full-bleed artwork for the notification icon`
 
 #### Performance
 - `perf(buffer): use full stretch buffer capacity`
@@ -247,6 +258,12 @@ describe the resulting user-visible state.
 - `refactor(message): extract token and value parsing module`
 - `refactor(message): extract mode-domain message handler`
 - `refactor(mission-control): consolidate state and logic into mission_control.c`
+- `refactor(service): share one waitable command runner`
+- `refactor(service): share launchd job ownership verification`
+- `refactor(event-loop): extract managed window frame correction`
+
+#### Style
+- `style(config): expand the dense JSONC structural parser`
 
 #### Build and packaging
 - `build(nix): add flake packaging`
@@ -255,6 +272,8 @@ describe the resulting user-visible state.
 - `build: enable stricter initialization and fall-through diagnostics`
 - `build(signing): package Developer ID app releases`
 - `build(version): reset fork numbering to 0.0.1`
+- `build(message): type-check daemon_fail format strings`
+- `build: enable -Wshadow and remove shadowed locals`
 
 #### Release automation
 - `ci(release): publish signed and notarized app channels`
