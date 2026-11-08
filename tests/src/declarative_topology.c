@@ -668,8 +668,8 @@ TEST_FUNC(declarative_topology_system_active_display_count_fill_contract_is_stri
 
         uint32_t *ids = NULL;
         size_t count = 0;
-        bool result = declarative_topology_system_active_displays(&ids, &count, NULL);
-        TEST_CHECK(result, scenario == 0);
+        bool listed = declarative_topology_system_active_displays(&ids, &count, NULL);
+        TEST_CHECK(listed, scenario == 0);
         TEST_CHECK(fixture.calls, 2);
         TEST_CHECK(fixture.capacities[0], 0U);
         TEST_CHECK(fixture.capacities[1], fixture.counts[0]);

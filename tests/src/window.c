@@ -1619,10 +1619,10 @@ TEST_FUNC(window_is_unknown_does_not_consume_cached_subrole,
     window.subrole = CFStringCreateCopy(NULL, kAXUnknownSubrole);
 
     CFIndex retain_count_before = CFGetRetainCount(window.subrole);
-    bool result = window_is_unknown(&window);
+    bool is_unknown = window_is_unknown(&window);
     CFIndex retain_count_after = CFGetRetainCount(window.subrole);
 
-    TEST_CHECK(result, false);
+    TEST_CHECK(is_unknown, false);
     TEST_CHECK(retain_count_after, retain_count_before);
     TEST_CHECK(CFEqual(window.subrole, kAXUnknownSubrole), true);
 

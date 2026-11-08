@@ -1517,10 +1517,10 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
     bool wildcard_seen = false;
     for (size_t i = 0; i < binding->case_count; ++i) {
         char base[256]; json_path_format(base, sizeof(base), "%s[%zu]", path, i);
-        id object = cases[i];
-        if (![object isKindOfClass:[NSDictionary class]])
+        id element = cases[i];
+        if (![element isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding case must be an object");
-        NSDictionary *item = object;
+        NSDictionary *item = element;
         const char *keys[] = {"application", "window", "disposition", "action", "transition"};
         if (!hotkey_dictionary_has_only_keys(b, item, keys, 5, base)) return false;
         struct hotkey_binding_case *out = &binding->cases[i];
@@ -1635,10 +1635,10 @@ static bool convert_hotkey_bindings(struct model_builder *b, id object, struct h
     if (!*out_bindings) return false;
     for (size_t i = 0; i < *out_count; ++i) {
         char base[256]; json_path_format(base, sizeof(base), "%s[%zu]", path, i);
-        id object = bindings[i];
-        if (![object isKindOfClass:[NSDictionary class]])
+        id element = bindings[i];
+        if (![element isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding must be an object");
-        NSDictionary *item = object;
+        NSDictionary *item = element;
         const char *keys[] = {"key", "keycode", "modifiers", "repeat", "cases"};
         if (!hotkey_dictionary_has_only_keys(b, item, keys, 5, base)) return false;
         struct hotkey_binding *binding = &(*out_bindings)[i];
@@ -1722,10 +1722,10 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
     }
     for (size_t i = 0; i < b->model->keyboard.mode_count; ++i) {
         char mode_path[256]; json_path_format(mode_path, sizeof(mode_path), "$.keyboard.modes[%zu]", i);
-        id object = modes[i];
-        if (![object isKindOfClass:[NSDictionary class]])
+        id element = modes[i];
+        if (![element isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, mode_path, "input mode must be an object");
-        NSDictionary *mode = object;
+        NSDictionary *mode = element;
         const char *mode_keys[] = {"name", "capture_unbound", "timeout_ms", "bindings"};
         if (!hotkey_dictionary_has_only_keys(b, mode, mode_keys, 4, mode_path)) return false;
         struct hotkey_input_mode *out = &b->model->keyboard.modes[i];

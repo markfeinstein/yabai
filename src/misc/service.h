@@ -655,8 +655,8 @@ static int service_start(void)
     // NOTE(asmvik): Check if service is bootstrapped
     //
 
-    const char *const args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    int is_bootstrapped = safe_exec((char *const*)args, true);
+    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
+    int is_bootstrapped = safe_exec((char *const*)print_args, true);
 
     if (is_bootstrapped != 0) {
 
@@ -894,8 +894,8 @@ static int service_stop(void)
     // NOTE(asmvik): Check if service is bootstrapped
     //
 
-    const char *const args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
-    int is_bootstrapped = safe_exec((char *const*)args, true);
+    const char *const print_args[] = { _PATH_LAUNCHCTL, "print", service_target, NULL };
+    int is_bootstrapped = safe_exec((char *const*)print_args, true);
 
     if (is_bootstrapped != 0) {
 
