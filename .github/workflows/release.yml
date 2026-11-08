@@ -359,19 +359,22 @@ jobs:
           CHECKSUM: ${{ steps.archive.outputs.checksum }}
         run: |
           set -euo pipefail
-          title="$RELEASE_TAG"
-          release_flags=()
           if [ "$RELEASE_CHANNEL" = nightly ]; then
-            title="Nightly $BUILD_VERSION"
-            release_flags+=(--prerelease)
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "Nightly $BUILD_VERSION" \
+              --prerelease \
+              --generate-notes \
+              "$ASSET" \
+              "$CHECKSUM"
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              "$ASSET" \
+              "$CHECKSUM"
           fi
-          gh release create "$RELEASE_TAG" \
-            --verify-tag \
-            --title "$title" \
-            --generate-notes \
-            "${release_flags[@]}" \
-            "$ASSET" \
-            "$CHECKSUM"
 
       - name: Delete temporary signing material
         if: ${{ always() }}
