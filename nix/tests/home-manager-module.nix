@@ -20,7 +20,7 @@ let
           };
           services.yabai = {
             enable = true;
-            service.enable = false;
+            service.enable = lib.mkDefault false;
             config.nativeConfig = {
               version = 3;
               config.layout = "bsp";
@@ -72,6 +72,18 @@ let
   nightlyPackage = nightly.config.services.yabai.finalPackage;
   releasePackage = release.config.services.yabai.finalPackage;
 
+  stableExecutable = "/Users/yabai-test/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
+  stableService = mkHome {
+    services.yabai.service = {
+      enable = true;
+      executable = stableExecutable;
+    };
+  };
+
+  invalidRelativeExecutable = mkHome {
+    services.yabai.service.executable = "Applications/Yabai.app/Contents/MacOS/yabai";
+  };
+
   invalidCommit = mkHome {
     services.yabai.install.source = "commit";
   };
@@ -92,7 +104,10 @@ assert nightlyPackage.installSource == "nightly";
 assert nightlyPackage.version == "7.2.0-nightly";
 assert releasePackage.installSource == "release";
 assert releasePackage.version == "7.2.0";
+assert stableService.config.services.yabai.service.finalExecutable == stableExecutable;
+assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert toString head.config.xdg.configFile."yabai/yabai.jsonc".source != "";
+assert !(builtins.tryEval invalidRelativeExecutable.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidCommit.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidNightly.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidRelease.activationPackage.drvPath).success;

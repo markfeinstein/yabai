@@ -86,6 +86,15 @@ The flake exports `homeManagerModules.yabai`. The module defaults to `head`, whi
 
 The module installs the selected application package, validates native configuration with `yabai --check-config`, writes the default XDG configuration paths, and manages a direct `com.asmvik.yabai` GUI LaunchAgent. Disable any nix-darwin, Homebrew, or hand-written yabai agent before enabling it so two daemons cannot race for the same runtime resources. The module refuses to overwrite an unmanaged or locally modified `com.asmvik.yabai` plist unless `services.yabai.service.force = true` is set explicitly.
 
+By default the agent launches the immutable executable inside the selected package. A configuration that enables Home Manager's Darwin application copying can instead launch the stable copied bundle path so macOS privacy grants apply to the application users see in System Settings:
+
+```nix
+services.yabai.service.executable =
+  "${config.home.homeDirectory}/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
+```
+
+The service activation runs after Home Manager's `copyApps` step and refuses to load the agent if the configured executable does not exist or is not executable.
+
 Available installation sources are:
 
 - `head`: compile the revision pinned by the flake input. This is the current default.

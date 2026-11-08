@@ -89,7 +89,9 @@ let
     else
       artifactPackage "release" cfg.install.release;
 
-  selectedExecutable = "${selectedPackage}/${selectedPackage.executable}";
+  packageExecutable = "${selectedPackage}/${selectedPackage.executable}";
+  serviceExecutable =
+    if cfg.service.executable != null then cfg.service.executable else packageExecutable;
 
   authoredNativeConfig =
     if cfg.config.nativeConfig != null then
@@ -103,7 +105,7 @@ let
     else
       pkgs.runCommand "yabai.jsonc" { } ''
         cp ${lib.escapeShellArg (toString authoredNativeConfig)} "$out"
-        ${lib.escapeShellArg selectedExecutable} --check-config "$out"
+        ${lib.escapeShellArg packageExecutable} --check-config "$out"
       '';
 
   legacyConfig = pkgs.writeText "yabairc" (cfg.config.extraConfig + "\n");
@@ -125,7 +127,7 @@ let
 
   plist = (pkgs.formats.plist { }).generate "com.asmvik.yabai.plist" {
     Label = "com.asmvik.yabai";
-    ProgramArguments = [ selectedExecutable ];
+    ProgramArguments = [ serviceExecutable ];
     EnvironmentVariables.PATH = launchPath;
     RunAtLoad = true;
     KeepAlive = {
@@ -139,7 +141,7 @@ let
   };
 
   restartIdentity = pkgs.writeText "yabai-restart-identity" ''
-    ${selectedExecutable}
+    ${serviceExecutable}
     ${if validatedNativeConfig == null then "no-native-config" else toString validatedNativeConfig}
     ${legacyConfig}
   '';
@@ -152,6 +154,7 @@ let
       [
         "writeBoundary"
         "linkGeneration"
+        "copyApps"
       ]
       ''
         service_label=com.asmvik.yabai
@@ -159,6 +162,7 @@ let
         service_target="$service_domain/$service_label"
         desired_plist=${lib.escapeShellArg (toString plist)}
         desired_trigger=${lib.escapeShellArg (toString restartIdentity)}
+        service_executable=${lib.escapeShellArg serviceExecutable}
         destination=${lib.escapeShellArg launchAgentPath}
         state_directory=${lib.escapeShellArg stateDirectory}
         applied_plist="$state_directory/applied.plist"
@@ -166,6 +170,11 @@ let
         force_takeover=${if cfg.service.force then "1" else "0"}
 
         run /bin/mkdir -p "$(/usr/bin/dirname "$destination")" "$state_directory"
+
+        if [ ! -x "$service_executable" ]; then
+          errorEcho "Configured yabai service executable is not executable: $service_executable"
+          exit 1
+        fi
 
         if [ -e "$destination" ] && [ ! -f "$applied_plist" ] \
           && ! /usr/bin/cmp -s "$desired_plist" "$destination" \
@@ -356,6 +365,23 @@ in
         description = "Whether to install and load the direct com.asmvik.yabai LaunchAgent.";
       };
 
+      executable = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        example = "/Users/alice/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
+        description = ''
+          Absolute executable path written to the LaunchAgent. The selected
+          package executable is used by default. Set this to a stable copied
+          application path when macOS privacy grants should follow that path.
+        '';
+      };
+
+      finalExecutable = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        description = "Resolved executable path written to the LaunchAgent.";
+      };
+
       force = lib.mkOption {
         type = lib.types.bool;
         default = false;
@@ -380,6 +406,10 @@ in
         {
           assertion = cfg.config.nativeConfig == null || cfg.config.nativeConfigFile == null;
           message = "Set only one of services.yabai.config.nativeConfig and nativeConfigFile";
+        }
+        {
+          assertion = cfg.service.executable == null || lib.hasPrefix "/" cfg.service.executable;
+          message = "services.yabai.service.executable must be an absolute path";
         }
         {
           assertion =
@@ -414,7 +444,10 @@ in
     }
 
     (lib.mkIf cfg.enable {
-      services.yabai.finalPackage = selectedPackage;
+      services.yabai = {
+        finalPackage = selectedPackage;
+        service.finalExecutable = serviceExecutable;
+      };
       home.packages = [ selectedPackage ];
 
       xdg.configFile."yabai/yabairc" = {
