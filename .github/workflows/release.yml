@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
       - "nightly-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release or nightly tag to build
+        required: true
+        type: string
 
 permissions: {}
 
@@ -15,7 +21,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
       channel: ${{ steps.version.outputs.channel }}
       base_version: ${{ steps.version.outputs.base_version }}
       build_version: ${{ steps.version.outputs.build_version }}
@@ -23,39 +32,43 @@ jobs:
     steps:
       - name: Checkout release tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve release version
         id: version
         run: |
           set -euo pipefail
           base_version=$(/usr/bin/tr -d '\n' < VERSION)
+          source_sha=$(git rev-parse HEAD)
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$source_sha"
           if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "VERSION must contain one semantic release version" >&2
             exit 1
           fi
 
-          case "$GITHUB_REF_NAME" in
+          case "$RELEASE_TAG" in
             v*)
               channel=release
-              build_version=${GITHUB_REF_NAME#v}
+              build_version=${RELEASE_TAG#v}
               bundle_version=$base_version
               if [ "$build_version" != "$base_version" ]; then
-                echo "release tag $GITHUB_REF_NAME does not match VERSION $base_version" >&2
+                echo "release tag $RELEASE_TAG does not match VERSION $base_version" >&2
                 exit 1
               fi
               ;;
             nightly-*)
               channel=nightly
-              nightly_date=${GITHUB_REF_NAME#nightly-}
+              nightly_date=${RELEASE_TAG#nightly-}
               if [[ ! "$nightly_date" =~ ^[0-9]{8}$ ]]; then
                 echo "nightly tags must match nightly-YYYYMMDD" >&2
                 exit 1
               fi
-              build_version="$base_version-nightly.$nightly_date.${GITHUB_SHA:0:12}"
+              build_version="$base_version-nightly.$nightly_date.${source_sha:0:12}"
               bundle_version=$base_version
               ;;
             *)
-              echo "unsupported release tag: $GITHUB_REF_NAME" >&2
+              echo "unsupported release tag: $RELEASE_TAG" >&2
               exit 1
               ;;
           esac
@@ -67,6 +80,7 @@ jobs:
             echo "BUNDLE_VERSION=$bundle_version"
           } >> "$GITHUB_ENV"
           {
+            echo "release_tag=$RELEASE_TAG"
             echo "channel=$channel"
             echo "base_version=$base_version"
             echo "build_version=$build_version"
@@ -121,6 +135,7 @@ jobs:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
       RELEASE_CHANNEL: ${{ needs.build.outputs.channel }}
       BASE_VERSION: ${{ needs.build.outputs.base_version }}
       BUILD_VERSION: ${{ needs.build.outputs.build_version }}
@@ -297,7 +312,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: notarization-${{ github.ref_name }}
+          name: notarization-${{ needs.build.outputs.release_tag }}
           path: ${{ runner.temp }}/notarization/*.json
           if-no-files-found: warn
           retention-days: 30
@@ -314,7 +329,7 @@ jobs:
         id: archive
         run: |
           set -euo pipefail
-          asset="Yabai-$GITHUB_REF_NAME.zip"
+          asset="Yabai-$RELEASE_TAG.zip"
           checksum="$asset.sha256"
           /usr/bin/ditto -c -k --keepParent "$SIGNED_APP" "$asset"
           /usr/bin/shasum -a 256 "$asset" > "$checksum"
@@ -330,13 +345,13 @@ jobs:
           CHECKSUM: ${{ steps.archive.outputs.checksum }}
         run: |
           set -euo pipefail
-          title="$GITHUB_REF_NAME"
+          title="$RELEASE_TAG"
           release_flags=()
           if [ "$RELEASE_CHANNEL" = nightly ]; then
             title="Nightly $BUILD_VERSION"
             release_flags+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             --verify-tag \
             --title "$title" \
             --generate-notes \
