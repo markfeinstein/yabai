@@ -1001,6 +1001,8 @@ test_expanded_render_uses_direct_actions_and_manual_menu(void)
 
     NSStatusBarButton *button = menu_bar_ui_state(controller).status_button;
     TEST_CHECK(menu_bar_ui_state(controller).status_item_count == 1);
+    TEST_CHECK([menu_bar_ui_state(controller).status_item_autosave_name
+        isEqualToString:YB_MENU_BAR_STATUS_ITEM_AUTOSAVE_NAME]);
     TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 4);
     TEST_CHECK(menu_bar_ui_state(controller).status_button_owns_strip_view);
     TEST_CHECK(menu_bar_ui_state(controller).status_views_use_manual_menu);
@@ -1018,6 +1020,7 @@ test_expanded_render_uses_direct_actions_and_manual_menu(void)
 
     [controller clearStatusItem];
     TEST_CHECK(menu_bar_ui_state(controller).status_item_count == 0);
+    TEST_CHECK(menu_bar_ui_state(controller).status_item_autosave_name == nil);
     TEST_CHECK(menu_bar_ui_state(controller).status_button_count == 0);
     TEST_CHECK(menu_bar_ui_state(controller).status_button == nil);
     TEST_CHECK(log.count == 0);

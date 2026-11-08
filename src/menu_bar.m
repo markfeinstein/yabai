@@ -49,6 +49,8 @@
 #define YB_MENU_BAR_LONG_PRESS_DURATION  0.45
 #define YB_MENU_BAR_DRAG_TOLERANCE       4.0
 
+static NSString *const YB_MENU_BAR_STATUS_ITEM_AUTOSAVE_NAME = @"com.asmvik.yabai.spaces";
+
 static int g_yb_menu_bar_contrast_override = -1;
 #if defined(YB_MENU_BAR_TEST)
 static bool g_yb_menu_bar_accessibility_override = true;
@@ -229,6 +231,7 @@ struct yb_menu_bar_test_state
 {
     NSMenu *menu;
     NSStatusBarButton *status_button;
+    NSString *status_item_autosave_name;
     NSView *strip_view;
     NSPanel *expanded_panel;
     bool has_snapshot;
@@ -1131,6 +1134,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     if (_status_item) return;
 
     _status_item = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
+    [_status_item setAutosaveName:YB_MENU_BAR_STATUS_ITEM_AUTOSAVE_NAME];
 }
 
 - (bool)expandedPanelCapabilityAvailable
@@ -2066,6 +2070,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     memset(state, 0, sizeof(*state));
     state->menu = _menu;
     state->status_button = _status_item ? [_status_item button] : nil;
+    state->status_item_autosave_name = _status_item ? [_status_item autosaveName] : nil;
     state->strip_view = _strip_view;
     state->expanded_panel = _expanded_panel;
     state->has_snapshot = _snapshot != NULL;
