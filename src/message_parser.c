@@ -215,7 +215,7 @@ static struct token_value token_to_value(struct token token)
     return value;
 }
 
-static inline void daemon_fail(FILE *rsp, char *fmt, ...)
+static inline __attribute__((format(printf, 2, 3))) void daemon_fail(FILE *rsp, const char *fmt, ...)
 {
     if (!rsp) return;
 
