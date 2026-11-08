@@ -67,10 +67,15 @@ let
     };
   };
 
+  pinnedRelease = mkHome {
+    services.yabai.install.source = "release";
+  };
+
   headPackage = head.config.services.yabai.finalPackage;
   commitPackage = commit.config.services.yabai.finalPackage;
   nightlyPackage = nightly.config.services.yabai.finalPackage;
   releasePackage = release.config.services.yabai.finalPackage;
+  pinnedReleasePackage = pinnedRelease.config.services.yabai.finalPackage;
 
   stableExecutable = "/Users/yabai-test/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
   stableService = mkHome {
@@ -91,10 +96,6 @@ let
   invalidNightly = mkHome {
     services.yabai.install.source = "nightly";
   };
-
-  invalidRelease = mkHome {
-    services.yabai.install.source = "release";
-  };
 in
 assert head.config.services.yabai.install.source == "head";
 assert headPackage.installSource == "source";
@@ -106,13 +107,20 @@ assert releasePackage.installSource == "release";
 assert releasePackage.version == "0.0.1";
 assert releasePackage.signingIdentifier == "com.markfeinstein.yabai";
 assert releasePackage.teamIdentifier == "GYXXG6S7KM";
+assert pinnedReleasePackage.installSource == "release";
+assert pinnedReleasePackage.version == "0.0.1";
+assert
+  pinnedRelease.config.services.yabai.install.release.url
+  == "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
+assert
+  pinnedRelease.config.services.yabai.install.release.hash
+  == "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
 assert stableService.config.services.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert toString head.config.xdg.configFile."yabai/yabai.jsonc".source != "";
 assert !(builtins.tryEval invalidRelativeExecutable.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidCommit.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidNightly.activationPackage.drvPath).success;
-assert !(builtins.tryEval invalidRelease.activationPackage.drvPath).success;
 pkgs.runCommand "yabai-home-manager-module-eval" { } ''
   touch "$out"
 ''

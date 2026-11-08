@@ -9,6 +9,12 @@
 let
   cfg = config.services.yabai;
 
+  pinnedRelease = rec {
+    version = "0.0.1";
+    url = "https://github.com/markfeinstein/yabai/releases/download/v${version}/Yabai-v${version}.zip";
+    hash = "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
+  };
+
   artifactOptions = {
     options = {
       url = lib.mkOption {
@@ -328,8 +334,11 @@ in
 
       release = lib.mkOption {
         type = lib.types.submodule artifactOptions;
-        default = { };
-        description = "Pinned metadata for a CI-produced signed release application archive.";
+        default = pinnedRelease;
+        description = ''
+          Pinned metadata for a CI-produced signed release application archive.
+          Defaults to the latest release verified by this module revision.
+        '';
       };
     };
 

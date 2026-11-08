@@ -115,17 +115,20 @@ services.yabai.install = {
 };
 ```
 
-A signed release uses an archive whose root contains `Yabai.app`:
+The module pins the verified `v0.0.1` signed release, so selecting it only requires:
 
 ```nix
-services.yabai.install = {
-  source = "release";
-  release = {
-    url = "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
-    hash = "sha256-...";
-    version = "0.0.1";
-    # appPath = "Yabai.app"; # relative to the unpacked archive root
-  };
+services.yabai.install.source = "release";
+```
+
+The equivalent explicit metadata is:
+
+```nix
+services.yabai.install.release = {
+  url = "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
+  hash = "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
+  version = "0.0.1";
+  # appPath = "Yabai.app"; # relative to the unpacked archive root
 };
 ```
 
