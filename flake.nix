@@ -21,7 +21,8 @@
         "x86_64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      version = "7.1.25-unstable-${self.shortRev or "dirty"}";
+      baseVersion = nixpkgs.lib.removeSuffix "\n" (builtins.readFile ./VERSION);
+      version = "${baseVersion}-nightly.${self.shortRev or "dirty"}";
     in
     {
       packages = forAllSystems (
@@ -54,7 +55,10 @@
           { pkgs, ... }:
           {
             imports = [ ./nix/modules/home-manager/yabai.nix ];
-            _module.args.yabaiHeadPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.head;
+            _module.args = {
+              inherit baseVersion;
+              yabaiHeadPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.head;
+            };
           };
         yabai = self.homeManagerModules.default;
       };

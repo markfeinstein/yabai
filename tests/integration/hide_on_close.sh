@@ -24,7 +24,7 @@ done
 YABAI_BIN=${YABAI_BIN:-../../bin/debug/yabai}
 [ -x "$YABAI_BIN" ] || fail "build the current debug binary with 'make debug'"
 YABAI_BIN=$(cd "$(dirname "$YABAI_BIN")" && pwd -P)/$(basename "$YABAI_BIN")
-expected=$(awk '/^#define MAJOR /{a=$3} /^#define MINOR /{b=$3} /^#define PATCH /{c=$3} END{printf "yabai-v%s.%s.%s",a,b,c}' ../../src/yabai.c)
+expected="yabai-v$(cat ../../VERSION)"
 actual=$($YABAI_BIN --version 2>/dev/null || true)
 [ "$actual" = "$expected" ] || fail "binary is not the current source version ($actual != $expected)"
 $YABAI_BIN -m query --spaces --space >/dev/null 2>&1 || fail "the current yabai daemon is unreachable"

@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  baseVersion,
   yabaiHeadPackage,
   ...
 }:
@@ -27,7 +28,7 @@ let
       version = lib.mkOption {
         type = with lib.types; nullOr str;
         default = null;
-        example = "7.2.0";
+        example = "0.0.1";
         description = "Version attached to the packaged application.";
       };
 
@@ -44,7 +45,7 @@ let
     if cfg.install.commit.version != null then
       cfg.install.commit.version
     else
-      "7.1.25-unstable-${builtins.substring 0 12 commitRevision}";
+      "${baseVersion}-nightly.${builtins.substring 0 12 commitRevision}";
 
   commitPackage =
     if cfg.install.commit.rev != null && cfg.install.commit.hash != null then
@@ -314,7 +315,7 @@ in
         version = lib.mkOption {
           type = with lib.types; nullOr str;
           default = null;
-          example = "7.1.25-unstable-8955858e10ec";
+          example = "0.0.1-nightly.8955858e10ec";
           description = "Optional package version for the selected Git revision.";
         };
       };

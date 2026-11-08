@@ -5,7 +5,7 @@ root=$(mktemp -d "${TMPDIR:-/tmp}/yabai-man-check.XXXXXX")
 cleanup() { find "$root" -mindepth 1 -delete; rmdir "$root"; }
 trap cleanup 0 HUP INT TERM
 mkdir -p "$root/doc" "$root/tests"
-cp "$repo/makefile" "$root/makefile"
+cp "$repo/makefile" "$repo/VERSION" "$root/"
 cp "$repo/doc/yabai.asciidoc" "$root/doc/yabai.asciidoc"
 cp "$repo/doc/yabai.1" "$root/doc/yabai.1"
 cp "$repo/tests/doc_contract.sh" "$root/tests/doc_contract.sh"

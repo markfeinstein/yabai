@@ -12,7 +12,7 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
 
     if (facts->binary_executable == DOCTOR_PROBE_YES) {
         char mechanism[128];
-        snprintf(mechanism, sizeof(mechanism), "running yabai-v%d.%d.%d as %s", MAJOR, MINOR, PATCH,
+        snprintf(mechanism, sizeof(mechanism), "running yabai-v%s as %s", YABAI_VERSION,
                  facts->runtime_arch ? facts->runtime_arch : "unknown architecture");
         doctor_emit(stream, "PASS", "binary", mechanism, "use this binary for service installation");
     } else if (facts->binary_executable == DOCTOR_PROBE_NO) {

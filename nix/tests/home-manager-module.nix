@@ -39,7 +39,7 @@ let
       commit = {
         rev = "8955858e10ec6bb04ec4bd8c17a443e94c02b200";
         hash = lib.fakeHash;
-        version = "7.1.25-unstable-test";
+        version = "0.0.1-nightly.test";
       };
     };
   };
@@ -50,7 +50,7 @@ let
       nightly = {
         url = "https://example.invalid/yabai-nightly.zip";
         hash = lib.fakeHash;
-        version = "7.2.0-nightly";
+        version = "0.0.1-nightly.20261108.test";
       };
     };
   };
@@ -59,9 +59,9 @@ let
     services.yabai.install = {
       source = "release";
       release = {
-        url = "https://example.invalid/yabai-7.2.0.zip";
+        url = "https://example.invalid/Yabai-v0.0.1.zip";
         hash = lib.fakeHash;
-        version = "7.2.0";
+        version = "0.0.1";
         appPath = "dist/Yabai.app";
       };
     };
@@ -99,11 +99,11 @@ in
 assert head.config.services.yabai.install.source == "head";
 assert headPackage.installSource == "source";
 assert commitPackage.installSource == "source";
-assert commitPackage.version == "7.1.25-unstable-test";
+assert commitPackage.version == "0.0.1-nightly.test";
 assert nightlyPackage.installSource == "nightly";
-assert nightlyPackage.version == "7.2.0-nightly";
+assert nightlyPackage.version == "0.0.1-nightly.20261108.test";
 assert releasePackage.installSource == "release";
-assert releasePackage.version == "7.2.0";
+assert releasePackage.version == "0.0.1";
 assert releasePackage.signingIdentifier == "com.markfeinstein.yabai";
 assert releasePackage.teamIdentifier == "GYXXG6S7KM";
 assert stableService.config.services.yabai.service.finalExecutable == stableExecutable;

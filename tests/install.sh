@@ -558,7 +558,7 @@ mkdir -p "$PUBLISH_BUILD/release" "$PUBLISH_RELEASE" "$PUBLISH_SCRIPT"
 cp "$REPO_ROOT/scripts/install.sh" "$PUBLISH_SCRIPT/install.sh"
 cp "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE"
 
-if make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
+if make -f "$REPO_ROOT/makefile" publish VERSION_FILE="$REPO_ROOT/VERSION" BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
     fail 'publish without a binary unexpectedly succeeded'
 fi
 cmp -s "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE" || fail 'missing-binary publish changed installer'
@@ -568,14 +568,14 @@ cat > "$PUBLISH_BINARY" <<'EOF'
 printf '%s\n' 'yabai-v9.8.7'
 EOF
 chmod 0755 "$PUBLISH_BINARY"
-if make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
+if make -f "$REPO_ROOT/makefile" publish VERSION_FILE="$REPO_ROOT/VERSION" BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null 2>&1; then
     fail 'publish without an archive unexpectedly succeeded'
 fi
 cmp -s "$PUBLISH_SCRIPT/install.sh" "$PUBLISH_BASELINE" || fail 'missing-archive publish changed installer'
 
 printf 'local fake archive\n' > "$PUBLISH_RELEASE/yabai-v9.8.7.tar.gz"
 PUBLISH_HASH=$(shasum -a 256 "$PUBLISH_RELEASE/yabai-v9.8.7.tar.gz" | cut -d ' ' -f 1)
-make -f "$REPO_ROOT/makefile" publish BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null
+make -f "$REPO_ROOT/makefile" publish VERSION_FILE="$REPO_ROOT/VERSION" BUILD_PATH="$PUBLISH_BUILD" RELEASE_PATH="$PUBLISH_RELEASE" SCRIPT_PATH="$PUBLISH_SCRIPT" >/dev/null
 grep -F 'VERSION="9.8.7"' "$PUBLISH_SCRIPT/install.sh" >/dev/null || \
     fail 'successful publish wrote the wrong version'
 grep -F "EXPECTED_HASH=\"$PUBLISH_HASH\"" "$PUBLISH_SCRIPT/install.sh" >/dev/null || \

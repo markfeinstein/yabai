@@ -6,6 +6,7 @@
   version ? yabai.version,
 }:
 let
+  bundleVersion = builtins.head (lib.splitString "-" version);
   infoPlist = (formats.plist { }).generate "Info.plist" {
     CFBundleDevelopmentRegion = "en";
     CFBundleExecutable = "yabai";
@@ -13,8 +14,8 @@ let
     CFBundleInfoDictionaryVersion = "6.0";
     CFBundleName = "Yabai";
     CFBundlePackageType = "APPL";
-    CFBundleShortVersionString = version;
-    CFBundleVersion = version;
+    CFBundleShortVersionString = bundleVersion;
+    CFBundleVersion = bundleVersion;
     LSUIElement = true;
     NSHumanReadableCopyright = "Copyright © 2019 Åsmund Vikane. All rights reserved.";
   };

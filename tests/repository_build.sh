@@ -33,7 +33,7 @@ TOOL_ROOT=$tool_candidate
 
 WORK=$TMP/work
 mkdir -p "$WORK" "$TOOL_ROOT/tools" "$TOOL_ROOT/attacker"
-cp "$ROOT/makefile" "$WORK/makefile"
+cp "$ROOT/makefile" "$ROOT/VERSION" "$WORK/"
 for tree in src assets examples doc scripts; do cp -R "$ROOT/$tree" "$WORK/$tree"; done
 mkdir -p "$WORK/tests" "$WORK/bin" "$WORK/release" "$WORK/deploy"
 cp "$ROOT/tests/doc_contract.sh" "$WORK/tests/doc_contract.sh"
@@ -238,6 +238,7 @@ done
 # The embedded Info.plist is a daemon link input, never an object-compile flag.
 test "$(grep -F -c 'xcrun-arg:-sectcreate' "$XCRUN_LOG")" -eq 4
 test "$(grep -F -c 'xcrun-arg:./assets/Info.plist' "$XCRUN_LOG")" -eq 4
+test "$(grep -F -c 'xcrun-arg:-DYABAI_VERSION="0.0.1"' "$XCRUN_LOG")" -eq 4
 
 # An unchanged configuration is a true no-op, while an OSAX source change
 # regenerates the embedded artifacts and rebuilds the dependent binary once.

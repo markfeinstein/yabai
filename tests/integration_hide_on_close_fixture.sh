@@ -18,7 +18,7 @@ trap cleanup 0 HUP INT TERM
 mock=$root/mock
 state=$root/state
 mkdir "$mock" "$state"
-expected=$(awk '/^#define MAJOR /{a=$3} /^#define MINOR /{b=$3} /^#define PATCH /{c=$3} END{printf "yabai-v%s.%s.%s",a,b,c}' "$repo/src/yabai.c")
+expected="yabai-v$(cat "$repo/VERSION")"
 
 cat > "$mock/yabai" <<'EOF'
 #!/bin/sh

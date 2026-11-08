@@ -20,9 +20,9 @@
 
 #define CLIENT_RESPONSE_INACTIVITY_TIMEOUT_MS 30000
 
-#define MAJOR  7
-#define MINOR  1
-#define PATCH 25
+#ifndef YABAI_VERSION
+#define YABAI_VERSION "0.0.1"
+#endif
 
 struct signal *g_signal_event[SIGNAL_TYPE_COUNT];
 struct process_manager g_process_manager;
@@ -286,13 +286,13 @@ static void parse_arguments(int argc, char **argv)
                         "    --version, -v          Print version to stdout and exit.\n"
                         "    --help, -h             Print options to stdout and exit.\n"
                         "Type `man yabai` for more information, or visit: "
-                        "https://github.com/asmvik/yabai/blob/v%d.%d.%d/doc/yabai.asciidoc\n", MAJOR, MINOR, PATCH);
+                        "https://github.com/markfeinstein/yabai/blob/main/doc/yabai.asciidoc\n");
         exit(EXIT_SUCCESS);
     }
 
     if ((string_equals(argv[1], VERSION_OPT_LONG)) ||
         (string_equals(argv[1], VERSION_OPT_SHRT))) {
-        fprintf(stdout, "yabai-v%d.%d.%d\n", MAJOR, MINOR, PATCH);
+        fprintf(stdout, "yabai-v%s\n", YABAI_VERSION);
         exit(EXIT_SUCCESS);
     }
 

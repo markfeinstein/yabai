@@ -2,6 +2,10 @@ FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
 FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
 MACOS_MIN_VERSION = 14.0
+VERSION_FILE    ?= ./VERSION
+BASE_VERSION    := $(strip $(shell /bin/cat '$(VERSION_FILE)'))
+VERSION         ?= $(BASE_VERSION)
+VERSION_FLAGS   = -DYABAI_VERSION='"$(VERSION)"'
 STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32
 COMMON_FLAGS   = -std=c11 -Wall -Wextra $(STRICT_WARNING_FLAGS) -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64
 INFO_PLIST_LINK_FLAGS = -sectcreate __TEXT __info_plist $(INFO_PLIST)
@@ -45,7 +49,7 @@ FUZZ_CONFIG_FLAGS = $(FUZZ_FLAGS) -DTESTS -Wno-unused-function -Wno-unused-param
 YABAI_COMMON   = ./src/manifest.m
 YABAI_MODULES  = menu_bar_model pattern window_constraints window_server_classifier window_server_hit_test focus_follows_mouse
 YABAI_MODULE_SOURCES = $(foreach module,$(YABAI_MODULES),./src/$(module).c ./src/$(module).h)
-YABAI_DEPS     = $(filter-out $(YABAI_MODULE_SOURCES),$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) makefile
+YABAI_DEPS     = $(filter-out $(YABAI_MODULE_SOURCES),$(wildcard ./src/*.c ./src/*.h ./src/*.m ./src/misc/*.c ./src/misc/*.h ./src/misc/*.m)) $(INFO_PLIST) $(VERSION_FILE) makefile
 DEBUG_MODULES  = $(addprefix $(BUILD_PATH)/debug/,$(addsuffix .o,$(YABAI_MODULES)))
 RELEASE_MODULES = $(addprefix $(BUILD_PATH)/release/,$(addsuffix .o,$(YABAI_MODULES)))
 ASAN_MODULES   = $(addprefix $(BUILD_PATH)/asan/,$(addsuffix .o,$(YABAI_MODULES)))
@@ -281,19 +285,19 @@ $(foreach module,$(YABAI_MODULES),$(eval $(call MODULE_RULE,tsan,TSAN,$(module))
 
 $(DEBUG_BIN): $(YABAI_DEPS) $(BUILD_PATH)/debug/osax/generated.c $(DEBUG_MODULES)
 	mkdir -p '$(BUILD_PATH)/debug'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/debug/osax/generated.c' $(DEBUG_MODULES) $(DEBUG_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/debug/osax/generated.c' $(DEBUG_MODULES) $(DEBUG_FLAGS) $(VERSION_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 $(RELEASE_BIN): $(YABAI_DEPS) $(BUILD_PATH)/release/osax/generated.c $(RELEASE_MODULES)
 	mkdir -p '$(BUILD_PATH)/release'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/release/osax/generated.c' $(RELEASE_MODULES) $(RELEASE_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/release/osax/generated.c' $(RELEASE_MODULES) $(RELEASE_FLAGS) $(VERSION_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 $(ASAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/asan/osax/generated.c $(ASAN_MODULES)
 	mkdir -p '$(BUILD_PATH)/asan'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/asan/osax/generated.c' $(ASAN_MODULES) $(ASAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/asan/osax/generated.c' $(ASAN_MODULES) $(ASAN_FLAGS) $(VERSION_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 $(TSAN_BIN): $(YABAI_DEPS) $(BUILD_PATH)/tsan/osax/generated.c $(TSAN_MODULES)
 	mkdir -p '$(BUILD_PATH)/tsan'
-	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/tsan/osax/generated.c' $(TSAN_MODULES) $(TSAN_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
+	$(XCRUN) clang $(YABAI_COMMON) '$(BUILD_PATH)/tsan/osax/generated.c' $(TSAN_MODULES) $(TSAN_FLAGS) $(VERSION_FLAGS) $(INFO_PLIST_LINK_FLAGS) $(CLI_FLAGS) $(FRAMEWORK_PATH) $(FRAMEWORK) -o '$@'
 
 man:
 	@set -eu; $(MAN_DATE_SETUP); '$(ASCIIDOCTOR)' -a "docdate=$$date" -b manpage '$(DOC_PATH)/yabai.asciidoc' -o '$(DOC_PATH)/yabai.1'

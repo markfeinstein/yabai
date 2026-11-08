@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "nightly-*"
 
 permissions: {}
 
@@ -14,23 +15,70 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      channel: ${{ steps.version.outputs.channel }}
+      base_version: ${{ steps.version.outputs.base_version }}
+      build_version: ${{ steps.version.outputs.build_version }}
+      bundle_version: ${{ steps.version.outputs.bundle_version }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Validate release tag
+      - name: Resolve release version
+        id: version
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "release tags must match v<major>.<minor>.<patch>" >&2
+          base_version=$(/usr/bin/tr -d '\n' < VERSION)
+          if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must contain one semantic release version" >&2
             exit 1
           fi
+
+          case "$GITHUB_REF_NAME" in
+            v*)
+              channel=release
+              build_version=${GITHUB_REF_NAME#v}
+              bundle_version=$base_version
+              if [ "$build_version" != "$base_version" ]; then
+                echo "release tag $GITHUB_REF_NAME does not match VERSION $base_version" >&2
+                exit 1
+              fi
+              ;;
+            nightly-*)
+              channel=nightly
+              nightly_date=${GITHUB_REF_NAME#nightly-}
+              if [[ ! "$nightly_date" =~ ^[0-9]{8}$ ]]; then
+                echo "nightly tags must match nightly-YYYYMMDD" >&2
+                exit 1
+              fi
+              build_version="$base_version-nightly.$nightly_date.${GITHUB_SHA:0:12}"
+              bundle_version=$base_version
+              ;;
+            *)
+              echo "unsupported release tag: $GITHUB_REF_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "RELEASE_CHANNEL=$channel"
+            echo "BASE_VERSION=$base_version"
+            echo "BUILD_VERSION=$build_version"
+            echo "BUNDLE_VERSION=$bundle_version"
+          } >> "$GITHUB_ENV"
+          {
+            echo "channel=$channel"
+            echo "base_version=$base_version"
+            echo "build_version=$build_version"
+            echo "bundle_version=$bundle_version"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and test
         run: |
           set -euo pipefail
           make test
-          make release
+          make release VERSION="$BUILD_VERSION"
+          test "$(bin/release/yabai --version)" = "yabai-v$BUILD_VERSION"
           for arch in arm64 x86_64; do
             lipo bin/release/yabai -verify_arch "$arch"
           done
@@ -38,14 +86,13 @@ jobs:
       - name: Stage unsigned application
         run: |
           set -euo pipefail
-          version=${GITHUB_REF_NAME#v}
           app="$RUNNER_TEMP/unsigned/Yabai.app"
           mkdir -p "$app/Contents/MacOS"
           install -m 0755 bin/release/yabai "$app/Contents/MacOS/yabai"
           install -m 0644 assets/Info.plist "$app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleName Yabai" "$app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $version" "$app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $version" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $BASE_VERSION" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUNDLE_VERSION" "$app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$app/Contents/Info.plist"
           /usr/bin/plutil -lint "$app/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = \
@@ -74,6 +121,10 @@ jobs:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+      RELEASE_CHANNEL: ${{ needs.build.outputs.channel }}
+      BASE_VERSION: ${{ needs.build.outputs.base_version }}
+      BUILD_VERSION: ${{ needs.build.outputs.build_version }}
+      BUNDLE_VERSION: ${{ needs.build.outputs.bundle_version }}
     steps:
       - name: Download unsigned application
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -279,10 +330,17 @@ jobs:
           CHECKSUM: ${{ steps.archive.outputs.checksum }}
         run: |
           set -euo pipefail
+          title="$GITHUB_REF_NAME"
+          release_flags=()
+          if [ "$RELEASE_CHANNEL" = nightly ]; then
+            title="Nightly $BUILD_VERSION"
+            release_flags+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
-            --title "$GITHUB_REF_NAME" \
+            --title "$title" \
             --generate-notes \
+            "${release_flags[@]}" \
             "$ASSET" \
             "$CHECKSUM"
 

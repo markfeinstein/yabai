@@ -110,7 +110,7 @@ services.yabai.install = {
   commit = {
     rev = "8955858e10ec6bb04ec4bd8c17a443e94c02b200";
     hash = "sha256-...";
-    version = "7.1.25-unstable-8955858e10ec"; # optional
+    version = "0.0.1-nightly.8955858e10ec"; # optional
   };
 };
 ```
@@ -121,9 +121,9 @@ A signed release uses an archive whose root contains `Yabai.app`:
 services.yabai.install = {
   source = "release";
   release = {
-    url = "https://github.com/markfeinstein/yabai/releases/download/v7.2.0/Yabai-v7.2.0.zip";
+    url = "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
     hash = "sha256-...";
-    version = "7.2.0";
+    version = "0.0.1";
     # appPath = "Yabai.app"; # relative to the unpacked archive root
   };
 };
@@ -133,7 +133,7 @@ Nightly builds use the equivalent `install.nightly` options. Artifact hashes are
 
 ### Protected release signing
 
-Pushing a `v<major>.<minor>.<patch>` tag starts `.github/workflows/release.yml`. An unprivileged job builds and tests the universal binary, stages `Yabai.app`, and uploads a one-day unsigned artifact. The release job cannot read signing or notarization credentials until the `release-signing` environment is approved. It imports the certificate into an ephemeral keychain, signs both the executable and bundle as `com.markfeinstein.yabai` with hardened runtime and a secure timestamp, verifies the Apple team and designated requirement, and submits a temporary ZIP to Apple's automated notary service. An accepted submission is logged, stapled to `Yabai.app`, validated with `stapler` and Gatekeeper, and repackaged as `Yabai-<tag>.zip` with its SHA-256 checksum. Temporary signing and notarization credentials are deleted before the runner exits.
+Pushing a `v<major>.<minor>.<patch>` release tag or `nightly-YYYYMMDD` nightly tag starts `.github/workflows/release.yml`. The release tag must match the base version in `VERSION`; nightly binaries use `<base>-nightly.<date>.<commit>` while retaining the base version in bundle metadata. An unprivileged job builds and tests the universal binary, stages `Yabai.app`, and uploads a one-day unsigned artifact. The release job cannot read signing or notarization credentials until the `release-signing` environment is approved. It imports the certificate into an ephemeral keychain, signs both the executable and bundle as `com.markfeinstein.yabai` with hardened runtime and a secure timestamp, verifies the Apple team and designated requirement, and submits a temporary ZIP to Apple's automated notary service. An accepted submission is logged, stapled to `Yabai.app`, validated with `stapler` and Gatekeeper, and repackaged as `Yabai-<tag>.zip` with its SHA-256 checksum. Temporary signing and notarization credentials are deleted before the runner exits.
 
 Configure the `release-signing` environment with these non-secret variables:
 
@@ -151,7 +151,7 @@ Configure these environment secrets without placing any value in the repository:
 
 Individual App Store Connect API keys cannot authenticate `notarytool`; use a Team Key with the least role that permits notarization. Because notarization requires hardened runtime, exercise the notarized build on a prepared Mac before treating a release as validated, including Accessibility-driven window management and any optional scripting-addition workflow. The workflow submits once, records the submission ID, and waits up to 20 minutes. If waiting times out, Apple continues processing the existing submission and the workflow fails without resubmitting it. Submission, result, and notary log JSON are retained as a workflow artifact for 30 days. The notary service typically completes within 5–15 minutes, but only an `Accepted` result can reach release publication.
 
-The environment should require the certificate owner as reviewer, permit self-review when that owner is the sole maintainer, and restrict deployments to `v*` tags. After publishing, calculate the unpacked Nix hash for the immutable release URL and pin it in `services.yabai.install.release.hash`.
+The environment should require the certificate owner as reviewer, permit self-review when that owner is the sole maintainer, and restrict deployments to `v*` and `nightly-*` tags. After publishing, calculate the unpacked Nix hash for the immutable release URL and pin it in `services.yabai.install.release.hash`.
 
 The module manages only the user service. It intentionally does not install the optional scripting addition, which requires root access and a separate SIP-aware system configuration.
 

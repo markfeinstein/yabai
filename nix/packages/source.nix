@@ -20,6 +20,7 @@ stdenvNoCC.mkDerivation {
     runHook preBuild
     make release \
       BUILD_PATH="$TMPDIR/build" \
+      VERSION=${lib.escapeShellArg version} \
       XCRUN=/usr/bin/xcrun \
       XXD=${xxd}/bin/xxd
     runHook postBuild
@@ -37,7 +38,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     description = "Tiling window manager for macOS based on binary space partitioning";
-    homepage = "https://github.com/asmvik/yabai";
+    homepage = "https://github.com/markfeinstein/yabai";
     license = lib.licenses.mit;
     mainProgram = "yabai";
     platforms = lib.platforms.darwin;
