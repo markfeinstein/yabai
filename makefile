@@ -82,7 +82,7 @@ DEPLOY_OWNER_UID ?= 0
 # (for example, an exact requirement that pins the leaf certificate hash).
 DEPLOY_REQUIREMENT ?=
 
-.PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon archive publish sign deploy \
+.PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon app-icon archive publish sign deploy \
         test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax analyze fuzz-build fuzz-smoke \
         integration-hide-on-close integration private-api-smoke-build private-api-smoke \
         clean-debug clean-release clean-asan clean-tsan clean-fuzz clean distclean
@@ -303,6 +303,28 @@ man-contract:
 
 man-check: man-contract
 	@set -eu; command -v '$(ASCIIDOCTOR)' >/dev/null 2>&1 || { echo "asciidoctor is required for man-check" >&2; exit 127; }; $(MAN_DATE_SETUP); tmp=$$(mktemp "$${TMPDIR:-/tmp}/yabai-man.XXXXXX"); trap 'rm -f "$$tmp"' 0 HUP INT TERM; '$(ASCIIDOCTOR)' -a "docdate=$$date" -b manpage '$(DOC_PATH)/yabai.asciidoc' -o "$$tmp"; cmp "$$tmp" '$(DOC_PATH)/yabai.1'
+
+# Regenerate the committed application icon from its full-bleed vector
+# source; macOS applies the rounded app-icon mask itself, and artwork with
+# its own rounded plate would be shrunk onto a grey backing. The .icns is
+# checked in so package builds need no image tooling.
+APP_ICON_SOURCE = $(ASSET_PATH)/icon/icon-app.svg
+APP_ICON = $(ASSET_PATH)/icon/yabai.icns
+SIPS ?= /usr/bin/sips
+ICONUTIL ?= /usr/bin/iconutil
+
+app-icon:
+	@set -eu; \
+	stage=$$(mktemp -d "$${TMPDIR:-/tmp}/yabai-icon.XXXXXX"); \
+	trap 'find "$$stage" -depth -delete' 0 HUP INT TERM; \
+	mkdir "$$stage/yabai.iconset"; \
+	for size in 16 32 128 256 512; do \
+		double=$$((size * 2)); \
+		'$(SIPS)' -s format png -z "$$size" "$$size" '$(APP_ICON_SOURCE)' --out "$$stage/yabai.iconset/icon_$${size}x$${size}.png" >/dev/null; \
+		'$(SIPS)' -s format png -z "$$double" "$$double" '$(APP_ICON_SOURCE)' --out "$$stage/yabai.iconset/icon_$${size}x$${size}@2x.png" >/dev/null; \
+	done; \
+	'$(ICONUTIL)' -c icns "$$stage/yabai.iconset" -o "$$stage/yabai.icns"; \
+	mv -f "$$stage/yabai.icns" '$(APP_ICON)'
 
 icon: release
 	$(PYTHON) '$(SCRIPT_PATH)/seticon.py' '$(ASSET_PATH)/icon/2x/icon-512px@2x.png' '$(RELEASE_BIN)'

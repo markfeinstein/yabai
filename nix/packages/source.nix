@@ -29,6 +29,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     install -Dm755 "$TMPDIR/build/release/yabai" "$out/bin/yabai"
     install -Dm644 doc/yabai.1 "$out/share/man/man1/yabai.1"
+    install -Dm644 assets/icon/yabai.icns "$out/share/yabai/yabai.icns"
     runHook postInstall
   '';
 

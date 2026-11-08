@@ -9,6 +9,7 @@ let
   infoPlist = (formats.plist { }).generate "Info.plist" {
     CFBundleDevelopmentRegion = "en";
     CFBundleExecutable = "yabai";
+    CFBundleIconFile = "yabai";
     CFBundleIdentifier = "com.asmvik.yabai";
     CFBundleInfoDictionaryVersion = "6.0";
     CFBundleName = "Yabai";
@@ -30,8 +31,9 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
 
     app="$out/Applications/Yabai.app"
-    mkdir -p "$app/Contents/MacOS" "$out/bin"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$out/bin"
     install -m755 ${yabai}/bin/yabai "$app/Contents/MacOS/yabai"
+    install -m644 ${yabai}/share/yabai/yabai.icns "$app/Contents/Resources/yabai.icns"
     install -m644 ${infoPlist} "$app/Contents/Info.plist"
 
     # Source builds are an explicitly development-oriented fallback until CI
