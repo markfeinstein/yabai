@@ -44,9 +44,85 @@ Additional features of yabai include focus-follows-mouse, disabling animations f
 The flake supports `aarch64-darwin` and `x86_64-darwin`. It requires the Xcode command line tools because yabai links against macOS system and private frameworks.
 
 - `nix build` builds the optimized universal binary and man page.
+- `nix build .#head` builds an ad-hoc-signed `Yabai.app` from the pinned source revision.
 - `nix run . -- --version` runs the flake package.
 - `nix develop` enters a shell with the repository's build, test, and documentation tools.
-- `nix flake check` evaluates and builds the default package.
+- `nix flake check` builds the source package, application bundle, and Home Manager evaluation checks.
+
+### Home Manager
+
+The flake exports `homeManagerModules.yabai`. The module defaults to `head`, which means the exact source revision pinned by the consumer's `yabai` flake input; updating that input advances the build. Source builds are ad-hoc signed development bundles until CI publishes immutable Developer ID-signed artifacts.
+
+```nix
+{
+  inputs.yabai.url = "github:markfeinstein/yabai/main";
+
+  outputs = { home-manager, nixpkgs, yabai, ... }: {
+    homeConfigurations.mark = home-manager.lib.homeManagerConfiguration {
+      pkgs = nixpkgs.legacyPackages.aarch64-darwin;
+      modules = [
+        yabai.homeManagerModules.yabai
+        {
+          home = {
+            username = "mark";
+            homeDirectory = "/Users/mark";
+            stateVersion = "26.05";
+          };
+
+          services.yabai = {
+            enable = true;
+            install.source = "head";
+            config.nativeConfig = {
+              version = 3;
+              config.layout = "bsp";
+            };
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The module installs the selected application package, validates native configuration with `yabai --check-config`, writes the default XDG configuration paths, and manages a direct `com.asmvik.yabai` GUI LaunchAgent. Disable any nix-darwin, Homebrew, or hand-written yabai agent before enabling it so two daemons cannot race for the same runtime resources. The module refuses to overwrite an unmanaged or locally modified `com.asmvik.yabai` plist unless `services.yabai.service.force = true` is set explicitly.
+
+Available installation sources are:
+
+- `head`: compile the revision pinned by the flake input. This is the current default.
+- `commit`: fetch and compile an explicit revision using `install.commit.rev` and its Nix source `hash`.
+- `nightly`: install a CI-produced signed app archive pinned by `url`, unpacked `hash`, and `version`.
+- `release`: install a signed release archive with the same pinned artifact metadata.
+
+For example, an explicit source revision uses:
+
+```nix
+services.yabai.install = {
+  source = "commit";
+  commit = {
+    rev = "8955858e10ec6bb04ec4bd8c17a443e94c02b200";
+    hash = "sha256-...";
+    version = "7.1.25-unstable-8955858e10ec"; # optional
+  };
+};
+```
+
+A future signed release uses an archive whose root contains `Yabai.app`:
+
+```nix
+services.yabai.install = {
+  source = "release";
+  release = {
+    url = "https://github.com/markfeinstein/yabai/releases/download/v7.2.0/Yabai.zip";
+    hash = "sha256-...";
+    version = "7.2.0";
+    # appPath = "Yabai.app"; # relative to the unpacked archive root
+  };
+};
+```
+
+Nightly builds use the equivalent `install.nightly` options. Artifact hashes are mandatory: the module never follows an unpinned mutable download. The archive is verified with `codesign --verify --deep --strict` while packaging and is not stripped, re-signed, or otherwise modified.
+
+The module manages only the user service. It intentionally does not install the optional scripting addition, which requires root access and a separate SIP-aware system configuration.
 
 ## Testing
 

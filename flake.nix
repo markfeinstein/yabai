@@ -1,62 +1,43 @@
 {
   description = "yabai — a tiling window manager for macOS";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+    home-manager = {
+      url = "github:nix-community/home-manager/release-26.05";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      home-manager,
+    }:
     let
       systems = [
         "aarch64-darwin"
         "x86_64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      version = "7.1.25-unstable-${self.shortRev or "dirty"}";
     in
     {
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          yabai = pkgs.callPackage ./nix/packages/source.nix {
+            src = self;
+            inherit version;
+          };
+          head = pkgs.callPackage ./nix/packages/app-bundle.nix { inherit yabai; };
         in
         {
-          default = pkgs.stdenvNoCC.mkDerivation {
-            pname = "yabai";
-            version = "7.1.25-unstable-${self.shortRev or "dirty"}";
-            src = self;
-
-            strictDeps = true;
-            nativeBuildInputs = [
-              pkgs.gnumake
-              pkgs.xxd
-            ];
-
-            buildPhase = ''
-              runHook preBuild
-              make release \
-                BUILD_PATH="$TMPDIR/build" \
-                XCRUN=/usr/bin/xcrun \
-                XXD=${pkgs.xxd}/bin/xxd
-              runHook postBuild
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              install -Dm755 "$TMPDIR/build/release/yabai" "$out/bin/yabai"
-              install -Dm644 doc/yabai.1 "$out/share/man/man1/yabai.1"
-              runHook postInstall
-            '';
-
-            # Stripping would invalidate the Mach-O signatures produced by ld.
-            dontStrip = true;
-
-            meta = {
-              description = "Tiling window manager for macOS based on binary space partitioning";
-              homepage = "https://github.com/asmvik/yabai";
-              license = pkgs.lib.licenses.mit;
-              mainProgram = "yabai";
-              platforms = systems;
-            };
-          };
+          default = yabai;
+          inherit yabai head;
+          app-bundle = head;
         }
       );
 
@@ -68,9 +49,53 @@
         };
       });
 
-      checks = forAllSystems (system: {
-        default = self.packages.${system}.default;
-      });
+      homeManagerModules = {
+        default =
+          { pkgs, ... }:
+          {
+            imports = [ ./nix/modules/home-manager/yabai.nix ];
+            _module.args.yabaiHeadPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.head;
+          };
+        yabai = self.homeManagerModules.default;
+      };
+
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          home = home-manager.lib.homeManagerConfiguration {
+            inherit pkgs;
+            modules = [
+              self.homeManagerModules.default
+              {
+                home = {
+                  username = "yabai-test";
+                  homeDirectory = "/Users/yabai-test";
+                  stateVersion = "26.05";
+                  enableNixpkgsReleaseCheck = false;
+                };
+                services.yabai = {
+                  enable = true;
+                  config.nativeConfig = {
+                    version = 3;
+                    config.layout = "bsp";
+                  };
+                };
+              }
+            ];
+          };
+        in
+        {
+          default = self.packages.${system}.default;
+          app-bundle = self.packages.${system}.head;
+          home-manager = home.activationPackage;
+          home-manager-module = import ./nix/tests/home-manager-module.nix {
+            inherit home-manager pkgs;
+            inherit (nixpkgs) lib;
+            yabaiModule = self.homeManagerModules.default;
+          };
+        }
+      );
 
       devShells = forAllSystems (
         system:
