@@ -9,9 +9,14 @@ struct active_window_highlight_geometry active_window_highlight_geometry_make(CG
     CGFloat minimum_dimension = fmin(target_frame.size.width, target_frame.size.height);
     CGFloat stroke_width = fmin((CGFloat) configured_width, 0.5 * minimum_dimension);
     CGFloat stroke_outset = 0.5 * stroke_width;
-    CGRect frame = CGRectInset(target_frame, -stroke_outset, -stroke_outset);
+    CGRect stroke_frame = CGRectInset(target_frame, -stroke_outset, -stroke_outset);
+    // The overlay uses a 1x backing surface. Keep its WindowServer shape on whole
+    // points so odd stroke widths do not leave an unpainted top/right backing row.
+    CGRect frame = CGRectIntegral(stroke_frame);
     CGRect bounds = CGRectMake(0.0, 0.0, frame.size.width, frame.size.height);
-    CGRect stroke_rect = CGRectInset(bounds, stroke_outset, stroke_outset);
+    CGRect stroke_rect = CGRectMake(target_frame.origin.x - frame.origin.x,
+                                    target_frame.origin.y - frame.origin.y,
+                                    target_frame.size.width, target_frame.size.height);
     CGFloat radius = fmax(0.0, (CGFloat) configured_radius) + stroke_outset;
 
     return (struct active_window_highlight_geometry) {

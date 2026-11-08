@@ -41,6 +41,25 @@ TEST_FUNC(active_window_highlight_geometry_is_bounded_and_outset,
     TEST_CHECK(geometry.corner_radius_x, 11.0);
     TEST_CHECK(geometry.corner_radius_y, 11.0);
 
+    struct active_window_highlight_geometry odd_width =
+        active_window_highlight_geometry_make(CGRectMake(10.0, 20.0, 100.0, 40.0), 3.0f, 9.0f);
+    TEST_CHECK(odd_width.frame.origin.x, 8.0);
+    TEST_CHECK(odd_width.frame.origin.y, 18.0);
+    TEST_CHECK(odd_width.frame.size.width, 104.0);
+    TEST_CHECK(odd_width.frame.size.height, 44.0);
+    TEST_CHECK(odd_width.stroke_rect.origin.x, 2.0);
+    TEST_CHECK(odd_width.stroke_rect.origin.y, 2.0);
+    TEST_CHECK(odd_width.stroke_rect.size.width, 100.0);
+    TEST_CHECK(odd_width.stroke_rect.size.height, 40.0);
+    TEST_CHECK(CGRectGetMinX(odd_width.frame) + CGRectGetMinX(odd_width.stroke_rect) -
+               0.5 * odd_width.stroke_width, 8.5);
+    TEST_CHECK(CGRectGetMinY(odd_width.frame) + CGRectGetMinY(odd_width.stroke_rect) -
+               0.5 * odd_width.stroke_width, 18.5);
+    TEST_CHECK(CGRectGetMinX(odd_width.frame) + CGRectGetMaxX(odd_width.stroke_rect) +
+               0.5 * odd_width.stroke_width, 111.5);
+    TEST_CHECK(CGRectGetMinY(odd_width.frame) + CGRectGetMaxY(odd_width.stroke_rect) +
+               0.5 * odd_width.stroke_width, 61.5);
+
     struct active_window_highlight_geometry clamped =
         active_window_highlight_geometry_make(CGRectMake(0.0, 0.0, 8.0, 4.0), 100.0f, 100.0f);
     TEST_CHECK(clamped.stroke_width, 2.0);
