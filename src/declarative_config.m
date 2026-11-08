@@ -37,11 +37,31 @@ int declarative_config_id_for_name(const char *name, size_t length) { return des
 int declarative_rule_field_for_json_name(const char *name, size_t length) { return descriptor_lookup(name, length, false, false); }
 int declarative_rule_field_for_cli_name(const char *name, size_t length) { return descriptor_lookup(name, length, false, true); }
 
+/* Format a JSON error path into a fixed buffer. Deep paths that do not fit
+ * end in a visible marker instead of being silently clipped mid-segment. */
+static __attribute__((format(printf, 3, 4))) void json_path_format(char *buffer, size_t capacity, const char *format, ...)
+{
+    static const char marker[] = "...<truncated>";
+    if (!buffer || !capacity) return;
+    va_list args;
+    va_start(args, format);
+    int length = vsnprintf(buffer, capacity, format, args);
+    va_end(args);
+    if (length >= 0 && (size_t) length < capacity) return;
+    if (length < 0 || capacity < sizeof(marker)) {
+        snprintf(buffer, capacity, "$");
+        return;
+    }
+    size_t at = capacity - sizeof(marker);
+    while (at > 0 && ((unsigned char) buffer[at] & 0xc0) == 0x80) --at;
+    memcpy(buffer + at, marker, sizeof(marker));
+}
+
 static void set_error(struct declarative_error *e, enum declarative_error_stage stage, size_t line, size_t column, const char *json_path, const char *message)
 {
     if (!e) return;
     e->stage = stage; e->line = line; e->column = column;
-    snprintf(e->json_path, sizeof(e->json_path), "%s", json_path ? json_path : "$");
+    json_path_format(e->json_path, sizeof(e->json_path), "%s", json_path ? json_path : "$");
     snprintf(e->message, sizeof(e->message), "%s", message);
 }
 
@@ -238,13 +258,13 @@ static bool parse_object(struct structural_parser *p, const char *path) {
         uint8_t *key = NULL;
         size_t length = 0, key_at = p->p;
         char key_path[256];
-        snprintf(key_path, sizeof(key_path), "%s.<unknown>", path);
+        json_path_format(key_path, sizeof(key_path), "%s.<unknown>", path);
         if (!parse_string(p, &key, &length, true, key_path))
             goto fail;
         for (size_t i = 0; i < count; ++i)
             if (lengths[i] == length && !memcmp(keys[i], key, length)) {
                 char duplicate[256];
-                snprintf(duplicate, sizeof(duplicate), "%s.<duplicate>", path);
+                json_path_format(duplicate, sizeof(duplicate), "%s.<duplicate>", path);
                 free(key);
                 structural_fail(p, key_at, duplicate, "duplicate object key");
                 goto fail;
@@ -259,9 +279,9 @@ static bool parse_object(struct structural_parser *p, const char *path) {
         skip_ws(p);
         char child[256];
         if (schema_known_key(key, length))
-            snprintf(child, sizeof(child), "%s.%.*s", path, (int)length, key);
+            json_path_format(child, sizeof(child), "%s.%.*s", path, (int)length, key);
         else
-            snprintf(child, sizeof(child), "%s.<unknown>", path);
+            json_path_format(child, sizeof(child), "%s.<unknown>", path);
         if (!parse_structural_value(p, child))
             goto fail;
         skip_ws(p);
@@ -304,7 +324,7 @@ static bool parse_array(struct structural_parser *p, const char *path) {
     size_t index = 0;
     for (;;) {
         char child[256];
-        snprintf(child, sizeof(child), "%s[%zu]", path, index++);
+        json_path_format(child, sizeof(child), "%s[%zu]", path, index++);
         if (p->target_path && !strcmp(child, p->target_path) && !p->target_found) {
             p->target_found = true;
             p->target_at = p->p;
@@ -634,7 +654,7 @@ static struct numeric_offsets *numeric_offsets_create(id root, const uint8_t *so
                 if ([list isKindOfClass:[NSArray class]]) {
                     size_t count = [list count];
                     char path[96];
-                    snprintf(path, sizeof(path), "$.modes[%zu].spaces", i);
+                    json_path_format(path, sizeof(path), "$.modes[%zu].spaces", i);
                     if (count > DECLARATIVE_CONFIG_MAX_SPACES) {
                         set_error(error, DECLARATIVE_ERROR_SCHEMA, 0, 0, path, "total Space policy limit exceeded");
                         return NULL;
@@ -965,7 +985,7 @@ static bool hotkey_dictionary_has_only_keys(struct model_builder *b, NSDictionar
         }
         if (!known) {
             char unknown[256];
-            snprintf(unknown, sizeof(unknown), "%s.<unknown>", path);
+            json_path_format(unknown, sizeof(unknown), "%s.<unknown>", path);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, unknown, "unknown keyboard field");
         }
     }
@@ -1078,11 +1098,11 @@ static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictio
     int keycode = -1;
     char value_path[256];
     if (key) {
-        snprintf(value_path, sizeof(value_path), "%s.key", path);
+        json_path_format(value_path, sizeof(value_path), "%s.key", path);
         keycode = hotkey_keycode_for_name(key);
         if (keycode < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "unknown keyboard key");
     } else if ([raw isKindOfClass:[NSString class]]) {
-        snprintf(value_path, sizeof(value_path), "%s.keycode", path);
+        json_path_format(value_path, sizeof(value_path), "%s.keycode", path);
         const char *text = [raw UTF8String];
         char *end = NULL;
         if (!text || strncmp(text, "0x", 2) || !text[2])
@@ -1093,7 +1113,7 @@ static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictio
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "invalid hardware keycode");
         keycode = (int)value;
     } else {
-        snprintf(value_path, sizeof(value_path), "%s.keycode", path);
+        json_path_format(value_path, sizeof(value_path), "%s.keycode", path);
         if (!declarative_number_to_int(raw, 0, UINT16_MAX, &keycode))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "invalid hardware keycode");
     }
@@ -1101,7 +1121,7 @@ static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictio
 
     id modifiers = dictionary[@"modifiers"];
     if (!modifiers) return true;
-    snprintf(value_path, sizeof(value_path), "%s.modifiers", path);
+    json_path_format(value_path, sizeof(value_path), "%s.modifiers", path);
     if (![modifiers isKindOfClass:[NSArray class]])
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, value_path, "modifiers must be an array");
     for (size_t i = 0; i < [modifiers count]; ++i) {
@@ -1131,10 +1151,10 @@ static bool convert_hotkey_keycode(struct model_builder *b, NSDictionary *dictio
         } else if ([modifier isEqualToString:@"right_shift"]) {
             flag = HOTKEY_MODIFIER_SHIFT | HOTKEY_MODIFIER_RIGHT_SHIFT; sided = true;
         } else {
-            char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
+            char item[256]; json_path_format(item, sizeof(item), "%s[%zu]", value_path, i);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "unknown keyboard modifier");
         }
-        char item[256]; snprintf(item, sizeof(item), "%s[%zu]", value_path, i);
+        char item[256]; json_path_format(item, sizeof(item), "%s[%zu]", value_path, i);
         if (sided && !allow_sided_modifiers)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item, "synthetic keys do not support sided modifiers");
         if (out->modifiers & flag)
@@ -1169,7 +1189,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "action must be an object");
     NSDictionary *action = object;
     id type = action[@"type"];
-    char path[256]; snprintf(path, sizeof(path), "%s.type", base);
+    char path[256]; json_path_format(path, sizeof(path), "%s.type", base);
     if (![type isKindOfClass:[NSString class]])
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "missing or invalid action type");
 
@@ -1177,21 +1197,21 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
     if ([type isEqualToString:@"focus_window"]) {
         const char *keys[] = {"type", "direction", "robust"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 3, base)) return false;
-        snprintf(path, sizeof(path), "%s.direction", base);
+        json_path_format(path, sizeof(path), "%s.direction", base);
         int direction = hotkey_direction_value(action[@"direction"]);
         if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid focus direction");
         out->type = HOTKEY_ACTION_FOCUS_WINDOW;
         out->data.focus_window.direction = direction;
         id robust = action[@"robust"];
         if (robust && CFGetTypeID((CFTypeRef)robust) != CFBooleanGetTypeID()) {
-            snprintf(path, sizeof(path), "%s.robust", base);
+            json_path_format(path, sizeof(path), "%s.robust", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "robust must be boolean");
         }
         out->data.focus_window.robust = robust ? [robust boolValue] : false;
     } else if ([type isEqualToString:@"warp_window"]) {
         const char *keys[] = {"type", "direction"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
-        snprintf(path, sizeof(path), "%s.direction", base);
+        json_path_format(path, sizeof(path), "%s.direction", base);
         int direction = hotkey_direction_value(action[@"direction"]);
         if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid warp direction");
         out->type = HOTKEY_ACTION_WARP_WINDOW;
@@ -1204,14 +1224,14 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
             {"top_left", HANDLE_TOP | HANDLE_LEFT}, {"top_right", HANDLE_TOP | HANDLE_RIGHT},
             {"bottom_left", HANDLE_BOTTOM | HANDLE_LEFT}, {"bottom_right", HANDLE_BOTTOM | HANDLE_RIGHT}
         };
-        snprintf(path, sizeof(path), "%s.handle", base);
+        json_path_format(path, sizeof(path), "%s.handle", base);
         int handle = enum_mapped_value(action[@"handle"], handles, sizeof(handles) / sizeof(*handles));
         if (handle < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize handle");
         float dx, dy;
-        snprintf(path, sizeof(path), "%s.dx", base);
+        json_path_format(path, sizeof(path), "%s.dx", base);
         if (!declarative_number_to_float(action[@"dx"], true, &dx) || fabsf(dx) > 10000.0f)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize delta");
-        snprintf(path, sizeof(path), "%s.dy", base);
+        json_path_format(path, sizeof(path), "%s.dy", base);
         if (!declarative_number_to_float(action[@"dy"], true, &dy) || fabsf(dy) > 10000.0f)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid resize delta");
         out->type = HOTKEY_ACTION_RESIZE_WINDOW;
@@ -1222,7 +1242,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "delta"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         float delta;
-        snprintf(path, sizeof(path), "%s.delta", base);
+        json_path_format(path, sizeof(path), "%s.delta", base);
         if (!declarative_number_to_float(action[@"delta"], false, &delta) || fabsf(delta) > 1.0f)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid ratio delta");
         out->type = HOTKEY_ACTION_CHANGE_WINDOW_RATIO;
@@ -1231,7 +1251,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "direction"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         static const char *values[] = {"shrink", "grow", "west", "south", "north", "east"};
-        snprintf(path, sizeof(path), "%s.direction", base);
+        json_path_format(path, sizeof(path), "%s.direction", base);
         int direction = enum_value(action[@"direction"], values, sizeof(values) / sizeof(*values));
         if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid adaptive resize direction");
         out->type = HOTKEY_ACTION_ADAPTIVE_RESIZE;
@@ -1246,7 +1266,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "degrees"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         int degrees;
-        snprintf(path, sizeof(path), "%s.degrees", base);
+        json_path_format(path, sizeof(path), "%s.degrees", base);
         if (!declarative_number_to_int(action[@"degrees"], 90, 270, &degrees) || degrees % 90)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "degrees must be 90, 180, or 270");
         out->type = HOTKEY_ACTION_ROTATE_SPACE;
@@ -1255,7 +1275,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "layout"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         static const char *values[] = {"bsp", "stack", "float", "accordion_horizontal", "accordion_vertical"};
-        snprintf(path, sizeof(path), "%s.layout", base);
+        json_path_format(path, sizeof(path), "%s.layout", base);
         int layout = enum_value(action[@"layout"], values, sizeof(values) / sizeof(*values));
         if (layout < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid Space layout");
         out->type = HOTKEY_ACTION_SET_SPACE_LAYOUT;
@@ -1267,7 +1287,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "index"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         int index;
-        snprintf(path, sizeof(path), "%s.index", base);
+        json_path_format(path, sizeof(path), "%s.index", base);
         if (!declarative_number_to_int(action[@"index"], 1, INT_MAX, &index))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid Space index");
         out->type = [type isEqualToString:@"focus_space"] ? HOTKEY_ACTION_FOCUS_SPACE : HOTKEY_ACTION_MOVE_WINDOW_TO_SPACE;
@@ -1276,7 +1296,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "direction"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         static const char *values[] = {"previous", "next"};
-        snprintf(path, sizeof(path), "%s.direction", base);
+        json_path_format(path, sizeof(path), "%s.direction", base);
         int direction = enum_value(action[@"direction"], values, 2);
         if (direction < 0) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid occupied-Space direction");
         out->type = HOTKEY_ACTION_FOCUS_OCCUPIED_SPACE;
@@ -1296,7 +1316,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
     } else if ([type isEqualToString:@"restart_service"]) {
         const char *keys[] = {"type", "label"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
-        snprintf(path, sizeof(path), "%s.label", base);
+        json_path_format(path, sizeof(path), "%s.label", base);
         if (!hotkey_service_label_valid(action[@"label"]))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid launchd service label");
         out->type = HOTKEY_ACTION_RESTART_SERVICE;
@@ -1306,7 +1326,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         const char *keys[] = {"type", "arguments"};
         if (!hotkey_dictionary_has_only_keys(b, action, keys, 2, base)) return false;
         id arguments = action[@"arguments"];
-        snprintf(path, sizeof(path), "%s.arguments", base);
+        json_path_format(path, sizeof(path), "%s.arguments", base);
         if (![arguments isKindOfClass:[NSArray class]] || ![arguments count] || [arguments count] > 64)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path,
                                  "arguments must contain 1 to 64 strings");
@@ -1314,7 +1334,7 @@ static bool convert_hotkey_action(struct model_builder *b, id object, struct hot
         for (size_t i = 0; i < [arguments count]; ++i) {
             id value = arguments[i];
             if (![value isKindOfClass:[NSString class]] || ![value length]) {
-                char item[256]; snprintf(item, sizeof(item), "%s[%zu]", path, i);
+                char item[256]; json_path_format(item, sizeof(item), "%s[%zu]", path, i);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, item,
                                      "command arguments must be nonempty strings");
             }
@@ -1353,8 +1373,8 @@ static bool convert_hotkey_actions(struct model_builder *b, id object, struct ho
     if (!out->actions) return false;
     for (size_t i = 0; i < out->action_count; ++i) {
         char item[256];
-        if ([object isKindOfClass:[NSArray class]]) snprintf(item, sizeof(item), "%s[%zu]", path, i);
-        else snprintf(item, sizeof(item), "%s", path);
+        if ([object isKindOfClass:[NSArray class]]) json_path_format(item, sizeof(item), "%s[%zu]", path, i);
+        else json_path_format(item, sizeof(item), "%s", path);
         if (!convert_hotkey_action(b, actions[i], &out->actions[i], item)) return false;
     }
     return true;
@@ -1387,7 +1407,7 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
     if (!binding->cases) return false;
     bool wildcard_seen = false;
     for (size_t i = 0; i < binding->case_count; ++i) {
-        char base[256]; snprintf(base, sizeof(base), "%s[%zu]", path, i);
+        char base[256]; json_path_format(base, sizeof(base), "%s[%zu]", path, i);
         id object = cases[i];
         if (![object isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding case must be an object");
@@ -1398,7 +1418,7 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
         out->transition_mode = HOTKEY_TRANSITION_NONE;
         id application = item[@"application"];
         if (application) {
-            char app_path[256]; snprintf(app_path, sizeof(app_path), "%s.application", base);
+            char app_path[256]; json_path_format(app_path, sizeof(app_path), "%s.application", base);
             if (![application isKindOfClass:[NSDictionary class]])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, app_path, "application condition must be an object");
             const char *app_keys[] = {"bundle_id", "name"};
@@ -1406,14 +1426,14 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
             if (!application[@"bundle_id"] && !application[@"name"])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, app_path, "application condition must not be empty");
             if (application[@"bundle_id"]) {
-                char member[256]; snprintf(member, sizeof(member), "%s.bundle_id", app_path);
+                char member[256]; json_path_format(member, sizeof(member), "%s.bundle_id", app_path);
                 out->application.bundle_id = model_string(b, application[@"bundle_id"],
                                                           DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
                 if (!out->application.bundle_id)
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid bundle identifier");
             }
             if (application[@"name"]) {
-                char member[256]; snprintf(member, sizeof(member), "%s.name", app_path);
+                char member[256]; json_path_format(member, sizeof(member), "%s.name", app_path);
                 out->application.name = model_string(b, application[@"name"],
                                                      DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
                 if (!out->application.name)
@@ -1422,7 +1442,7 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
         }
         id window = item[@"window"];
         if (window) {
-            char window_path[256]; snprintf(window_path, sizeof(window_path), "%s.window", base);
+            char window_path[256]; json_path_format(window_path, sizeof(window_path), "%s.window", base);
             if (![window isKindOfClass:[NSDictionary class]])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, window_path, "window condition must be an object");
             const char *window_keys[] = {"title", "title_prefix"};
@@ -1432,13 +1452,13 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, window_path,
                                      "window condition requires exactly one title selector");
             if (window[@"title"]) {
-                char member[256]; snprintf(member, sizeof(member), "%s.title", window_path);
+                char member[256]; json_path_format(member, sizeof(member), "%s.title", window_path);
                 out->window.title = model_string(b, window[@"title"], DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
                 if (!out->window.title)
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, member, "invalid window title");
             }
             if (window[@"title_prefix"]) {
-                char member[256]; snprintf(member, sizeof(member), "%s.title_prefix", window_path);
+                char member[256]; json_path_format(member, sizeof(member), "%s.title_prefix", window_path);
                 out->window.title_prefix = model_string(b, window[@"title_prefix"],
                                                         DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
                 if (!out->window.title_prefix)
@@ -1455,17 +1475,17 @@ static bool convert_hotkey_cases(struct model_builder *b, id object, struct hotk
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "duplicate binding case");
         }
         static const char *dispositions[] = {"consume", "consume_only", "pass_through", "remap"};
-        char disposition_path[256]; snprintf(disposition_path, sizeof(disposition_path), "%s.disposition", base);
+        char disposition_path[256]; json_path_format(disposition_path, sizeof(disposition_path), "%s.disposition", base);
         int disposition = enum_value(item[@"disposition"], dispositions, 4);
         if (disposition < 0)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, disposition_path, "invalid event disposition");
         out->disposition = disposition;
         if (item[@"action"]) {
-            char action_path[256]; snprintf(action_path, sizeof(action_path), "%s.action", base);
+            char action_path[256]; json_path_format(action_path, sizeof(action_path), "%s.action", base);
             if (!convert_hotkey_actions(b, item[@"action"], out, action_path)) return false;
         }
         if (item[@"transition"]) {
-            char transition_path[256]; snprintf(transition_path, sizeof(transition_path), "%s.transition", base);
+            char transition_path[256]; json_path_format(transition_path, sizeof(transition_path), "%s.transition", base);
             out->transition_name = model_string(b, item[@"transition"], DECLARATIVE_CONFIG_MAX_KEY_BYTES, true);
             if (!out->transition_name)
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, transition_path, "invalid input mode transition");
@@ -1505,7 +1525,7 @@ static bool convert_hotkey_bindings(struct model_builder *b, id object, struct h
     *out_bindings = model_alloc(b, sizeof(**out_bindings) * *out_count);
     if (!*out_bindings) return false;
     for (size_t i = 0; i < *out_count; ++i) {
-        char base[256]; snprintf(base, sizeof(base), "%s[%zu]", path, i);
+        char base[256]; json_path_format(base, sizeof(base), "%s[%zu]", path, i);
         id object = bindings[i];
         if (![object isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "binding must be an object");
@@ -1516,11 +1536,11 @@ static bool convert_hotkey_bindings(struct model_builder *b, id object, struct h
         if (!convert_hotkey_keycode(b, item, base, &binding->keystroke, true)) return false;
         id repeat = item[@"repeat"];
         if (repeat && CFGetTypeID((CFTypeRef)repeat) != CFBooleanGetTypeID()) {
-            char repeat_path[256]; snprintf(repeat_path, sizeof(repeat_path), "%s.repeat", base);
+            char repeat_path[256]; json_path_format(repeat_path, sizeof(repeat_path), "%s.repeat", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, repeat_path, "repeat must be boolean");
         }
         binding->repeat = repeat ? [repeat boolValue] : true;
-        char cases_path[256]; snprintf(cases_path, sizeof(cases_path), "%s.cases", base);
+        char cases_path[256]; json_path_format(cases_path, sizeof(cases_path), "%s.cases", base);
         if (!item[@"cases"]) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, cases_path, "missing binding cases");
         if (!convert_hotkey_cases(b, item[@"cases"], binding, cases_path)) return false;
         for (size_t j = 0; j < i; ++j) {
@@ -1552,7 +1572,7 @@ static bool resolve_hotkey_transitions(struct model_builder *b, struct hotkey_bi
             item->transition_mode = hotkey_mode_index(&b->model->keyboard, item->transition_name);
             if (item->transition_mode == HOTKEY_TRANSITION_NONE) {
                 char transition_path[256];
-                snprintf(transition_path, sizeof(transition_path), "%s[%zu].cases[%zu].transition", path, i, j);
+                json_path_format(transition_path, sizeof(transition_path), "%s[%zu].cases[%zu].transition", path, i, j);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, transition_path, "transition references an unknown input mode");
             }
         }
@@ -1592,7 +1612,7 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
         if (!b->model->keyboard.modes) return false;
     }
     for (size_t i = 0; i < b->model->keyboard.mode_count; ++i) {
-        char mode_path[256]; snprintf(mode_path, sizeof(mode_path), "$.keyboard.modes[%zu]", i);
+        char mode_path[256]; json_path_format(mode_path, sizeof(mode_path), "$.keyboard.modes[%zu]", i);
         id object = modes[i];
         if (![object isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, mode_path, "input mode must be an object");
@@ -1600,7 +1620,7 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
         const char *mode_keys[] = {"name", "capture_unbound", "timeout_ms", "bindings"};
         if (!hotkey_dictionary_has_only_keys(b, mode, mode_keys, 4, mode_path)) return false;
         struct hotkey_input_mode *out = &b->model->keyboard.modes[i];
-        char name_path[256]; snprintf(name_path, sizeof(name_path), "%s.name", mode_path);
+        char name_path[256]; json_path_format(name_path, sizeof(name_path), "%s.name", mode_path);
         out->name = model_string(b, mode[@"name"], DECLARATIVE_CONFIG_MAX_KEY_BYTES, true);
         if (!out->name) return builder_error(b, DECLARATIVE_ERROR_SCHEMA, name_path, "missing or invalid input mode name");
         if (!strcmp(out->name, "default"))
@@ -1610,27 +1630,27 @@ static bool convert_hotkey_config(struct model_builder *b, id object)
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, name_path, "input mode names must be unique");
         id capture = mode[@"capture_unbound"];
         if (capture && CFGetTypeID((CFTypeRef)capture) != CFBooleanGetTypeID()) {
-            char capture_path[256]; snprintf(capture_path, sizeof(capture_path), "%s.capture_unbound", mode_path);
+            char capture_path[256]; json_path_format(capture_path, sizeof(capture_path), "%s.capture_unbound", mode_path);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, capture_path, "capture_unbound must be boolean");
         }
         out->capture_unbound = capture ? [capture boolValue] : false;
         id timeout = mode[@"timeout_ms"];
         if (timeout) {
             int timeout_ms;
-            char timeout_path[256]; snprintf(timeout_path, sizeof(timeout_path), "%s.timeout_ms", mode_path);
+            char timeout_path[256]; json_path_format(timeout_path, sizeof(timeout_path), "%s.timeout_ms", mode_path);
             if (!declarative_number_to_int(timeout, 1, 3600000, &timeout_ms))
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, timeout_path,
                                      "timeout_ms must be an integer from 1 through 3600000");
             out->timeout_ms = (uint32_t)timeout_ms;
         }
-        char bindings_path[256]; snprintf(bindings_path, sizeof(bindings_path), "%s.bindings", mode_path);
+        char bindings_path[256]; json_path_format(bindings_path, sizeof(bindings_path), "%s.bindings", mode_path);
         if (!convert_hotkey_bindings(b, mode[@"bindings"] ?: @[], &out->bindings,
                                      &out->binding_count, &total, bindings_path)) return false;
     }
     if (!resolve_hotkey_transitions(b, b->model->keyboard.bindings,
                                     b->model->keyboard.binding_count, "$.keyboard.bindings")) return false;
     for (size_t i = 0; i < b->model->keyboard.mode_count; ++i) {
-        char path[256]; snprintf(path, sizeof(path), "$.keyboard.modes[%zu].bindings", i);
+        char path[256]; json_path_format(path, sizeof(path), "$.keyboard.modes[%zu].bindings", i);
         if (!resolve_hotkey_transitions(b, b->model->keyboard.modes[i].bindings,
                                         b->model->keyboard.modes[i].binding_count, path)) return false;
     }
@@ -1707,30 +1727,30 @@ static bool convert_setting(struct model_builder *b, int setting_id, id object, 
                     known = true;
             if (!known) {
                 char p[256];
-                snprintf(p, sizeof(p), "%s.<unknown>", path);
+                json_path_format(p, sizeof(p), "%s.<unknown>", path);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown external_bar field");
             }
         }
         for (size_t i = 0; i < 3; ++i)
             if (!object[@(k[i])]) {
                 char p[256];
-                snprintf(p, sizeof(p), "%s.%s", path, k[i]);
+                json_path_format(p, sizeof(p), "%s.%s", path, k[i]);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "missing required external_bar field");
             }
         const char *m[] = {"off", "main", "all"};
         iv = enum_value(object[@"mode"], m, 3);
         if (iv < 0) {
             char p[256];
-            snprintf(p, sizeof(p), "%s.mode", path);
+            json_path_format(p, sizeof(p), "%s.mode", path);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "invalid external_bar mode");
         }
         out->external_bar.mode = iv;
         char padding_path[256];
-        snprintf(padding_path, sizeof(padding_path), "%s.top_padding", path);
+        json_path_format(padding_path, sizeof(padding_path), "%s.top_padding", path);
         if (!builder_number_to_int(b, object[@"top_padding"], padding_path, INT_MIN, INT_MAX,
                                    &out->external_bar.top_padding))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, padding_path, "invalid external_bar padding");
-        snprintf(padding_path, sizeof(padding_path), "%s.bottom_padding", path);
+        json_path_format(padding_path, sizeof(padding_path), "%s.bottom_padding", path);
         if (!builder_number_to_int(b, object[@"bottom_padding"], padding_path, INT_MIN, INT_MAX,
                                    &out->external_bar.bottom_padding))
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, padding_path, "invalid external_bar padding");
@@ -1858,11 +1878,11 @@ static bool convert_config_object(struct model_builder *b, NSDictionary *d, stru
         int id = declarative_config_id_for_name(s, strlen(s));
         if (id < 0) {
             char unknown[256];
-            snprintf(unknown, sizeof(unknown), "%s.<unknown>", base);
+            json_path_format(unknown, sizeof(unknown), "%s.<unknown>", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, unknown, "unknown configuration field");
         }
         char path[256];
-        snprintf(path, sizeof(path), "%s.%s", base, declarative_config_descriptors[id].name);
+        json_path_format(path, sizeof(path), "%s.%s", base, declarative_config_descriptors[id].name);
         if (space && declarative_config_descriptors[id].scope != DECLARATIVE_SCOPE_SPACE)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "field is not valid for a Space");
         if (!convert_setting(b, id, d[k], &out[id], path))
@@ -1911,16 +1931,16 @@ static bool convert_scaffold_matcher(struct model_builder *b, id object, struct 
     for (NSString *k in d)
         if (!([k isEqualToString:@"pattern"] || [k isEqualToString:@"exclude"])) {
             char p[256];
-            snprintf(p, sizeof(p), "%s.<unknown>", path);
+            json_path_format(p, sizeof(p), "%s.<unknown>", path);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown scaffold matcher field");
         }
     if (!d[@"pattern"]) {
         char p[256];
-        snprintf(p, sizeof(p), "%s.pattern", path);
+        json_path_format(p, sizeof(p), "%s.pattern", path);
         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "missing required pattern");
     }
     char pattern_path[256];
-    snprintf(pattern_path, sizeof(pattern_path), "%s.pattern", path);
+    json_path_format(pattern_path, sizeof(pattern_path), "%s.pattern", path);
     out->pattern = model_string(b, d[@"pattern"], DECLARATIVE_CONFIG_MAX_PATTERN_BYTES, true);
     if (!out->pattern)
         return b->error && b->error->stage == DECLARATIVE_ERROR_ALLOCATION
@@ -1928,7 +1948,7 @@ static bool convert_scaffold_matcher(struct model_builder *b, id object, struct 
                    : builder_error(b, DECLARATIVE_ERROR_SCHEMA, pattern_path, "invalid matcher pattern");
     if (d[@"exclude"]) {
         char p[256];
-        snprintf(p, sizeof(p), "%s.exclude", path);
+        json_path_format(p, sizeof(p), "%s.exclude", path);
         if (CFGetTypeID((CFTypeRef)d[@"exclude"]) != CFBooleanGetTypeID())
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "exclude must be boolean");
         out->exclude = [d[@"exclude"] boolValue];
@@ -1951,7 +1971,7 @@ static bool convert_rules(struct model_builder *b, id object) {
     NSString *names[] = {@"app", @"title", @"role", @"subrole", @"identifier"};
     for (size_t i = 0; i < b->model->rule_count; ++i) {
         char base[80];
-        snprintf(base, sizeof(base), "$.rules[%zu]", i);
+        json_path_format(base, sizeof(base), "$.rules[%zu]", i);
         id item = a[i];
         if (![item isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "expected rule object");
@@ -1960,13 +1980,13 @@ static bool convert_rules(struct model_builder *b, id object) {
             if (!([k isEqualToString:@"label"] || [k isEqualToString:@"one_shot"] || [k isEqualToString:@"match"] ||
                   [k isEqualToString:@"effects"])) {
                 char p[96];
-                snprintf(p, sizeof(p), "%s.<unknown>", base);
+                json_path_format(p, sizeof(p), "%s.<unknown>", base);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown rule field");
             }
         struct declarative_rule_model *r = &b->model->rules[i];
         char path[160];
         if (d[@"label"]) {
-            snprintf(path, sizeof(path), "%s.label", base);
+            json_path_format(path, sizeof(path), "%s.label", base);
             r->label = model_string(b, d[@"label"], DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
             if (!r->label)
                 return b->error && b->error->stage == DECLARATIVE_ERROR_ALLOCATION
@@ -1977,12 +1997,12 @@ static bool convert_rules(struct model_builder *b, id object) {
             [labels addObject:d[@"label"]];
         }
         if (d[@"one_shot"]) {
-            snprintf(path, sizeof(path), "%s.one_shot", base);
+            json_path_format(path, sizeof(path), "%s.one_shot", base);
             if (CFGetTypeID((CFTypeRef)d[@"one_shot"]) != CFBooleanGetTypeID())
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "one_shot must be boolean");
             r->one_shot = [d[@"one_shot"] boolValue];
         }
-        snprintf(path, sizeof(path), "%s.match", base);
+        json_path_format(path, sizeof(path), "%s.match", base);
         id match = d[@"match"];
         if (!match)
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "missing required match");
@@ -1996,10 +2016,10 @@ static bool convert_rules(struct model_builder *b, id object) {
                     mi = j;
             if (mi < 0) {
                 char p[160];
-                snprintf(p, sizeof(p), "%s.match.<unknown>", base);
+                json_path_format(p, sizeof(p), "%s.match.<unknown>", base);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown matcher");
             }
-            snprintf(path, sizeof(path), "%s.match.%s", base, [k UTF8String]);
+            json_path_format(path, sizeof(path), "%s.match.%s", base, [k UTF8String]);
             id matcher = m[k];
             if (![matcher isKindOfClass:[NSDictionary class]])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "matcher must be an object");
@@ -2007,11 +2027,11 @@ static bool convert_rules(struct model_builder *b, id object) {
             for (NSString *mk in md)
                 if (!([mk isEqualToString:@"pattern"] || [mk isEqualToString:@"exclude"])) {
                     char p[192];
-                    snprintf(p, sizeof(p), "%s.<unknown>", path);
+                    json_path_format(p, sizeof(p), "%s.<unknown>", path);
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown matcher field");
                 }
             char pattern_path[192];
-            snprintf(pattern_path, sizeof(pattern_path), "%s.pattern", path);
+            json_path_format(pattern_path, sizeof(pattern_path), "%s.pattern", path);
             if (!md[@"pattern"])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, pattern_path, "missing required pattern");
             r->matchers[mi].pattern = model_string(b, md[@"pattern"], DECLARATIVE_CONFIG_MAX_PATTERN_BYTES, true);
@@ -2021,7 +2041,7 @@ static bool convert_rules(struct model_builder *b, id object) {
                            : builder_error(b, DECLARATIVE_ERROR_SCHEMA, pattern_path, "invalid matcher pattern");
             if (md[@"exclude"]) {
                 char p[192];
-                snprintf(p, sizeof(p), "%s.exclude", path);
+                json_path_format(p, sizeof(p), "%s.exclude", path);
                 if (CFGetTypeID((CFTypeRef)md[@"exclude"]) != CFBooleanGetTypeID())
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "exclude must be boolean");
                 r->matchers[mi].exclude = [md[@"exclude"] boolValue];
@@ -2031,7 +2051,7 @@ static bool convert_rules(struct model_builder *b, id object) {
             r->matcher_present[mi] = true;
         }
         id effects = d[@"effects"] ?: @{};
-        snprintf(path, sizeof(path), "%s.effects", base);
+        json_path_format(path, sizeof(path), "%s.effects", base);
         if (![effects isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "effects must be an object");
         NSDictionary *e = effects;
@@ -2040,22 +2060,22 @@ static bool convert_rules(struct model_builder *b, id object) {
                                                            [k lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
             if (fid < DECLARATIVE_RULE_FIELD_DISPLAY) {
                 char p[160];
-                snprintf(p, sizeof(p), "%s.effects.<unknown>", base);
+                json_path_format(p, sizeof(p), "%s.effects.<unknown>", base);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown effect");
             }
             id o = e[k];
-            snprintf(path, sizeof(path), "%s.effects.%s", base, declarative_rule_field_descriptors[fid].json_name);
+            json_path_format(path, sizeof(path), "%s.effects.%s", base, declarative_rule_field_descriptors[fid].json_name);
             if (fid == DECLARATIVE_RULE_FIELD_DISPLAY || fid == DECLARATIVE_RULE_FIELD_SPACE) {
                 if (![o isKindOfClass:[NSDictionary class]])
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "target must be an object");
                 for (NSString *tk in o)
                     if (![tk isEqualToString:@"index"]) {
                         char p[192];
-                        snprintf(p, sizeof(p), "%s.<unknown>", path);
+                        json_path_format(p, sizeof(p), "%s.<unknown>", path);
                         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "unknown target field");
                     }
                 char p[192];
-                snprintf(p, sizeof(p), "%s.index", path);
+                json_path_format(p, sizeof(p), "%s.index", path);
                 if (!o[@"index"])
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "missing required target index");
                 int x;
@@ -2079,7 +2099,7 @@ static bool convert_rules(struct model_builder *b, id object) {
                 for (int j = 0; j < 6; ++j) {
                     uint32_t x;
                     char p[192];
-                    snprintf(p, sizeof(p), "%s[%d]", path, j);
+                    json_path_format(p, sizeof(p), "%s[%d]", path, j);
                     if (!builder_number_to_uint(b, o[j], p, j < 2 ? 1 : 0, UINT_MAX, &x))
                         return builder_error(b, DECLARATIVE_ERROR_SCHEMA, p, "invalid grid element");
                     r->grid[j] = x;
@@ -2125,11 +2145,11 @@ static bool convert_rules(struct model_builder *b, id object) {
             }
         }
         if (r->follow_present && !r->display_present && !r->space_present) {
-            snprintf(path, sizeof(path), "%s.effects.follow", base);
+            json_path_format(path, sizeof(path), "%s.effects.follow", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "follow requires display or space");
         }
         if (r->scratchpad && r->manage_present) {
-            snprintf(path, sizeof(path), "%s.effects", base);
+            json_path_format(path, sizeof(path), "%s.effects", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "scratchpad conflicts with manage");
         }
     }
@@ -2150,7 +2170,7 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
     *out = policies;
     for (size_t i = 0; i < count; ++i) {
         char base[128];
-        snprintf(base, sizeof(base), "%s[%zu]", array_path, i);
+        json_path_format(base, sizeof(base), "%s[%zu]", array_path, i);
         id item = a[i];
         if (![item isKindOfClass:[NSDictionary class]])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "expected Space policy object");
@@ -2159,17 +2179,17 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
             if (!([key isEqualToString:@"match"] || [key isEqualToString:@"settings"] ||
                   [key isEqualToString:@"scaffold"])) {
                 char path[160];
-                snprintf(path, sizeof(path), "%s.<unknown>", base);
+                json_path_format(path, sizeof(path), "%s.<unknown>", base);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "unknown Space policy field");
             }
         char match_path[160];
-        snprintf(match_path, sizeof(match_path), "%s.match", base);
+        json_path_format(match_path, sizeof(match_path), "%s.match", base);
         if (!s[@"match"])
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, match_path, "missing required match");
         bool has_scaffold = s[@"scaffold"] != nil;
         if (!s[@"settings"] && !has_scaffold) {
             char path[160];
-            snprintf(path, sizeof(path), "%s.settings", base);
+            json_path_format(path, sizeof(path), "%s.settings", base);
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "Space policy requires settings or scaffold");
         }
         id match = s[@"match"];
@@ -2179,7 +2199,7 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
         for (NSString *key in m)
             if (!([key isEqualToString:@"index"] || [key isEqualToString:@"uuid"])) {
                 char path[176];
-                snprintf(path, sizeof(path), "%s.<unknown>", match_path);
+                json_path_format(path, sizeof(path), "%s.<unknown>", match_path);
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "unknown Space matcher field");
             }
         if ([m count] != 1)
@@ -2187,13 +2207,13 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
         struct declarative_space_policy *policy = &policies[i];
         if (m[@"index"]) {
             char path[176];
-            snprintf(path, sizeof(path), "%s.index", match_path);
+            json_path_format(path, sizeof(path), "%s.index", match_path);
             if (!builder_number_to_int(b, m[@"index"], path, 1, INT_MAX, &policy->index))
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "invalid Space index");
             policy->by_index = true;
         } else if (m[@"uuid"]) {
             char path[176];
-            snprintf(path, sizeof(path), "%s.uuid", match_path);
+            json_path_format(path, sizeof(path), "%s.uuid", match_path);
             policy->uuid = model_string(b, m[@"uuid"], DECLARATIVE_CONFIG_MAX_STRING_BYTES, true);
             if (!policy->uuid)
                 return b->error && b->error->stage == DECLARATIVE_ERROR_ALLOCATION
@@ -2203,7 +2223,7 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
             return builder_error(b, DECLARATIVE_ERROR_SCHEMA, match_path, "Space match requires a selector");
         if (has_scaffold) {
             char scaffold_path[160];
-            snprintf(scaffold_path, sizeof(scaffold_path), "%s.scaffold", base);
+            json_path_format(scaffold_path, sizeof(scaffold_path), "%s.scaffold", base);
             id scaffold = s[@"scaffold"];
             if (![scaffold isKindOfClass:[NSArray class]] || (!allow_empty_scaffold && ![scaffold count]) ||
                 [scaffold count] > DECLARATIVE_CONFIG_MAX_SCAFFOLD_SLOTS)
@@ -2214,14 +2234,14 @@ static bool convert_spaces(struct model_builder *b, id object, struct declarativ
             policy->scaffold_count = [scaffold count];
             for (size_t slot = 0; slot < policy->scaffold_count; ++slot) {
                 char slot_path[176];
-                snprintf(slot_path, sizeof(slot_path), "%s[%zu]", scaffold_path, slot);
+                json_path_format(slot_path, sizeof(slot_path), "%s[%zu]", scaffold_path, slot);
                 if (!convert_scaffold_matcher(b, scaffold[slot], &policy->scaffold[slot], slot_path))
                     return false;
             }
         }
         if (s[@"settings"]) {
             char settings_path[160];
-            snprintf(settings_path, sizeof(settings_path), "%s.settings", base);
+            json_path_format(settings_path, sizeof(settings_path), "%s.settings", base);
             if (!convert_config_object(b, s[@"settings"], policy->settings, true, settings_path))
                 return false;
         }
@@ -2275,7 +2295,7 @@ static bool convert_root(id root, struct model_builder *b) {
         }
         for (size_t i = 0; i < b->model->mode_count; ++i) {
             char base[96];
-            snprintf(base, sizeof(base), "$.modes[%zu]", i);
+            json_path_format(base, sizeof(base), "$.modes[%zu]", i);
             id item = modes[i];
             if (![item isKindOfClass:[NSDictionary class]])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, base, "expected mode object");
@@ -2283,11 +2303,11 @@ static bool convert_root(id root, struct model_builder *b) {
             for (NSString *k in mode)
                 if (!([k isEqualToString:@"name"] || [k isEqualToString:@"spaces"])) {
                     char path[128];
-                    snprintf(path, sizeof(path), "%s.<unknown>", base);
+                    json_path_format(path, sizeof(path), "%s.<unknown>", base);
                     return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "unknown mode field");
                 }
             char path[128];
-            snprintf(path, sizeof(path), "%s.name", base);
+            json_path_format(path, sizeof(path), "%s.name", base);
             if (!mode[@"name"])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "missing required mode name");
             struct declarative_mode_model *out = &b->model->modes[i];
@@ -2299,7 +2319,7 @@ static bool convert_root(id root, struct model_builder *b) {
             if ([names containsObject:mode[@"name"]])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "mode names must be unique");
             [names addObject:mode[@"name"]];
-            snprintf(path, sizeof(path), "%s.spaces", base);
+            json_path_format(path, sizeof(path), "%s.spaces", base);
             if (!mode[@"spaces"])
                 return builder_error(b, DECLARATIVE_ERROR_SCHEMA, path, "missing required mode spaces");
             if (![mode[@"spaces"] isKindOfClass:[NSArray class]])

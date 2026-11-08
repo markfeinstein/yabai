@@ -519,3 +519,26 @@ TEST_FUNC(declarative_reload_summary_reports_semantic_section_changes,
     declarative_config_destroy(previous);
     declarative_config_destroy(current);
 })
+
+TEST_FUNC(declarative_json_error_paths_mark_truncation,
+{
+    char fits[16];
+    json_path_format(fits, sizeof(fits), "%s.%s", "$", "rules");
+    TEST_CHECK(strcmp(fits, "$.rules"), 0);
+
+    char clipped[24];
+    json_path_format(clipped, sizeof(clipped), "%s.%s", "$.modes[0].spaces[1]", "settings");
+    TEST_CHECK(strlen(clipped), sizeof(clipped) - 1);
+    TEST_CHECK(strcmp(clipped + strlen(clipped) - strlen("...<truncated>"), "...<truncated>"), 0);
+    TEST_CHECK(strncmp(clipped, "$.modes[0", 9), 0);
+
+    /* Truncation never splits a multibyte UTF-8 sequence. */
+    char multibyte[18];
+    json_path_format(multibyte, sizeof(multibyte), "%s", "$.\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9");
+    TEST_CHECK(utf8_validate_bytes(multibyte, strlen(multibyte)), true);
+    TEST_CHECK(strstr(multibyte, "...<truncated>") != NULL, true);
+
+    char tiny[4];
+    json_path_format(tiny, sizeof(tiny), "%s", "$.rules[0]");
+    TEST_CHECK(strcmp(tiny, "$"), 0);
+});
