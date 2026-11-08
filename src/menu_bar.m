@@ -1525,7 +1525,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
                                                              _snapshot->generation);
     NSMenuItem *restart = yb_menu_item(@"Restart yabai", @selector(performMenuAction:),
                                        self, restart_target);
-    [restart setToolTip:@"Restart yabai through its active launchd service."];
+    [restart setToolTip:@"Restart yabai through its launchd service, or relaunch it directly."];
     [restart setAccessibilityLabel:@"Restart yabai"];
     [_menu addItem:restart];
 

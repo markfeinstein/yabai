@@ -877,6 +877,96 @@ static enum service_restart_result service_restart_for_menu(void)
                                              service_menu_capture, service_menu_exec);
 }
 
+/* Relaunch an instance that no launchd job owns, such as one opened from
+ * Finder. A detached helper waits for this process to exit, so the daemon
+ * lock is free, then starts the replacement. An application launched by
+ * LaunchServices is reopened through LaunchServices to keep that identity;
+ * otherwise the executable is started again with the original arguments.
+ * If this process outlives the wait, the replacement starts anyway and the
+ * daemon lock rejects the duplicate. */
+#define SERVICE_RELAUNCH_WAIT_TICKS 100 /* 100 ms ticks */
+
+static const char service_relaunch_script[] =
+    "pid=$1; ticks=$2; shift 2; i=0; "
+    "while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt \"$ticks\" ]; do sleep 0.1; i=$((i+1)); done; "
+    "exec \"$@\"";
+
+typedef int service_spawn_fn(char *const argv[]);
+
+static int service_spawn_detached(char *const argv[])
+{
+    posix_spawnattr_t attributes;
+    if (posix_spawnattr_init(&attributes) != 0) return 1;
+    int result = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+    if (result == 0) {
+        pid_t pid;
+        extern char **environ;
+        result = posix_spawn(&pid, argv[0], NULL, &attributes, argv, environ);
+    }
+    posix_spawnattr_destroy(&attributes);
+    return result == 0 ? 0 : 1;
+}
+
+/* Return the enclosing .app bundle of an executable path, or false. */
+static bool service_bundle_path(const char *executable, char *bundle, size_t capacity)
+{
+    const char *marker = strstr(executable, ".app/Contents/MacOS/");
+    if (!marker) return false;
+    size_t length = (size_t) (marker - executable) + 4;
+    if (length >= capacity) return false;
+    memcpy(bundle, executable, length);
+    bundle[length] = '\0';
+    return true;
+}
+
+static bool service_relaunch_unmanaged_with_ops(const char *label, pid_t pid, const char *executable,
+                                                int argc, char *const *argv, service_spawn_fn spawn_fn)
+{
+    if (!executable || !executable[0] || pid <= 0) return false;
+
+    char pid_text[32], ticks_text[16], bundle[PATH_MAX];
+    snprintf(pid_text, sizeof(pid_text), "%d", (int) pid);
+    snprintf(ticks_text, sizeof(ticks_text), "%d", SERVICE_RELAUNCH_WAIT_TICKS);
+
+    bool launch_services = label && strncmp(label, "application.", 12) == 0 &&
+                           service_bundle_path(executable, bundle, sizeof(bundle));
+    int extra = launch_services ? 3 : (argc > 1 ? argc - 1 : 0) + 1;
+    char **command = calloc((size_t) (6 + extra + 1), sizeof(*command));
+    if (!command) return false;
+
+    int n = 0;
+    command[n++] = "/bin/sh";
+    command[n++] = "-c";
+    command[n++] = (char *) service_relaunch_script;
+    command[n++] = "yabai-relaunch";
+    command[n++] = pid_text;
+    command[n++] = ticks_text;
+    if (launch_services) {
+        command[n++] = "/usr/bin/open";
+        command[n++] = "-n";
+        command[n++] = bundle;
+    } else {
+        command[n++] = (char *) executable;
+        for (int i = 1; i < argc; ++i) command[n++] = argv[i];
+    }
+    command[n] = NULL;
+
+    bool result = spawn_fn(command) == 0;
+    free(command);
+    return result;
+}
+
+static bool service_relaunch_unmanaged(void)
+{
+    char executable[PATH_MAX];
+    uint32_t size = sizeof(executable);
+    if (_NSGetExecutablePath(executable, &size) != 0) return false;
+    char resolved[PATH_MAX];
+    const char *path = realpath(executable, resolved) ? resolved : executable;
+    return service_relaunch_unmanaged_with_ops(getenv("XPC_SERVICE_NAME"), getpid(), path,
+                                               *_NSGetArgc(), *_NSGetArgv(), service_spawn_detached);
+}
+
 static int service_stop(void)
 {
     char *yabai_plist_path = populate_plist_path();

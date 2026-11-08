@@ -5,6 +5,7 @@
 #include <ColorSync/ColorSyncDevice.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
+#include <crt_externs.h>
 #include <mach-o/fat.h>
 #include <mach-o/swap.h>
 

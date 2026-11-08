@@ -1246,6 +1246,86 @@ TEST_FUNC(service_restart_requires_the_owning_launchd_job,
     TEST_CHECK(g_service_quit_test_valid, true);
 });
 
+static char *g_service_relaunch_test_argv[32];
+static int g_service_relaunch_test_argc;
+static int g_service_relaunch_test_result;
+
+static int service_relaunch_test_spawn(char *const argv[])
+{
+    g_service_relaunch_test_argc = 0;
+    while (argv[g_service_relaunch_test_argc] && g_service_relaunch_test_argc < 31) {
+        g_service_relaunch_test_argv[g_service_relaunch_test_argc] = strdup(argv[g_service_relaunch_test_argc]);
+        ++g_service_relaunch_test_argc;
+    }
+    g_service_relaunch_test_argv[g_service_relaunch_test_argc] = NULL;
+    return g_service_relaunch_test_result;
+}
+
+static void service_relaunch_test_reset(void)
+{
+    for (int i = 0; i < g_service_relaunch_test_argc; ++i) free(g_service_relaunch_test_argv[i]);
+    g_service_relaunch_test_argc = 0;
+    g_service_relaunch_test_result = 0;
+}
+
+TEST_FUNC(service_relaunch_reopens_unmanaged_instances,
+{
+    char bundle[PATH_MAX];
+    TEST_CHECK(service_bundle_path("/Applications/Yabai.app/Contents/MacOS/yabai", bundle, sizeof(bundle)), true);
+    TEST_CHECK(strcmp(bundle, "/Applications/Yabai.app"), 0);
+    TEST_CHECK(service_bundle_path("/usr/local/bin/yabai", bundle, sizeof(bundle)), false);
+
+    /* LaunchServices instances reopen the bundle as a new instance. */
+    char *argv[] = { "/Applications/Yabai.app/Contents/MacOS/yabai", "-psn_0_1", NULL };
+    service_relaunch_test_reset();
+    TEST_CHECK(service_relaunch_unmanaged_with_ops("application.com.asmvik.yabai.1.2", 4242,
+                                                   "/Applications/Yabai.app/Contents/MacOS/yabai",
+                                                   2, argv, service_relaunch_test_spawn), true);
+    TEST_CHECK(g_service_relaunch_test_argc, 9);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[0], "/bin/sh"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[4], "4242"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[6], "/usr/bin/open"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[7], "-n"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[8], "/Applications/Yabai.app"), 0);
+
+    /* Command-line instances rerun the executable with their arguments. */
+    char *cli_argv[] = { "yabai", "--config-jsonc", "/tmp/a b.jsonc", NULL };
+    service_relaunch_test_reset();
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "/usr/local/bin/yabai",
+                                                   3, cli_argv, service_relaunch_test_spawn), true);
+    TEST_CHECK(g_service_relaunch_test_argc, 9);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[6], "/usr/local/bin/yabai"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[7], "--config-jsonc"), 0);
+    TEST_CHECK(strcmp(g_service_relaunch_test_argv[8], "/tmp/a b.jsonc"), 0);
+
+    service_relaunch_test_reset();
+    g_service_relaunch_test_result = 1;
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "/usr/local/bin/yabai",
+                                                   1, cli_argv, service_relaunch_test_spawn), false);
+    TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 4242, "", 1, cli_argv,
+                                                   service_relaunch_test_spawn), false);
+    service_relaunch_test_reset();
+
+    /* The real helper script waits for the PID, then execs the command. */
+    char marker[] = "/tmp/yabai-relaunch-test.XXXXXX";
+    int fd = mkstemp(marker);
+    TEST_CHECK(fd >= 0, true);
+    if (fd >= 0) {
+        close(fd);
+        unlink(marker);
+        char *touch_argv[] = { "touch", marker, NULL };
+        TEST_CHECK(service_relaunch_unmanaged_with_ops(NULL, 999999, "/usr/bin/touch",
+                                                       2, touch_argv, service_spawn_detached), true);
+        bool created = false;
+        for (int i = 0; i < 50 && !created; ++i) {
+            created = access(marker, F_OK) == 0;
+            if (!created) usleep(100000);
+        }
+        TEST_CHECK(created, true);
+        unlink(marker);
+    }
+});
+
 TEST_FUNC(safe_exec_reports_child_outcomes,
 {
     char *success[] = { "/usr/bin/true", NULL };
