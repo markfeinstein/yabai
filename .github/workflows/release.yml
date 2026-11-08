@@ -320,8 +320,22 @@ jobs:
       - name: Staple and validate notarization ticket
         run: |
           set -euo pipefail
-          xcrun stapler staple -v "$SIGNED_APP"
-          xcrun stapler validate -v "$SIGNED_APP"
+          retry_stapler() {
+            action=$1
+            attempt=1
+            while [ "$attempt" -le 4 ]; do
+              if xcrun stapler "$action" -v "$SIGNED_APP"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                return 1
+              fi
+              /bin/sleep $((attempt * 5))
+              attempt=$((attempt + 1))
+            done
+          }
+          retry_stapler staple
+          retry_stapler validate
           /usr/bin/codesign --verify --deep --strict --verbose=4 "$SIGNED_APP"
           /usr/sbin/spctl --assess --type execute --verbose=4 "$SIGNED_APP"
 
