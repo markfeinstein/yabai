@@ -94,11 +94,19 @@ static bool set_public_path(struct declarative_error *error, const char *path)
 static void source_position_bytes(const uint8_t *bytes, size_t length, size_t at, size_t *line, size_t *column)
 {
     if (at > length) at = length;
-    *line = 1; *column = 1;
+    *line = 1;
+    *column = 1;
     for (size_t i = 0; i < at; ++i) {
-        if (bytes[i] == '\r') { ++*line; *column = 1; if (i + 1 < at && bytes[i+1] == '\n') ++i; }
-        else if (bytes[i] == '\n') { ++*line; *column = 1; }
-        else ++*column;
+        if (bytes[i] == '\r') {
+            ++*line;
+            *column = 1;
+            if (i + 1 < at && bytes[i + 1] == '\n') ++i;
+        } else if (bytes[i] == '\n') {
+            ++*line;
+            *column = 1;
+        } else {
+            ++*column;
+        }
     }
 }
 
@@ -122,7 +130,18 @@ static size_t *numeric_rule_offsets(struct numeric_offsets *offsets, size_t inde
     return numeric_policy_slots(offsets) + offsets->policy_count * (DECLARATIVE_CONFIG_COUNT + 1) + index * 8;
 }
 
-struct structural_parser { uint8_t *b; size_t n, p, depth; struct declarative_error *e; const char *target_path; bool target_found; size_t target_at; struct numeric_offsets *numeric_offsets; };
+struct structural_parser
+{
+    uint8_t *b;                 /* source bytes */
+    size_t n;                   /* source length */
+    size_t p;                   /* cursor */
+    size_t depth;               /* current container nesting */
+    struct declarative_error *e;
+    const char *target_path;    /* optional JSON path whose offset is wanted */
+    bool target_found;
+    size_t target_at;
+    struct numeric_offsets *numeric_offsets;
+};
 #ifdef TESTS
 static _Thread_local size_t structural_full_traversals;
 size_t declarative_config_get_structural_traversal_count(void) { return structural_full_traversals; }
@@ -134,29 +153,119 @@ static void source_position(struct structural_parser *p, size_t at, size_t *line
 }
 static bool structural_fail(struct structural_parser *p, size_t at, const char *path, const char *message)
 {
-    size_t line, column; source_position(p, at, &line, &column); set_error(p->e, DECLARATIVE_ERROR_JSONC, line, column, path, message); return false;
+    size_t line, column;
+    source_position(p, at, &line, &column);
+    set_error(p->e, DECLARATIVE_ERROR_JSONC, line, column, path, message);
+    return false;
 }
-static void skip_ws(struct structural_parser *p) { while (p->p < p->n && (p->b[p->p] == ' ' || p->b[p->p] == '\t' || p->b[p->p] == '\r' || p->b[p->p] == '\n')) ++p->p; }
+
+static void skip_ws(struct structural_parser *p)
+{
+    while (p->p < p->n) {
+        uint8_t c = p->b[p->p];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        ++p->p;
+    }
+}
+
+/* Grow a decoded-string buffer by doubling until it holds `needed` bytes. */
+static bool decoded_reserve(uint8_t **out, size_t *capacity, size_t needed)
+{
+    if (needed <= *capacity) return true;
+    size_t grown = *capacity ? *capacity * 2 : 32;
+    while (grown < needed) grown *= 2;
+    void *resized = realloc(*out, grown);
+    if (!resized) return false;
+    *out = resized;
+    *capacity = grown;
+    return true;
+}
+
 static bool append_utf8(uint8_t **out, size_t *length, size_t *capacity, uint32_t cp)
 {
-    uint8_t tmp[4]; size_t count;
-    if (cp <= 0x7f) { tmp[0] = cp; count = 1; }
-    else if (cp <= 0x7ff) { tmp[0]=0xc0|(cp>>6); tmp[1]=0x80|(cp&63); count=2; }
-    else if (cp <= 0xffff) { tmp[0]=0xe0|(cp>>12); tmp[1]=0x80|((cp>>6)&63); tmp[2]=0x80|(cp&63); count=3; }
-    else { tmp[0]=0xf0|(cp>>18); tmp[1]=0x80|((cp>>12)&63); tmp[2]=0x80|((cp>>6)&63); tmp[3]=0x80|(cp&63); count=4; }
-    if (*length + count > *capacity) { size_t c = *capacity ? *capacity * 2 : 32; while (c < *length + count) c *= 2; void *q = realloc(*out, c); if (!q) return false; *out=q; *capacity=c; }
-    memcpy(*out + *length, tmp, count); *length += count; return true;
+    uint8_t tmp[4];
+    size_t count;
+    if (cp <= 0x7f) {
+        tmp[0] = (uint8_t) cp;
+        count = 1;
+    } else if (cp <= 0x7ff) {
+        tmp[0] = (uint8_t) (0xc0 | (cp >> 6));
+        tmp[1] = (uint8_t) (0x80 | (cp & 63));
+        count = 2;
+    } else if (cp <= 0xffff) {
+        tmp[0] = (uint8_t) (0xe0 | (cp >> 12));
+        tmp[1] = (uint8_t) (0x80 | ((cp >> 6) & 63));
+        tmp[2] = (uint8_t) (0x80 | (cp & 63));
+        count = 3;
+    } else {
+        tmp[0] = (uint8_t) (0xf0 | (cp >> 18));
+        tmp[1] = (uint8_t) (0x80 | ((cp >> 12) & 63));
+        tmp[2] = (uint8_t) (0x80 | ((cp >> 6) & 63));
+        tmp[3] = (uint8_t) (0x80 | (cp & 63));
+        count = 4;
+    }
+    if (!decoded_reserve(out, capacity, *length + count)) return false;
+    memcpy(*out + *length, tmp, count);
+    *length += count;
+    return true;
 }
-static int hex4(const uint8_t *s) { int v=0; for (int i=0;i<4;++i) { int c=s[i]; int d=c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:-1; if(d<0)return -1; v=(v<<4)|d; } return v; }
+
+static int hex_digit(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Decode exactly four hexadecimal digits, or return -1. */
+static int hex4(const uint8_t *s)
+{
+    int value = 0;
+    for (int i = 0; i < 4; ++i) {
+        int digit = hex_digit(s[i]);
+        if (digit < 0) return -1;
+        value = (value << 4) | digit;
+    }
+    return value;
+}
+
+/* Parse and decode one JSON string starting at the opening quote. On success
+ * the caller owns *decoded (NULL for an empty string). Decoded U+0000 and
+ * unpaired surrogates are rejected; keys are limited to
+ * DECLARATIVE_CONFIG_MAX_KEY_BYTES decoded bytes. */
 static bool parse_string(struct structural_parser *p, uint8_t **decoded, size_t *decoded_length, bool key, const char *path)
 {
-    size_t start=p->p; if (p->p>=p->n || p->b[p->p++]!='"') return structural_fail(p,start,path,"expected string");
-    uint8_t *out=NULL; size_t len=0, cap=0;
-    while (p->p<p->n) {
-        uint8_t c=p->b[p->p++]; uint32_t cp;
-        if (c=='"') { if (key && len>DECLARATIVE_CONFIG_MAX_KEY_BYTES) { free(out); return structural_fail(p,start,path,"decoded key exceeds limit"); } *decoded=out; *decoded_length=len; return true; }
-        if (c<0x20) { free(out); return structural_fail(p,p->p-1,path,"control character in string"); }
-        if (c!='\\') { if (len+1>cap) { size_t nc=cap?cap*2:32; void *q=realloc(out,nc); if(!q){free(out);set_error(p->e,DECLARATIVE_ERROR_ALLOCATION,0,0,"$","allocation failed");return false;}out=q;cap=nc;} out[len++]=c; continue; }
+    size_t start = p->p;
+    if (p->p >= p->n || p->b[p->p++] != '"') return structural_fail(p, start, path, "expected string");
+
+    uint8_t *out = NULL;
+    size_t len = 0, cap = 0;
+    while (p->p < p->n) {
+        uint8_t c = p->b[p->p++];
+        uint32_t cp;
+        if (c == '"') {
+            if (key && len > DECLARATIVE_CONFIG_MAX_KEY_BYTES) {
+                free(out);
+                return structural_fail(p, start, path, "decoded key exceeds limit");
+            }
+            *decoded = out;
+            *decoded_length = len;
+            return true;
+        }
+        if (c < 0x20) {
+            free(out);
+            return structural_fail(p, p->p - 1, path, "control character in string");
+        }
+        if (c != '\\') {
+            if (!decoded_reserve(&out, &cap, len + 1)) {
+                free(out);
+                set_error(p->e, DECLARATIVE_ERROR_ALLOCATION, 0, 0, "$", "allocation failed");
+                return false;
+            }
+            out[len++] = c;
+            continue;
+        }
         if (p->p >= p->n) {
             free(out);
             return structural_fail(p, start, path, "unterminated escape");
