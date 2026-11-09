@@ -14,13 +14,14 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 - Let the Home Manager module ensure a minimum global count of ordinary Spaces, creating missing Spaces after service startup and reloading settings so native rule targets can bind.
 
 ### Changed
+- Require macOS 26 or 27 on Apple Silicon, publish thin arm64 releases with a 26.0 deployment floor, and remove Intel builds, implementation paths, tests, and package outputs.
 - Upgrade checkout and artifact-transfer workflow actions to pinned Node.js 24 releases.
 - Enable the menu bar by default with the panel interface and automatic layout, and default auto-balance and native edge resizing to on.
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 
 ### Fixed
 - Reject missing scratchpad mutation targets instead of dereferencing null window pointers.
-- Replace the retired macOS 14 GitHub-hosted CI runner with supported macOS 15 ARM and Intel coverage while retaining the macOS 14 deployment target.
+- Move hosted CI, signing, and artifact verification to macOS 26 Apple Silicon runners.
 
 ## [0.0.1] - 2026-11-08
 

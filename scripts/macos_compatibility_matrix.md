@@ -41,7 +41,6 @@ Do not create or download a VM merely to fill this matrix.
 | macOS 26.6 arm64 | BLOCKED-ENV | no existing suitable host/VM |
 | macOS 27.0.x arm64 | PARTIAL-PASS | current 27.0.1 physical host; source-safe diagnostics completed |
 | macOS 27.2 arm64 | PARTIAL-PASS | 2026-11-04 native query smoke passed on 27.2 build 26B123; UI/animation acceptance not run |
-| live Intel/x86_64 | BLOCKED-ENV | cross-build only; no supported live Intel host |
 
 ## Native private-API smoke evidence (2026-11-04)
 
@@ -53,11 +52,8 @@ Prepared-host availability was checked again on 2026-11-04: the read-only GitHub
 
 | Native smoke row | Evidence |
 |---|---|
-| macOS 14 arm64 / x86_64 | NOT-RUN; existing offline CI/cross-builds do not satisfy this row |
-| macOS 15 arm64 / x86_64 | NOT-RUN; prepared native hosts required |
-| macOS 26 arm64 / x86_64 | NOT-RUN; prepared native hosts required |
+| macOS 26 arm64 | NOT-RUN; prepared native host required |
 | macOS 27 arm64 | PASS on 27.2.0 / 26B123; local query smoke only |
-| macOS 27 x86_64 | NOT-RUN; prepared native Intel host required |
 
 Use the [manual native smoke workflow and setup instructions](../doc/testing.md) to add attributable per-host results. No suitable additional hosts or runner registration are implied by the workflow definition.
 
@@ -72,4 +68,4 @@ Per-display CADisplayLink work remains blocked even though mixed 60/120-Hz physi
 - no mixed-scale fixture exists;
 - no macOS 26.6 environment has been validated; the available 27.2 host has only query-smoke evidence, not animation acceptance.
 
-Synthetic 60/120/144-Hz tests and offline macOS 14 CI remain source evidence only. They do not satisfy physical cadence, cross-display handoff, UI-stall, or proxy-cleanup acceptance.
+Synthetic 60/120/144-Hz tests and offline CI remain source evidence only. They do not satisfy physical cadence, cross-display handoff, UI-stall, or proxy-cleanup acceptance.
