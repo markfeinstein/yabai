@@ -26,23 +26,20 @@
                                      OSAX_ATTRIB_SET_WINDOW | \
                                      OSAX_ATTRIB_ANIM_TIME)
 
-static inline uint32_t osax_required_attributes(long major, long minor, bool arm64)
+static inline uint32_t osax_required_attributes(long major, long minor)
 {
-    if (arm64 && major == 27) {
+    if (major == 27) {
         return minor >= 2
              ? OSAX_ATTRIB_ALL & ~(OSAX_ATTRIB_DPPM | OSAX_ATTRIB_SET_WINDOW)
              : OSAX_ATTRIB_DOCK_SPACES;
     }
-    /* The Intel payload does not currently expose Golden Gate operations;
-     * retain the existing diagnostic contract until those lookups exist. */
-    if (!arm64 && major == 27) return OSAX_ATTRIB_DOCK_SPACES;
     return OSAX_ATTRIB_ALL;
 }
 
-static inline uint32_t osax_space_move_required_attributes(long major, long minor, bool arm64)
+static inline uint32_t osax_space_move_required_attributes(long major, long minor)
 {
     uint32_t required = OSAX_ATTRIB_DOCK_SPACES | OSAX_ATTRIB_MOV_SPACE;
-    if (!(arm64 && major == 27 && minor >= 2)) required |= OSAX_ATTRIB_DPPM;
+    if (!(major == 27 && minor >= 2)) required |= OSAX_ATTRIB_DPPM;
     return required;
 }
 

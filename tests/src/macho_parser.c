@@ -43,7 +43,7 @@ static void test_headers_policy_and_commands(void)
     assert(macho_validate_arm64(image, sizeof(image)) && macho_validate_scanner_image(image, sizeof(image)));
     assert(!macho_validate_arm64(image, sizeof(struct mach_header_64) - 1));
     make_image(image); header(image)->magic = MH_MAGIC; assert(!macho_validate_arm64(image, sizeof(image)));
-    make_image(image); header(image)->cputype = CPU_TYPE_X86_64; assert(!macho_validate_arm64(image, sizeof(image)));
+    make_image(image); header(image)->cputype = CPU_TYPE_POWERPC; assert(!macho_validate_arm64(image, sizeof(image)));
     make_image(image); header(image)->filetype = MH_DYLIB;
     assert(macho_validate_arm64(image, sizeof(image)) && !macho_validate_scanner_image(image, sizeof(image)));
     make_image(image); header(image)->cpusubtype = CPU_SUBTYPE_ARM64E | CPU_SUBTYPE_LIB64;

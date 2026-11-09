@@ -39,7 +39,7 @@ TEST_FUNC(daemon_identity_json_contains_protocol_identity,
         struct mach_header_64 header;
         struct uuid_command command;
     } image = {
-        .header = { .magic = MH_MAGIC_64, .cputype = CPU_TYPE_X86_64, .filetype = MH_EXECUTE,
+        .header = { .magic = MH_MAGIC_64, .cputype = CPU_TYPE_ARM64, .filetype = MH_EXECUTE,
                     .ncmds = 1, .sizeofcmds = sizeof(struct uuid_command) },
         .command = { .cmd = LC_UUID, .cmdsize = sizeof(struct uuid_command),
                      .uuid = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -51,7 +51,7 @@ TEST_FUNC(daemon_identity_json_contains_protocol_identity,
     if (stream) {
         TEST_CHECK(daemon_identity_write_json(stream, 42, &image.header), true);
         fclose(stream);
-        TEST_CHECK(strcmp(output, "{\"pid\":42,\"architecture\":\"x86_64\",\"uuid\":\"00112233-4455-6677-8899-AABBCCDDEEFF\"}\n"), 0);
+        TEST_CHECK(strcmp(output, "{\"pid\":42,\"architecture\":\"arm64\",\"uuid\":\"00112233-4455-6677-8899-AABBCCDDEEFF\"}\n"), 0);
     }
     free(output);
     image.header.cputype = CPU_TYPE_POWERPC;

@@ -284,11 +284,11 @@ static bool scripting_addition_request_handshake(char *version, size_t version_c
 
 enum scripting_addition_runtime_status scripting_addition_classify_runtime(
     bool reachable, const char *version, uint32_t attributes,
-    long macos_major, long macos_minor, bool arm64)
+    long macos_major, long macos_minor)
 {
     if (!reachable) return SA_RUNTIME_UNREACHABLE;
     if (!version || !string_equals(version, OSAX_VERSION)) return SA_RUNTIME_OUTDATED;
-    uint32_t required_attributes = osax_required_attributes(macos_major, macos_minor, arm64);
+    uint32_t required_attributes = osax_required_attributes(macos_major, macos_minor);
     return (attributes & required_attributes) == required_attributes
          ? SA_RUNTIME_CURRENT
          : SA_RUNTIME_INCOMPLETE;
@@ -300,13 +300,8 @@ enum scripting_addition_runtime_status scripting_addition_probe_runtime(void)
     char version[SA_SOCKET_BUFF_LEN] = {0};
     bool reachable = scripting_addition_request_handshake_with_timeout(version, sizeof(version), &attributes, 250);
     NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-#ifdef __arm64__
-    bool arm64 = true;
-#else
-    bool arm64 = false;
-#endif
     return scripting_addition_classify_runtime(reachable, version, attributes,
-                                               os_version.majorVersion, os_version.minorVersion, arm64);
+                                               os_version.majorVersion, os_version.minorVersion);
 }
 
 static int scripting_addition_perform_validation(void)
@@ -321,14 +316,9 @@ static int scripting_addition_perform_validation(void)
     }
 
     NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-#ifdef __arm64__
-    bool arm64 = true;
-#else
-    bool arm64 = false;
-#endif
     enum scripting_addition_runtime_status runtime =
         scripting_addition_classify_runtime(true, version, attrib,
-                                            os_version.majorVersion, os_version.minorVersion, arm64);
+                                            os_version.majorVersion, os_version.minorVersion);
     if (runtime == SA_RUNTIME_CURRENT) {
         notify("scripting-addition", "payload v%s", version);
         return 0;
@@ -364,7 +354,6 @@ static bool scripting_addition_is_sip_friendly(void)
     return true;
 }
 
-#ifdef __arm64__
 static bool scripting_addition_is_arm64e_enabled(void)
 {
     char bootargs[2048];
@@ -378,7 +367,6 @@ static bool scripting_addition_is_arm64e_enabled(void)
 
     return false;
 }
-#endif
 
 static bool mach_loader_inject_payload(void)
 {
@@ -447,14 +435,12 @@ int scripting_addition_load(void)
         goto out;
     }
 
-#ifdef __arm64__
     if (!scripting_addition_is_arm64e_enabled()) {
         warn("yabai: missing required nvram boot-arg '-arm64e_preview_abi'!\n");
         notify("scripting-addition", "missing required nvram boot-arg '-arm64e_preview_abi'!");
         result = 1;
         goto out;
     }
-#endif
 
     if (!mach_loader_inject_payload()) {
         warn("yabai: scripting-addition failed to inject payload into Dock.app!\n");
@@ -550,13 +536,8 @@ static bool scripting_addition_can_move_space(void)
     if (!scripting_addition_request_handshake(version, sizeof(version), &attributes) ||
         !string_equals(version, OSAX_VERSION)) return false;
     NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-#ifdef __arm64__
-    bool arm64 = true;
-#else
-    bool arm64 = false;
-#endif
     uint32_t required = osax_space_move_required_attributes(
-        os_version.majorVersion, os_version.minorVersion, arm64);
+        os_version.majorVersion, os_version.minorVersion);
     return (attributes & required) == required;
 }
 

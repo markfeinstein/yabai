@@ -14,11 +14,7 @@
 
 static inline const char *daemon_identity_architecture(cpu_type_t cpu_type)
 {
-    switch (cpu_type) {
-    case CPU_TYPE_ARM64: return "arm64";
-    case CPU_TYPE_X86_64: return "x86_64";
-    default: return NULL;
-    }
+    return cpu_type == CPU_TYPE_ARM64 ? "arm64" : NULL;
 }
 
 static inline bool daemon_identity_macho_uuid(const struct mach_header_64 *header,

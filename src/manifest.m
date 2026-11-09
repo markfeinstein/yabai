@@ -9,11 +9,10 @@
 #include <mach-o/fat.h>
 #include <mach-o/swap.h>
 
-#ifdef __x86_64__
-#include <emmintrin.h>
-#elif __arm64__
-#include <arm_neon.h>
+#if !defined(__arm64__)
+#error yabai requires Apple Silicon
 #endif
+#include <arm_neon.h>
 
 #include <stdio.h>
 #include <stddef.h>

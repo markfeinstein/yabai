@@ -14,7 +14,7 @@ CHECKS = (
 COUNTS = ("display_count", "current_space_count", "window_count", "sample_count")
 
 
-def run_probe(command, expected_os=None, expected_arch=None, revision="unknown", timeout=15):
+def run_probe(command, expected_os=None, revision="unknown", timeout=15):
     report = {"schema": SCHEMA, "source_revision": revision, "status": "fail"}
     try:
         process = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
@@ -32,9 +32,9 @@ def run_probe(command, expected_os=None, expected_arch=None, revision="unknown",
         return dict(report, failure="invalid-schema")
     version, build = native.get("os_version"), native.get("os_build")
     arch, translated = native.get("architecture"), native.get("translated")
-    if (not isinstance(version, str) or not re.fullmatch(r"(?:14|15|26|27)\.\d+\.\d+", version)
+    if (not isinstance(version, str) or not re.fullmatch(r"(?:26|27)\.\d+\.\d+", version)
             or not isinstance(build, str) or not re.fullmatch(r"[0-9A-Za-z.]+", build)
-            or arch not in ("arm64", "x86_64") or type(translated) is not bool):
+            or arch != "arm64" or type(translated) is not bool):
         return dict(report, failure="invalid-host-metadata")
     # Whitelist output: do not forward native stderr or unknown payload fields.
     report.update(os_version=version, os_build=build, architecture=arch, translated=translated)
@@ -42,8 +42,6 @@ def run_probe(command, expected_os=None, expected_arch=None, revision="unknown",
         return dict(report, failure="translated-process-not-native-evidence")
     if expected_os is not None and version.split(".")[0] != expected_os:
         return dict(report, failure="unexpected-os")
-    if expected_arch is not None and arch != expected_arch:
-        return dict(report, failure="unexpected-architecture")
     checks = native.get("checks")
     if not isinstance(checks, dict):
         return dict(report, failure="invalid-checks")
@@ -65,11 +63,10 @@ def run_probe(command, expected_os=None, expected_arch=None, revision="unknown",
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", required=True)
-    parser.add_argument("--expected-os", choices=("14", "15", "26", "27"))
-    parser.add_argument("--expected-arch", choices=("arm64", "x86_64"))
+    parser.add_argument("--expected-os", choices=("26", "27"))
     parser.add_argument("--source-revision", default="unknown")
     args = parser.parse_args()
-    report = run_probe([args.probe], args.expected_os, args.expected_arch, args.source_revision)
+    report = run_probe([args.probe], args.expected_os, args.source_revision)
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "pass" else 1
 

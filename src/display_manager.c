@@ -327,10 +327,6 @@ CGRect display_manager_menu_bar_rect(uint32_t did)
 {
     CGRect bounds = {0};
 
-#ifdef __x86_64__
-    SLSGetRevealedMenuBarBounds(&bounds, g_connection, display_space_id(did));
-#elif __arm64__
-
     //
     // NOTE(asmvik): SLSGetRevealedMenuBarBounds is broken on Apple Silicon,
     // but we expected it to return the full display bounds along with the menubar
@@ -342,7 +338,6 @@ CGRect display_manager_menu_bar_rect(uint32_t did)
 
     bounds = CGDisplayBounds(did);
     bounds.size.height = height;
-#endif
 
     //
     // NOTE(asmvik): Height needs to be offset by 1 because that is the actual

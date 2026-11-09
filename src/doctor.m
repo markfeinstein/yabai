@@ -24,21 +24,17 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
                     "verify the installed yabai binary manually");
     }
 
-    if (facts->translated == DOCTOR_PROBE_YES && facts->arm64_slice == DOCTOR_PROBE_YES) {
-        doctor_emit(stream, "WARN", "architecture", "Rosetta translation is forced although this binary contains an arm64 slice",
-                    "launch the arm64 slice instead of forcing x86_64");
-    } else if (facts->translated == DOCTOR_PROBE_YES && facts->arm64_slice == DOCTOR_PROBE_NO) {
-        doctor_emit(stream, "WARN", "architecture", "Rosetta translation is required because this binary lacks an arm64 slice",
-                    "install a universal or arm64 yabai binary");
-    } else if (facts->translated == DOCTOR_PROBE_YES) {
-        doctor_emit(stream, "WARN", "architecture", "Rosetta translation is active and binary slices are not inspectable",
-                    "inspect the binary with file and install a native slice if needed");
-    } else if (facts->translated == DOCTOR_PROBE_NO) {
-        doctor_emit(stream, "PASS", "architecture", "the process is running natively",
+    if (facts->runtime_arch && strcmp(facts->runtime_arch, "arm64") == 0) {
+        doctor_emit(stream, "PASS", "architecture", "the process is running natively on Apple Silicon",
                     "no action required");
+    } else if (facts->runtime_arch && strcmp(facts->runtime_arch, "unknown") != 0 &&
+               strcmp(facts->runtime_arch, "unknown architecture") != 0) {
+        doctor_emit(stream, "FAIL", "architecture", "the process is not running on supported Apple Silicon hardware",
+                    "install yabai on an arm64 Mac running macOS 26 or 27");
+        ++failures;
     } else {
-        doctor_emit(stream, "UNKNOWN", "architecture", "translation state is unavailable",
-                    "compare uname -m with the installed binary architecture");
+        doctor_emit(stream, "UNKNOWN", "architecture", "the runtime architecture is unavailable",
+                    "verify that uname -m reports arm64");
     }
 
     if (facts->accessibility == DOCTOR_PROBE_YES) {
@@ -225,20 +221,15 @@ int doctor_report(const struct doctor_facts *facts, FILE *stream)
                     "retain the existing scripting-addition and gesture paths");
     }
 
-    if (facts->arm64e_applicable == DOCTOR_PROBE_YES) {
-        if (facts->arm64e_bootarg == DOCTOR_PROBE_YES) {
-            doctor_emit(stream, "PASS", "arm64e boot arg", "kern.bootargs contains -arm64e_preview_abi",
-                        "no action required for this scripting-addition prerequisite");
-        } else if (facts->arm64e_bootarg == DOCTOR_PROBE_NO) {
-            doctor_emit(stream, "WARN", "arm64e boot arg", "kern.bootargs lacks -arm64e_preview_abi",
-                        "use core features, or follow scripting-addition setup documentation");
-        } else {
-            doctor_emit(stream, "UNKNOWN", "arm64e boot arg", "kern.bootargs is unavailable",
-                        "verify the boot argument manually only if scripting features are needed");
-        }
-    } else if (facts->arm64e_applicable == DOCTOR_PROBE_UNKNOWN) {
-        doctor_emit(stream, "UNKNOWN", "arm64e boot arg", "Apple Silicon applicability could not be determined",
-                    "verify architecture and the boot argument manually only if scripting features are needed");
+    if (facts->arm64e_bootarg == DOCTOR_PROBE_YES) {
+        doctor_emit(stream, "PASS", "arm64e boot arg", "kern.bootargs contains -arm64e_preview_abi",
+                    "no action required for this scripting-addition prerequisite");
+    } else if (facts->arm64e_bootarg == DOCTOR_PROBE_NO) {
+        doctor_emit(stream, "WARN", "arm64e boot arg", "kern.bootargs lacks -arm64e_preview_abi",
+                    "use core features, or follow scripting-addition setup documentation");
+    } else {
+        doctor_emit(stream, "UNKNOWN", "arm64e boot arg", "kern.bootargs is unavailable",
+                    "verify the boot argument manually only if scripting features are needed");
     }
 
     switch (facts->sa_install) {
@@ -771,12 +762,6 @@ static enum doctor_probe doctor_inspect_socket(const struct doctor_collect_ops *
     return errno == ENOENT ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
 }
 
-static enum doctor_probe doctor_arm64e_applicability(bool compiled_arm64, enum doctor_probe translated)
-{
-    if (compiled_arm64 || translated == DOCTOR_PROBE_YES) return DOCTOR_PROBE_YES;
-    return translated == DOCTOR_PROBE_NO ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
-}
-
 static __attribute__((unused)) enum doctor_probe doctor_classify_arm64e_bootargs(const char *bootargs, size_t length)
 {
     static const char token[] = "-arm64e_preview_abi";
@@ -923,61 +908,28 @@ static void doctor_collect_paths(struct doctor_facts *facts, const struct doctor
     facts->sa_socket = doctor_inspect_socket(ops, identity);
 }
 
-static enum doctor_probe doctor_binary_has_arm64_slice(const struct doctor_collect_ops *ops,
-                                                        const char *path,
-                                                        const struct stat *expected)
-{
-    NSData *data = nil;
-    if (doctor_read_regular_snapshot(ops, path, expected, 512 * 1024 * 1024, &data, NULL) != DOCTOR_PROBE_YES ||
-        [data length] < sizeof(uint32_t)) return DOCTOR_PROBE_UNKNOWN;
-    const uint8_t *bytes = [data bytes];
-    uint32_t magic;
-    memcpy(&magic, bytes, sizeof(magic));
-    if (magic == MH_MAGIC_64) {
-        if ([data length] < sizeof(struct mach_header_64)) return DOCTOR_PROBE_UNKNOWN;
-        return ((const struct mach_header_64 *) bytes)->cputype == CPU_TYPE_ARM64 ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
-    }
-    if (magic != FAT_CIGAM && magic != FAT_MAGIC) return DOCTOR_PROBE_UNKNOWN;
-    bool swap = magic == FAT_CIGAM;
-    if ([data length] < sizeof(struct fat_header)) return DOCTOR_PROBE_UNKNOWN;
-    uint32_t count = ((const struct fat_header *) bytes)->nfat_arch;
-    if (swap) count = OSSwapInt32(count);
-    if (count > 32 || [data length] < sizeof(struct fat_header) + count * sizeof(struct fat_arch)) return DOCTOR_PROBE_UNKNOWN;
-    const struct fat_arch *arches = (const struct fat_arch *) (bytes + sizeof(struct fat_header));
-    for (uint32_t i = 0; i < count; ++i) {
-        cpu_type_t type = arches[i].cputype;
-        if (swap) type = OSSwapInt32(type);
-        if (type == CPU_TYPE_ARM64) return DOCTOR_PROBE_YES;
-    }
-    return DOCTOR_PROBE_NO;
-}
-
 static void doctor_inspect_running_executable(const struct doctor_collect_ops *ops,
                                                const struct doctor_identity *identity,
                                                const char *path, struct doctor_facts *facts)
 {
     if (!path || !identity) {
-        facts->binary_executable = facts->arm64_slice = DOCTOR_PROBE_UNKNOWN;
+        facts->binary_executable = DOCTOR_PROBE_UNKNOWN;
         return;
     }
     char canonical[PATH_MAX];
     enum doctor_probe traversal = doctor_target_path_traversal(ops, identity, path, canonical, NULL);
     if (traversal != DOCTOR_PROBE_YES) {
         facts->binary_executable = traversal;
-        facts->arm64_slice = DOCTOR_PROBE_UNKNOWN;
         return;
     }
     struct stat executable_stat;
     if (ops->stat_fn(canonical, &executable_stat) != 0) {
         int error = errno;
         facts->binary_executable = error == EACCES || error == EPERM ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
-        facts->arm64_slice = DOCTOR_PROBE_UNKNOWN;
     } else if (!S_ISREG(executable_stat.st_mode)) {
         facts->binary_executable = DOCTOR_PROBE_NO;
-        facts->arm64_slice = DOCTOR_PROBE_UNKNOWN;
     } else {
         facts->binary_executable = doctor_target_permission(ops, identity, canonical, &executable_stat, R_OK | X_OK);
-        facts->arm64_slice = doctor_binary_has_arm64_slice(ops, canonical, &executable_stat);
     }
 }
 
@@ -1033,25 +985,13 @@ static void doctor_collect_production(void *opaque, struct doctor_facts *facts)
                                       identity_resolved ? &identity : NULL,
                                       executable_known ? executable : NULL, facts);
 
-    int translated = 0;
-    size_t translated_size = sizeof(translated);
-    if (sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0) == 0) facts->translated = translated ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
-    else facts->translated = errno == ENOENT ? DOCTOR_PROBE_NO : DOCTOR_PROBE_UNKNOWN;
-
     facts->accessibility = AXIsProcessTrusted() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
     facts->secure_input = IsSecureEventInputEnabled() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
     facts->sip_available = csr_get_active_config(&facts->sip_config) == 0 ? DOCTOR_PROBE_YES : DOCTOR_PROBE_UNKNOWN;
-#ifdef __arm64__
-    facts->arm64e_applicable = doctor_arm64e_applicability(true, facts->translated);
-#else
-    facts->arm64e_applicable = doctor_arm64e_applicability(false, facts->translated);
-#endif
-    if (facts->arm64e_applicable != DOCTOR_PROBE_NO) {
-        char bootargs[2048] = {0};
-        size_t bootargs_size = sizeof(bootargs) - 1;
-        if (sysctlbyname("kern.bootargs", bootargs, &bootargs_size, NULL, 0) == 0) facts->arm64e_bootarg = doctor_classify_arm64e_bootargs(bootargs, bootargs_size);
-        else facts->arm64e_bootarg = DOCTOR_PROBE_UNKNOWN;
-    }
+    char bootargs[2048] = {0};
+    size_t bootargs_size = sizeof(bootargs) - 1;
+    if (sysctlbyname("kern.bootargs", bootargs, &bootargs_size, NULL, 0) == 0) facts->arm64e_bootarg = doctor_classify_arm64e_bootargs(bootargs, bootargs_size);
+    else facts->arm64e_bootarg = DOCTOR_PROBE_UNKNOWN;
 
     if (!window_management_bridge_diagnose_readonly(&facts->window_management)) {
         facts->window_management = (struct wm_bridge_diagnostic) {

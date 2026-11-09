@@ -242,12 +242,7 @@ static void diagnose_extended(struct native_tile_extended_diagnostic *diagnostic
             id result = perform(manager, operation);
             CGRect rect = CGRectZero; bool rect_known = false;
             if (kind(result, rect_result)) {
-#ifdef __x86_64__
-                ((void (*)(CGRect *, id, SEL))objc_msgSend_stret)(
-                    &rect, result, sel_registerName("rect"));
-#else
                 rect = ((CGRect (*)(id, SEL))objc_msgSend)(result, sel_registerName("rect"));
-#endif
                 rect_known = true;
                 ++diagnostic->tile_rect_successes;
                 if (rect_nonempty(rect)) {

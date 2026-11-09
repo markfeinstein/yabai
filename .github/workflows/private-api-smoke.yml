@@ -4,27 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       os_major:
-        description: Expected macOS major version on the prepared host
+        description: Expected macOS major version on the prepared Apple Silicon host
         type: choice
         required: true
-        options: ["14", "15", "26", "27"]
-      architecture:
-        description: Native hardware architecture (Rosetta is not evidence)
-        type: choice
-        required: true
-        options: [arm64, x86_64]
+        options: ["26", "27"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: private-api-smoke-${{ inputs.os_major }}-${{ inputs.architecture }}
+  group: private-api-smoke-${{ inputs.os_major }}-arm64
   cancel-in-progress: false
 
 jobs:
   native-smoke:
     # Explicitly prepared, logged-in Macs only; never run untrusted PRs here.
-    runs-on: [self-hosted, macOS, "${{ format('yabai-smoke-macos-{0}-{1}', inputs.os_major, inputs.architecture) }}"]
+    runs-on: [self-hosted, macOS, "${{ format('yabai-smoke-macos-{0}-arm64', inputs.os_major) }}"]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,11 +30,10 @@ jobs:
       - name: Validate real WindowServer APIs on the selected native host
         env:
           EXPECTED_OS: ${{ inputs.os_major }}
-          EXPECTED_ARCH: ${{ inputs.architecture }}
         run: |
           python3 -B tests/integration/private_api_smoke.py \
             --probe bin/debug/private-api-smoke \
-            --expected-os "$EXPECTED_OS" --expected-arch "$EXPECTED_ARCH" \
+            --expected-os "$EXPECTED_OS" \
             --source-revision "$GITHUB_SHA" | tee "$RUNNER_TEMP/yabai-private-api-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
       - name: Preserve redacted evidence in the run summary
         if: always()
