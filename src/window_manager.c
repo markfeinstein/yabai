@@ -3727,7 +3727,7 @@ mode_3:;
 
 bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct window *window, char *label)
 {
-    if (!label) return false;
+    if (!wm || !window || !label) return false;
     struct window *existing_window = window_manager_find_scratchpad_window(wm, label);
     if (existing_window) return false;
 
@@ -3753,6 +3753,7 @@ bool window_manager_set_scratchpad_for_window(struct window_manager *wm, struct 
 
 bool window_manager_remove_scratchpad_for_window(struct window_manager *wm, struct window *window, bool unfloat)
 {
+    if (!wm || !window) return false;
     for (int i = 0; i < buf_len(wm->scratchpad_window); ++i) {
         if (wm->scratchpad_window[i].window == window) {
             window->scratchpad = NULL;

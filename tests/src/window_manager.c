@@ -238,6 +238,31 @@ TEST_FUNC(hashtable_for_preserves_enclosing_loop_variables,
     table_free(&table);
 })
 
+TEST_FUNC(scratchpad_mutators_reject_missing_targets,
+{
+    struct window_manager wm = {0};
+    struct window window = { .id = 41 };
+    char *label = string_copy("prior");
+    TEST_CHECK(label != NULL, true);
+    if (!label) return result;
+
+    buf_push(wm.scratchpad_window, ((struct scratchpad) { .label = label, .window = &window }));
+    window.scratchpad = label;
+
+    TEST_CHECK(window_manager_set_scratchpad_for_window(NULL, &window, "next"), false);
+    TEST_CHECK(window_manager_set_scratchpad_for_window(&wm, NULL, "next"), false);
+    TEST_CHECK(window_manager_set_scratchpad_for_window(&wm, &window, NULL), false);
+    TEST_CHECK(window_manager_remove_scratchpad_for_window(NULL, &window, false), false);
+    TEST_CHECK(window_manager_remove_scratchpad_for_window(&wm, NULL, false), false);
+    TEST_CHECK(buf_len(wm.scratchpad_window), 1);
+    TEST_CHECK(wm.scratchpad_window[0].window, &window);
+    TEST_CHECK(wm.scratchpad_window[0].label, label);
+    TEST_CHECK(window.scratchpad, label);
+
+    free(label);
+    buf_free(wm.scratchpad_window);
+});
+
 TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
 {
     TEST_OVERRIDE(window_manager_window_is_ordered_in, window_manager_test_window_is_ordered_in);

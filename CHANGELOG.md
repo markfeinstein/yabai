@@ -17,6 +17,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 
 ### Fixed
+- Reject missing scratchpad mutation targets instead of dereferencing null window pointers.
 - Replace the retired macOS 14 GitHub-hosted CI runner with supported macOS 15 ARM and Intel coverage while retaining the macOS 14 deployment target.
 
 ## [0.0.1] - 2026-11-08
