@@ -894,6 +894,8 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     YBMenuBarScreenCell *first = [[strip subviews] firstObject];
     NSPoint first_point = NSMakePoint(NSMidX([first frame]), NSMidY([first frame]));
     NSPoint first_window_point = [strip convertPoint:first_point toView:nil];
+    NSPoint first_screen_point = [[strip window]
+        convertRectToScreen:NSMakeRect(first_window_point.x, first_window_point.y, 0.0, 0.0)].origin;
     NSInteger window_number = [[strip window] windowNumber];
     NSEvent *down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
                                         location:first_window_point
@@ -931,17 +933,22 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
         TEST_CHECK(log.space_id[i] == expected_space_ids[i]);
     }
 
-    TEST_CHECK([controller routeStatusItemEvent:down]);
+    TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
+                                             eventType:[down type]]);
     TEST_CHECK(log.count == 4);
     TEST_CHECK(log.type[3] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[3] == 73);
     TEST_CHECK(log.space_id[3] == expected_space_ids[0]);
 
-    TEST_CHECK([controller routeStatusItemEvent:up]);
+    TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
+                                             eventType:[up type]]);
     TEST_CHECK(log.count == 5);
     TEST_CHECK(log.type[4] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[4] == 73);
     TEST_CHECK(log.space_id[4] == expected_space_ids[0]);
+    TEST_CHECK(![controller routeStatusItemScreenPoint:first_screen_point
+                                              eventType:NSEventTypeKeyDown]);
+    TEST_CHECK(log.count == 5);
 
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];

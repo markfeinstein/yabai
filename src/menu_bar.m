@@ -211,7 +211,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
-- (bool)routeStatusItemEvent:(NSEvent *)event;
+- (bool)routeStatusItemScreenPoint:(NSPoint)screenPoint eventType:(NSEventType)type;
 - (void)performStatusItemAction:(id)sender;
 - (void)showStatusMenu:(id)sender;
 - (void)performScreenAction:(id)sender;
@@ -1833,16 +1833,15 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     }
 }
 
-- (bool)routeStatusItemEvent:(NSEvent *)event
+- (bool)routeStatusItemScreenPoint:(NSPoint)screenPoint eventType:(NSEventType)type
 {
-    if (!_strip_view || !event) return false;
-    NSEventType type = [event type];
-    if (type != NSEventTypeLeftMouseDown && type != NSEventTypeLeftMouseUp) return false;
+    if (!_strip_view || (type != NSEventTypeLeftMouseDown && type != NSEventTypeLeftMouseUp)) return false;
 
     NSWindow *window = [_strip_view window];
-    if (!window || [event windowNumber] != [window windowNumber]) return false;
+    if (!window) return false;
 
-    NSPoint point = [_strip_view convertPoint:[event locationInWindow] fromView:nil];
+    NSPoint window_point = [window convertPointFromScreen:screenPoint];
+    NSPoint point = [_strip_view convertPoint:window_point fromView:nil];
     if (!NSPointInRect(point, [_strip_view bounds])) return false;
 
     [(YBMenuBarStripView *) _strip_view activatePoint:point];
@@ -1852,10 +1851,12 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 - (void)performStatusItemAction:(id)sender
 {
     // AppKit and third-party menu-bar managers can occasionally let the host
-    // NSStatusBarButton win hit testing instead of its strip subview. Preserve
-    // the click coordinate so this fallback selects the intended Space rather
-    // than treating every intercepted click as a request to open the menu.
-    if (![self routeStatusItemEvent:[NSApp currentEvent]]) {
+    // NSStatusBarButton win hit testing instead of its strip subview. Status
+    // item scene events do not reliably report window-relative coordinates,
+    // so map the actual global mouse position into the current strip.
+    NSEvent *event = [NSApp currentEvent];
+    if (!event || ![self routeStatusItemScreenPoint:[NSEvent mouseLocation]
+                                         eventType:[event type]]) {
         [self showStatusMenu:sender];
     }
 }
