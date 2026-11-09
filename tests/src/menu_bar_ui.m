@@ -739,8 +739,8 @@ test_space_menu_focus_closes_without_animation(void)
 static bool
 test_expanded_screen_cells_and_compact_option(void)
 {
-    struct menu_bar_settings defaults = {0};
-    TEST_CHECK(defaults.style == MENU_BAR_STYLE_EXPANDED);
+    struct menu_bar_settings defaults = menu_bar_settings_default();
+    TEST_CHECK(defaults.style == MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(defaults.space_filter == MENU_BAR_SPACE_FILTER_OCCUPIED);
 
     struct menu_bar_ui_action_log log = {0};

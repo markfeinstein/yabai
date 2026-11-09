@@ -212,6 +212,7 @@ static void declarative_install_space_defaults(struct space_manager *sm)
         .single_window_width_ratio = 1.0f,
         .split_ratio = 0.5f,
         .split_type = SPLIT_AUTO,
+        .auto_balance = SPLIT_AUTO,
         .window_placement = CHILD_SECOND,
         .window_insertion_point = INSERT_FOCUSED,
         .window_zoom_persist = true
@@ -1008,9 +1009,10 @@ static bool declarative_reload_prepare(struct declarative_reload_transaction *tr
         .action1 = MOUSE_MODE_MOVE,
         .action2 = MOUSE_MODE_RESIZE,
         .drop_action = MOUSE_MODE_SWAP,
+        .native_edge_resize = true,
         .active_button = MOUSE_BUTTON_NONE
     };
-    bundle->menu_settings = (struct menu_bar_settings) {0};
+    bundle->menu_settings = menu_bar_settings_default();
     bundle->verbose = false;
     for (int i = 0; i < DECLARATIVE_CONFIG_COUNT; ++i) {
         if (settings.values[i].present) declarative_install_apply_candidate_value(bundle, i, &settings.values[i]);

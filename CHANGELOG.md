@@ -12,6 +12,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 - Let the Home Manager module ensure a minimum global count of ordinary Spaces, creating missing Spaces after service startup and reloading settings so native rule targets can bind.
 
 ### Changed
+- Enable the menu bar by default with the panel interface and automatic layout, and default auto-balance and native edge resizing to on.
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 
 ## [0.0.1] - 2026-11-08

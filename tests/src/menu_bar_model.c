@@ -73,13 +73,13 @@ static struct menu_bar_snapshot *test_create_two_display_snapshot(uint64_t gener
 }
 
 MENU_BAR_MODEL_TEST_BEGIN(menu_bar_model_defaults_and_zero_counts)
-    struct menu_bar_settings defaults = {0};
+    struct menu_bar_settings defaults = menu_bar_settings_default();
     struct menu_bar_snapshot *empty = menu_bar_model_snapshot_create(1, defaults, NULL, 0, false, 0, NULL, 0, NULL);
     TEST_CHECK_NOT_NULL(empty);
     if (empty) {
-        TEST_CHECK(empty->settings.enabled, MENU_BAR_DISABLED);
-        TEST_CHECK(empty->settings.interface, MENU_BAR_INTERFACE_MENU);
-        TEST_CHECK(empty->settings.style, MENU_BAR_STYLE_EXPANDED);
+        TEST_CHECK(empty->settings.enabled, MENU_BAR_ENABLED);
+        TEST_CHECK(empty->settings.interface, MENU_BAR_INTERFACE_PANEL);
+        TEST_CHECK(empty->settings.style, MENU_BAR_STYLE_AUTOMATIC);
         TEST_CHECK(empty->settings.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
         TEST_CHECK(empty->display_count, 0);
         TEST_CHECK(empty->has_focused_display, false);

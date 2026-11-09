@@ -4,20 +4,20 @@ static void menu_bar_manager_test_install_native_seams(void);
 TEST_FUNC(menu_bar_manager_config_value_parsing, {
     menu_bar_manager_test_reset();
 
-    struct menu_bar_settings defaults = menu_bar_manager_settings();
-    TEST_CHECK(defaults.enabled, MENU_BAR_DISABLED);
-    TEST_CHECK(defaults.interface, MENU_BAR_INTERFACE_MENU);
-    TEST_CHECK(defaults.style, MENU_BAR_STYLE_EXPANDED);
+    struct menu_bar_settings defaults = menu_bar_settings_default();
+    TEST_CHECK(defaults.enabled, MENU_BAR_ENABLED);
+    TEST_CHECK(defaults.interface, MENU_BAR_INTERFACE_PANEL);
+    TEST_CHECK(defaults.style, MENU_BAR_STYLE_AUTOMATIC);
     TEST_CHECK(defaults.space_filter, MENU_BAR_SPACE_FILTER_OCCUPIED);
 
     TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_MENU), "menu"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_PANEL), "panel"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_interface_string(MENU_BAR_INTERFACE_AUTO), "auto"), 0);
-    TEST_CHECK(strcmp(menu_bar_manager_interface_string((enum menu_bar_interface) -1), "menu"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_interface_string((enum menu_bar_interface) -1), "panel"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_COMPACT), "compact"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_EXPANDED), "expanded"), 0);
     TEST_CHECK(strcmp(menu_bar_manager_style_string(MENU_BAR_STYLE_AUTOMATIC), "automatic"), 0);
-    TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "expanded"), 0);
+    TEST_CHECK(strcmp(menu_bar_manager_style_string((enum menu_bar_style) -1), "automatic"), 0);
 
     enum menu_bar_enabled enabled = MENU_BAR_ENABLED;
     enum menu_bar_interface interface = MENU_BAR_INTERFACE_MENU;

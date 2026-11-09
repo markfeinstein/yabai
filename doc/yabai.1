@@ -1133,14 +1133,14 @@ Specify top and bottom padding for a potential custom bar that you may be runnin
 .sp
 \fBmenubar\fP [\fI<BOOL_SEL>\fP]
 .RS 4
-Show yabai Spaces as a native macOS menu bar status item. Default is \fIoff\fP.
+Show yabai Spaces as a native macOS menu bar status item. Default is \fIon\fP.
 .br
 Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right\-click, or press and hold to open the menu. The native menu can reload the installed JSONC configuration or stop the launchd service and quit yabai. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and \fBmenubar_opacity\fP settings.
 .RE
 .sp
 \fBmenubar_interface\fP [\fImenu|panel|auto\fP]
 .RS 4
-Select the read\-only menu bar item\(cqs expanded interface. Default is \fImenu\fP.
+Select the read\-only menu bar item\(cqs expanded interface. Default is \fIpanel\fP.
 .br
 \fImenu\fP: Use the existing native informational menu.
 .br
@@ -1153,7 +1153,7 @@ The panel uses the existing display/Space snapshot and exposes only the existing
 .sp
 \fBmenubar_style\fP [\fIautomatic|compact|expanded\fP]
 .RS 4
-Set the menu bar status item layout. Default is \fIexpanded\fP.
+Set the menu bar status item layout. Default is \fIautomatic\fP.
 .br
 \fIautomatic\fP: Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout.
 .br
@@ -1392,7 +1392,7 @@ Proportion of usable width assigned to a Space containing exactly one managed wi
 .sp
 \fBnative_edge_resize\fP [\fI<BOOL_SEL>\fP]
 .RS 4
-Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application\(cqs mouse events. Only a focused, visible, resizable, unzoomed single\-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse\-up. Auto\-balance and managed\-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
+Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application\(cqs mouse events. Only a focused, visible, resizable, unzoomed single\-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse\-up. Auto\-balance and managed\-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: on)
 .RE
 .sp
 \fBmouse_bsp_live_resize\fP [\fI<BOOL_SEL>\fP]
@@ -1489,7 +1489,7 @@ Set the default ratio for new BSP splits on the selected Space. Existing ordinar
 .sp
 \fBauto_balance\fP [\fI<BOOL_SEL>|x\-axis|y\-axis\fP]
 .RS 4
-Balance the window tree upon change, so that all windows occupy an equally sized area.
+Balance the window tree upon change, so that all windows occupy an equally sized area. (default: on)
 .RE
 .SS "Display"
 .SS "General Syntax"

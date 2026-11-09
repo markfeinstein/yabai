@@ -570,20 +570,21 @@ TEST_FUNC(declarative_reload_omits_skylight_only_windows_until_discovery,
     TEST_CHECK(declarative_install_test_outstanding_allocations(), 0U);
 });
 
-TEST_FUNC(declarative_native_edge_resize_reload_defaults_and_failures_are_transactional,
+TEST_FUNC(declarative_preferred_reload_defaults_and_failures_are_transactional,
 {
-    static const char enabled_json[] =
-        "{\"version\":1,\"config\":{\"native_edge_resize\":true,\"mouse_bsp_live_resize\":true},\"rules\":[]}";
+    static const char configured_json[] =
+        "{\"version\":1,\"config\":{\"auto_balance\":\"off\",\"native_edge_resize\":true,\"mouse_bsp_live_resize\":true},\"rules\":[]}";
     static const char invalid_json[] =
-        "{\"version\":1,\"config\":{\"native_edge_resize\":true,\"mouse_bsp_live_resize\":\"on\"},\"rules\":[]}";
+        "{\"version\":1,\"config\":{\"auto_balance\":\"off\",\"native_edge_resize\":true,\"mouse_bsp_live_resize\":\"on\"},\"rules\":[]}";
     static const char omitted_json[] = "{\"version\":1,\"rules\":[]}";
     struct declarative_reload_fixture fixture = {
-        .json = enabled_json, .path = "/tmp/native-edge-resize.jsonc"
+        .json = configured_json, .path = "/tmp/native-edge-resize.jsonc"
     };
     struct declarative_reload_saved_state saved;
     TEST_CHECK(declarative_reload_test_setup(&fixture, &saved), true);
     if (!g_event_loop.semaphore) return result;
 
+    TEST_CHECK(g_space_manager.auto_balance, SPLIT_AUTO);
     TEST_CHECK(g_mouse_state.native_edge_resize, false);
     TEST_CHECK(g_mouse_state.bsp_live_resize, false);
     g_mouse_state.native_resize.window_id = 999;
@@ -591,6 +592,7 @@ TEST_FUNC(declarative_native_edge_resize_reload_defaults_and_failures_are_transa
     g_mouse_state.native_resize.claimed = true;
     struct declarative_reload_test_ops ops = declarative_reload_test_ops(&fixture);
     TEST_CHECK(declarative_reload_run(&ops, NULL), true);
+    TEST_CHECK(g_space_manager.auto_balance, SPLIT_NONE);
     TEST_CHECK(g_mouse_state.native_edge_resize, true);
     TEST_CHECK(g_mouse_state.bsp_live_resize, true);
     TEST_CHECK(g_mouse_state.native_resize.window_id, 0U);
@@ -599,13 +601,15 @@ TEST_FUNC(declarative_native_edge_resize_reload_defaults_and_failures_are_transa
 
     fixture.json = invalid_json;
     TEST_CHECK(declarative_reload_run(&ops, NULL), false);
+    TEST_CHECK(g_space_manager.auto_balance, SPLIT_NONE);
     TEST_CHECK(g_mouse_state.native_edge_resize, true);
     TEST_CHECK(g_mouse_state.bsp_live_resize, true);
     TEST_CHECK(declarative_installed.generation, generation);
 
     fixture.json = omitted_json;
     TEST_CHECK(declarative_reload_run(&ops, NULL), true);
-    TEST_CHECK(g_mouse_state.native_edge_resize, false);
+    TEST_CHECK(g_space_manager.auto_balance, SPLIT_AUTO);
+    TEST_CHECK(g_mouse_state.native_edge_resize, true);
     TEST_CHECK(g_mouse_state.bsp_live_resize, false);
     TEST_CHECK(declarative_installed.generation, generation + 1);
 
@@ -1430,6 +1434,9 @@ TEST_FUNC(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_li
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_SPLIT_RATIO,
                                                  &(struct declarative_value) { .present = true, .real = 0.73f }, 0),
                DECLARATIVE_APPLY_OK);
+    TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_AUTO_BALANCE,
+                                                 &(struct declarative_value) { .present = true, .u32 = SPLIT_NONE }, 0),
+               DECLARATIVE_APPLY_OK);
     TEST_CHECK(declarative_apply_runtime_setting(DECLARATIVE_CONFIG_WINDOW_ZOOM_PERSIST,
                                                  &(struct declarative_value) { .present = true, .boolean = false }, 0),
                DECLARATIVE_APPLY_OK);
@@ -1470,6 +1477,7 @@ TEST_FUNC(declarative_reconcile_preserves_live_imperative_bsp_defaults_across_li
     TEST_CHECK(g_space_manager.window_placement, CHILD_FIRST);
     TEST_CHECK(g_space_manager.window_insertion_point, INSERT_FOCUSED);
     TEST_CHECK(g_space_manager.split_ratio, 0.73f);
+    TEST_CHECK(g_space_manager.auto_balance, SPLIT_NONE);
     TEST_CHECK(g_space_manager.window_zoom_persist, false);
 
     declarative_reload_test_teardown(&fixture, &saved);

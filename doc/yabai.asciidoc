@@ -500,18 +500,18 @@ Global Settings
     'off':  Do not apply any special padding.
 
 *menubar* ['<BOOL_SEL>']::
-    Show yabai Spaces as a native macOS menu bar status item. Default is 'off'. +
+    Show yabai Spaces as a native macOS menu bar status item. Default is 'on'. +
     Click an inactive Space outline to focus it directly. Click the active outline or an empty region, right-click, or press and hold to open the menu. The native menu can reload the installed JSONC configuration or stop the launchd service and quit yabai. The indicator works with full System Integrity Protection (SIP) enabled and follows the system menu bar visibility, including autohide, and *menubar_opacity* settings.
 
 *menubar_interface* ['menu|panel|auto']::
-    Select the read-only menu bar item's expanded interface. Default is 'menu'. +
+    Select the read-only menu bar item's expanded interface. Default is 'panel'. +
     'menu': Use the existing native informational menu. +
     'panel': On macOS 27 or newer, use a transient keyboard-accessible read-only panel; fall back to the native menu when unavailable. +
     'auto': Use the panel on macOS 27 or newer and the native menu on older systems. +
     The panel uses the existing display/Space snapshot and exposes only the existing space-filter and indicator-layout settings. It does not expose window content and does not require Screen Recording permission.
 
 *menubar_style* ['automatic|compact|expanded']::
-    Set the menu bar status item layout. Default is 'expanded'. +
+    Set the menu bar status item layout. Default is 'automatic'. +
     'automatic': Use the expanded layout when its filtered strip is at most 260 points wide; otherwise use the compact layout. +
     'compact': Show one screen outline for the keyboard-focused display's visible space. +
     'expanded': Show a bounded display-grouped interval of filtered spaces around the focused space in the menu bar. When every outline does not fit within the 520-point strip, `←+N` and `+N→` controls separately report spaces omitted before and after the visible interval.
@@ -646,7 +646,7 @@ Global Settings
     Proportion of usable width assigned to a Space containing exactly one managed window. The window keeps the full usable height and is centered horizontally. A value of 1 preserves full width unless an absolute ceiling is configured. (default: 1)
 
 *native_edge_resize* ['<BOOL_SEL>']::
-    Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application's mouse events. Only a focused, visible, resizable, unzoomed single-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse-up. Auto-balance and managed-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: off)
+    Update BSP split ratios from ordinary macOS edge and corner resize drags. Yabai observes native resize notifications without consuming the application's mouse events. Only a focused, visible, resizable, unzoomed single-window BSP leaf can start a native resize; stacked leaves are not supported. The grabbed application window follows the native macOS drag while sibling windows remain unchanged; Yabai applies and normalizes the real BSP layout once after mouse-up. Auto-balance and managed-scaffold Spaces accept the gesture, subject to their normal later tree rebuild behavior. (default: on)
 
 *mouse_bsp_live_resize* ['<BOOL_SEL>']::
     Reflow sibling BSP windows during *mouse_modifier* resizing. Updates are limited to 30 Hz and require a two-point cursor delta. This setting does not alter ordinary macOS edge or corner resizing, which remains release-only under *native_edge_resize*. Zoomed, floating and non-BSP windows retain the ordinary resize path. The setting is latched when a modifier-assisted gesture begins, so a runtime change applies to the next gesture. (default: off)
@@ -706,7 +706,7 @@ Space Settings
     Set the default ratio for new BSP splits on the selected Space. Existing ordinary BSP node ratios are not rewritten. A managed scaffold uses the effective Space ratio for its root split; with three primaries, the right-side subdivision remains `0.5`. Native and imperative values follow `built-in < native global < native Space < runtime global < runtime Space`, and runtime ownership clears on the next successful native reload like other Space settings.
 
 *auto_balance* ['<BOOL_SEL>|x-axis|y-axis']::
-    Balance the window tree upon change, so that all windows occupy an equally sized area.
+    Balance the window tree upon change, so that all windows occupy an equally sized area. (default: on)
 
 Display
 ~~~~~~~

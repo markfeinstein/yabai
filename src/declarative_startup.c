@@ -138,6 +138,7 @@ struct declarative_space_defaults declarative_startup_view_defaults(const struct
         .accordion_padding = 30,
         .single_window_width_ratio = 1.0f,
         .split_type = SPLIT_AUTO,
+        .auto_balance = SPLIT_AUTO,
         .split_ratio = 0.5f,
         .window_placement = CHILD_SECOND,
         .window_insertion_point = INSERT_FOCUSED,

@@ -1,3 +1,8 @@
+TEST_FUNC(declarative_startup_view_defaults_enable_auto_balance,
+    struct declarative_space_defaults defaults = declarative_startup_view_defaults(NULL);
+    TEST_CHECK(defaults.auto_balance, SPLIT_AUTO);
+)
+
 TEST_FUNC(declarative_primary_action_classifier_is_exclusive,
     char *daemon[] = { "yabai", "--verbose" };
     char *check[] = { "yabai", "--check-config", "candidate.jsonc" };

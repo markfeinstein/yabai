@@ -33,9 +33,9 @@ enum menu_bar_enabled
 
 enum menu_bar_interface
 {
-    /* Preserve the existing native NSMenu. This is the default. */
+    /* Preserve the existing native NSMenu. */
     MENU_BAR_INTERFACE_MENU = 0,
-    /* Prefer the macOS 27 expanded panel, with native-menu fallback. */
+    /* Prefer the macOS 27 expanded panel, with native-menu fallback. This is the default. */
     MENU_BAR_INTERFACE_PANEL = 1,
     /* Select the panel on macOS 27 and the native menu on older systems. */
     MENU_BAR_INTERFACE_AUTO = 2
@@ -43,13 +43,13 @@ enum menu_bar_interface
 
 enum menu_bar_style
 {
-    /* Show every space selected by the space filter. This is the default. */
+    /* Show every space selected by the space filter. */
     MENU_BAR_STYLE_EXPANDED  = 0,
 
     /* Show only the focused display's visible space in the status item. */
     MENU_BAR_STYLE_COMPACT   = 1,
 
-    /* Use expanded layout within the automatic width budget, otherwise compact. */
+    /* Use expanded layout within the automatic width budget, otherwise compact. This is the default. */
     MENU_BAR_STYLE_AUTOMATIC = 2
 };
 
@@ -62,7 +62,6 @@ enum menu_bar_space_filter
     MENU_BAR_SPACE_FILTER_ALL      = 1
 };
 
-/* A zero-initialized settings struct is the product default: off/menu/expanded/occupied. */
 struct menu_bar_settings
 {
     enum menu_bar_enabled enabled;
@@ -70,6 +69,16 @@ struct menu_bar_settings
     enum menu_bar_style style;
     enum menu_bar_space_filter space_filter;
 };
+
+static inline struct menu_bar_settings menu_bar_settings_default(void)
+{
+    return (struct menu_bar_settings) {
+        .enabled = MENU_BAR_ENABLED,
+        .interface = MENU_BAR_INTERFACE_PANEL,
+        .style = MENU_BAR_STYLE_AUTOMATIC,
+        .space_filter = MENU_BAR_SPACE_FILTER_OCCUPIED
+    };
+}
 
 enum menu_bar_space_membership
 {

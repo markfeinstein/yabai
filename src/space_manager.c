@@ -1749,7 +1749,7 @@ bool space_manager_begin(struct space_manager *sm)
     sm->single_window_min_width = 0;
     sm->single_window_width_ratio = 1.0f;
     sm->split_ratio = 0.5f;
-    sm->auto_balance = SPLIT_NONE;
+    sm->auto_balance = SPLIT_AUTO;
     sm->split_type = SPLIT_AUTO;
     sm->window_placement = CHILD_SECOND;
     sm->window_insertion_point = INSERT_FOCUSED;

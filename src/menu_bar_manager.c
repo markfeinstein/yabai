@@ -948,7 +948,7 @@ bool menu_bar_manager_init(void)
     g_menu_bar_manager.initialized = true;
     g_menu_bar_manager.refresh_pending = false;
     g_menu_bar_manager.dirty_reasons = 0;
-    g_menu_bar_manager.settings = (struct menu_bar_settings) { 0 };
+    g_menu_bar_manager.settings = menu_bar_settings_default();
     g_menu_bar_manager.generation = 0;
     g_menu_bar_manager.enabled_generation_floor = 1;
     g_menu_bar_manager.menu_tracking_depth = 0;
@@ -1012,7 +1012,7 @@ const char *menu_bar_manager_enabled_string(enum menu_bar_enabled enabled)
     case MENU_BAR_DISABLED: return "off";
     }
 
-    return "off";
+    return "on";
 }
 
 const char *menu_bar_manager_interface_string(enum menu_bar_interface interface)
@@ -1022,7 +1022,7 @@ const char *menu_bar_manager_interface_string(enum menu_bar_interface interface)
     case MENU_BAR_INTERFACE_PANEL: return MENU_BAR_INTERFACE_PANEL_STR;
     case MENU_BAR_INTERFACE_AUTO:  return MENU_BAR_INTERFACE_AUTO_STR;
     }
-    return MENU_BAR_INTERFACE_MENU_STR;
+    return MENU_BAR_INTERFACE_PANEL_STR;
 }
 
 const char *menu_bar_manager_style_string(enum menu_bar_style style)
@@ -1033,7 +1033,7 @@ const char *menu_bar_manager_style_string(enum menu_bar_style style)
     case MENU_BAR_STYLE_AUTOMATIC: return MENU_BAR_STYLE_AUTOMATIC_STR;
     }
 
-    return MENU_BAR_STYLE_EXPANDED_STR;
+    return MENU_BAR_STYLE_AUTOMATIC_STR;
 }
 
 const char *menu_bar_manager_space_filter_string(enum menu_bar_space_filter filter)

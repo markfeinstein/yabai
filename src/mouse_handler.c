@@ -616,7 +616,7 @@ void mouse_state_init(struct mouse_state *state)
     mouse_state_set_action1(state, MOUSE_MODE_MOVE);
     mouse_state_set_action2(state, MOUSE_MODE_RESIZE);
     state->drop_action = MOUSE_MODE_SWAP;
-    state->native_edge_resize = false;
+    state->native_edge_resize = true;
     state->bsp_live_resize = false;
     state->active_button = MOUSE_BUTTON_NONE;
 }
