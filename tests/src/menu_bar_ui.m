@@ -915,6 +915,8 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
                                    eventNumber:2
                                     clickCount:1
                                       pressure:0.0];
+    ((YBMenuBarStripView *) strip)->yb_test_has_mouse_screen_point = true;
+    ((YBMenuBarStripView *) strip)->yb_test_mouse_screen_point = first_screen_point;
     [(YBMenuBarStripView *) strip mouseDown:down];
     TEST_CHECK(((YBMenuBarStripView *) strip)->yb_long_press_timer != nil);
     [(YBMenuBarStripView *) strip mouseUp:up];
@@ -924,7 +926,19 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     TEST_CHECK(log.generation[0] == 73);
     TEST_CHECK(log.space_id[0] == expected_space_ids[0]);
 
-    for (size_t i = 1; i < sizeof(expected_space_ids) / sizeof(expected_space_ids[0]); ++i) {
+    YBMenuBarScreenCell *second = [[strip subviews] objectAtIndex:1];
+    NSPoint second_point = NSMakePoint(NSMidX([second frame]), NSMidY([second frame]));
+    NSPoint second_window_point = [strip convertPoint:second_point toView:nil];
+    ((YBMenuBarStripView *) strip)->yb_test_mouse_screen_point = [[strip window]
+        convertRectToScreen:NSMakeRect(second_window_point.x, second_window_point.y, 0.0, 0.0)].origin;
+    [(YBMenuBarStripView *) strip mouseDown:down];
+    [(YBMenuBarStripView *) strip mouseUp:up];
+    TEST_CHECK(log.count == 2);
+    TEST_CHECK(log.type[1] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.generation[1] == 73);
+    TEST_CHECK(log.space_id[1] == expected_space_ids[1]);
+
+    for (size_t i = 2; i < sizeof(expected_space_ids) / sizeof(expected_space_ids[0]); ++i) {
         YBMenuBarScreenCell *direct = [[strip subviews] objectAtIndex:i];
         [(YBMenuBarStripView *) strip activatePoint:NSMakePoint(NSMidX([direct frame]), NSMidY([direct frame]))];
         TEST_CHECK(log.count == i + 1);

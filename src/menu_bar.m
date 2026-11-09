@@ -134,6 +134,10 @@ enum yb_menu_bar_control_kind
     bool yb_long_press_fired;
     bool yb_click_cancelled;
     bool yb_expanded_interface;
+#if defined(YB_MENU_BAR_TEST)
+    bool yb_test_has_mouse_screen_point;
+    NSPoint yb_test_mouse_screen_point;
+#endif
 }
 - (void)activatePoint:(NSPoint)point;
 @end
@@ -339,10 +343,24 @@ struct yb_menu_bar_test_state
     [yb_controller showStatusMenu:self];
 }
 
+- (NSPoint)mousePointForEvent:(NSEvent *)event
+{
+    NSWindow *window = [self window];
+    if (!window) return [self convertPoint:[event locationInWindow] fromView:nil];
+#if defined(YB_MENU_BAR_TEST)
+    NSPoint screen_point = yb_test_has_mouse_screen_point
+                         ? yb_test_mouse_screen_point : [NSEvent mouseLocation];
+#else
+    NSPoint screen_point = [NSEvent mouseLocation];
+#endif
+    NSPoint window_point = [window convertPointFromScreen:screen_point];
+    return [self convertPoint:window_point fromView:nil];
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
     [self cancelLongPressTimer];
-    yb_mouse_down_point = [self convertPoint:[event locationInWindow] fromView:nil];
+    yb_mouse_down_point = [self mousePointForEvent:event];
     yb_long_press_fired = false;
     yb_click_cancelled = false;
 
@@ -356,7 +374,7 @@ struct yb_menu_bar_test_state
 
 - (void)mouseDragged:(NSEvent *)event
 {
-    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSPoint point = [self mousePointForEvent:event];
     if (hypot(point.x - yb_mouse_down_point.x, point.y - yb_mouse_down_point.y) <= YB_MENU_BAR_DRAG_TOLERANCE) return;
 
     yb_click_cancelled = true;
@@ -365,7 +383,7 @@ struct yb_menu_bar_test_state
 
 - (void)mouseUp:(NSEvent *)event
 {
-    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSPoint point = [self mousePointForEvent:event];
     [self cancelLongPressTimer];
     if (!yb_long_press_fired && !yb_click_cancelled && NSPointInRect(point, [self bounds])) {
         [self activatePoint:point];
