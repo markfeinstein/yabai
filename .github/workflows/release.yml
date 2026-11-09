@@ -397,3 +397,27 @@ jobs:
           test -z "${SIGNING_CERTIFICATE:-}" || /bin/rm -f "$SIGNING_CERTIFICATE"
           test -z "${SIGNING_INTERMEDIATE:-}" || /bin/rm -f "$SIGNING_INTERMEDIATE"
           test -z "${NOTARY_API_KEY:-}" || /bin/rm -f "$NOTARY_API_KEY"
+
+  pin-artifact:
+    name: Dispatch Home Manager artifact pin
+    needs:
+      - build
+      - sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch artifact pin workflow
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run pin-artifact.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$DEFAULT_BRANCH" \
+            --field "tag=$RELEASE_TAG"
+          echo "Dispatched Home Manager artifact pinning for \`$RELEASE_TAG\`." >> "$GITHUB_STEP_SUMMARY"

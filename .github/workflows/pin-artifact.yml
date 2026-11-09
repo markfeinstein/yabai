@@ -1,0 +1,316 @@
+name: pin-home-manager-artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable or nightly tag to pin
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pin-home-manager-artifact
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    name: Pin ${{ inputs.tag }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate published artifact
+        id: release
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            v*)
+              if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                echo "stable release tags must match v<major>.<minor>.<patch>" >&2
+                exit 1
+              fi
+              channel=release
+              expected_prerelease=false
+              pin_path=nix/release.json
+              ;;
+            nightly-*)
+              if [[ ! "$RELEASE_TAG" =~ ^nightly-[0-9]{8}$ ]]; then
+                echo "nightly tags must match nightly-YYYYMMDD" >&2
+                exit 1
+              fi
+              channel=nightly
+              expected_prerelease=true
+              pin_path=nix/nightly.json
+              ;;
+            *)
+              echo "unsupported artifact tag: $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+
+          release_json=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease)
+          test "$(jq -r .tagName <<< "$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r .isDraft <<< "$release_json")" = false
+          test "$(jq -r .isPrerelease <<< "$release_json")" = "$expected_prerelease"
+
+          git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          release_sha=$(git rev-parse "$RELEASE_TAG^{commit}")
+          if ! git merge-base --is-ancestor "$release_sha" HEAD; then
+            echo "$RELEASE_TAG at $release_sha is not an ancestor of current main" >&2
+            exit 1
+          fi
+
+          asset="Yabai-$RELEASE_TAG.zip"
+          checksum="$asset.sha256"
+          {
+            echo "channel=$channel"
+            echo "pin_path=$pin_path"
+            echo "asset=$asset"
+            echo "checksum=$checksum"
+            echo "release_sha=$release_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify published archive
+        env:
+          ASSET: ${{ steps.release.outputs.asset }}
+          CHECKSUM: ${{ steps.release.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/release"
+          mkdir -p "$download"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$download" \
+            --pattern "$ASSET" \
+            --pattern "$CHECKSUM"
+          cd "$download"
+          test -f "$ASSET"
+          test -f "$CHECKSUM"
+          /usr/bin/shasum -a 256 -c "$CHECKSUM"
+          echo "RELEASE_ARCHIVE=$download/$ASSET" >> "$GITHUB_ENV"
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Verify artifact and calculate normalized Nix hash
+        id: artifact
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          unpacked="$RUNNER_TEMP/unpacked"
+          mkdir -p "$unpacked"
+          /usr/bin/ditto -x -k "$RELEASE_ARCHIVE" "$unpacked"
+          app="$unpacked/Yabai.app"
+          executable="$app/Contents/MacOS/yabai"
+          plist="$app/Contents/Info.plist"
+          test -x "$executable"
+          test -f "$plist"
+
+          requirement='identifier "com.markfeinstein.yabai" and anchor apple generic and certificate leaf[subject.OU] = "GYXXG6S7KM"'
+          /usr/bin/codesign --verify --strict -R "=$requirement" "$executable"
+          /usr/bin/codesign --verify --deep --strict -R "=$requirement" "$app"
+          xcrun stapler validate -v "$app"
+          /usr/sbin/spctl --assess --type execute --verbose=4 "$app"
+
+          reported_version=$("$executable" --version)
+          case "$reported_version" in
+            yabai-v*) artifact_version=${reported_version#yabai-v} ;;
+            *) echo "unexpected binary version: $reported_version" >&2; exit 1 ;;
+          esac
+          plist_version=$(python3 - "$plist" <<'PY'
+          import plistlib
+          import sys
+
+          with open(sys.argv[1], "rb") as handle:
+              info = plistlib.load(handle)
+          short_version = info.get("CFBundleShortVersionString")
+          bundle_version = info.get("CFBundleVersion")
+          if not isinstance(short_version, str) or not isinstance(bundle_version, str):
+              raise SystemExit("release bundle is missing version metadata")
+          print(f"{short_version}\t{bundle_version}")
+          PY
+          )
+          short_version=${plist_version%%$'\t'*}
+          bundle_version=${plist_version#*$'\t'}
+
+          if [ "$CHANNEL" = release ]; then
+            expected_version=${RELEASE_TAG#v}
+            test "$artifact_version" = "$expected_version"
+            test "$short_version" = "$expected_version"
+            test "$bundle_version" = "$expected_version"
+          else
+            nightly_date=${RELEASE_TAG#nightly-}
+            expected_version="$short_version-nightly.$nightly_date.${RELEASE_SHA:0:12}"
+            test "$artifact_version" = "$expected_version"
+            test "$bundle_version" = "$short_version"
+          fi
+
+          normalized_hash=$(nix hash path "$unpacked")
+          case "$normalized_hash" in
+            sha256-*) ;;
+            *) echo "unexpected Nix hash: $normalized_hash" >&2; exit 1 ;;
+          esac
+          {
+            echo "version=$artifact_version"
+            echo "hash=$normalized_hash"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update artifact pin
+        id: pin
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          NEW_HASH: ${{ steps.artifact.outputs.hash }}
+          NEW_VERSION: ${{ steps.artifact.outputs.version }}
+          PIN_PATH: ${{ steps.release.outputs.pin_path }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          channel = os.environ["CHANNEL"]
+          path = Path(os.environ["PIN_PATH"])
+          current = json.loads(path.read_text(encoding="utf-8"))
+          new_hash = os.environ["NEW_HASH"]
+          new_version = os.environ["NEW_VERSION"]
+          new_tag = os.environ["RELEASE_TAG"]
+          hash_pattern = re.compile(r"^sha256-[A-Za-z0-9+/]{43}=$")
+          if not hash_pattern.fullmatch(new_hash):
+              raise SystemExit("artifact pin hash must be an SRI SHA-256 value")
+
+          if channel == "release":
+              if set(current) != {"version", "hash"}:
+                  raise SystemExit("nix/release.json must contain exactly version and hash")
+              version_pattern = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+              old_version = current["version"]
+              old_hash = current["hash"]
+              if not version_pattern.fullmatch(old_version) or not version_pattern.fullmatch(new_version):
+                  raise SystemExit("release pin versions must be semantic versions")
+              if not hash_pattern.fullmatch(old_hash):
+                  raise SystemExit("existing release pin hash must be an SRI SHA-256 value")
+              old_key = tuple(map(int, old_version.split(".")))
+              new_key = tuple(map(int, new_version.split(".")))
+              if new_key < old_key:
+                  raise SystemExit(f"refusing to downgrade release pin from {old_version} to {new_version}")
+              if new_key == old_key:
+                  if new_hash != old_hash:
+                      raise SystemExit(f"release {new_version} is already pinned with a different immutable hash")
+                  changed = False
+              else:
+                  current = {"version": new_version, "hash": new_hash}
+                  changed = True
+          elif channel == "nightly":
+              if set(current) != {"tag", "version", "hash"}:
+                  raise SystemExit("nix/nightly.json must contain exactly tag, version, and hash")
+              old_tag = current["tag"]
+              old_version = current["version"]
+              old_hash = current["hash"]
+              if (old_tag is None) != (old_version is None) or (old_tag is None) != (old_hash is None):
+                  raise SystemExit("nightly pin fields must be either all null or all populated")
+              tag_pattern = re.compile(r"^nightly-([0-9]{8})$")
+              version_pattern = re.compile(
+                  r"^[0-9]+\.[0-9]+\.[0-9]+-nightly\.([0-9]{8})\.[0-9a-f]{12}$"
+              )
+              new_tag_match = tag_pattern.fullmatch(new_tag)
+              new_version_match = version_pattern.fullmatch(new_version)
+              if not new_tag_match or not new_version_match:
+                  raise SystemExit("new nightly metadata has an invalid tag or version")
+              if new_tag_match.group(1) != new_version_match.group(1):
+                  raise SystemExit("new nightly tag and version dates do not match")
+              if old_tag is None:
+                  changed = True
+              else:
+                  old_tag_match = tag_pattern.fullmatch(old_tag)
+                  old_version_match = version_pattern.fullmatch(old_version)
+                  if not old_tag_match or not old_version_match:
+                      raise SystemExit("existing nightly metadata has an invalid tag or version")
+                  if old_tag_match.group(1) != old_version_match.group(1):
+                      raise SystemExit("existing nightly tag and version dates do not match")
+                  if not hash_pattern.fullmatch(old_hash):
+                      raise SystemExit("existing nightly pin hash must be an SRI SHA-256 value")
+                  old_key = int(old_tag_match.group(1))
+                  new_key = int(new_tag_match.group(1))
+                  if new_key < old_key:
+                      raise SystemExit(f"refusing to downgrade nightly pin from {old_tag} to {new_tag}")
+                  if new_key == old_key:
+                      if new_tag != old_tag or new_version != old_version or new_hash != old_hash:
+                          raise SystemExit(f"nightly {new_tag} is already pinned with different immutable metadata")
+                      changed = False
+                  else:
+                      changed = True
+              if changed:
+                  current = {"tag": new_tag, "version": new_version, "hash": new_hash}
+          else:
+              raise SystemExit(f"unsupported artifact channel: {channel}")
+
+          if changed:
+              path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"changed={str(changed).lower()}\n")
+          PY
+
+      - name: Validate updated module
+        if: ${{ steps.pin.outputs.changed == 'true' }}
+        run: |
+          set -euo pipefail
+          git diff --check
+          nix flake check --all-systems --no-build
+
+      - name: Commit and push artifact pin
+        if: ${{ steps.pin.outputs.changed == 'true' }}
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          PIN_PATH: ${{ steps.release.outputs.pin_path }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$PIN_PATH"
+          git commit -m "chore(home-manager): pin $CHANNEL $RELEASE_TAG"
+
+          expected_remote=$(git rev-parse HEAD^)
+          current_remote=$(git ls-remote origin refs/heads/main | awk '{ print $1 }')
+          if [ "$current_remote" != "$expected_remote" ]; then
+            echo "main advanced from $expected_remote to $current_remote while calculating the artifact pin" >&2
+            echo "rerun this workflow for $RELEASE_TAG; the immutable artifact does not need to be rebuilt" >&2
+            exit 1
+          fi
+          git \
+            -c credential.helper="!f() { test \"\$1\" = get || exit 0; printf \"protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=%s\\n\" \"\$GH_TOKEN\"; }; f" \
+            push origin HEAD:refs/heads/main
+
+      - name: Summarize artifact pin
+        env:
+          CHANGED: ${{ steps.pin.outputs.changed }}
+          HASH: ${{ steps.artifact.outputs.hash }}
+          VERSION: ${{ steps.artifact.outputs.version }}
+        run: |
+          {
+            echo "Home Manager artifact pin: \`$RELEASE_TAG\`"
+            echo "Artifact version: \`$VERSION\`"
+            echo "Normalized Nix hash: \`$HASH\`"
+            if [ "$CHANGED" = true ]; then
+              echo "The pin was committed to \`main\`."
+            else
+              echo "The artifact was already pinned; no commit was necessary."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

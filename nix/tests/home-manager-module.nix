@@ -5,6 +5,8 @@
   yabaiModule,
 }:
 let
+  nightlyPin = builtins.fromJSON (builtins.readFile ../nightly.json);
+  releasePin = builtins.fromJSON (builtins.readFile ../release.json);
   mkHome =
     extraModule:
     home-manager.lib.homeManagerConfiguration {
@@ -67,6 +69,14 @@ let
     };
   };
 
+  pinnedNightly =
+    if nightlyPin.tag == null then
+      null
+    else
+      mkHome {
+        programs.yabai.install.source = "nightly";
+      };
+
   pinnedRelease = mkHome {
     programs.yabai.install.source = "release";
   };
@@ -75,6 +85,8 @@ let
   commitPackage = commit.config.programs.yabai.finalPackage;
   nightlyPackage = nightly.config.programs.yabai.finalPackage;
   releasePackage = release.config.programs.yabai.finalPackage;
+  pinnedNightlyPackage =
+    if pinnedNightly == null then null else pinnedNightly.config.programs.yabai.finalPackage;
   pinnedReleasePackage = pinnedRelease.config.programs.yabai.finalPackage;
 
   stableExecutable = "/Users/yabai-test/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
@@ -103,7 +115,14 @@ let
   };
 
   invalidNightly = mkHome {
-    programs.yabai.install.source = "nightly";
+    programs.yabai.install = {
+      source = "nightly";
+      nightly = {
+        url = null;
+        hash = null;
+        version = null;
+      };
+    };
   };
 
   invalidSettingsFile = mkHome {
@@ -121,18 +140,27 @@ assert commitPackage.installSource == "source";
 assert commitPackage.version == "0.0.1-nightly.test";
 assert nightlyPackage.installSource == "nightly";
 assert nightlyPackage.version == "0.0.1-nightly.20261108.test";
+assert head.config.programs.yabai.install.nightly.hash == nightlyPin.hash;
+assert head.config.programs.yabai.install.nightly.version == nightlyPin.version;
+assert
+  head.config.programs.yabai.install.nightly.url == (
+    if nightlyPin.tag == null then
+      null
+    else
+      "https://github.com/markfeinstein/yabai/releases/download/${nightlyPin.tag}/Yabai-${nightlyPin.tag}.zip"
+  );
+assert nightlyPin.tag == null || pinnedNightlyPackage.installSource == "nightly";
+assert nightlyPin.tag == null || pinnedNightlyPackage.version == nightlyPin.version;
 assert releasePackage.installSource == "release";
 assert releasePackage.version == "0.0.1";
 assert releasePackage.signingIdentifier == "com.markfeinstein.yabai";
 assert releasePackage.teamIdentifier == "GYXXG6S7KM";
 assert pinnedReleasePackage.installSource == "release";
-assert pinnedReleasePackage.version == "0.0.1";
+assert pinnedReleasePackage.version == releasePin.version;
 assert
   pinnedRelease.config.programs.yabai.install.release.url
-  == "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
-assert
-  pinnedRelease.config.programs.yabai.install.release.hash
-  == "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
+  == "https://github.com/markfeinstein/yabai/releases/download/v${releasePin.version}/Yabai-v${releasePin.version}.zip";
+assert pinnedRelease.config.programs.yabai.install.release.hash == releasePin.hash;
 assert stableService.config.programs.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert ensuredSpaces.config.programs.yabai.spaces.ensureCount == 9;

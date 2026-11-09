@@ -59,10 +59,19 @@ jobs:
             if [ -n "$latest_nightly" ]; then
               git fetch origin "refs/tags/$latest_nightly:refs/tags/$latest_nightly"
               latest_sha=$(git rev-parse "$latest_nightly^{commit}")
-              if [ "$latest_sha" = "$source_sha" ]; then
+              if git diff --quiet "$latest_sha" "$source_sha" -- \
+                . \
+                ':(exclude)nix/nightly.json' \
+                ':(exclude)nix/release.json'; then
                 should_dispatch=false
                 create_tag=false
-                reason="main has not changed since $latest_nightly"
+                reason="main has no non-pin changes since $latest_nightly"
+              else
+                diff_status=$?
+                if [ "$diff_status" -ne 1 ]; then
+                  echo "could not compare main with $latest_nightly" >&2
+                  exit "$diff_status"
+                fi
               fi
             fi
           fi

@@ -123,28 +123,21 @@ programs.yabai.install = {
 };
 ```
 
-The module pins the verified `v0.0.1` signed release, so selecting it only requires:
+The module pins the latest verified signed stable release in `nix/release.json` and, after the first nightly is published, the latest verified nightly in `nix/nightly.json`. Selecting either channel only requires:
 
 ```nix
 programs.yabai.install.source = "release";
+# or
+programs.yabai.install.source = "nightly";
 ```
 
-The equivalent explicit metadata is:
+After any stable or nightly artifact is signed, notarized, and published, the release workflow dispatches a separate least-privilege workflow that verifies its checksum, Developer ID signature, stapled ticket, Gatekeeper assessment, and version metadata; calculates the normalized unpacked Nix hash; validates the module; and advances the matching metadata file on `main`. It rejects downgrades and immutable-tag metadata changes. The nightly scheduler ignores commits that change only these pin files, preventing pin updates from generating an endless sequence of otherwise identical nightlies. Custom archives can still be selected explicitly with the `programs.yabai.install.release` or `programs.yabai.install.nightly` metadata options.
 
-```nix
-programs.yabai.install.release = {
-  url = "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
-  hash = "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
-  version = "0.0.1";
-  # appPath = "Yabai.app"; # relative to the unpacked archive root
-};
-```
-
-Nightly builds use the equivalent `install.nightly` options. Artifact hashes are mandatory: the module never follows an unpinned mutable download. Release and nightly packages require the Developer ID identity `com.markfeinstein.yabai` from Apple team `GYXXG6S7KM`; the executable and enclosing bundle are checked against that requirement before and after the archive is copied into the Nix store. The archive is not stripped, re-signed, or otherwise modified.
+Artifact hashes are mandatory: the module never follows an unpinned mutable download. Release and nightly packages require the Developer ID identity `com.markfeinstein.yabai` from Apple team `GYXXG6S7KM`; the executable and enclosing bundle are checked against that requirement before and after the archive is copied into the Nix store. The archive is not stripped, re-signed, or otherwise modified.
 
 ### Protected release signing
 
-Pushing a `v<major>.<minor>.<patch>` release tag or `nightly-YYYYMMDD` nightly tag starts `.github/workflows/release.yml`. The release tag must match the base version in `VERSION`; nightly binaries use `<base>-nightly.<date>.<commit>` while retaining the base version in bundle metadata. `.github/workflows/nightly.yml` also checks the default branch every day at 09:17 UTC. When the branch has changed since the latest published nightly, it creates the immutable UTC-dated nightly tag and explicitly dispatches the protected release workflow. It skips unchanged revisions and already-published dates, while an existing date tag without a release is retried at that tag. The explicit dispatch is intentional because tag pushes made with GitHub Actions' repository token do not start another workflow run. The scheduler can also be started manually without changing these safeguards.
+Pushing a `v<major>.<minor>.<patch>` release tag or `nightly-YYYYMMDD` nightly tag starts `.github/workflows/release.yml`. The release tag must match the base version in `VERSION`; nightly binaries use `<base>-nightly.<date>.<commit>` while retaining the base version in bundle metadata. `.github/workflows/nightly.yml` also checks the default branch every day at 09:17 UTC. When non-pin content has changed since the latest published nightly, it creates the immutable UTC-dated nightly tag and explicitly dispatches the protected release workflow. It skips pin-only or unchanged revisions and already-published dates, while an existing date tag without a release is retried at that tag. The explicit dispatch is intentional because tag pushes made with GitHub Actions' repository token do not start another workflow run. The scheduler can also be started manually without changing these safeguards.
 
 An unprivileged job builds and tests the universal binary, stages `Yabai.app`, and uploads a one-day unsigned artifact. The release job cannot read signing or notarization credentials until the `release-signing` environment is approved. It imports the certificate into an ephemeral keychain, signs both the executable and bundle as `com.markfeinstein.yabai` with hardened runtime and a secure timestamp, verifies the Apple team and designated requirement, and submits a temporary ZIP to Apple's automated notary service. An accepted submission is logged, stapled to `Yabai.app`, validated with `stapler` and Gatekeeper, and repackaged as `Yabai-<tag>.zip` with its SHA-256 checksum. Temporary signing and notarization credentials are deleted before the runner exits.
 

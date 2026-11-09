@@ -9,11 +9,21 @@
 let
   cfg = config.programs.yabai;
   requiredSpaceCount = if cfg.spaces.ensureCount == null then 0 else cfg.spaces.ensureCount;
+  nightlyPin = builtins.fromJSON (builtins.readFile ../../nightly.json);
+  releasePin = builtins.fromJSON (builtins.readFile ../../release.json);
 
-  pinnedRelease = rec {
-    version = "0.0.1";
-    url = "https://github.com/markfeinstein/yabai/releases/download/v${version}/Yabai-v${version}.zip";
-    hash = "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
+  pinnedNightly = {
+    inherit (nightlyPin) version hash;
+    url =
+      if nightlyPin.tag == null then
+        null
+      else
+        "https://github.com/markfeinstein/yabai/releases/download/${nightlyPin.tag}/Yabai-${nightlyPin.tag}.zip";
+  };
+
+  pinnedRelease = {
+    inherit (releasePin) version hash;
+    url = "https://github.com/markfeinstein/yabai/releases/download/v${releasePin.version}/Yabai-v${releasePin.version}.zip";
   };
 
   artifactOptions = {
@@ -395,8 +405,11 @@ in
 
       nightly = lib.mkOption {
         type = lib.types.submodule artifactOptions;
-        default = { };
-        description = "Pinned metadata for a CI-produced signed nightly application archive.";
+        default = pinnedNightly;
+        description = ''
+          Pinned metadata for a CI-produced signed nightly application archive.
+          Defaults to the latest nightly verified by this module revision when available.
+        '';
       };
 
       release = lib.mkOption {
