@@ -9,13 +9,13 @@ permissions:
 
 jobs:
   macos-offline:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Verify macOS 14 arm64 runner
+      - name: Verify macOS 15 arm64 runner
         run: |
           test "$(uname -m)" = arm64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 14
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 15
       - name: Install pinned documentation generator
         run: |
           gem install --no-document asciidoctor --version 2.0.26
@@ -93,13 +93,13 @@ jobs:
       - name: Working tree remains clean
         run: test -z "$(git status --porcelain --untracked-files=all)"
 
-  macos-15-compatibility:
-    runs-on: macos-15
+  macos-15-intel-compatibility:
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Verify macOS 15 arm64 runner
+      - name: Verify macOS 15 Intel runner
         run: |
-          test "$(uname -m)" = arm64
+          test "$(uname -m)" = x86_64
           test "$(sw_vers -productVersion | cut -d. -f1)" -eq 15
       - name: Build and run offline compatibility suite
         run: |

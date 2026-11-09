@@ -16,6 +16,9 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 - Enable the menu bar by default with the panel interface and automatic layout, and default auto-balance and native edge resizing to on.
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 
+### Fixed
+- Replace the retired macOS 14 GitHub-hosted CI runner with supported macOS 15 ARM and Intel coverage while retaining the macOS 14 deployment target.
+
 ## [0.0.1] - 2026-11-08
 
 This is the first independently versioned fork release. It is based on upstream
