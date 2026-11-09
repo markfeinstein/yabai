@@ -165,7 +165,7 @@ jobs:
     name: Sign, notarize, and publish application
     needs: build
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 70
     environment: release-signing
     permissions:
       contents: write
@@ -348,6 +348,106 @@ jobs:
           fi
           test "$(/usr/bin/plutil -extract status raw -o - "$log")" = Accepted
 
+      - name: Staple and validate application ticket
+        run: |
+          set -euo pipefail
+          retry_stapler() {
+            action=$1
+            target=$2
+            attempt=1
+            while [ "$attempt" -le 4 ]; do
+              if xcrun stapler "$action" -v "$target"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                return 1
+              fi
+              /bin/sleep $((attempt * 5))
+              attempt=$((attempt + 1))
+            done
+          }
+          retry_stapler staple "$SIGNED_APP"
+          retry_stapler validate "$SIGNED_APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=4 "$SIGNED_APP"
+          /usr/sbin/spctl --assess --type execute --verbose=4 "$SIGNED_APP"
+
+      - name: Create and sign release disk image
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/dmg-root"
+          asset="$GITHUB_WORKSPACE/Yabai-$RELEASE_TAG.dmg"
+          mkdir -p "$stage"
+          /usr/bin/ditto "$SIGNED_APP" "$stage/Yabai.app"
+          /bin/ln -s /Applications "$stage/Applications"
+          /usr/bin/hdiutil create \
+            -quiet \
+            -fs HFS+ \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            -volname Yabai \
+            -srcfolder "$stage" \
+            "$asset"
+          /usr/bin/codesign \
+            --force \
+            --sign "$SIGNING_IDENTITY" \
+            --keychain "$SIGNING_KEYCHAIN" \
+            --timestamp \
+            "$asset"
+          requirement="anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
+          /usr/bin/codesign --verify --strict --verbose=4 -R "=$requirement" "$asset"
+          /usr/bin/codesign -dvvv -r- "$asset"
+          echo "RELEASE_DMG=$asset" >> "$GITHUB_ENV"
+
+      - name: Submit disk image for notarization
+        run: |
+          set -euo pipefail
+          submission="$NOTARY_DIRECTORY/dmg-submission.json"
+          xcrun notarytool submit "$RELEASE_DMG" \
+            --key "$NOTARY_API_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --no-progress \
+            --output-format json > "$submission"
+          submission_id=$(/usr/bin/plutil -extract id raw -o - "$submission")
+          test -n "$submission_id"
+          echo "DMG_NOTARY_SUBMISSION_ID=$submission_id" >> "$GITHUB_ENV"
+          echo "Apple disk-image notary submission: $submission_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for disk image notarization
+        run: |
+          set -euo pipefail
+          result="$NOTARY_DIRECTORY/dmg-result.json"
+          log="$NOTARY_DIRECTORY/dmg-log.json"
+          wait_status=0
+          xcrun notarytool wait "$DMG_NOTARY_SUBMISSION_ID" \
+            --key "$NOTARY_API_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --timeout 20m \
+            --no-progress \
+            --output-format json > "$result" || wait_status=$?
+
+          if [ "$wait_status" -ne 0 ]; then
+            xcrun notarytool log "$DMG_NOTARY_SUBMISSION_ID" "$log" \
+              --key "$NOTARY_API_KEY" \
+              --key-id "$APPLE_NOTARY_KEY_ID" \
+              --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            echo "Disk-image notarization wait failed or timed out for submission $DMG_NOTARY_SUBMISSION_ID." >&2
+            echo "Apple continues processing a timed-out submission; do not resubmit it automatically." >&2
+            exit "$wait_status"
+          fi
+
+          status=$(/usr/bin/plutil -extract status raw -o - "$result")
+          xcrun notarytool log "$DMG_NOTARY_SUBMISSION_ID" "$log" \
+            --key "$NOTARY_API_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID"
+          if [ "$status" != Accepted ]; then
+            echo "Apple rejected disk-image notarization for submission $DMG_NOTARY_SUBMISSION_ID: $status" >&2
+            exit 1
+          fi
+          test "$(/usr/bin/plutil -extract status raw -o - "$log")" = Accepted
+
       - name: Upload notarization evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -357,14 +457,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Staple and validate notarization ticket
+      - name: Staple and validate disk image ticket
         run: |
           set -euo pipefail
           retry_stapler() {
             action=$1
             attempt=1
             while [ "$attempt" -le 4 ]; do
-              if xcrun stapler "$action" -v "$SIGNED_APP"; then
+              if xcrun stapler "$action" -v "$RELEASE_DMG"; then
                 return 0
               fi
               if [ "$attempt" -eq 4 ]; then
@@ -376,20 +476,40 @@ jobs:
           }
           retry_stapler staple
           retry_stapler validate
-          /usr/bin/codesign --verify --deep --strict --verbose=4 "$SIGNED_APP"
-          /usr/sbin/spctl --assess --type execute --verbose=4 "$SIGNED_APP"
+          requirement="anchor apple generic and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
+          /usr/bin/codesign --verify --strict --verbose=4 -R "=$requirement" "$RELEASE_DMG"
+          /usr/sbin/spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$RELEASE_DMG"
 
-      - name: Create notarized release archive
+          mountpoint="$RUNNER_TEMP/mounted-dmg"
+          mkdir -p "$mountpoint"
+          /usr/bin/hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mountpoint" "$RELEASE_DMG"
+          trap '/usr/bin/hdiutil detach -quiet "$mountpoint" || true' EXIT
+          test "$(readlink "$mountpoint/Applications")" = /Applications
+          /usr/bin/codesign --verify --deep --strict --verbose=4 "$mountpoint/Yabai.app"
+          test "$("$mountpoint/Yabai.app/Contents/MacOS/yabai" --version)" = "yabai-v$BUILD_VERSION"
+          /usr/bin/hdiutil detach -quiet "$mountpoint"
+          trap - EXIT
+
+      - name: Create notarized release assets
         id: archive
         run: |
           set -euo pipefail
-          asset="Yabai-$RELEASE_TAG.zip"
-          checksum="$asset.sha256"
-          /usr/bin/ditto -c -k --keepParent "$SIGNED_APP" "$asset"
-          /usr/bin/shasum -a 256 "$asset" > "$checksum"
+          zip_asset="Yabai-$RELEASE_TAG.zip"
+          zip_checksum="$zip_asset.sha256"
+          dmg_asset=$(basename "$RELEASE_DMG")
+          dmg_checksum="$dmg_asset.sha256"
+          /usr/bin/ditto -c -k --keepParent "$SIGNED_APP" "$zip_asset"
+          /usr/bin/shasum -a 256 "$zip_asset" > "$zip_checksum"
+          /usr/bin/shasum -a 256 "$dmg_asset" > "$dmg_checksum"
           {
-            echo "asset=$asset"
-            echo "checksum=$checksum"
+            echo "asset=$zip_asset"
+            echo "checksum=$zip_checksum"
+            echo "dmg=$dmg_asset"
+            echo "dmg_checksum=$dmg_checksum"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload notarized release assets
@@ -399,6 +519,8 @@ jobs:
           path: |
             ${{ steps.archive.outputs.asset }}
             ${{ steps.archive.outputs.checksum }}
+            ${{ steps.archive.outputs.dmg }}
+            ${{ steps.archive.outputs.dmg_checksum }}
           if-no-files-found: error
           retention-days: 30
 
@@ -407,6 +529,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.archive.outputs.asset }}
           CHECKSUM: ${{ steps.archive.outputs.checksum }}
+          DMG: ${{ steps.archive.outputs.dmg }}
+          DMG_CHECKSUM: ${{ steps.archive.outputs.dmg_checksum }}
         run: |
           set -euo pipefail
           if [ "$RELEASE_CHANNEL" = nightly ]; then
@@ -417,7 +541,9 @@ jobs:
               --prerelease \
               --generate-notes \
               "$ASSET" \
-              "$CHECKSUM"
+              "$CHECKSUM" \
+              "$DMG" \
+              "$DMG_CHECKSUM"
           else
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
@@ -425,7 +551,9 @@ jobs:
               --title "$RELEASE_TAG" \
               --generate-notes \
               "$ASSET" \
-              "$CHECKSUM"
+              "$CHECKSUM" \
+              "$DMG" \
+              "$DMG_CHECKSUM"
           fi
 
       - name: Delete temporary signing material
