@@ -1388,8 +1388,6 @@ static void handle_domain_display(FILE *rsp, struct token domain, char *message)
             enum space_op_error result = display_manager_focus_space(acting_did, selector.sid);
             if (result == SPACE_OP_ERROR_SAME_DISPLAY) {
                 daemon_fail(rsp, "acting display does not contain the given space.\n");
-            } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                daemon_fail(rsp, "cannot focus space because the display is in the middle of an animation.\n");
             } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                 daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1464,8 +1462,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 enum space_op_error result = space_manager_focus_space(selector.sid);
                 if (result == SPACE_OP_ERROR_SAME_SPACE) {
                     daemon_fail(rsp, "cannot focus an already focused space.\n");
-                } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                    daemon_fail(rsp, "cannot focus space because the display is in the middle of an animation.\n");
                 } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                     daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1482,8 +1478,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 enum space_op_error result = space_manager_switch_space(selector.sid);
                 if (result == SPACE_OP_ERROR_SAME_SPACE) {
                     daemon_fail(rsp, "cannot focus an already focused space.\n");
-                } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                    daemon_fail(rsp, "cannot focus space because the display is in the middle of an animation.\n");
                 } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                     daemon_fail(rsp, "cannot focus space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1504,8 +1498,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "cannot move space to itself.\n");
                 } else if (result == SPACE_OP_ERROR_SAME_DISPLAY) {
                     daemon_fail(rsp, "cannot move space across display boundaries. use --display instead.\n");
-                } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                    daemon_fail(rsp, "cannot move space because the display is in the middle of an animation.\n");
                 } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                     daemon_fail(rsp, "cannot move space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1525,8 +1517,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 enum space_op_error result = space_manager_swap_space_with_space(acting_sid, selector.sid);
                 if (result == SPACE_OP_ERROR_SAME_SPACE) {
                     daemon_fail(rsp, "cannot swap space with itself.\n");
-                } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                    daemon_fail(rsp, "cannot swap space because the display is in the middle of an animation.\n");
                 } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                     daemon_fail(rsp, "cannot swap space because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1556,8 +1546,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     daemon_fail(rsp, "acting space is the last user-space on the source display and cannot be moved.\n");
                 } else if (result == SPACE_OP_ERROR_INVALID_DST) {
                     daemon_fail(rsp, "acting space is already located on the given display.\n");
-                } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                    daemon_fail(rsp, "cannot send space to display because it is in the middle of an animation.\n");
                 } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                     daemon_fail(rsp, "cannot send space to display because mission-control is active.\n");
                 } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1581,8 +1569,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
             enum space_op_error result = message_space_add(acting_sid);
             if (result == SPACE_OP_ERROR_MISSING_SRC) {
                 daemon_fail(rsp, "could not locate the space to act on.\n");
-            } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                daemon_fail(rsp, "cannot create space because the display is in the middle of an animation.\n");
             } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                 daemon_fail(rsp, "cannot create space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {
@@ -1608,8 +1594,6 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                 daemon_fail(rsp, "acting space is the last user-space on the source display and cannot be destroyed.\n");
             } else if (result == SPACE_OP_ERROR_INVALID_TYPE) {
                 daemon_fail(rsp, "cannot destroy a macOS fullscreen space.\n");
-            } else if (result == SPACE_OP_ERROR_DISPLAY_IS_ANIMATING) {
-                daemon_fail(rsp, "cannot destroy space because the display is in the middle of an animation.\n");
             } else if (result == SPACE_OP_ERROR_IN_MISSION_CONTROL) {
                 daemon_fail(rsp, "cannot destroy space because mission-control is active.\n");
             } else if (result == SPACE_OP_ERROR_SCRIPTING_ADDITION) {

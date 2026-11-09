@@ -1,13 +1,13 @@
 FRAMEWORK_PATH = -F/System/Library/PrivateFrameworks
 FRAMEWORK      = -framework Carbon -framework Cocoa -framework ColorSync -framework CoreServices -framework CoreVideo -framework SkyLight
 CLI_FLAGS      =
-MACOS_MIN_VERSION = 14.0
+MACOS_MIN_VERSION = 26.0
 VERSION_FILE    ?= ./VERSION
 BASE_VERSION    := $(strip $(shell /bin/cat '$(VERSION_FILE)'))
 VERSION         ?= $(BASE_VERSION)
 VERSION_FLAGS   = -DYABAI_VERSION='"$(VERSION)"'
 STRICT_WARNING_FLAGS = -Wimplicit-fallthrough -Wconditional-uninitialized -Wshorten-64-to-32 -Wshadow
-COMMON_FLAGS   = -std=c11 -Wall -Wextra $(STRICT_WARNING_FLAGS) -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch x86_64 -arch arm64
+COMMON_FLAGS   = -std=c11 -Wall -Wextra $(STRICT_WARNING_FLAGS) -g -fvisibility=hidden -mmacosx-version-min=$(MACOS_MIN_VERSION) -fno-objc-arc -arch arm64
 INFO_PLIST_LINK_FLAGS = -sectcreate __TEXT __info_plist $(INFO_PLIST)
 DEBUG_FLAGS    = $(COMMON_FLAGS) -O0
 RELEASE_FLAGS  = $(COMMON_FLAGS) -DNDEBUG -O3
@@ -54,7 +54,7 @@ DEBUG_MODULES  = $(addprefix $(BUILD_PATH)/debug/,$(addsuffix .o,$(YABAI_MODULES
 RELEASE_MODULES = $(addprefix $(BUILD_PATH)/release/,$(addsuffix .o,$(YABAI_MODULES)))
 ASAN_MODULES   = $(addprefix $(BUILD_PATH)/asan/,$(addsuffix .o,$(YABAI_MODULES)))
 TSAN_MODULES   = $(addprefix $(BUILD_PATH)/tsan/,$(addsuffix .o,$(YABAI_MODULES)))
-OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m $(OSAX_PATH)/x64_payload.m
+OSAX_DEPS      = makefile $(OSAX_PATH)/loader.m $(OSAX_PATH)/loader_shellcode.s $(OSAX_PATH)/loader_protocol.h $(OSAX_PATH)/payload.m $(OSAX_PATH)/common.h $(OSAX_PATH)/message_validation.h ./src/misc/hashtable.h ./src/misc/socket_io.h ./src/runtime_paths.h $(OSAX_PATH)/arm64_payload.m
 TAG_CORPUS_DEPS = scripts/window_server_tag_corpus.m scripts/window_server_tag_corpus_core.c scripts/window_server_tag_corpus_core.h scripts/probe_support.h src/window_server_snapshot.c src/window_server_snapshot.h src/window_corner_geometry.c src/window_corner_geometry.h src/window_server_tags.h src/window_server_classifier.c src/window_server_classifier.h src/misc/extern.h makefile
 GEOMETRY_PROBE_DEPS = scripts/window_server_geometry_probe.m scripts/probe_support.h src/window_server_hit_test.c src/window_server_hit_test.h src/window_server_tags.h src/misc/extern.h makefile
 NATIVE_TAB_RECORDER_DEPS = scripts/native_tab_event_recorder.m scripts/native_tab_event_recorder_core.c scripts/native_tab_event_recorder_core.h src/misc/extern.h makefile
@@ -87,7 +87,7 @@ DEPLOY_OWNER_UID ?= 0
 DEPLOY_REQUIREMENT ?=
 
 .PHONY: all debug release asan tsan window-server-tag-corpus classifier-corpus-gate window-server-geometry-probe window-corner-geometry-probe window-constraints-probe display-cadence-diagnostic native-resize-pipeline-probe native-tab-event-recorder native-tab-evidence-gate native-tile-diagnostic active-window-highlight-probe install man man-check man-contract icon app-icon archive publish sign deploy \
-        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-x86_64 test-architectures test-all syntax analyze fuzz-build fuzz-smoke \
+        test test-asan test-tsan test-benchmark-ax test-benchmark-ws-snapshot test-benchmark-space-inventory test-benchmark-window-query test-benchmark-snapshot-reuse test-benchmark-animation-clock test-benchmark-window-server-tag-corpus test-benchmark-window-server-classifier test-benchmark-window-constraints test-benchmark-window-server-hit-test test-arm64 test-architectures test-all syntax analyze fuzz-build fuzz-smoke \
         integration-hide-on-close integration private-api-smoke-build private-api-smoke \
         clean-debug clean-release clean-asan clean-tsan clean-fuzz clean distclean
 .NOTPARALLEL:
@@ -156,10 +156,7 @@ test-benchmark-window-server-hit-test:
 test-arm64:
 	$(MAKE) -C tests arch-arm64
 
-test-x86_64:
-	$(MAKE) -C tests arch-x86_64
-
-test-architectures: test-arm64 test-x86_64
+test-architectures: test-arm64
 
 test-all: test test-asan test-tsan test-architectures syntax man-contract
 
@@ -249,7 +246,7 @@ $(ACTIVE_HIGHLIGHT_PROBE_BIN): $(ACTIVE_HIGHLIGHT_PROBE_DEPS)
 	$(XCRUN) clang scripts/active_window_highlight_probe.m -o '$@' $(COMMON_FLAGS) -O0 $(FRAMEWORK_PATH) -framework Cocoa -framework SkyLight
 	$(CODESIGN) --force --deep --sign - '$(ACTIVE_HIGHLIGHT_PROBE_APP)'
 
-# Generate both native scripting-addition artifacts as private temporaries,
+# Generate the Apple Silicon scripting-addition artifacts as private temporaries,
 # then publish only one combined compiler input. Explicit source and makefile
 # dependencies keep unchanged builds incremental; a dependency change advances
 # the generated source mtime so the embedding binary rebuilds exactly once.
@@ -259,8 +256,8 @@ $(BUILD_PATH)/$(1)/osax/generated.c: $(OSAX_DEPS)
 	dir='$(BUILD_PATH)/$(1)/osax'; mkdir -p "$$$$dir"; \
 	payload=$$$$(mktemp "$$$$dir/.payload.XXXXXX"); loader=$$$$(mktemp "$$$$dir/.loader.XXXXXX"); generated=$$$$(mktemp "$$$$dir/.generated.c.XXXXXX"); \
 	trap 'rm -f "$$$$payload" "$$$$loader" "$$$$generated"' 0 HUP INT TERM; \
-	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
-	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch x86_64 -arch arm64e -o "$$$$loader" -framework Cocoa; \
+	$(XCRUN) clang '$(OSAX_PATH)/payload.m' -shared -fPIC -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch arm64e -o "$$$$payload" $(OSAX_FRAMEWORK); \
+	$(XCRUN) clang '$(OSAX_PATH)/loader.m' -x assembler-with-cpp '$(OSAX_PATH)/loader_shellcode.s' -O3 -mmacosx-version-min=$(MACOS_MIN_VERSION) -arch arm64e -o "$$$$loader" -framework Cocoa; \
 	$(XXD) -i -n __src_osax_payload "$$$$payload" > "$$$$generated"; \
 	$(XXD) -i -n __src_osax_loader "$$$$loader" >> "$$$$generated"; \
 	if [ -f "$$$$dir/generated.c" ] && cmp -s "$$$$generated" "$$$$dir/generated.c"; then touch "$$$$dir/generated.c"; rm -f "$$$$generated"; else mv -f "$$$$generated" "$$$$dir/generated.c"; fi; \

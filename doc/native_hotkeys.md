@@ -282,7 +282,7 @@ Automated tests cover:
 - synchronous mode entry/exit, capture-unbound behavior, and synthetic-event
   recursion avoidance;
 - ordered action execution and stop-on-failure semantics;
-- complete repository core tests and universal debug compilation.
+- complete repository core tests and Apple Silicon debug compilation.
 
 Real macOS acceptance should use the signed application bundle, with skhd
 stopped, and verify:

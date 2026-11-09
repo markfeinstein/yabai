@@ -109,13 +109,10 @@ int main(void)
         int translated = 0;
         size_t translated_size = sizeof(translated);
         if (sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0) != 0 && errno != ENOENT) return 1;
-#if defined(__arm64__)
-        NSString *architecture = @"arm64";
-#elif defined(__x86_64__)
-        NSString *architecture = @"x86_64";
-#else
-#error Unsupported smoke-test architecture
+#if !defined(__arm64__)
+#error The private-API smoke probe requires Apple Silicon
 #endif
+        NSString *architecture = @"arm64";
         NSMutableDictionary *report = [NSMutableDictionary dictionaryWithDictionary:@{
             @"schema": @"yabai.private-api-smoke/v1",
             @"os_version": [NSString stringWithFormat:@"%ld.%ld.%ld", (long) version.majorVersion,

@@ -3,14 +3,11 @@ static struct doctor_facts doctor_test_healthy_facts(void)
     return (struct doctor_facts) {
         .identity = DOCTOR_PROBE_YES,
         .binary_executable = DOCTOR_PROBE_YES,
-        .translated = DOCTOR_PROBE_NO,
-        .arm64_slice = DOCTOR_PROBE_YES,
         .accessibility = DOCTOR_PROBE_YES,
         .keyboard_capture_required = DOCTOR_PROBE_NO,
         .secure_input = DOCTOR_PROBE_NO,
         .sip_available = DOCTOR_PROBE_YES,
         .sip_config = DOCTOR_REQUIRED_SIP,
-        .arm64e_applicable = DOCTOR_PROBE_YES,
         .arm64e_bootarg = DOCTOR_PROBE_YES,
         .service_plist = DOCTOR_SERVICE_VALID,
         .service_runtime = DOCTOR_PROBE_UNKNOWN,
@@ -86,20 +83,19 @@ TEST_FUNC(doctor_keyboard_capture_reports_secure_input_without_failing_core,
 
 TEST_FUNC(scripting_addition_runtime_classification_is_nonmutating_and_versioned,
 {
-    TEST_CHECK(scripting_addition_classify_runtime(false, NULL, 0, 26, 6, true), SA_RUNTIME_UNREACHABLE);
-    TEST_CHECK(scripting_addition_classify_runtime(true, "old", OSAX_ATTRIB_ALL, 26, 6, true), SA_RUNTIME_OUTDATED);
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 26, 6, true), SA_RUNTIME_INCOMPLETE);
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_ALL, 26, 6, true), SA_RUNTIME_CURRENT);
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 27, 2, false), SA_RUNTIME_CURRENT);
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 27, 0, true), SA_RUNTIME_CURRENT);
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_ALL, 27, 0, true), SA_RUNTIME_CURRENT);
-    uint32_t golden_gate_required = osax_required_attributes(27, 2, true);
+    TEST_CHECK(scripting_addition_classify_runtime(false, NULL, 0, 26, 6), SA_RUNTIME_UNREACHABLE);
+    TEST_CHECK(scripting_addition_classify_runtime(true, "old", OSAX_ATTRIB_ALL, 26, 6), SA_RUNTIME_OUTDATED);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 26, 6), SA_RUNTIME_INCOMPLETE);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_ALL, 26, 6), SA_RUNTIME_CURRENT);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_DOCK_SPACES, 27, 0), SA_RUNTIME_CURRENT);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, OSAX_ATTRIB_ALL, 27, 0), SA_RUNTIME_CURRENT);
+    uint32_t golden_gate_required = osax_required_attributes(27, 2);
     TEST_CHECK(golden_gate_required, (uint32_t) (OSAX_ATTRIB_ALL & ~(OSAX_ATTRIB_DPPM | OSAX_ATTRIB_SET_WINDOW)));
-    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, golden_gate_required, 27, 2, true), SA_RUNTIME_CURRENT);
+    TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION, golden_gate_required, 27, 2), SA_RUNTIME_CURRENT);
     TEST_CHECK(scripting_addition_classify_runtime(true, OSAX_VERSION,
                                                    golden_gate_required & ~OSAX_ATTRIB_MOV_SPACE,
-                                                   27, 2, true), SA_RUNTIME_INCOMPLETE);
-    TEST_CHECK(osax_space_move_required_attributes(27, 2, true),
+                                                   27, 2), SA_RUNTIME_INCOMPLETE);
+    TEST_CHECK(osax_space_move_required_attributes(27, 2),
                (uint32_t) (OSAX_ATTRIB_DOCK_SPACES | OSAX_ATTRIB_MOV_SPACE));
 });
 
@@ -885,19 +881,14 @@ TEST_FUNC(doctor_sa_bundle_absence_and_nested_metadata_are_distinct,
 
 TEST_FUNC(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded,
 {
-    TEST_CHECK(doctor_arm64e_applicability(true, DOCTOR_PROBE_NO), DOCTOR_PROBE_YES);
-    TEST_CHECK(doctor_arm64e_applicability(false, DOCTOR_PROBE_YES), DOCTOR_PROBE_YES);
-    TEST_CHECK(doctor_arm64e_applicability(false, DOCTOR_PROBE_NO), DOCTOR_PROBE_NO);
-    TEST_CHECK(doctor_arm64e_applicability(false, DOCTOR_PROBE_UNKNOWN), DOCTOR_PROBE_UNKNOWN);
-
     struct doctor_facts platform = doctor_test_healthy_facts();
-    platform.runtime_arch = "x86_64"; platform.translated = DOCTOR_PROBE_YES;
-    platform.arm64e_applicable = DOCTOR_PROBE_YES; platform.arm64e_bootarg = DOCTOR_PROBE_NO;
-    FILE *platform_stream = tmpfile(); doctor_report(&platform, platform_stream);
-    TEST_CHECK(doctor_test_output_contains(platform_stream, "WARN arm64e boot arg"), true); fclose(platform_stream);
-    platform.translated = DOCTOR_PROBE_NO; platform.arm64e_applicable = DOCTOR_PROBE_NO;
-    platform_stream = tmpfile(); doctor_report(&platform, platform_stream);
-    TEST_CHECK(doctor_test_output_contains(platform_stream, "arm64e boot arg"), false); fclose(platform_stream);
+    platform.runtime_arch = "unsupported";
+    platform.arm64e_bootarg = DOCTOR_PROBE_NO;
+    FILE *platform_stream = tmpfile();
+    TEST_CHECK(doctor_report(&platform, platform_stream), EXIT_FAILURE);
+    TEST_CHECK(doctor_test_output_contains(platform_stream, "FAIL architecture"), true);
+    TEST_CHECK(doctor_test_output_contains(platform_stream, "WARN arm64e boot arg"), true);
+    fclose(platform_stream);
 
     TEST_CHECK(doctor_classify_arm64e_bootargs("foo -arm64e_preview_abi bar", 28), DOCTOR_PROBE_YES);
     TEST_CHECK(doctor_classify_arm64e_bootargs("foo", 3), DOCTOR_PROBE_NO);
@@ -907,23 +898,13 @@ TEST_FUNC(doctor_bootarg_socket_architecture_and_cli_probes_are_bounded,
     TEST_CHECK(doctor_classify_arm64e_bootargs(NULL, 0), DOCTOR_PROBE_UNKNOWN);
 
     char thin[] = "/tmp/yabai-doctor-thin.XXXXXX"; int fd = mkstemp(thin);
-    struct mach_header_64 header = { .magic = MH_MAGIC_64, .cputype = CPU_TYPE_X86_64 };
-    TEST_CHECK(write(fd, &header, sizeof(header)), (ssize_t) sizeof(header)); close(fd); chmod(thin, 0700);
-    struct stat thin_stat; TEST_CHECK(stat(thin, &thin_stat) == 0, true);
-    TEST_CHECK(doctor_binary_has_arm64_slice(&doctor_production_ops, thin, &thin_stat), DOCTOR_PROBE_NO);
-    struct doctor_collect_ops snapshot_ops = doctor_production_ops; snapshot_ops.fstat_fn = doctor_test_fstat_override;
-    doctor_test_fstat_mode = 2;
-    TEST_CHECK(doctor_binary_has_arm64_slice(&snapshot_ops, thin, &thin_stat), DOCTOR_PROBE_UNKNOWN);
-    doctor_test_fstat_mode = 0; snapshot_ops = doctor_production_ops; snapshot_ops.read_fn = doctor_test_read_failure;
-    doctor_test_read_error = EIO;
-    TEST_CHECK(doctor_binary_has_arm64_slice(&snapshot_ops, thin, &thin_stat), DOCTOR_PROBE_UNKNOWN);
+    TEST_CHECK(write(fd, "x", 1), (ssize_t) 1); close(fd); chmod(thin, 0700);
     char thin_link[PATH_MAX]; snprintf(thin_link, sizeof(thin_link), "%s-link", thin); unlink(thin_link);
     TEST_CHECK(symlink(thin, thin_link) == 0, true);
     struct doctor_identity binary_identity = { .uid = getuid(), .gid = getgid(), .name = "fixture", .home = "/tmp" };
     struct doctor_facts executable_facts = {0};
     doctor_inspect_running_executable(&doctor_production_ops, &binary_identity, thin_link, &executable_facts);
     TEST_CHECK(executable_facts.binary_executable, DOCTOR_PROBE_YES);
-    TEST_CHECK(executable_facts.arm64_slice, DOCTOR_PROBE_NO);
     binary_identity.elevated = true; memset(&executable_facts, 0, sizeof(executable_facts));
     doctor_inspect_running_executable(&doctor_production_ops, &binary_identity, thin_link, &executable_facts);
     TEST_CHECK(executable_facts.binary_executable, DOCTOR_PROBE_YES);

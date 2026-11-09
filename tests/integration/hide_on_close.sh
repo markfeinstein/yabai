@@ -41,7 +41,7 @@ daemon_identity=$($YABAI_BIN -m query --daemon-identity) || fail "daemon identit
 identity_pid=$(printf '%s\n' "$daemon_identity" | jq -er '.pid') || fail "daemon identity PID is invalid"
 daemon_arch=$(printf '%s\n' "$daemon_identity" | jq -er '.architecture') || fail "daemon identity architecture is invalid"
 daemon_uuid=$(printf '%s\n' "$daemon_identity" | jq -er '.uuid') || fail "daemon identity UUID is invalid"
-case "$identity_pid:$daemon_arch" in "$daemon_pid":arm64|"$daemon_pid":x86_64) ;; *) fail "daemon protocol identity is malformed or does not match PID $daemon_pid" ;; esac
+case "$identity_pid:$daemon_arch" in "$daemon_pid":arm64) ;; *) fail "daemon protocol identity is malformed or does not match PID $daemon_pid" ;; esac
 printf '%s\n' "$daemon_uuid" | grep -Eq '^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$' || fail "daemon protocol UUID is malformed"
 built_uuid_lines=$(dwarfdump --uuid "$YABAI_BIN" 2>/dev/null | awk -v architecture="$daemon_arch" '$0 ~ "\\(" architecture "\\)" { print $2 }')
 built_uuid_count=$(printf '%s\n' "$built_uuid_lines" | awk 'NF { count++ } END { print count+0 }')

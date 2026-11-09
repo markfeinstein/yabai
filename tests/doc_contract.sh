@@ -34,7 +34,7 @@ check_contract() {
     require_source '*--daemon-identity*::'
     require_source '    Retrieve diagnostic identity information for the running daemon. This command accepts no properties or trailing arguments. +'
     grep -Fq 'The JSON object contains `pid`' "$source_doc"
-    grep -Fq '`architecture` (`arm64` or `x86_64`)' "$source_doc"
+    grep -Fq '`architecture` (`arm64`)' "$source_doc"
     grep -Fq '`uuid` (the Mach-O UUID' "$source_doc"
     grep -Fq 'Version 3 additionally accepts `keyboard`' "$source_doc"
     grep -Fq 'Native keyboard control' "$source_doc"

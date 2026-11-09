@@ -16,10 +16,7 @@
       home-manager,
     }:
     let
-      systems = [
-        "aarch64-darwin"
-        "x86_64-darwin"
-      ];
+      systems = [ "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       baseVersion = nixpkgs.lib.removeSuffix "\n" (builtins.readFile ./VERSION);
       version = "${baseVersion}-nightly.${self.shortRev or "dirty"}";
@@ -57,7 +54,11 @@
             imports = [ ./nix/modules/home-manager/yabai.nix ];
             _module.args = {
               inherit baseVersion;
-              yabaiHeadPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.head;
+              yabaiHeadPackage =
+                if pkgs.stdenv.hostPlatform.system == "aarch64-darwin" then
+                  self.packages.aarch64-darwin.head
+                else
+                  throw "yabai supports only aarch64-darwin on macOS 26 and 27";
             };
           };
         yabai = self.homeManagerModules.default;
@@ -97,6 +98,10 @@
             executable="$app/Contents/MacOS/yabai"
             test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = \
               com.markfeinstein.yabai.development
+            test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 26.0
+            /usr/bin/lipo "$executable" -verify_arch arm64
+            test "$(/usr/bin/lipo -archs "$executable")" = arm64
+            test "$(/usr/bin/otool -arch arm64 -l "$executable" | /usr/bin/awk '$1 == "minos" { print $2 }')" = 26.0
             /usr/bin/codesign --verify --deep --strict --verbose=4 "$app"
             /usr/bin/codesign -dv --verbose=2 "$app" 2>&1 \
               | /usr/bin/grep -Fx 'Identifier=com.markfeinstein.yabai.development'

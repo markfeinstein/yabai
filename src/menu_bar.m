@@ -980,12 +980,7 @@ yb_informational_menu_item(NSString *title, NSInteger indentation, NSString *too
 static NSMenuItem *
 yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 {
-    NSMenuItem *item = nil;
-    if (@available(macOS 14.0, *)) {
-        item = [NSMenuItem sectionHeaderWithTitle:title];
-    } else {
-        item = yb_informational_menu_item(title, 0, tool_tip);
-    }
+    NSMenuItem *item = [NSMenuItem sectionHeaderWithTitle:title];
     [item setToolTip:tool_tip];
     [item setAccessibilityRole:NSAccessibilityStaticTextRole];
     [item setAccessibilityLabel:title];

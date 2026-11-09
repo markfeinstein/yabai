@@ -23,17 +23,6 @@ bool workspace_event_handler_begin(void **context)
     return true;
 }
 
-bool workspace_use_macos_space_workaround(void)
-{
-    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-
-    if (os_version.majorVersion == 12 && os_version.minorVersion >= 7) return true;
-    if (os_version.majorVersion == 13 && os_version.minorVersion >= 6) return true;
-    if (os_version.majorVersion == 14 && os_version.minorVersion >= 5) return true;
-
-    return os_version.majorVersion >= 15;
-}
-
 NSRunningApplication *workspace_application_create_running_ns_application(struct process *process)
 {
     return [[NSRunningApplication runningApplicationWithProcessIdentifier:process->pid] retain];
@@ -132,19 +121,16 @@ bool workspace_application_is_finished_launching(struct process *process)
 }
 
 // CGDirectDisplayID was added to NSScreen as a public property in macOS 26.
-// Resolve it by selector so this source remains buildable with older SDKs, then
-// retain NSScreenNumber for systems whose AppKit does not implement the selector.
+// Resolve it dynamically so the source does not depend on the SDK declaration.
 static CGDirectDisplayID workspace_screen_display_id(NSScreen *screen)
 {
     SEL display_id_selector = sel_registerName("CGDirectDisplayID");
-    if ([screen respondsToSelector:display_id_selector]) {
-        IMP display_id_method = [screen methodForSelector:display_id_selector];
-        if (!display_id_method) return kCGNullDirectDisplay;
-        return ((CGDirectDisplayID (*)(id, SEL)) display_id_method)(screen, display_id_selector);
-    }
+    if (![screen respondsToSelector:display_id_selector]) return kCGNullDirectDisplay;
 
-    NSNumber *legacy_display_id = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
-    return legacy_display_id ? [legacy_display_id unsignedIntValue] : kCGNullDirectDisplay;
+    IMP display_id_method = [screen methodForSelector:display_id_selector];
+    return display_id_method
+         ? ((CGDirectDisplayID (*)(id, SEL)) display_id_method)(screen, display_id_selector)
+         : kCGNullDirectDisplay;
 }
 
 static bool workspace_screen_matches_display(NSScreen *screen, uint32_t did)
@@ -157,11 +143,9 @@ int workspace_display_notch_height(uint32_t did)
 {
     if (!CGDisplayIsBuiltin(did)) return 0;
 
-    if (__builtin_available(macos 12.0, *)) {
-        for (NSScreen *screen in [NSScreen screens]) {
-            if (workspace_screen_matches_display(screen, did)) {
-                return screen.safeAreaInsets.top;
-            }
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (workspace_screen_matches_display(screen, did)) {
+            return screen.safeAreaInsets.top;
         }
     }
 

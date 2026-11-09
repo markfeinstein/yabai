@@ -3715,7 +3715,7 @@ TEST_FUNC(insert_feedback_rekeys_on_stack_order_mutations,
 {
     long saved_macos_version = workspace_macos_major_version();
 
-    workspace_set_macos_version(15);
+    workspace_set_macos_version(26);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
 
     struct window_node remove_node = {0};
@@ -3786,7 +3786,7 @@ TEST_FUNC(insert_feedback_rekeys_collapsed_child_before_free,
 {
     long saved_macos_version = workspace_macos_major_version();
 
-    workspace_set_macos_version(15);
+    workspace_set_macos_version(26);
     table_init(&g_window_manager.insert_feedback, 20, hash_wm, compare_wm);
 
     struct window_node parent = {0};

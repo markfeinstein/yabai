@@ -1048,7 +1048,7 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
         space_swap_test_inventory_calls = 0;
         space_swap_test_inventory_failure = failed_inventory;
 
-        TEST_CHECK(space_manager_swap_space_with_space_on_display(1, 101, 2, 202), SPACE_OP_ERROR_WINDOW_SERVER);
+        TEST_CHECK(space_manager_swap_space_with_space_on_display(101, 202), SPACE_OP_ERROR_WINDOW_SERVER);
         TEST_CHECK(space_swap_test_inventory_calls, 2);
         TEST_CHECK(a_view.sid, 101ULL);
         TEST_CHECK(b_view.sid, 202ULL);
@@ -1073,7 +1073,7 @@ TEST_FUNC(cross_display_space_swap_is_transactional,
     space_swap_test_inventory_failure = 0;
     table_test_fail_allocation_after(0);
 
-    TEST_CHECK(space_manager_swap_space_with_space_on_display(1, a_sid, 2, b_sid), SPACE_OP_ERROR_SUCCESS);
+    TEST_CHECK(space_manager_swap_space_with_space_on_display(a_sid, b_sid), SPACE_OP_ERROR_SUCCESS);
     TEST_CHECK(space_swap_test_inventory_calls, 2);
     TEST_CHECK(a_view.sid, b_sid);
     TEST_CHECK(b_view.sid, a_sid);

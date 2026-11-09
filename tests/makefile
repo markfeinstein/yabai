@@ -1,4 +1,4 @@
-.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock benchmark-window-server-tag-corpus benchmark-window-server-classifier benchmark-window-constraints benchmark-window-server-hit-test test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 arch-x86_64 shell-fixtures integration-hide-on-close
+.PHONY: all clean build core-build run run-asan run-tsan benchmark-ax benchmark-ws-snapshot benchmark-space-inventory benchmark-window-query benchmark-snapshot-reuse benchmark-animation-clock benchmark-window-server-tag-corpus benchmark-window-server-classifier benchmark-window-constraints benchmark-window-server-hit-test test-all opaque-context repository-build runtime-paths macho-parser syntax arch-arm64 shell-fixtures integration-hide-on-close
 
 all: run
 
@@ -180,16 +180,9 @@ arch-arm64:
 	@lipo ./bin/arch-arm64/osax_payload -verify_arch arm64
 	@if [ "$$(uname -m)" = arm64 ]; then ./bin/arch-arm64/tests && ./bin/arch-arm64/osax_payload; else echo "SKIP arm64 execution: host is not arm64"; fi
 
-arch-x86_64:
-	$(MAKE) CONFIG=arch ARCH=x86_64 core-build
-	$(CC) ./src/osax_payload.m -o ./bin/arch-x86_64/osax_payload -arch x86_64 -DPROFILE=1 -Wl,-undefined,dynamic_lookup -F/System/Library/PrivateFrameworks -framework Carbon -framework ColorSync -framework Foundation -framework SkyLight
-	@lipo ./bin/arch-x86_64/tests -verify_arch x86_64
-	@lipo ./bin/arch-x86_64/osax_payload -verify_arch x86_64
-	@if [ "$$(uname -m)" = x86_64 ]; then ./bin/arch-x86_64/tests && ./bin/arch-x86_64/osax_payload; elif /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1; then /usr/bin/arch -x86_64 ./bin/arch-x86_64/tests && /usr/bin/arch -x86_64 ./bin/arch-x86_64/osax_payload; else echo "SKIP x86_64 execution: Rosetta is unavailable"; fi
-
 integration-hide-on-close:
 	./integration/hide_on_close.sh
 
-test-all: run run-asan run-tsan arch-arm64 arch-x86_64 syntax
+test-all: run run-asan run-tsan arch-arm64 syntax
 
 -include $(MODEL:.o=.d) $(RUNNER:.o=.d) $(PATTERN:.o=.d) $(CONSTRAINTS:.o=.d) $(CLASSIFIER:.o=.d) $(HIT_TEST:.o=.d) $(FFM_STATE:.o=.d) $(OUT)/macho_parser_production.d

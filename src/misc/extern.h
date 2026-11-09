@@ -42,7 +42,6 @@ extern uint64_t SLSManagedDisplayGetCurrentSpace(int cid, CFStringRef uuid);
 extern CF_RETURNS_RETAINED CFStringRef SLSCopyActiveMenuBarDisplayIdentifier(int cid);
 extern CGError SLSSetActiveMenuBarDisplayIdentifier(int cid, CFStringRef uuid, CFStringRef repeat_uuid);
 extern CF_RETURNS_RETAINED CFStringRef SLSCopyBestManagedDisplayForPoint(int cid, CGPoint point);
-extern bool SLSManagedDisplayIsAnimating(int cid, CFStringRef uuid);
 extern CGError SLSSetMenuBarInsetAndAlpha(int cid, double unused1, double unused2, float alpha);
 extern CGError SLSGetMenuBarAutohideEnabled(int cid, int *enabled);
 extern CGError SLSGetRevealedMenuBarBounds(CGRect *rect, int cid, uint64_t sid);

@@ -346,7 +346,7 @@ int main(int argc, char **argv)
                "\"os_version\":\"%ld.%ld.%ld\",\"os_build\":\"%s\","
                "\"process_arch\":\"%s\",\"host_arch\":\"%s\",\"translated\":%s,"
                "\"pointer_bits\":%zu,\"cgfloat_bits\":%zu,\"compiler\":\"%s\","
-               "\"sdk_max_allowed\":%d,\"deployment_target\":\"14.0\","
+               "\"sdk_max_allowed\":%d,\"deployment_target\":\"26.0\","
                "\"symbols\":{\"raw\":%s,\"resolved\":%s,\"mask_flags\":%s,"
                "\"copy_mask\":%s},\"abi\":{\"raw\":\"%s\","
                "\"resolved\":\"%s\",\"mask_flags\":\"%s\","

@@ -150,11 +150,9 @@ constraint/corner metadata.
 
 `.github/workflows/private-api-smoke.yml` is manual-only. An operator must first
 prepare an interactive self-hosted Mac with the standard `self-hosted`, `macOS`
-labels and a version/architecture label such as
-`yabai-smoke-macos-27-arm64` or `yabai-smoke-macos-14-x86_64`.
-Select the OS major (14, 15, 26, 27) and native architecture in the dispatch UI.
-The driver validates the selected expectation against the probe's runtime
-metadata; Rosetta is never accepted as native Intel evidence. Register only
+labels and a version label such as `yabai-smoke-macos-26-arm64` or
+`yabai-smoke-macos-27-arm64`. Select the OS major (26 or 27) in the dispatch UI.
+The driver validates the selected expectation and native arm64 metadata. Register only
 hosts the operator owns and explicitly approves; run trusted revisions only,
 never untrusted pull requests on these machines.
 

@@ -14,87 +14,6 @@
 .globl _loader_shellcode_path_slot
 
 _loader_shellcode_start:
-#if defined(__x86_64__)
-    pushq %rbp
-    movq %rsp, %rbp
-    pushq %r12
-    pushq %r13
-    subq $24, %rsp
-    leaq _loader_shellcode_control_slot(%rip), %rax
-    movq (%rax), %r12
-    movl $0, 4(%r12)
-    movl $0, 8(%r12)
-    movl $0, 12(%r12)
-    movq $0, 16(%r12)
-
-    leaq 0(%rsp), %rdi
-    xorl %esi, %esi
-    leaq Lchild(%rip), %rdx
-    movq %r12, %rcx
-    leaq _loader_shellcode_pthread_create_slot(%rip), %rax
-    callq *(%rax)
-    testl %eax, %eax
-    jz Lcreated
-    movl %eax, 12(%r12)
-    movl $1, 4(%r12)
-    jmp Lspin
-
-Lcreated:
-    movq 0(%rsp), %r13
-    movq %r13, %rdi
-    leaq 16(%r12), %rsi
-    leaq _loader_shellcode_pthread_threadid_slot(%rip), %rax
-    callq *(%rax)
-    testl %eax, %eax
-    jz Lready
-    movl %eax, 12(%r12)
-Lready:
-    movl $2, 4(%r12)
-    movq %r13, %rdi
-    leaq 8(%rsp), %rsi
-    leaq _loader_shellcode_pthread_join_slot(%rip), %rax
-    callq *(%rax)
-    testl %eax, %eax
-    jz Ljoined
-    movl %eax, 12(%r12)
-    movl $5, 4(%r12)
-    jmp Lspin
-Ljoined:
-    cmpl $1, 8(%r12)
-    jne Lload_fail
-    movl $3, 4(%r12)
-    jmp Lspin
-Lload_fail:
-    movl $4, 4(%r12)
-Lspin:
-    pause
-    jmp Lspin
-
-.p2align 4
-Lchild:
-    pushq %rbp
-    movq %rsp, %rbp
-    pushq %r12
-    subq $8, %rsp
-    movq %rdi, %r12
-    leaq _loader_shellcode_path_slot(%rip), %rdi
-    movl $1, %esi
-    leaq _loader_shellcode_dlopen_slot(%rip), %rax
-    callq *(%rax)
-    testq %rax, %rax
-    jz Lchild_fail
-    movl $1, 8(%r12)
-    jmp Lchild_return
-Lchild_fail:
-    movl $2, 8(%r12)
-Lchild_return:
-    xorl %eax, %eax
-    addq $8, %rsp
-    popq %r12
-    popq %rbp
-    retq
-
-#elif defined(__arm64__)
     sub sp, sp, #48
     stp x29, x30, [sp, #32]
     stp x19, x20, [sp, #16]
@@ -194,9 +113,6 @@ Lchild_return:
     ldp x29, x30, [sp, #16]
     add sp, sp, #32
     retab
-#else
-#error unsupported architecture
-#endif
 
 .p2align 3
 _loader_shellcode_pthread_create_slot:

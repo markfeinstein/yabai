@@ -182,6 +182,16 @@ static char *display_cadence_os_version(void)
     return strdup(buffer);
 }
 
+static CGDirectDisplayID display_cadence_display_id(NSScreen *screen)
+{
+    SEL selector = sel_registerName("CGDirectDisplayID");
+    if (![screen respondsToSelector:selector]) return kCGNullDirectDisplay;
+
+    IMP method = [screen methodForSelector:selector];
+    return method ? ((CGDirectDisplayID (*)(id, SEL)) method)(screen, selector)
+                  : kCGNullDirectDisplay;
+}
+
 static bool display_cadence_screen_facts(NSScreen *screen,
                                          struct display_cadence_screen *facts)
 {
@@ -197,8 +207,7 @@ static bool display_cadence_screen_facts(NSScreen *screen,
         facts->backing_scale_available = true;
         facts->backing_scale = scale;
     }
-    NSNumber *screen_number = screen.deviceDescription[@"NSScreenNumber"];
-    CGDirectDisplayID display = screen_number ? (CGDirectDisplayID) screen_number.unsignedIntValue : 0;
+    CGDirectDisplayID display = display_cadence_display_id(screen);
     CGDisplayModeRef mode = display ? CGDisplayCopyDisplayMode(display) : NULL;
     if (mode) {
         double refresh = CGDisplayModeGetRefreshRate(mode);
@@ -209,12 +218,6 @@ static bool display_cadence_screen_facts(NSScreen *screen,
         CGDisplayModeRelease(mode);
     }
     return true;
-}
-
-static CGDirectDisplayID display_cadence_display_id(NSScreen *screen)
-{
-    NSNumber *number = screen.deviceDescription[@"NSScreenNumber"];
-    return number ? (CGDirectDisplayID) number.unsignedIntValue : 0;
 }
 
 static bool display_cadence_screens_equal(NSArray *left, NSArray *right)

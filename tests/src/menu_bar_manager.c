@@ -770,7 +770,7 @@ TEST_FUNC(menu_bar_manager_application_inventory_lifecycle_boundaries, {
     long saved_macos_version = workspace_macos_major_version();
     int saved_window_notification_rebuild_count = g_window_notification_rebuild_count;
 
-    workspace_set_macos_version(15);
+    workspace_set_macos_version(26);
     g_window_notification_rebuild_count = 0;
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();
@@ -862,7 +862,7 @@ TEST_FUNC(window_manager_scratchpad_refresh_routes_inventory_changes, {
     __auto_type saved_order_window_in = window_manager_scratchpad_order_window_in;
     __auto_type saved_refresh_application_windows = window_manager_scratchpad_refresh_application_windows;
 
-    workspace_set_macos_version(15);
+    workspace_set_macos_version(26);
     g_window_notification_rebuild_count = 0;
     menu_bar_manager_test_reset();
     menu_bar_manager_test_begin_queue();

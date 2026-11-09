@@ -28,14 +28,14 @@ class SmokeDriverTests(unittest.TestCase):
 
     def test_expected_host_and_redaction(self):
         self.native["private-title"] = "do-not-log"
-        result = self.run_native(self.native, expected_os="27", expected_arch="arm64", revision="abc123")
+        result = self.run_native(self.native, expected_os="27", revision="abc123")
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["source_revision"], "abc123")
         self.assertNotIn("do-not-log", json.dumps(result))
         self.assertNotIn("private-title", result)
         self.assertNotIn("private-stderr", json.dumps(result))
         self.assertEqual(self.run_native(self.native, expected_os="26")["failure"], "unexpected-os")
-        self.assertEqual(self.run_native(self.native, expected_arch="x86_64")["failure"], "unexpected-architecture")
+        self.assertEqual(self.run_native(dict(self.native, architecture="unsupported"))["failure"], "invalid-host-metadata")
         self.native["translated"] = True
         self.assertEqual(self.run_native(self.native)["failure"], "translated-process-not-native-evidence")
 
@@ -53,7 +53,7 @@ class SmokeDriverTests(unittest.TestCase):
         for native in ([], None, {}, dict(self.native, schema="other"), dict(self.native, checks=[])):
             self.assertEqual(self.run_native(native)["status"], "fail")
         for field, values in {
-            "os_version": (None, "13.0.0", "27", "27.2.0\nprivate"),
+            "os_version": (None, "14.0.0", "15.7.0", "27", "27.2.0\nprivate"),
             "os_build": (None, "26B123\nprivate"), "architecture": (None, "other"),
             "translated": (None, 0), "display_count": (0, 65, True),
             "current_space_count": (0, 3), "window_count": (0, 100001),

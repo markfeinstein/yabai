@@ -9,13 +9,13 @@ permissions:
 
 jobs:
   macos-offline:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify macOS 15 arm64 runner
+      - name: Verify macOS 26 arm64 runner
         run: |
           test "$(uname -m)" = arm64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 15
+          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 26
       - name: Install pinned documentation generator
         run: |
           gem install --no-document asciidoctor --version 2.0.26
@@ -54,17 +54,14 @@ jobs:
           make test-asan
           make test-tsan
       - name: Thin architecture behavior
-        run: |
-          make test-arm64
-          make test-x86_64
-      - name: Universal daemon builds
+        run: make test-arm64
+      - name: Apple Silicon daemon builds
         run: |
           make debug release asan tsan
           for binary in bin/debug/yabai bin/release/yabai; do
-            for arch in arm64 x86_64; do
-              lipo "$binary" -verify_arch "$arch"
-              test "$(otool -arch "$arch" -l "$binary" | awk '$1 == "minos" { print $2 }')" = 14.0
-            done
+            lipo "$binary" -verify_arch arm64
+            test "$(lipo -archs "$binary")" = arm64
+            test "$(otool -arch arm64 -l "$binary" | awk '$1 == "minos" { print $2 }')" = 26.0
           done
       - name: Offline config and bounded doctor paths
         run: |
@@ -90,29 +87,5 @@ jobs:
               exit 1
               ;;
           esac
-      - name: Working tree remains clean
-        run: test -z "$(git status --porcelain --untracked-files=all)"
-
-  macos-15-intel-compatibility:
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify macOS 15 Intel runner
-        run: |
-          test "$(uname -m)" = x86_64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 15
-      - name: Build and run offline compatibility suite
-        run: |
-          make syntax man-contract
-          make test
-          make debug release
-          bin/debug/yabai --check-config examples/yabai.jsonc
-          bin/debug/yabai --check-config examples/native-hotkeys.jsonc
-          for binary in bin/debug/yabai bin/release/yabai; do
-            for arch in arm64 x86_64; do
-              lipo "$binary" -verify_arch "$arch"
-              test "$(otool -arch "$arch" -l "$binary" | awk '$1 == "minos" { print $2 }')" = 14.0
-            done
-          done
       - name: Working tree remains clean
         run: test -z "$(git status --porcelain --untracked-files=all)"

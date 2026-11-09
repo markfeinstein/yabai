@@ -10,10 +10,8 @@
 
 #include "loader_protocol.h"
 
-#ifdef __arm64__
 #include <ptrauth.h>
 static kern_return_t (*thread_convert_thread_state_fn)(thread_act_t, int, thread_state_flavor_t, thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
-#endif
 
 extern const unsigned char loader_shellcode_start[];
 extern const unsigned char loader_shellcode_end[];
@@ -52,11 +50,7 @@ static bool blob_offset(const unsigned char *symbol, size_t blob_size, size_t wi
 
 static uint64_t callable_address(void *symbol)
 {
-#ifdef __arm64__
     return (uint64_t)ptrauth_strip(symbol, ptrauth_key_function_pointer);
-#else
-    return (uint64_t)symbol;
-#endif
 }
 
 static int loader_main(int argc, char **argv)
@@ -101,7 +95,6 @@ static int loader_main(int argc, char **argv)
         goto cleanup;
     }
 
-#ifdef __arm64__
     void *kernel = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_GLOBAL | RTLD_LAZY);
     if (kernel) {
         thread_convert_thread_state_fn = dlsym(kernel, "thread_convert_thread_state");
@@ -111,7 +104,6 @@ static int loader_main(int argc, char **argv)
         fprintf(stderr, "could not resolve thread_convert_thread_state\n");
         goto cleanup;
     }
-#endif
 
     pid_t pid = get_dock_pid();
     if (!pid) {
@@ -155,17 +147,6 @@ static int loader_main(int argc, char **argv)
         goto cleanup;
     }
 
-#ifdef __x86_64__
-    x86_thread_state64_t state = {};
-    state.__rip = code;
-    state.__rsp = (stack + stack_size / 2) & ~0xfull;
-    kr = thread_create_running(task, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT, &bootstrap);
-    if (kr != KERN_SUCCESS) {
-        fprintf(stderr, "could not spawn remote thread: %s\n", mach_error_string(kr));
-        goto cleanup;
-    }
-    launched = true;
-#elif __arm64__
     arm_thread_state64_t state = {}, machine_state = {};
     mach_msg_type_number_t machine_count = ARM_THREAD_STATE64_COUNT;
     __darwin_arm_thread_state64_set_pc_fptr(state, ptrauth_sign_unauthenticated((void *)code, ptrauth_key_asia, 0));
@@ -181,31 +162,20 @@ static int loader_main(int argc, char **argv)
         fprintf(stderr, "could not convert thread state: %s\n", mach_error_string(kr));
         goto cleanup;
     }
-    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
-    if ((version.majorVersion == 14 && version.minorVersion >= 4) || version.majorVersion >= 15) {
-        thread_act_t old_bootstrap = bootstrap;
-        kr = thread_terminate(old_bootstrap);
-        if (kr != KERN_SUCCESS) {
-            fprintf(stderr, "could not terminate initial remote thread: %s\n", mach_error_string(kr));
-            goto cleanup;
-        }
-        mach_port_deallocate(mach_task_self(), old_bootstrap);
-        bootstrap = MACH_PORT_NULL;
-        kr = thread_create_running(task, ARM_THREAD_STATE64, (thread_state_t)&machine_state, machine_count, &bootstrap);
-        if (kr != KERN_SUCCESS) {
-            fprintf(stderr, "could not spawn replacement remote thread: %s\n", mach_error_string(kr));
-            goto cleanup;
-        }
-    } else {
-        kr = thread_set_state(bootstrap, ARM_THREAD_STATE64, (thread_state_t)&machine_state, machine_count);
-        if (kr == KERN_SUCCESS) kr = thread_resume(bootstrap);
-        if (kr != KERN_SUCCESS) {
-            fprintf(stderr, "could not start remote thread: %s\n", mach_error_string(kr));
-            goto cleanup;
-        }
+    thread_act_t old_bootstrap = bootstrap;
+    kr = thread_terminate(old_bootstrap);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "could not terminate initial remote thread: %s\n", mach_error_string(kr));
+        goto cleanup;
+    }
+    mach_port_deallocate(mach_task_self(), old_bootstrap);
+    bootstrap = MACH_PORT_NULL;
+    kr = thread_create_running(task, ARM_THREAD_STATE64, (thread_state_t)&machine_state, machine_count, &bootstrap);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "could not spawn replacement remote thread: %s\n", mach_error_string(kr));
+        goto cleanup;
     }
     launched = true;
-#endif
 
     uint64_t start = monotonic_ns();
     for (;;) {

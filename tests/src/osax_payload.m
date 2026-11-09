@@ -981,39 +981,6 @@ static void test_owned_ivar_replacement_balances_retain_counts(void)
     [holder release];
 }
 
-#ifdef __x86_64__
-static void test_intel_animation_patch_byte_order(void)
-{
-    const uint8_t expected[] = { 0x66, 0x0f, 0xef, 0xc0, 0x66, 0x0f, 0xef, 0xc0 };
-    CHECK(memcmp(&x64_zero_animation_patch, expected, sizeof(expected)) == 0);
-}
-
-static void test_intel_sonoma_14_8_build_specific_scan_windows(void)
-{
-    NSOperatingSystemVersion version = { .majorVersion = 14, .minorVersion = 8, .patchVersion = 5 };
-    CHECK(get_dock_spaces_offset(version) == 0xD4000);
-    CHECK(get_dppm_offset(version) == 0x2A7000);
-    CHECK(get_set_front_window_offset(version) == 0x49000);
-    CHECK(strstr(get_dppm_pattern(version), "4C 8B 28 4C 89 EF") != NULL);
-
-    version.patchVersion = 9;
-    CHECK(get_dock_spaces_offset(version) == 0x4000);
-    CHECK(get_dppm_offset(version) == 0x290000);
-    CHECK(get_set_front_window_offset(version) == 0x40000);
-    CHECK(strstr(get_dock_spaces_pattern(version), "BC BC 3E 00") != NULL);
-    CHECK(strstr(get_dppm_pattern(version), "4C 8B 28 4C 89 EF") != NULL);
-
-    version.patchVersion = 4;
-    CHECK(get_dock_spaces_offset(version) == 0xD5000);
-    CHECK(get_dppm_offset(version) == 0x12CE00);
-    CHECK(get_set_front_window_offset(version) == 0x4A000);
-    version.patchVersion = 6;
-    CHECK(get_dock_spaces_offset(version) == 0xD5000);
-    CHECK(get_dppm_offset(version) == 0x12CE00);
-    CHECK(get_set_front_window_offset(version) == 0x4A000);
-}
-#endif
-
 static int osax_payload_test_main(void)
 {
     test_main_image_segment_lookup();
@@ -1032,10 +999,6 @@ static int osax_payload_test_main(void)
     test_owned_ivar_replacement_balances_retain_counts();
 #if __arm64__
     test_macos_27_2_payload_patterns_and_capabilities();
-#endif
-#ifdef __x86_64__
-    test_intel_animation_patch_byte_order();
-    test_intel_sonoma_14_8_build_specific_scan_windows();
 #endif
     test_retarget_during_blocked_getter_failure();
     test_retarget_during_blocked_setter_failure();

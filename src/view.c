@@ -144,7 +144,6 @@ static bool insert_feedback_create(struct window_node *node, CFTypeRef frame_reg
         return false;
     }
 
-    if (!workspace_is_macos_sequoia_or_newer()) update_window_notifications();
     return true;
 }
 
@@ -267,7 +266,6 @@ void insert_feedback_destroy(struct window_node *node)
 
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
-        if (!workspace_is_macos_sequoia_or_newer()) update_window_notifications();
         insert_feedback_release_resources(node);
     }
 }
@@ -278,10 +276,6 @@ void insert_feedback_rekey(struct window_node *node, uint32_t prev_window_id)
         table_remove(&g_window_manager.insert_feedback, &prev_window_id);
         if (!table_try_add(&g_window_manager.insert_feedback, &node->window_order[0], node)) {
             insert_feedback_abandon(node);
-        }
-
-        if (!workspace_is_macos_sequoia_or_newer()) {
-            update_window_notifications();
         }
     }
 }
@@ -296,10 +290,6 @@ static void insert_feedback_adopt(struct window_node *parent, struct window_node
         memset(&child->feedback_window, 0, sizeof(struct feedback_window));
         adopted = table_try_add(&g_window_manager.insert_feedback, &parent->window_order[0], parent);
         if (!adopted) insert_feedback_abandon(parent);
-
-        if (!workspace_is_macos_sequoia_or_newer()) {
-            update_window_notifications();
-        }
     }
 
     if (g_mouse_state.feedback_node == child) {
@@ -730,10 +720,6 @@ void window_node_swap_window_list(struct window_node *a_node, struct window_node
         if (b_node->feedback_window.id &&
             !table_try_add(&g_window_manager.insert_feedback, &b_node->window_order[0], b_node)) {
             insert_feedback_abandon(b_node);
-        }
-
-        if (!workspace_is_macos_sequoia_or_newer()) {
-            update_window_notifications();
         }
     }
 }
