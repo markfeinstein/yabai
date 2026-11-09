@@ -1835,7 +1835,9 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 
 - (bool)routeStatusItemEvent:(NSEvent *)event
 {
-    if (!_strip_view || !event || [event type] != NSEventTypeLeftMouseUp) return false;
+    if (!_strip_view || !event) return false;
+    NSEventType type = [event type];
+    if (type != NSEventTypeLeftMouseDown && type != NSEventTypeLeftMouseUp) return false;
 
     NSWindow *window = [_strip_view window];
     if (!window || [event windowNumber] != [window windowNumber]) return false;

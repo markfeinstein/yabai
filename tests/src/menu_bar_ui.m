@@ -931,18 +931,24 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
         TEST_CHECK(log.space_id[i] == expected_space_ids[i]);
     }
 
-    TEST_CHECK([controller routeStatusItemEvent:up]);
+    TEST_CHECK([controller routeStatusItemEvent:down]);
     TEST_CHECK(log.count == 4);
     TEST_CHECK(log.type[3] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[3] == 73);
     TEST_CHECK(log.space_id[3] == expected_space_ids[0]);
+
+    TEST_CHECK([controller routeStatusItemEvent:up]);
+    TEST_CHECK(log.count == 5);
+    TEST_CHECK(log.type[4] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.generation[4] == 73);
+    TEST_CHECK(log.space_id[4] == expected_space_ids[0]);
 
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];
     NSPoint gap = NSMakePoint((NSMaxX([before_gap frame]) + NSMinX([after_gap frame])) * 0.5,
                               NSMidY([strip bounds]));
     TEST_CHECK([strip hitTest:gap] == strip);
-    TEST_CHECK(log.count == 4);
+    TEST_CHECK(log.count == 5);
 
     [controller clearStatusItem];
     [controller release];
