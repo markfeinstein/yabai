@@ -115,7 +115,8 @@ let
     "commit"
   ];
   localSigningEnabled = cfg.install.localSigning.identity != null;
-  localSigningIdentifier = selectedPackage.bundleIdentifier or null;
+  packageBundleIdentifier = selectedPackage.bundleIdentifier or null;
+  localSigningIdentifier = cfg.install.localSigning.bundleIdentifier;
   serviceApplication = lib.removeSuffix "/Contents/MacOS/yabai" serviceExecutable;
 
   authoredSettings =
@@ -233,9 +234,22 @@ let
 
         if [ -n "$local_signing_identity" ]; then
           signing_requirement="identifier \"$local_signing_identifier\" and anchor apple generic and certificate leaf[subject.OU] = \"$local_signing_team\""
+          application_plist="$service_application/Contents/Info.plist"
           if [ ! -d "$service_application" ] || [ ! -w "$service_application" ]; then
             errorEcho "Local yabai signing requires a writable copied application bundle: $service_application"
             exit 1
+          fi
+          if [ ! -f "$application_plist" ] || [ ! -w "$application_plist" ]; then
+            errorEcho "Local yabai signing requires a writable application Info.plist: $application_plist"
+            exit 1
+          fi
+          current_bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$application_plist" 2>/dev/null || true)"
+          if [ "$current_bundle_identifier" != "$local_signing_identifier" ]; then
+            if [ -n "''${DRY_RUN:-}" ]; then
+              echo "Would set the copied yabai application identifier to $local_signing_identifier."
+            else
+              /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $local_signing_identifier" "$application_plist"
+            fi
           fi
           if ! /usr/bin/security find-identity -v -p codesigning \
             | /usr/bin/grep -F "\"$local_signing_identity\"" >/dev/null; then
@@ -257,6 +271,8 @@ let
                 -R "=$signing_requirement" "$service_executable"
               /usr/bin/codesign --verify --deep --strict --verbose=4 \
                 -R "=$signing_requirement" "$service_application"
+              /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+                -f "$service_application"
             fi
           fi
         fi
@@ -448,6 +464,17 @@ in
       };
 
       localSigning = {
+        bundleIdentifier = lib.mkOption {
+          type = with lib.types; nullOr (strMatching "[A-Za-z0-9]+([.-][A-Za-z0-9]+)*");
+          default = null;
+          example = "com.example.yabai.local-development";
+          description = ''
+            Bundle identifier assigned only to the copied, locally signed
+            development application. It must differ from the ad-hoc source
+            package identifier so TCC cannot reuse a stale CDHash record.
+          '';
+        };
+
         identity = lib.mkOption {
           type = with lib.types; nullOr str;
           default = null;
@@ -607,8 +634,10 @@ in
         }
         {
           assertion =
-            (cfg.install.localSigning.identity == null) == (cfg.install.localSigning.teamIdentifier == null);
-          message = "Set both programs.yabai.install.localSigning identity and teamIdentifier, or neither";
+            (cfg.install.localSigning.identity == null) == (cfg.install.localSigning.teamIdentifier == null)
+            &&
+              (cfg.install.localSigning.identity == null) == (cfg.install.localSigning.bundleIdentifier == null);
+          message = "Set programs.yabai.install.localSigning bundleIdentifier, identity, and teamIdentifier together, or leave all unset";
         }
         {
           assertion = !localSigningEnabled || sourceInstall;
@@ -621,8 +650,10 @@ in
               cfg.service.executable != null
               && lib.hasSuffix "/Contents/MacOS/yabai" cfg.service.executable
               && localSigningIdentifier != null
+              && packageBundleIdentifier != null
+              && localSigningIdentifier != packageBundleIdentifier
             );
-          message = "Local yabai signing requires an explicit copied application executable ending in /Contents/MacOS/yabai";
+          message = "Local yabai signing requires an explicit copied application executable and a bundleIdentifier distinct from the source package";
         }
         {
           assertion =

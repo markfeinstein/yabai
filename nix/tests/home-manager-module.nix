@@ -100,6 +100,7 @@ let
   locallySignedHead = mkHome {
     programs.yabai = {
       install.localSigning = {
+        bundleIdentifier = "com.example.yabai.local-development";
         identity = "Developer ID Application: Example (TEAMID1234)";
         teamIdentifier = "TEAMID1234";
       };
@@ -155,6 +156,7 @@ let
     programs.yabai.install = {
       source = "release";
       localSigning = {
+        bundleIdentifier = "com.example.yabai.local-development";
         identity = "Developer ID Application: Example (TEAMID1234)";
         teamIdentifier = "TEAMID1234";
       };
@@ -164,10 +166,25 @@ let
   invalidStoreLocalSigning = mkHome {
     programs.yabai = {
       install.localSigning = {
+        bundleIdentifier = "com.example.yabai.local-development";
         identity = "Developer ID Application: Example (TEAMID1234)";
         teamIdentifier = "TEAMID1234";
       };
       service.enable = true;
+    };
+  };
+
+  invalidSharedLocalSigningIdentifier = mkHome {
+    programs.yabai = {
+      install.localSigning = {
+        bundleIdentifier = "com.markfeinstein.yabai.development";
+        identity = "Developer ID Application: Example (TEAMID1234)";
+        teamIdentifier = "TEAMID1234";
+      };
+      service = {
+        enable = true;
+        executable = stableExecutable;
+      };
     };
   };
 in
@@ -204,7 +221,12 @@ assert pinnedRelease.config.programs.yabai.install.release.hash == releasePin.ha
 assert stableService.config.programs.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert locallySignedHead.config.programs.yabai.install.localSigning.teamIdentifier == "TEAMID1234";
+assert
+  locallySignedHead.config.programs.yabai.install.localSigning.bundleIdentifier
+  == "com.example.yabai.local-development";
 assert lib.hasInfix "Developer ID Application: Example (TEAMID1234)" locallySignedActivation;
+assert lib.hasInfix "com.example.yabai.local-development" locallySignedActivation;
+assert lib.hasInfix "/usr/libexec/PlistBuddy" locallySignedActivation;
 assert lib.hasInfix "certificate leaf[subject.OU]" locallySignedActivation;
 assert lib.hasInfix "/usr/bin/codesign --force --sign" locallySignedActivation;
 assert lib.hasInfix "--timestamp=none" locallySignedActivation;
@@ -222,6 +244,7 @@ assert !(builtins.tryEval invalidEnsureSpaces.activationPackage.drvPath).success
 assert !(builtins.tryEval invalidLocalSigningPair.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidReleaseLocalSigning.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidStoreLocalSigning.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidSharedLocalSigningIdentifier.activationPackage.drvPath).success;
 pkgs.runCommand "yabai-home-manager-module-eval" { } ''
   fixture=$TMPDIR/yabai-spaces
   mkdir -p "$fixture"

@@ -121,6 +121,7 @@ Apple code-signing identity:
 ```nix
 programs.yabai = {
   install.localSigning = {
+    bundleIdentifier = "com.example.yabai.local-development";
     identity = "Developer ID Application: Example (TEAMID1234)";
     teamIdentifier = "TEAMID1234";
   };
@@ -129,11 +130,14 @@ programs.yabai = {
 };
 ```
 
-The private key remains in the user keychain, the immutable Nix-store package is not
-modified, and activation verifies the copied executable and app against the development
-identifier, Apple certificate chain, and configured team before starting the service.
-Local signing is available only for `head` and `commit`; published nightly and release
-artifacts are never re-signed.
+The private key remains in the user keychain and the immutable Nix-store package is not
+modified. Activation assigns the copied app a third identifier that must differ from the
+ad-hoc source package, signs it, registers it with Launch Services, and verifies the
+copied executable and app against that identifier, Apple certificate chain, and
+configured team before starting the service. Keeping ad-hoc source, locally signed
+source, and published artifacts on separate identifiers prevents TCC from reusing a
+stale CDHash or production grant. Local signing is available only for `head` and
+`commit`; published nightly and release artifacts are never re-signed.
 
 For example, an explicit source revision uses:
 
