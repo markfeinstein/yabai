@@ -97,6 +97,20 @@ let
     };
   };
 
+  locallySignedHead = mkHome {
+    programs.yabai = {
+      install.localSigning = {
+        identity = "Developer ID Application: Example (TEAMID1234)";
+        teamIdentifier = "TEAMID1234";
+      };
+      service = {
+        enable = true;
+        executable = stableExecutable;
+      };
+    };
+  };
+  locallySignedActivation = locallySignedHead.config.home.activation.yabaiService.data;
+
   ensuredSpaces = mkHome {
     programs.yabai = {
       service.enable = true;
@@ -132,6 +146,30 @@ let
   invalidEnsureSpaces = mkHome {
     programs.yabai.spaces.ensureCount = 9;
   };
+
+  invalidLocalSigningPair = mkHome {
+    programs.yabai.install.localSigning.identity = "Developer ID Application: Example (TEAMID1234)";
+  };
+
+  invalidReleaseLocalSigning = mkHome {
+    programs.yabai.install = {
+      source = "release";
+      localSigning = {
+        identity = "Developer ID Application: Example (TEAMID1234)";
+        teamIdentifier = "TEAMID1234";
+      };
+    };
+  };
+
+  invalidStoreLocalSigning = mkHome {
+    programs.yabai = {
+      install.localSigning = {
+        identity = "Developer ID Application: Example (TEAMID1234)";
+        teamIdentifier = "TEAMID1234";
+      };
+      service.enable = true;
+    };
+  };
 in
 assert head.config.programs.yabai.install.source == "head";
 assert head.config.programs.yabai.settings.version == 3;
@@ -165,6 +203,11 @@ assert
 assert pinnedRelease.config.programs.yabai.install.release.hash == releasePin.hash;
 assert stableService.config.programs.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
+assert locallySignedHead.config.programs.yabai.install.localSigning.teamIdentifier == "TEAMID1234";
+assert lib.hasInfix "Developer ID Application: Example (TEAMID1234)" locallySignedActivation;
+assert lib.hasInfix "certificate leaf[subject.OU]" locallySignedActivation;
+assert lib.hasInfix "/usr/bin/codesign --force --sign" locallySignedActivation;
+assert lib.hasInfix "--timestamp=none" locallySignedActivation;
 assert ensuredSpaces.config.programs.yabai.spaces.ensureCount == 9;
 assert lib.hasInfix "query --spaces" ensureSpacesActivation;
 assert lib.hasInfix "space --create" ensureSpacesActivation;
@@ -176,6 +219,9 @@ assert !(builtins.tryEval invalidCommit.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidNightly.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidSettingsFile.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidEnsureSpaces.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidLocalSigningPair.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidReleaseLocalSigning.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidStoreLocalSigning.activationPackage.drvPath).success;
 pkgs.runCommand "yabai-home-manager-module-eval" { } ''
   fixture=$TMPDIR/yabai-spaces
   mkdir -p "$fixture"

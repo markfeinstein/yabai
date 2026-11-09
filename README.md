@@ -111,10 +111,29 @@ Available installation sources are:
 - `release`: install a signed release archive with the same pinned artifact metadata.
 
 The `head` and `commit` application bundles use the development identifier
-`com.markfeinstein.yabai.development`. They are ad-hoc signed, so a content-changing
-source update still requires granting the rebuilt development app Accessibility again.
-The separate identifier prevents macOS from confusing that per-build CDHash grant with
-the stable Developer ID requirement used by signed nightly and release artifacts.
+`com.markfeinstein.yabai.development`. They are ad-hoc signed in the Nix store, keeping
+them distinct from the stable Developer ID requirement used by signed nightly and
+release artifacts. Current macOS versions can reject a newly granted ad-hoc
+Accessibility client even when its CDHash matches. For local source development, Home
+Manager can sign only the copied development bundle during activation with an installed
+Apple code-signing identity:
+
+```nix
+programs.yabai = {
+  install.localSigning = {
+    identity = "Developer ID Application: Example (TEAMID1234)";
+    teamIdentifier = "TEAMID1234";
+  };
+  service.executable =
+    "${config.home.homeDirectory}/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
+};
+```
+
+The private key remains in the user keychain, the immutable Nix-store package is not
+modified, and activation verifies the copied executable and app against the development
+identifier, Apple certificate chain, and configured team before starting the service.
+Local signing is available only for `head` and `commit`; published nightly and release
+artifacts are never re-signed.
 
 For example, an explicit source revision uses:
 

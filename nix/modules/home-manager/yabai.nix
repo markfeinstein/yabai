@@ -110,6 +110,13 @@ let
   packageExecutable = "${selectedPackage}/${selectedPackage.executable}";
   serviceExecutable =
     if cfg.service.executable != null then cfg.service.executable else packageExecutable;
+  sourceInstall = builtins.elem cfg.install.source [
+    "head"
+    "commit"
+  ];
+  localSigningEnabled = cfg.install.localSigning.identity != null;
+  localSigningIdentifier = selectedPackage.bundleIdentifier or null;
+  serviceApplication = lib.removeSuffix "/Contents/MacOS/yabai" serviceExecutable;
 
   authoredSettings =
     if cfg.settings != null then
@@ -162,6 +169,19 @@ let
     ${serviceExecutable}
     ${if validatedSettings == null then "no-settings" else toString validatedSettings}
     ${legacyConfig}
+    ${
+      if cfg.install.localSigning.identity == null then
+        "no-local-signing-identity"
+      else
+        cfg.install.localSigning.identity
+    }
+    ${
+      if cfg.install.localSigning.teamIdentifier == null then
+        "no-local-signing-team"
+      else
+        cfg.install.localSigning.teamIdentifier
+    }
+    ${if localSigningIdentifier == null then "no-local-signing-identifier" else localSigningIdentifier}
   '';
 
   stateDirectory = "${config.xdg.stateHome}/home-manager/yabai";
@@ -181,6 +201,23 @@ let
         desired_plist=${lib.escapeShellArg (toString plist)}
         desired_trigger=${lib.escapeShellArg (toString restartIdentity)}
         service_executable=${lib.escapeShellArg serviceExecutable}
+        service_application=${lib.escapeShellArg serviceApplication}
+        local_signing_identity=${
+          lib.escapeShellArg (
+            if cfg.install.localSigning.identity == null then "" else cfg.install.localSigning.identity
+          )
+        }
+        local_signing_team=${
+          lib.escapeShellArg (
+            if cfg.install.localSigning.teamIdentifier == null then
+              ""
+            else
+              cfg.install.localSigning.teamIdentifier
+          )
+        }
+        local_signing_identifier=${
+          lib.escapeShellArg (if localSigningIdentifier == null then "" else localSigningIdentifier)
+        }
         destination=${lib.escapeShellArg launchAgentPath}
         state_directory=${lib.escapeShellArg stateDirectory}
         applied_plist="$state_directory/applied.plist"
@@ -192,6 +229,36 @@ let
         if [ ! -x "$service_executable" ]; then
           errorEcho "Configured yabai service executable is not executable: $service_executable"
           exit 1
+        fi
+
+        if [ -n "$local_signing_identity" ]; then
+          signing_requirement="identifier \"$local_signing_identifier\" and anchor apple generic and certificate leaf[subject.OU] = \"$local_signing_team\""
+          if [ ! -d "$service_application" ] || [ ! -w "$service_application" ]; then
+            errorEcho "Local yabai signing requires a writable copied application bundle: $service_application"
+            exit 1
+          fi
+          if ! /usr/bin/security find-identity -v -p codesigning \
+            | /usr/bin/grep -F "\"$local_signing_identity\"" >/dev/null; then
+            errorEcho "Configured yabai local signing identity is unavailable in the user keychain."
+            exit 1
+          fi
+          if ! /usr/bin/codesign --verify --strict -R "=$signing_requirement" "$service_executable" >/dev/null 2>&1 \
+            || ! /usr/bin/codesign --verify --deep --strict -R "=$signing_requirement" "$service_application" >/dev/null 2>&1; then
+            if [ -n "''${DRY_RUN:-}" ]; then
+              echo "Would sign the copied yabai development application with the configured local identity."
+            else
+              /usr/bin/codesign --force --sign "$local_signing_identity" \
+                --identifier "$local_signing_identifier" --options runtime --timestamp=none \
+                "$service_executable"
+              /usr/bin/codesign --force --sign "$local_signing_identity" \
+                --identifier "$local_signing_identifier" --options runtime --timestamp=none \
+                "$service_application"
+              /usr/bin/codesign --verify --strict --verbose=4 \
+                -R "=$signing_requirement" "$service_executable"
+              /usr/bin/codesign --verify --deep --strict --verbose=4 \
+                -R "=$signing_requirement" "$service_application"
+            fi
+          fi
         fi
 
         if [ -e "$destination" ] && [ ! -f "$applied_plist" ] \
@@ -380,6 +447,28 @@ in
         '';
       };
 
+      localSigning = {
+        identity = lib.mkOption {
+          type = with lib.types; nullOr str;
+          default = null;
+          example = "Developer ID Application: Example (TEAMID1234)";
+          description = ''
+            Optional local Apple code-signing identity used during Home Manager
+            activation to sign the copied `head` or `commit` development bundle.
+            The private key remains in the user keychain. This is intended for
+            local development on macOS versions that reject ad-hoc Accessibility
+            clients; signed nightly and release artifacts are never re-signed.
+          '';
+        };
+
+        teamIdentifier = lib.mkOption {
+          type = with lib.types; nullOr str;
+          default = null;
+          example = "TEAMID1234";
+          description = "Apple team identifier required when verifying the locally signed development bundle.";
+        };
+      };
+
       commit = {
         rev = lib.mkOption {
           type = with lib.types; nullOr str;
@@ -515,6 +604,25 @@ in
         {
           assertion = cfg.spaces.ensureCount == null || cfg.service.enable;
           message = "programs.yabai.spaces.ensureCount requires programs.yabai.service.enable";
+        }
+        {
+          assertion =
+            (cfg.install.localSigning.identity == null) == (cfg.install.localSigning.teamIdentifier == null);
+          message = "Set both programs.yabai.install.localSigning identity and teamIdentifier, or neither";
+        }
+        {
+          assertion = !localSigningEnabled || sourceInstall;
+          message = "programs.yabai.install.localSigning is supported only for head and commit source installs";
+        }
+        {
+          assertion =
+            !localSigningEnabled
+            || (
+              cfg.service.executable != null
+              && lib.hasSuffix "/Contents/MacOS/yabai" cfg.service.executable
+              && localSigningIdentifier != null
+            );
+          message = "Local yabai signing requires an explicit copied application executable ending in /Contents/MacOS/yabai";
         }
         {
           assertion =
