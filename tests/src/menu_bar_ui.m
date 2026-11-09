@@ -947,29 +947,43 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
         TEST_CHECK(log.space_id[i] == expected_space_ids[i]);
     }
 
+    ((YBMenuBarStripView *) strip)->yb_test_has_left_button_down = true;
+    ((YBMenuBarStripView *) strip)->yb_test_left_button_down = false;
     TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
                                              eventType:[down type]]);
+    TEST_CHECK(log.count == 3);
+    TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
+                                             eventType:[up type]]);
     TEST_CHECK(log.count == 4);
     TEST_CHECK(log.type[3] == MENU_BAR_ACTION_FOCUS_SPACE);
     TEST_CHECK(log.generation[3] == 73);
     TEST_CHECK(log.space_id[3] == expected_space_ids[0]);
 
+    ((YBMenuBarStripView *) strip)->yb_test_mouse_screen_point = first_screen_point;
+    ((YBMenuBarStripView *) strip)->yb_test_has_current_time = true;
+    ((YBMenuBarStripView *) strip)->yb_test_current_time = 2.0;
+    ((YBMenuBarStripView *) strip)->yb_test_left_button_down = true;
+    TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
+                                             eventType:[down type]]);
     TEST_CHECK([controller routeStatusItemScreenPoint:first_screen_point
                                              eventType:[up type]]);
-    TEST_CHECK(log.count == 5);
-    TEST_CHECK(log.type[4] == MENU_BAR_ACTION_FOCUS_SPACE);
-    TEST_CHECK(log.generation[4] == 73);
-    TEST_CHECK(log.space_id[4] == expected_space_ids[0]);
+    TEST_CHECK(log.count == 4);
+    NSTimer *route_timer = ((YBMenuBarStripView *) strip)->yb_long_press_timer;
+    TEST_CHECK(route_timer != nil);
+    ((YBMenuBarStripView *) strip)->yb_test_current_time = 2.5;
+    [(YBMenuBarStripView *) strip longPressTimerFired:route_timer];
+    TEST_CHECK(log.count == 4);
+    TEST_CHECK(menu_bar_ui_state(controller).show_status_menu_count == 1);
     TEST_CHECK(![controller routeStatusItemScreenPoint:first_screen_point
                                               eventType:NSEventTypeKeyDown]);
-    TEST_CHECK(log.count == 5);
+    TEST_CHECK(log.count == 4);
 
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];
     NSPoint gap = NSMakePoint((NSMaxX([before_gap frame]) + NSMinX([after_gap frame])) * 0.5,
                               NSMidY([strip bounds]));
     TEST_CHECK([strip hitTest:gap] == strip);
-    TEST_CHECK(log.count == 5);
+    TEST_CHECK(log.count == 4);
 
     [controller clearStatusItem];
     [controller release];
@@ -1006,17 +1020,62 @@ test_strip_long_press_uses_internal_timer(void)
                                     clickCount:1
                                       pressure:0.0];
 
+    strip->yb_test_has_current_time = true;
+    strip->yb_test_current_time = 1.0;
+    strip->yb_test_has_left_button_down = true;
+    strip->yb_test_left_button_down = true;
     [strip mouseDown:down];
     NSTimer *timer = strip->yb_long_press_timer;
     TEST_CHECK(timer != nil);
+    [strip mouseUp:up];
+    TEST_CHECK(strip->yb_long_press_timer == timer);
+    TEST_CHECK(log.count == 0);
+    strip->yb_test_current_time = 1.5;
     [strip longPressTimerFired:timer];
     TEST_CHECK(strip->yb_long_press_timer == nil);
     TEST_CHECK(strip->yb_long_press_fired == true);
+    TEST_CHECK(menu_bar_ui_state(controller).show_status_menu_count == 1);
     TEST_CHECK(log.count == 0);
 
+    strip->yb_test_left_button_down = false;
     [strip mouseUp:up];
     TEST_CHECK(strip->yb_long_press_fired == false);
+    TEST_CHECK(menu_bar_ui_state(controller).show_status_menu_count == 1);
     TEST_CHECK(log.count == 0);
+
+    NSEvent *fallback_down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                 location:point
+                                            modifierFlags:0
+                                                timestamp:2.0
+                                             windowNumber:0
+                                                  context:nil
+                                              eventNumber:3
+                                               clickCount:1
+                                                 pressure:1.0];
+    NSEvent *fallback_up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                               location:point
+                                          modifierFlags:0
+                                              timestamp:2.5
+                                           windowNumber:0
+                                                context:nil
+                                            eventNumber:4
+                                             clickCount:1
+                                               pressure:0.0];
+    strip->yb_test_current_time = 2.0;
+    strip->yb_test_left_button_down = true;
+    [strip mouseDown:fallback_down];
+    NSTimer *fallback_timer = strip->yb_long_press_timer;
+    TEST_CHECK(fallback_timer != nil);
+    [strip mouseUp:fallback_up];
+    TEST_CHECK(strip->yb_long_press_timer == fallback_timer);
+    strip->yb_test_current_time = 2.1;
+    strip->yb_test_left_button_down = false;
+    [strip longPressTimerFired:fallback_timer];
+    TEST_CHECK(strip->yb_long_press_timer == nil);
+    TEST_CHECK(menu_bar_ui_state(controller).show_status_menu_count == 1);
+    TEST_CHECK(log.count == 1);
+    TEST_CHECK(log.type[0] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.space_id[0] == 11);
 
     [controller release];
     return true;

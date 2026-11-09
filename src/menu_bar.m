@@ -47,6 +47,7 @@
 #define YB_MENU_BAR_INDEX_FONT_SIZE     12.0
 #define YB_MENU_BAR_INDEX_PAD_X          8.0
 #define YB_MENU_BAR_LONG_PRESS_DURATION  0.45
+#define YB_MENU_BAR_MOUSE_POLL_INTERVAL  0.01
 #define YB_MENU_BAR_DRAG_TOLERANCE       4.0
 
 static NSString *const YB_MENU_BAR_STATUS_ITEM_AUTOSAVE_NAME = @"com.asmvik.yabai.spaces";
@@ -131,15 +132,23 @@ enum yb_menu_bar_control_kind
     YBMenuBarController *yb_controller;
     NSTimer *yb_long_press_timer;
     NSPoint yb_mouse_down_point;
+    NSTimeInterval yb_mouse_down_timestamp;
     bool yb_long_press_fired;
     bool yb_click_cancelled;
+    bool yb_click_tracking;
     bool yb_expanded_interface;
 #if defined(YB_MENU_BAR_TEST)
     bool yb_test_has_mouse_screen_point;
     NSPoint yb_test_mouse_screen_point;
+    bool yb_test_has_current_time;
+    NSTimeInterval yb_test_current_time;
+    bool yb_test_has_left_button_down;
+    bool yb_test_left_button_down;
 #endif
 }
 - (void)activatePoint:(NSPoint)point;
+- (void)beginClickAtPoint:(NSPoint)point;
+- (void)endClickAtPoint:(NSPoint)point;
 @end
 
 static bool yb_increased_contrast(void);
@@ -210,6 +219,7 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
     uint64_t _tracking_generation;
 #if defined(YB_MENU_BAR_TEST)
     NSUInteger _test_accessibility_redraw_count;
+    NSUInteger _test_show_status_menu_count;
 #endif
 }
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
@@ -256,6 +266,7 @@ struct yb_menu_bar_test_state
     NSUInteger status_button_count;
     NSUInteger accessibility_redraw_count;
     NSUInteger expanded_space_card_count;
+    NSUInteger show_status_menu_count;
 };
 
 - (void)testSetSnapshot:(struct menu_bar_snapshot *)snapshot;
@@ -311,13 +322,53 @@ struct yb_menu_bar_test_state
     yb_long_press_timer = nil;
 }
 
+- (bool)leftMouseButtonDown
+{
+#if defined(YB_MENU_BAR_TEST)
+    if (yb_test_has_left_button_down) return yb_test_left_button_down;
+#endif
+    return CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
+                                    kCGMouseButtonLeft);
+}
+
+- (void)finishClickAtPoint:(NSPoint)point held:(bool)held
+{
+    if (!yb_click_tracking) return;
+
+    yb_click_tracking = false;
+    [self cancelLongPressTimer];
+    if (!yb_click_cancelled && NSPointInRect(point, [self bounds])) {
+        if (held) {
+            yb_long_press_fired = true;
+            [yb_controller showStatusMenu:self];
+        } else {
+            [self activatePoint:point];
+        }
+    }
+    yb_mouse_down_timestamp = 0.0;
+    yb_click_cancelled = false;
+}
+
 - (void)longPressTimerFired:(NSTimer *)timer
 {
-    if (timer != yb_long_press_timer || yb_click_cancelled) return;
+    if (timer != yb_long_press_timer || yb_click_cancelled || !yb_click_tracking) return;
 
-    yb_long_press_fired = true;
-    [self cancelLongPressTimer];
-    [yb_controller showStatusMenu:self];
+    NSPoint point = [self currentMousePoint];
+    if (hypot(point.x - yb_mouse_down_point.x, point.y - yb_mouse_down_point.y) > YB_MENU_BAR_DRAG_TOLERANCE) {
+        yb_click_cancelled = true;
+        yb_click_tracking = false;
+        [self cancelLongPressTimer];
+        return;
+    }
+
+    NSTimeInterval elapsed = [self currentTime] - yb_mouse_down_timestamp;
+    if ([self leftMouseButtonDown]) {
+        if (elapsed < YB_MENU_BAR_LONG_PRESS_DURATION) return;
+        [self finishClickAtPoint:point held:true];
+    } else {
+        [self finishClickAtPoint:point
+                            held:elapsed >= YB_MENU_BAR_LONG_PRESS_DURATION];
+    }
 }
 
 - (NSView *)hitTest:(NSPoint)point
@@ -357,19 +408,65 @@ struct yb_menu_bar_test_state
     return [self convertPoint:window_point fromView:nil];
 }
 
-- (void)mouseDown:(NSEvent *)event
+- (NSPoint)currentMousePoint
+{
+    NSWindow *window = [self window];
+    if (!window) return yb_mouse_down_point;
+#if defined(YB_MENU_BAR_TEST)
+    NSPoint screen_point = yb_test_has_mouse_screen_point
+                         ? yb_test_mouse_screen_point : [NSEvent mouseLocation];
+#else
+    NSPoint screen_point = [NSEvent mouseLocation];
+#endif
+    NSPoint window_point = [window convertPointFromScreen:screen_point];
+    return [self convertPoint:window_point fromView:nil];
+}
+
+- (NSTimeInterval)currentTime
+{
+#if defined(YB_MENU_BAR_TEST)
+    if (yb_test_has_current_time) return yb_test_current_time;
+#endif
+    return [[NSProcessInfo processInfo] systemUptime];
+}
+
+- (void)beginClickAtPoint:(NSPoint)point
 {
     [self cancelLongPressTimer];
-    yb_mouse_down_point = [self mousePointForEvent:event];
+    yb_mouse_down_point = point;
+    yb_mouse_down_timestamp = [self currentTime];
     yb_long_press_fired = false;
     yb_click_cancelled = false;
+    yb_click_tracking = true;
 
-    yb_long_press_timer = [[NSTimer timerWithTimeInterval:YB_MENU_BAR_LONG_PRESS_DURATION
+    yb_long_press_timer = [[NSTimer timerWithTimeInterval:YB_MENU_BAR_MOUSE_POLL_INTERVAL
                                                    target:self
                                                  selector:@selector(longPressTimerFired:)
                                                  userInfo:nil
-                                                  repeats:NO] retain];
-    [[NSRunLoop mainRunLoop] addTimer:yb_long_press_timer forMode:NSRunLoopCommonModes];
+                                                  repeats:YES] retain];
+    NSRunLoop *run_loop = [NSRunLoop mainRunLoop];
+    [run_loop addTimer:yb_long_press_timer forMode:NSRunLoopCommonModes];
+    [run_loop addTimer:yb_long_press_timer forMode:NSEventTrackingRunLoopMode];
+}
+
+- (void)endClickAtPoint:(NSPoint)point
+{
+    if (!yb_click_tracking) {
+        yb_long_press_fired = false;
+        return;
+    }
+    // macOS status-item scenes can synthesize mouse-up immediately after
+    // mouse-down and never deliver the physical release. Keep polling until
+    // the combined-session button state reports that the user actually let go.
+    if ([self leftMouseButtonDown]) return;
+
+    NSTimeInterval elapsed = [self currentTime] - yb_mouse_down_timestamp;
+    [self finishClickAtPoint:point held:elapsed >= YB_MENU_BAR_LONG_PRESS_DURATION];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    [self beginClickAtPoint:[self mousePointForEvent:event]];
 }
 
 - (void)mouseDragged:(NSEvent *)event
@@ -378,18 +475,13 @@ struct yb_menu_bar_test_state
     if (hypot(point.x - yb_mouse_down_point.x, point.y - yb_mouse_down_point.y) <= YB_MENU_BAR_DRAG_TOLERANCE) return;
 
     yb_click_cancelled = true;
+    yb_click_tracking = false;
     [self cancelLongPressTimer];
 }
 
 - (void)mouseUp:(NSEvent *)event
 {
-    NSPoint point = [self mousePointForEvent:event];
-    [self cancelLongPressTimer];
-    if (!yb_long_press_fired && !yb_click_cancelled && NSPointInRect(point, [self bounds])) {
-        [self activatePoint:point];
-    }
-    yb_long_press_fired = false;
-    yb_click_cancelled = false;
+    [self endClickAtPoint:[self mousePointForEvent:event]];
 }
 
 - (void)rightMouseDown:(NSEvent *)event
@@ -397,6 +489,7 @@ struct yb_menu_bar_test_state
     (void) event;
     [self cancelLongPressTimer];
     yb_click_cancelled = true;
+    yb_click_tracking = false;
     [yb_controller showStatusMenu:self];
 }
 
@@ -1689,6 +1782,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [button setImage:nil];
         [button setTarget:self];
         [button setAction:@selector(performStatusItemAction:)];
+        [button sendActionOn:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp];
         [self setStatusToolTipBase:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
@@ -1862,7 +1956,11 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     NSPoint point = [_strip_view convertPoint:window_point fromView:nil];
     if (!NSPointInRect(point, [_strip_view bounds])) return false;
 
-    [(YBMenuBarStripView *) _strip_view activatePoint:point];
+    if (type == NSEventTypeLeftMouseDown) {
+        [(YBMenuBarStripView *) _strip_view beginClickAtPoint:point];
+    } else {
+        [(YBMenuBarStripView *) _strip_view endClickAtPoint:point];
+    }
     return true;
 }
 
@@ -1881,6 +1979,10 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
 
 - (void)showStatusMenu:(id)sender
 {
+#if defined(YB_MENU_BAR_TEST)
+    ++_test_show_status_menu_count;
+    return;
+#endif
     if ([self wantsExpandedPanel] || !_status_item || !_menu || _is_tracking_menu) return;
 
     YBMenuBarScreenCell *pressed = [sender isKindOfClass:[YBMenuBarScreenCell class]]
@@ -2129,6 +2231,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
     state->deferred_snapshot_generation = _deferred_snapshot ? _deferred_snapshot->generation : 0;
     state->status_item_length = _status_item ? [_status_item length] : 0.0;
     state->accessibility_redraw_count = _test_accessibility_redraw_count;
+    state->show_status_menu_count = _test_show_status_menu_count;
     state->wants_expanded_panel = [self wantsExpandedPanel];
     state->status_item_has_menu = _status_item && [_status_item menu] != nil;
 
