@@ -1,0 +1,116 @@
+name: schedule-nightly
+
+on:
+  schedule:
+    # 01:17 PST / 02:17 PDT. GitHub schedules use UTC.
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: schedule-nightly
+  cancel-in-progress: false
+
+jobs:
+  schedule:
+    name: Tag and dispatch nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout current default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve nightly action
+        id: nightly
+        run: |
+          set -euo pipefail
+          nightly_tag="nightly-$(date -u +%Y%m%d)"
+          source_sha=$(git rev-parse HEAD)
+          should_dispatch=true
+          create_tag=true
+          reason="main changed since the latest published nightly"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$nightly_tag" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$nightly_tag:refs/tags/$nightly_tag"
+            source_sha=$(git rev-parse "$nightly_tag^{commit}")
+            create_tag=false
+            if gh release view "$nightly_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              should_dispatch=false
+              reason="today's nightly is already published"
+            else
+              reason="today's immutable tag exists without a published release; retrying it"
+            fi
+          else
+            latest_nightly=$(gh release list \
+              --repo "$GITHUB_REPOSITORY" \
+              --limit 100 \
+              --json tagName \
+              --jq 'map(select(.tagName | test("^nightly-[0-9]{8}$"))) | sort_by(.tagName) | last | .tagName // ""')
+            if [ -n "$latest_nightly" ]; then
+              git fetch origin "refs/tags/$latest_nightly:refs/tags/$latest_nightly"
+              latest_sha=$(git rev-parse "$latest_nightly^{commit}")
+              if [ "$latest_sha" = "$source_sha" ]; then
+                should_dispatch=false
+                create_tag=false
+                reason="main has not changed since $latest_nightly"
+              fi
+            fi
+          fi
+
+          {
+            echo "tag=$nightly_tag"
+            echo "source_sha=$source_sha"
+            echo "should_dispatch=$should_dispatch"
+            echo "create_tag=$create_tag"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Nightly tag: \`$nightly_tag\`"
+            echo "Source commit: \`$source_sha\`"
+            echo "Decision: $reason."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create immutable nightly tag
+        if: ${{ steps.nightly.outputs.should_dispatch == 'true' && steps.nightly.outputs.create_tag == 'true' }}
+        env:
+          NIGHTLY_TAG: ${{ steps.nightly.outputs.tag }}
+          SOURCE_SHA: ${{ steps.nightly.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$NIGHTLY_TAG" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$NIGHTLY_TAG:refs/tags/$NIGHTLY_TAG"
+            existing_sha=$(git rev-parse "$NIGHTLY_TAG^{commit}")
+            if [ "$existing_sha" != "$SOURCE_SHA" ]; then
+              echo "$NIGHTLY_TAG already points to $existing_sha, not $SOURCE_SHA" >&2
+              exit 1
+            fi
+          else
+            git tag "$NIGHTLY_TAG" "$SOURCE_SHA"
+            git push origin "refs/tags/$NIGHTLY_TAG:refs/tags/$NIGHTLY_TAG"
+          fi
+
+      - name: Dispatch protected release workflow
+        if: ${{ steps.nightly.outputs.should_dispatch == 'true' }}
+        env:
+          NIGHTLY_TAG: ${{ steps.nightly.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$NIGHTLY_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$NIGHTLY_TAG was published by another run; no dispatch is needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$DEFAULT_BRANCH" \
+            --field "tag=$NIGHTLY_TAG"
+          echo "Dispatched the protected signed-release workflow for \`$NIGHTLY_TAG\`." >> "$GITHUB_STEP_SUMMARY"

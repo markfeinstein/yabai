@@ -9,6 +9,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 ## [Unreleased]
 
 ### Added
+- Schedule a daily nightly check that creates and dispatches a signed nightly only when `main` has changed, while safely retrying an unpublished immutable nightly tag.
 - Let the Home Manager module ensure a minimum global count of ordinary Spaces, creating missing Spaces after service startup and reloading settings so native rule targets can bind.
 
 ### Changed
