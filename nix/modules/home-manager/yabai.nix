@@ -7,7 +7,7 @@
   ...
 }:
 let
-  cfg = config.services.yabai;
+  cfg = config.programs.yabai;
 
   pinnedRelease = rec {
     version = "0.0.1";
@@ -100,22 +100,22 @@ let
   serviceExecutable =
     if cfg.service.executable != null then cfg.service.executable else packageExecutable;
 
-  authoredNativeConfig =
-    if cfg.config.nativeConfig != null then
-      pkgs.writeText "yabai-authored.jsonc" (builtins.toJSON cfg.config.nativeConfig)
+  authoredSettings =
+    if cfg.settings != null then
+      pkgs.writeText "yabai-authored.jsonc" (builtins.toJSON cfg.settings)
     else
-      cfg.config.nativeConfigFile;
+      cfg.settingsFile;
 
-  validatedNativeConfig =
-    if authoredNativeConfig == null then
+  validatedSettings =
+    if authoredSettings == null then
       null
     else
       pkgs.runCommand "yabai.jsonc" { } ''
-        cp ${lib.escapeShellArg (toString authoredNativeConfig)} "$out"
+        cp ${lib.escapeShellArg (toString authoredSettings)} "$out"
         ${lib.escapeShellArg packageExecutable} --check-config "$out"
       '';
 
-  legacyConfig = pkgs.writeText "yabairc" (cfg.config.extraConfig + "\n");
+  legacyConfig = pkgs.writeText "yabairc" (cfg.extraConfig + "\n");
 
   launchPath = lib.concatStringsSep ":" (
     [ "${config.home.profileDirectory}/bin" ]
@@ -149,7 +149,7 @@ let
 
   restartIdentity = pkgs.writeText "yabai-restart-identity" ''
     ${serviceExecutable}
-    ${if validatedNativeConfig == null then "no-native-config" else toString validatedNativeConfig}
+    ${if validatedSettings == null then "no-settings" else toString validatedSettings}
     ${legacyConfig}
   '';
 
@@ -187,7 +187,7 @@ let
           && ! /usr/bin/cmp -s "$desired_plist" "$destination" \
           && [ "$force_takeover" -ne 1 ]; then
           errorEcho "Refusing to replace unmanaged yabai LaunchAgent at $destination"
-          errorEcho "Set services.yabai.service.force = true to adopt it explicitly."
+          errorEcho "Set programs.yabai.service.force = true to adopt it explicitly."
           exit 1
         fi
 
@@ -196,7 +196,7 @@ let
           && ! /usr/bin/cmp -s "$desired_plist" "$destination" \
           && [ "$force_takeover" -ne 1 ]; then
           errorEcho "The Home Manager yabai LaunchAgent was modified outside Home Manager."
-          errorEcho "Restore it or set services.yabai.service.force = true to replace it."
+          errorEcho "Restore it or set programs.yabai.service.force = true to replace it."
           exit 1
         fi
 
@@ -284,7 +284,7 @@ let
   '';
 in
 {
-  options.services.yabai = {
+  options.programs.yabai = {
     enable = lib.mkEnableOption "the yabai window manager";
 
     install = {
@@ -342,30 +342,28 @@ in
       };
     };
 
-    config = {
-      nativeConfig = lib.mkOption {
-        type = with lib.types; nullOr attrs;
-        default = null;
-        description = "Native yabai configuration serialized as JSON and validated before activation.";
-      };
+    settings = lib.mkOption {
+      type = with lib.types; nullOr attrs;
+      default = null;
+      description = "Declarative yabai settings serialized as JSON and validated before activation.";
+    };
 
-      nativeConfigFile = lib.mkOption {
-        type = with lib.types; nullOr path;
-        default = null;
-        description = "Existing JSONC configuration file to validate and install.";
-      };
+    settingsFile = lib.mkOption {
+      type = with lib.types; nullOr path;
+      default = null;
+      description = "Existing JSONC settings file to validate and install.";
+    };
 
-      extraConfig = lib.mkOption {
-        type = lib.types.lines;
-        default = "";
-        description = "Legacy yabairc commands executed after native configuration.";
-      };
+    extraConfig = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      description = "Legacy yabairc commands executed after declarative settings are loaded.";
+    };
 
-      force = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether Home Manager may replace existing yabai configuration paths.";
-      };
+    force = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Whether Home Manager may replace existing yabai configuration paths.";
     };
 
     service = {
@@ -402,7 +400,7 @@ in
     finalPackage = lib.mkOption {
       type = lib.types.package;
       readOnly = true;
-      description = "Resolved application package selected by services.yabai.install.";
+      description = "Resolved application package selected by programs.yabai.install.";
     };
   };
 
@@ -411,22 +409,22 @@ in
       assertions = [
         {
           assertion = !cfg.enable || pkgs.stdenv.hostPlatform.isDarwin;
-          message = "services.yabai is only supported on Darwin";
+          message = "programs.yabai is only supported on Darwin";
         }
         {
-          assertion = cfg.config.nativeConfig == null || cfg.config.nativeConfigFile == null;
-          message = "Set only one of services.yabai.config.nativeConfig and nativeConfigFile";
+          assertion = cfg.settings == null || cfg.settingsFile == null;
+          message = "Set only one of programs.yabai.settings and settingsFile";
         }
         {
           assertion = cfg.service.executable == null || lib.hasPrefix "/" cfg.service.executable;
-          message = "services.yabai.service.executable must be an absolute path";
+          message = "programs.yabai.service.executable must be an absolute path";
         }
         {
           assertion =
             !cfg.enable
             || cfg.install.source != "commit"
             || (cfg.install.commit.rev != null && cfg.install.commit.hash != null);
-          message = "The commit install source requires services.yabai.install.commit.rev and hash";
+          message = "The commit install source requires programs.yabai.install.commit.rev and hash";
         }
         {
           assertion =
@@ -454,7 +452,7 @@ in
     }
 
     (lib.mkIf cfg.enable {
-      services.yabai = {
+      programs.yabai = {
         finalPackage = selectedPackage;
         service.finalExecutable = serviceExecutable;
       };
@@ -462,12 +460,12 @@ in
 
       xdg.configFile."yabai/yabairc" = {
         source = legacyConfig;
-        force = cfg.config.force;
+        inherit (cfg) force;
       };
 
-      xdg.configFile."yabai/yabai.jsonc" = lib.mkIf (validatedNativeConfig != null) {
-        source = validatedNativeConfig;
-        force = cfg.config.force;
+      xdg.configFile."yabai/yabai.jsonc" = lib.mkIf (validatedSettings != null) {
+        source = validatedSettings;
+        inherit (cfg) force;
       };
     })
 

@@ -6,6 +6,11 @@ The fork uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) beginni
 version 0.0.1. The inherited upstream release history through the fork point is
 preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 
+## [Unreleased]
+
+### Changed
+- Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
+
 ## [0.0.1] - 2026-11-08
 
 This is the first independently versioned fork release. It is based on upstream

@@ -69,10 +69,10 @@ The flake exports `homeManagerModules.yabai`. The module defaults to `head`, whi
             stateVersion = "26.05";
           };
 
-          services.yabai = {
+          programs.yabai = {
             enable = true;
             install.source = "head";
-            config.nativeConfig = {
+            settings = {
               version = 3;
               config.layout = "bsp";
             };
@@ -84,12 +84,12 @@ The flake exports `homeManagerModules.yabai`. The module defaults to `head`, whi
 }
 ```
 
-The module installs the selected application package, validates native configuration with `yabai --check-config`, writes the default XDG configuration paths, and manages a direct `com.asmvik.yabai` GUI LaunchAgent. Disable any nix-darwin, Homebrew, or hand-written yabai agent before enabling it so two daemons cannot race for the same runtime resources. The module refuses to overwrite an unmanaged or locally modified `com.asmvik.yabai` plist unless `services.yabai.service.force = true` is set explicitly.
+The module installs the selected application package, validates declarative `settings` with `yabai --check-config`, writes the default XDG configuration paths, and manages a direct `com.asmvik.yabai` GUI LaunchAgent. Disable any nix-darwin, Homebrew, or hand-written yabai agent before enabling it so two daemons cannot race for the same runtime resources. The module refuses to overwrite an unmanaged or locally modified `com.asmvik.yabai` plist unless `programs.yabai.service.force = true` is set explicitly.
 
 By default the agent launches the immutable executable inside the selected package. A configuration that enables Home Manager's Darwin application copying can instead launch the stable copied bundle path so macOS privacy grants apply to the application users see in System Settings:
 
 ```nix
-services.yabai.service.executable =
+programs.yabai.service.executable =
   "${config.home.homeDirectory}/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
 ```
 
@@ -105,7 +105,7 @@ Available installation sources are:
 For example, an explicit source revision uses:
 
 ```nix
-services.yabai.install = {
+programs.yabai.install = {
   source = "commit";
   commit = {
     rev = "8955858e10ec6bb04ec4bd8c17a443e94c02b200";
@@ -118,13 +118,13 @@ services.yabai.install = {
 The module pins the verified `v0.0.1` signed release, so selecting it only requires:
 
 ```nix
-services.yabai.install.source = "release";
+programs.yabai.install.source = "release";
 ```
 
 The equivalent explicit metadata is:
 
 ```nix
-services.yabai.install.release = {
+programs.yabai.install.release = {
   url = "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
   hash = "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
   version = "0.0.1";

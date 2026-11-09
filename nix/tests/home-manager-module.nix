@@ -18,10 +18,10 @@ let
             stateVersion = "26.05";
             enableNixpkgsReleaseCheck = false;
           };
-          services.yabai = {
+          programs.yabai = {
             enable = true;
             service.enable = lib.mkDefault false;
-            config.nativeConfig = {
+            settings = {
               version = 3;
               config.layout = "bsp";
             };
@@ -34,7 +34,7 @@ let
   head = mkHome { };
 
   commit = mkHome {
-    services.yabai.install = {
+    programs.yabai.install = {
       source = "commit";
       commit = {
         rev = "8955858e10ec6bb04ec4bd8c17a443e94c02b200";
@@ -45,7 +45,7 @@ let
   };
 
   nightly = mkHome {
-    services.yabai.install = {
+    programs.yabai.install = {
       source = "nightly";
       nightly = {
         url = "https://example.invalid/yabai-nightly.zip";
@@ -56,7 +56,7 @@ let
   };
 
   release = mkHome {
-    services.yabai.install = {
+    programs.yabai.install = {
       source = "release";
       release = {
         url = "https://example.invalid/Yabai-v0.0.1.zip";
@@ -68,36 +68,41 @@ let
   };
 
   pinnedRelease = mkHome {
-    services.yabai.install.source = "release";
+    programs.yabai.install.source = "release";
   };
 
-  headPackage = head.config.services.yabai.finalPackage;
-  commitPackage = commit.config.services.yabai.finalPackage;
-  nightlyPackage = nightly.config.services.yabai.finalPackage;
-  releasePackage = release.config.services.yabai.finalPackage;
-  pinnedReleasePackage = pinnedRelease.config.services.yabai.finalPackage;
+  headPackage = head.config.programs.yabai.finalPackage;
+  commitPackage = commit.config.programs.yabai.finalPackage;
+  nightlyPackage = nightly.config.programs.yabai.finalPackage;
+  releasePackage = release.config.programs.yabai.finalPackage;
+  pinnedReleasePackage = pinnedRelease.config.programs.yabai.finalPackage;
 
   stableExecutable = "/Users/yabai-test/Applications/Home Manager Apps/Yabai.app/Contents/MacOS/yabai";
   stableService = mkHome {
-    services.yabai.service = {
+    programs.yabai.service = {
       enable = true;
       executable = stableExecutable;
     };
   };
 
   invalidRelativeExecutable = mkHome {
-    services.yabai.service.executable = "Applications/Yabai.app/Contents/MacOS/yabai";
+    programs.yabai.service.executable = "Applications/Yabai.app/Contents/MacOS/yabai";
   };
 
   invalidCommit = mkHome {
-    services.yabai.install.source = "commit";
+    programs.yabai.install.source = "commit";
   };
 
   invalidNightly = mkHome {
-    services.yabai.install.source = "nightly";
+    programs.yabai.install.source = "nightly";
+  };
+
+  invalidSettingsFile = mkHome {
+    programs.yabai.settingsFile = pkgs.writeText "yabai-settings.jsonc" "{}";
   };
 in
-assert head.config.services.yabai.install.source == "head";
+assert head.config.programs.yabai.install.source == "head";
+assert head.config.programs.yabai.settings.version == 3;
 assert headPackage.installSource == "source";
 assert commitPackage.installSource == "source";
 assert commitPackage.version == "0.0.1-nightly.test";
@@ -110,17 +115,18 @@ assert releasePackage.teamIdentifier == "GYXXG6S7KM";
 assert pinnedReleasePackage.installSource == "release";
 assert pinnedReleasePackage.version == "0.0.1";
 assert
-  pinnedRelease.config.services.yabai.install.release.url
+  pinnedRelease.config.programs.yabai.install.release.url
   == "https://github.com/markfeinstein/yabai/releases/download/v0.0.1/Yabai-v0.0.1.zip";
 assert
-  pinnedRelease.config.services.yabai.install.release.hash
+  pinnedRelease.config.programs.yabai.install.release.hash
   == "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
-assert stableService.config.services.yabai.service.finalExecutable == stableExecutable;
+assert stableService.config.programs.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
 assert toString head.config.xdg.configFile."yabai/yabai.jsonc".source != "";
 assert !(builtins.tryEval invalidRelativeExecutable.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidCommit.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidNightly.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidSettingsFile.activationPackage.drvPath).success;
 pkgs.runCommand "yabai-home-manager-module-eval" { } ''
   touch "$out"
 ''

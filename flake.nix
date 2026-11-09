@@ -78,9 +78,9 @@
                   stateVersion = "26.05";
                   enableNixpkgsReleaseCheck = false;
                 };
-                services.yabai = {
+                programs.yabai = {
                   enable = true;
-                  config.nativeConfig = {
+                  settings = {
                     version = 3;
                     config.layout = "bsp";
                   };
