@@ -92,6 +92,18 @@
         {
           default = self.packages.${system}.default;
           app-bundle = self.packages.${system}.head;
+          head-identity = pkgs.runCommand "yabai-head-development-identity" { } ''
+            app=${self.packages.${system}.head}/Applications/Yabai.app
+            executable="$app/Contents/MacOS/yabai"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = \
+              com.markfeinstein.yabai.development
+            /usr/bin/codesign --verify --deep --strict --verbose=4 "$app"
+            /usr/bin/codesign -dv --verbose=2 "$app" 2>&1 \
+              | /usr/bin/grep -Fx 'Identifier=com.markfeinstein.yabai.development'
+            /usr/bin/codesign -dv --verbose=2 "$executable" 2>&1 \
+              | /usr/bin/grep -Fx 'Identifier=com.markfeinstein.yabai.development'
+            touch "$out"
+          '';
           home-manager = home.activationPackage;
           home-manager-module = import ./nix/tests/home-manager-module.nix {
             inherit home-manager pkgs;

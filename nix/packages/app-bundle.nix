@@ -4,6 +4,7 @@
   stdenvNoCC,
   yabai,
   version ? yabai.version,
+  bundleIdentifier ? yabai.bundleIdentifier,
 }:
 let
   bundleVersion = builtins.head (lib.splitString "-" version);
@@ -11,7 +12,7 @@ let
     CFBundleDevelopmentRegion = "en";
     CFBundleExecutable = "yabai";
     CFBundleIconFile = "yabai";
-    CFBundleIdentifier = "com.markfeinstein.yabai";
+    CFBundleIdentifier = bundleIdentifier;
     CFBundleInfoDictionaryVersion = "6.0";
     CFBundleName = "Yabai";
     CFBundlePackageType = "APPL";
@@ -37,11 +38,11 @@ stdenvNoCC.mkDerivation {
     install -m644 ${yabai}/share/yabai/yabai.icns "$app/Contents/Resources/yabai.icns"
     install -m644 ${infoPlist} "$app/Contents/Info.plist"
 
-    # Source builds are an explicitly development-oriented fallback until CI
-    # publishes immutable Developer ID-signed application bundles. Give the
-    # bundle a coherent ad-hoc identity without pretending it is a release.
+    # Keep ad-hoc source builds separate from the Developer ID release identity.
+    # TCC records include the signing requirement, so sharing the production
+    # bundle identifier makes macOS prefer and enforce the production certificate.
     /usr/bin/codesign --force --sign - --timestamp=none \
-      --identifier com.markfeinstein.yabai "$app/Contents/MacOS/yabai"
+      --identifier ${lib.escapeShellArg bundleIdentifier} "$app/Contents/MacOS/yabai"
     /usr/bin/codesign --force --sign - --timestamp=none "$app"
 
     ln -s ../Applications/Yabai.app/Contents/MacOS/yabai "$out/bin/yabai"
@@ -50,7 +51,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   passthru = {
-    inherit yabai;
+    inherit bundleIdentifier yabai;
     application = "Applications/Yabai.app";
     executable = "Applications/Yabai.app/Contents/MacOS/yabai";
     installSource = "source";

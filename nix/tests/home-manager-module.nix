@@ -136,7 +136,9 @@ in
 assert head.config.programs.yabai.install.source == "head";
 assert head.config.programs.yabai.settings.version == 3;
 assert headPackage.installSource == "source";
+assert headPackage.bundleIdentifier == "com.markfeinstein.yabai.development";
 assert commitPackage.installSource == "source";
+assert commitPackage.bundleIdentifier == "com.markfeinstein.yabai.development";
 assert commitPackage.version == "0.0.1-nightly.test";
 assert nightlyPackage.installSource == "nightly";
 assert nightlyPackage.version == "0.0.1-nightly.20261108.test";

@@ -5,6 +5,7 @@
   xxd,
   src,
   version,
+  bundleIdentifier ? "com.markfeinstein.yabai.development",
 }:
 stdenvNoCC.mkDerivation {
   pname = "yabai";
@@ -15,6 +16,11 @@ stdenvNoCC.mkDerivation {
     gnumake
     xxd
   ];
+
+  postPatch = ''
+    substituteInPlace assets/Info.plist \
+      --replace-fail com.markfeinstein.yabai ${lib.escapeShellArg bundleIdentifier}
+  '';
 
   buildPhase = ''
     runHook preBuild
@@ -36,6 +42,10 @@ stdenvNoCC.mkDerivation {
 
   # Stripping would invalidate the Mach-O signatures produced by ld.
   dontStrip = true;
+
+  passthru = {
+    inherit bundleIdentifier;
+  };
 
   meta = {
     description = "Tiling window manager for macOS based on binary space partitioning";

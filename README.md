@@ -110,6 +110,12 @@ Available installation sources are:
 - `nightly`: install a CI-produced signed app archive pinned by `url`, unpacked `hash`, and `version`.
 - `release`: install a signed release archive with the same pinned artifact metadata.
 
+The `head` and `commit` application bundles use the development identifier
+`com.markfeinstein.yabai.development`. They are ad-hoc signed, so a content-changing
+source update still requires granting the rebuilt development app Accessibility again.
+The separate identifier prevents macOS from confusing that per-build CDHash grant with
+the stable Developer ID requirement used by signed nightly and release artifacts.
+
 For example, an explicit source revision uses:
 
 ```nix
