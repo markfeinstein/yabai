@@ -23,17 +23,6 @@ bool workspace_event_handler_begin(void **context)
     return true;
 }
 
-bool workspace_use_macos_space_workaround(void)
-{
-    NSOperatingSystemVersion os_version = [[NSProcessInfo processInfo] operatingSystemVersion];
-
-    if (os_version.majorVersion == 12 && os_version.minorVersion >= 7) return true;
-    if (os_version.majorVersion == 13 && os_version.minorVersion >= 6) return true;
-    if (os_version.majorVersion == 14 && os_version.minorVersion >= 5) return true;
-
-    return os_version.majorVersion >= 15;
-}
-
 NSRunningApplication *workspace_application_create_running_ns_application(struct process *process)
 {
     return [[NSRunningApplication runningApplicationWithProcessIdentifier:process->pid] retain];

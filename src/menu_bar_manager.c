@@ -880,8 +880,6 @@ static bool menu_bar_manager_snapshot_contains_space(const struct menu_bar_snaps
 static const char *menu_bar_manager_focus_failure(enum space_op_error error)
 {
     switch (error) {
-    case SPACE_OP_ERROR_DISPLAY_IS_ANIMATING:
-        return "cannot focus space while its display is animating";
     case SPACE_OP_ERROR_IN_MISSION_CONTROL:
         return "cannot focus space while Mission Control is active";
     case SPACE_OP_ERROR_SCRIPTING_ADDITION:

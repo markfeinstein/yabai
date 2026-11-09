@@ -759,7 +759,7 @@ enum window_op_error window_manager_resize_window_relative(struct window_manager
 
 static AXError window_manager_move_window_internal(struct window *window, float x, float y)
 {
-    if (!window || application_is_unresponsive(window->application)) return kAXErrorCannotComplete;
+    if (!window) return kAXErrorCannotComplete;
     CGPoint position = CGPointMake(x, y);
     CFTypeRef position_ref = AXValueCreate(kAXValueTypeCGPoint, (void *) &position);
     if (!position_ref) return kAXErrorFailure;
@@ -779,7 +779,7 @@ void window_manager_move_window(struct window *window, float x, float y)
 
 static AXError window_manager_resize_window_internal(struct window *window, float width, float height)
 {
-    if (!window || application_is_unresponsive(window->application)) return kAXErrorCannotComplete;
+    if (!window) return kAXErrorCannotComplete;
     CGSize size = CGSizeMake(width, height);
     CFTypeRef size_ref = AXValueCreate(kAXValueTypeCGSize, (void *) &size);
     if (!size_ref) return kAXErrorFailure;
@@ -885,7 +885,7 @@ void window_manager_set_window_frames(struct window_capture *window_list, int wi
 
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
-        if (!window || application_is_unresponsive(window->application)) continue;
+        if (!window) continue;
 
         bool seen = false;
         for (int j = 0; j < i; ++j) {
@@ -1716,8 +1716,6 @@ void window_manager_focus_window_without_raise(ProcessSerialNumber *window_psn, 
 void window_manager_focus_window_with_raise(ProcessSerialNumber *window_psn, uint32_t window_id, AXUIElementRef window_ref)
 {
     TIME_FUNCTION;
-    struct window *window = window_manager_find_window(&g_window_manager, window_id);
-    if (window && application_is_unresponsive(window->application)) return;
 
 #if 1
     _SLPSSetFrontProcessWithOptions(window_psn, window_id, kCPSUserGenerated);
@@ -1953,7 +1951,7 @@ void window_manager_invalidate_window_constraints(struct window_manager *wm)
 
 bool window_manager_refresh_window_ref(struct window_manager *wm, struct window *window)
 {
-    if (!wm || !window || !window->application || application_is_unresponsive(window->application)) return false;
+    if (!wm || !window || !window->application) return false;
     AXUIElementRef fresh_ref = window_manager_copy_application_window_ref(window->application, window->id);
     return fresh_ref ? window_manager_replace_window_ref(wm, window, fresh_ref) : false;
 }
@@ -3169,7 +3167,7 @@ enum window_op_error window_manager_minimize_window(struct window *window)
 {
     TIME_FUNCTION;
 
-    if (!window || application_is_unresponsive(window->application)) return WINDOW_OP_ERROR_MINIMIZE_FAILED;
+    if (!window) return WINDOW_OP_ERROR_MINIMIZE_FAILED;
     if (!window_can_minimize(window)) return WINDOW_OP_ERROR_CANT_MINIMIZE;
     if (window_check_flag(window, WINDOW_MINIMIZE)) return WINDOW_OP_ERROR_ALREADY_MINIMIZED;
 
@@ -3181,7 +3179,7 @@ enum window_op_error window_manager_deminimize_window(struct window *window)
 {
     TIME_FUNCTION;
 
-    if (!window || application_is_unresponsive(window->application)) return WINDOW_OP_ERROR_DEMINIMIZE_FAILED;
+    if (!window) return WINDOW_OP_ERROR_DEMINIMIZE_FAILED;
     if (!window_check_flag(window, WINDOW_MINIMIZE)) return WINDOW_OP_ERROR_NOT_MINIMIZED;
 
     AXError result = AXUIElementSetAttributeValue(window->ref, kAXMinimizedAttribute, kCFBooleanFalse);
@@ -3202,7 +3200,7 @@ static void (*window_manager_close_release)(CFTypeRef) = CFRelease;
 bool window_manager_close_window(struct window *window)
 {
     TIME_FUNCTION;
-    if (!window || application_is_unresponsive(window->application)) return false;
+    if (!window) return false;
 
     CFTypeRef button = NULL;
     AXError result = window_manager_close_copy_attribute(window->ref, kAXCloseButtonAttribute, &button);
@@ -3468,21 +3466,9 @@ bool window_manager_wait_for_native_fullscreen_transition(struct window *window,
 {
     TIME_FUNCTION;
 
-    if (workspace_is_macos_monterey_or_newer()) {
-        for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
-            uint64_t sid = window_space(window->id);
-            if (sid && space_is_user(sid) != fullscreen) return true;
-            usleep(NATIVE_FULLSCREEN_WAIT_INTERVAL_US);
-        }
-        return false;
-    }
-
-    uint32_t did = window_display_id(window->id);
-    if (!did) return false;
     for (int attempt = 0; attempt < NATIVE_FULLSCREEN_WAIT_ATTEMPTS; ++attempt) {
         uint64_t sid = window_space(window->id);
-        bool reached_state = sid && space_is_user(sid) != fullscreen;
-        if (reached_state && !display_manager_display_is_animating(did)) return true;
+        if (sid && space_is_user(sid) != fullscreen) return true;
         usleep(NATIVE_FULLSCREEN_WAIT_INTERVAL_US);
     }
     return false;
@@ -3491,7 +3477,7 @@ bool window_manager_wait_for_native_fullscreen_transition(struct window *window,
 bool window_manager_toggle_window_native_fullscreen(struct window *window)
 {
     TIME_FUNCTION;
-    if (!window || application_is_unresponsive(window->application)) return false;
+    if (!window) return false;
 
     uint64_t sid = window_space(window->id);
     if (!sid) return false;

@@ -612,7 +612,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK([[title title] isEqualToString:@"yabai Spaces"]);
     TEST_CHECK([title action] == nil);
     TEST_CHECK([[title accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
-    if (@available(macOS 14.0, *)) TEST_CHECK([title isSectionHeader]);
+    TEST_CHECK([title isSectionHeader]);
 
     NSMenuItem *display_header = [menu itemAtIndex:2];
     TEST_CHECK([[display_header title] containsString:@"Display 1"]);
@@ -620,7 +620,7 @@ test_space_rows_emit_focus_actions_and_settings_remain_interactive(void)
     TEST_CHECK([display_header action] == nil);
     TEST_CHECK([display_header submenu] == nil);
     TEST_CHECK([[display_header accessibilityRole] isEqualToString:NSAccessibilityStaticTextRole]);
-    if (@available(macOS 14.0, *)) TEST_CHECK([display_header isSectionHeader]);
+    TEST_CHECK([display_header isSectionHeader]);
 
     NSMenuItem *visible_space = [menu itemAtIndex:3];
     NSMenuItem *unknown_space = [menu itemAtIndex:4];

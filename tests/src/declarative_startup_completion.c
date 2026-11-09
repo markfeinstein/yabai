@@ -124,10 +124,9 @@ static void declarative_startup_completion_test_legacy(void *context)
 }
 
 static struct declarative_startup_completion_ops
-    declarative_startup_completion_test_ops(struct declarative_startup_completion_test_context *test,
-                                            bool notifications_required)
+    declarative_startup_completion_test_ops(struct declarative_startup_completion_test_context *test)
 {
-    workspace_set_macos_version(notifications_required ? 15 : 14);
+    workspace_set_macos_version(26);
     declarative_startup_production_test_overrides = (struct declarative_startup_completion_ops) {
         .inventory = declarative_startup_completion_test_inventory,
         .rebuild_notifications = declarative_startup_completion_test_notifications,
@@ -176,7 +175,7 @@ TEST_FUNC(declarative_startup_completion_orders_inventory_notifications_menu_soc
         .expect_native = true,
         .exercise_runtime_override = true
     };
-    struct declarative_startup_completion_ops ops = declarative_startup_completion_test_ops(&test, true);
+    struct declarative_startup_completion_ops ops = declarative_startup_completion_test_ops(&test);
     TEST_CHECK(declarative_startup_complete(&ops), DECLARATIVE_STARTUP_COMPLETION_OK);
     TEST_CHECK(strcmp(test.order, "INMSL"), 0);
     TEST_CHECK(test.inventory_count, 1U);
@@ -255,7 +254,7 @@ TEST_FUNC(declarative_startup_production_ops_observe_bootstrap_install_before_in
         .expect_native = true
     };
     struct declarative_startup_completion_ops completion =
-        declarative_startup_completion_test_ops(&test, true);
+        declarative_startup_completion_test_ops(&test);
     TEST_CHECK(test.order_count, 0U);
     TEST_CHECK(test.legacy_count, 0U);
     TEST_CHECK(declarative_startup_complete(&completion), DECLARATIVE_STARTUP_COMPLETION_OK);
@@ -301,7 +300,7 @@ TEST_FUNC(declarative_startup_completion_failure_cutoffs_are_exact,
     struct declarative_startup_completion_test_context notification = {
         .notification_result = false, .menu_result = true, .socket_result = true, .expect_native = true
     };
-    struct declarative_startup_completion_ops ops = declarative_startup_completion_test_ops(&notification, true);
+    struct declarative_startup_completion_ops ops = declarative_startup_completion_test_ops(&notification);
     TEST_CHECK(declarative_startup_complete(&ops), DECLARATIVE_STARTUP_COMPLETION_NOTIFICATION_FAILED);
     TEST_CHECK(strcmp(notification.order, "IN"), 0);
     TEST_CHECK(notification.socket_count, 0U);
@@ -310,7 +309,7 @@ TEST_FUNC(declarative_startup_completion_failure_cutoffs_are_exact,
     struct declarative_startup_completion_test_context menu = {
         .notification_result = true, .menu_result = false, .socket_result = true, .expect_native = true
     };
-    ops = declarative_startup_completion_test_ops(&menu, true);
+    ops = declarative_startup_completion_test_ops(&menu);
     TEST_CHECK(declarative_startup_complete(&ops), DECLARATIVE_STARTUP_COMPLETION_MENU_FAILED);
     TEST_CHECK(strcmp(menu.order, "INM"), 0);
     TEST_CHECK(menu.socket_count, 0U);
@@ -319,7 +318,7 @@ TEST_FUNC(declarative_startup_completion_failure_cutoffs_are_exact,
     struct declarative_startup_completion_test_context socket = {
         .notification_result = true, .menu_result = true, .socket_result = false, .expect_native = true
     };
-    ops = declarative_startup_completion_test_ops(&socket, true);
+    ops = declarative_startup_completion_test_ops(&socket);
     TEST_CHECK(declarative_startup_complete(&ops), DECLARATIVE_STARTUP_COMPLETION_SOCKET_FAILED);
     TEST_CHECK(strcmp(socket.order, "INMS"), 0);
     TEST_CHECK(socket.legacy_count, 0U);
@@ -330,12 +329,12 @@ TEST_FUNC(declarative_startup_completion_failure_cutoffs_are_exact,
     struct declarative_startup_completion_test_context absent_native = {
         .notification_result = true, .menu_result = true, .socket_result = true, .expect_native = false
     };
-    ops = declarative_startup_completion_test_ops(&absent_native, false);
+    ops = declarative_startup_completion_test_ops(&absent_native);
     TEST_CHECK(absent_native.order_count, 0U);
     TEST_CHECK(absent_native.legacy_count, 0U);
     TEST_CHECK(declarative_startup_complete(&ops), DECLARATIVE_STARTUP_COMPLETION_OK);
-    TEST_CHECK(strcmp(absent_native.order, "IMSL"), 0);
-    TEST_CHECK(absent_native.notification_count, 0U);
+    TEST_CHECK(strcmp(absent_native.order, "INMSL"), 0);
+    TEST_CHECK(absent_native.notification_count, 1U);
     TEST_CHECK(absent_native.native_seen_before_inventory, true);
     TEST_CHECK(absent_native.socket_count, 1U);
     TEST_CHECK(absent_native.legacy_count, 1U);

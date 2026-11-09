@@ -62,7 +62,7 @@ static float (*window_test_serialization_opacity)(uint32_t) = window_opacity;
 
 bool window_observe(struct window *window, bool *retry)
 {
-    if (!window || application_is_unresponsive(window->application)) {
+    if (!window) {
         if (retry) *retry = true;
         return false;
     }
@@ -1164,8 +1164,7 @@ char *window_title_ts(struct window *window)
 
 CFStringRef window_title(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application))
-        return window && window->title ? CFRetain(window->title) : NULL;
+    if (!window) return NULL;
     CFTypeRef value = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXTitleAttribute, &value);
     return value;
@@ -1388,7 +1387,6 @@ CGPoint window_ax_origin(struct window *window)
 {
     if (!window) return CGPointZero;
     CGPoint origin = window->frame.origin;
-    if (application_is_unresponsive(window->application)) return origin;
     CFTypeRef position_ref = NULL;
 
     AXUIElementCopyAttributeValue(window->ref, kAXPositionAttribute, &position_ref);
@@ -1403,7 +1401,7 @@ CGPoint window_ax_origin(struct window *window)
 
 bool window_ax_frame_with_status(struct window *window, CGRect *frame)
 {
-    if (!window || !window->ref || !frame || application_is_unresponsive(window->application)) return false;
+    if (!window || !window->ref || !frame) return false;
 
     struct window_ax_snapshot snapshot = {0};
     (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE, &snapshot);
@@ -1430,7 +1428,7 @@ CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen
 {
     CGRect frame = window ? window->frame : CGRectZero;
     if (is_fullscreen) *is_fullscreen = false;
-    if (!window || !window->ref || application_is_unresponsive(window->application)) return frame;
+    if (!window || !window->ref) return frame;
 
     struct window_ax_snapshot snapshot = {0};
     (void) window_ax_snapshot_read(window->ref, WINDOW_AX_POSITION | WINDOW_AX_SIZE | WINDOW_AX_FULLSCREEN, &snapshot);
@@ -1442,7 +1440,7 @@ CGRect window_ax_frame_and_fullscreen(struct window *window, bool *is_fullscreen
 
 bool window_ax_can_move(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application)) return false;
+    if (!window) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXPositionAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1457,7 +1455,7 @@ bool window_can_move(struct window *window)
 
 bool window_ax_can_resize(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application)) return false;
+    if (!window) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXSizeAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1472,7 +1470,7 @@ bool window_can_resize(struct window *window)
 
 bool window_can_minimize(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application)) return false;
+    if (!window) return false;
     Boolean result;
     if (AXUIElementIsAttributeSettable(window->ref, kAXMinimizedAttribute, &result) != kAXErrorSuccess) {
         result = 0;
@@ -1490,7 +1488,6 @@ bool window_is_undersized(struct window *window)
 bool window_is_fullscreen(struct window *window)
 {
     if (!window) return false;
-    if (application_is_unresponsive(window->application)) return window_check_flag(window, WINDOW_FULLSCREEN);
     Boolean result = 0;
     CFTypeRef value;
 
@@ -1572,37 +1569,30 @@ int window_level(uint32_t wid)
 {
     int level = 0;
 
-    if (workspace_is_macos_ventura_or_newer()) {
-        CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
-        if (!window_ref) return 0;
+    CFArrayRef window_ref = cfarray_of_cfnumbers(&wid, sizeof(uint32_t), 1, kCFNumberSInt32Type);
+    if (!window_ref) return 0;
 
-        CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
-        if (!query) goto err2;
+    CFTypeRef query = SLSWindowQueryWindows(g_connection, window_ref, 1);
+    if (!query) goto err2;
 
-        CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
-        if (!iterator) goto err1;
+    CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+    if (!iterator) goto err1;
 
-        if (SLSWindowIteratorGetCount(iterator) == 1) {
-            if (SLSWindowIteratorAdvance(iterator)) {
-                level = SLSWindowIteratorGetLevel(iterator);
-            }
-        }
-
-        CFRelease(iterator);
-    err1:
-        CFRelease(query);
-    err2:
-        CFRelease(window_ref);
-    } else {
-        SLSGetWindowLevel(g_connection, wid, &level);
+    if (SLSWindowIteratorGetCount(iterator) == 1 && SLSWindowIteratorAdvance(iterator)) {
+        level = SLSWindowIteratorGetLevel(iterator);
     }
 
+    CFRelease(iterator);
+err1:
+    CFRelease(query);
+err2:
+    CFRelease(window_ref);
     return level;
 }
 
 static uint32_t window_sub_level_message_id(void)
 {
-    return workspace_is_macos_tahoe_or_newer() ? 0x76E3 : 0x73C3;
+    return 0x76E3;
 }
 
 static int SLSGetWindowSubLevel__Internal(int cid, uint32_t wid)
@@ -1710,8 +1700,7 @@ out:
 
 CFStringRef window_ax_role(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application))
-        return window && window->role ? CFRetain(window->role) : NULL;
+    if (!window) return NULL;
     const void *role = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXRoleAttribute, &role);
     return role;
@@ -1733,8 +1722,7 @@ char *window_role_ts(struct window *window)
 
 CFStringRef window_ax_subrole(struct window *window)
 {
-    if (!window || application_is_unresponsive(window->application))
-        return window && window->subrole ? CFRetain(window->subrole) : NULL;
+    if (!window) return NULL;
     const void *srole = NULL;
     AXUIElementCopyAttributeValue(window->ref, kAXSubroleAttribute, &srole);
     return srole;

@@ -369,30 +369,6 @@ CGRect display_manager_dock_rect(void)
     return bounds;
 }
 
-static bool display_manager_animation_query_is_supported(void)
-{
-    // Big Sur can leave this bit latched after an application-driven Space
-    // transition. Newer releases are already excluded because the query is not
-    // reliable there; retain the established Monterey and Ventura behavior.
-    return workspace_is_macos_monterey() || workspace_is_macos_ventura();
-}
-
-bool display_manager_display_is_animating(uint32_t did)
-{
-    if (display_manager_animation_query_is_supported())
-    {
-        CFStringRef uuid = display_uuid(did);
-        if (!uuid) return false;
-
-        bool result = SLSManagedDisplayIsAnimating(g_connection, uuid);
-        CFRelease(uuid);
-
-        return result;
-    }
-
-    return false; // This does not return a correct result on modern macOS versions.
-}
-
 #ifdef TESTS
 static display_manager_active_display_list_fn display_manager_active_display_list_call = CGGetActiveDisplayList;
 
@@ -522,9 +498,6 @@ enum space_op_error display_manager_focus_space(uint32_t did, uint64_t sid)
 {
     bool is_in_mc = mission_control_is_active();
     if (is_in_mc) return SPACE_OP_ERROR_IN_MISSION_CONTROL;
-
-    bool is_animating = display_manager_display_is_animating(did);
-    if (is_animating) return SPACE_OP_ERROR_DISPLAY_IS_ANIMATING;
 
     uint32_t space_did = space_display_id(sid);
     if (space_did != did) return SPACE_OP_ERROR_SAME_DISPLAY;

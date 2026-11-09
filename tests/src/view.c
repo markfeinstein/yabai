@@ -513,7 +513,7 @@ TEST_FUNC(insert_feedback_creation_failures_unwind_without_publication,
     memset(&g_window_manager.insert_feedback, 0, sizeof(g_window_manager.insert_feedback));
     table_init(&g_window_manager.insert_feedback, 1, hash_wm, compare_wm);
     long saved_macos_version = workspace_macos_major_version();
-    workspace_set_macos_version(15);
+    workspace_set_macos_version(26);
     g_window_manager.insert_feedback_width = 2.0f;
     g_window_manager.insert_feedback_radius = 9.0f;
     g_window_manager.insert_feedback_color = rgba_color_from_hex(0xffffffff);

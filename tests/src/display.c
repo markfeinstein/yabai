@@ -121,30 +121,6 @@ static struct display_visible_frame_fixture display_visible_frame_test_fixture(v
     };
 }
 
-TEST_FUNC(display_animation_query_excludes_bigsur_and_modern_releases,
-{
-    long saved_macos_version = workspace_macos_major_version();
-
-    workspace_set_macos_version(11);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-    workspace_set_macos_version(12);
-    TEST_CHECK(display_manager_animation_query_is_supported(), true);
-    workspace_set_macos_version(13);
-    TEST_CHECK(display_manager_animation_query_is_supported(), true);
-    workspace_set_macos_version(14);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-    workspace_set_macos_version(15);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-    workspace_set_macos_version(26);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-    workspace_set_macos_version(27);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-    workspace_set_macos_version(28);
-    TEST_CHECK(display_manager_animation_query_is_supported(), false);
-
-    workspace_set_macos_version(saved_macos_version);
-});
-
 TEST_FUNC(display_visible_frame_property_selection_and_serialization_are_explicit,
 {
     TEST_SAVE(g_display_manager);

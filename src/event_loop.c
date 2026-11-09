@@ -533,33 +533,12 @@ static bool update_window_notifications(void)
     uint32_t *window_list = NULL;
     bool success = true;
 
-    if (workspace_is_macos_sequoia_or_newer()) {
-        // NOTE(asmvik): Subscribe to all windows because of window_destroyed (and ordered) notifications
-        table_for (struct window *window, g_window_manager.window, {
-            if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, window->id)) {
-                success = false;
-            }
-        })
-    } else {
-        // NOTE(asmvik): Subscribe to windows that have a feedback_border because of window_ordered notifications
-        table_for (struct window_node *node, g_window_manager.insert_feedback, {
-            if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, node->window_order[0])) {
-                success = false;
-            }
-        })
-    }
-
-    if (success && !workspace_is_macos_sequoia_or_newer() &&
-        g_window_manager.enable_active_window_highlight && g_window_manager.focused_window_id) {
-        bool present = false;
-        for (size_t i = 0; i < window_count; ++i) {
-            if (window_list[i] == g_window_manager.focused_window_id) { present = true; break; }
+    // Subscribe to every managed window for destroyed and ordered notifications.
+    table_for (struct window *window, g_window_manager.window, {
+        if (success && !update_window_notifications_append(&window_list, &window_count, &window_capacity, window->id)) {
+            success = false;
         }
-        if (!present) {
-            success = update_window_notifications_append(&window_list, &window_count, &window_capacity,
-                                                         g_window_manager.focused_window_id);
-        }
-    }
+    })
 
     if (success && window_count <= INT_MAX) {
         CGError request_result = SLSRequestNotificationsForWindows(g_connection, window_list, (int) window_count);
@@ -584,7 +563,6 @@ void event_loop_request_active_window_highlight_refresh(void)
 
 void event_loop_active_window_highlight_target_did_change(void)
 {
-    if (!workspace_is_macos_sequoia_or_newer()) (void) update_window_notifications();
 }
 
 static bool window_focus_should_center_mouse(struct window *focused_window, struct window *window, uint32_t ffm_window_id)
@@ -932,9 +910,7 @@ void event_loop_window_inventory_did_change(void)
 {
     menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_WINDOW);
 
-    if (workspace_is_macos_sequoia_or_newer()) {
-        update_window_notifications();
-    }
+    update_window_notifications();
 }
 
 static struct window *event_loop_focus_fallback_focused_window(struct window_manager *wm)
@@ -1669,13 +1645,6 @@ static EVENT_HANDLER(APPLICATION_FRONT_SWITCHED)
     event_loop_update_application_front_focus(application);
 }
 #pragma clang diagnostic pop
-
-static EVENT_HANDLER(APPLICATION_RESPONSIVENESS_CHANGED)
-{
-    (void)context;
-    (void)param1;
-    (void)application_responsiveness_drain();
-}
 
 static EVENT_HANDLER(APPLICATION_VISIBLE)
 {
@@ -3537,10 +3506,8 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
 {
     debug("%s:\n", __FUNCTION__);
 
-    if (workspace_is_macos_monterey_or_newer()) {
-        mission_control_unobserve();
-        mission_control_ensure_observed();
-    }
+    mission_control_unobserve();
+    mission_control_ensure_observed();
     mission_control_schedule_poll(0.1);
 
     event_signal_push(SIGNAL_DOCK_DID_RESTART, NULL);
@@ -3589,9 +3556,7 @@ static EVENT_HANDLER(SYSTEM_WOKE)
         window_reconcile_schedule(focused_window);
     }
 
-    if (workspace_is_macos_monterey_or_newer()) {
-        mission_control_ensure_observed();
-    }
+    mission_control_ensure_observed();
     window_manager_refresh_active_window_highlight(&g_window_manager);
     mission_control_schedule_poll(0.1);
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
@@ -4163,7 +4128,7 @@ static bool event_loop_recover_topology(struct event_loop *event_loop)
         }
         g_window_manager.window_animation_duration = animation_duration;
         if (space_manager_refresh_application_windows(&g_space_manager)) event_loop_window_inventory_did_change();
-        if (workspace_is_macos_monterey_or_newer()) mission_control_ensure_observed();
+        mission_control_ensure_observed();
         mission_control_schedule_poll(0.1);
         menu_bar_manager_mark_dirty(MENU_BAR_DIRTY_TOPOLOGY | MENU_BAR_DIRTY_DISPLAY |
                                     MENU_BAR_DIRTY_SPACE | MENU_BAR_DIRTY_WINDOW | MENU_BAR_DIRTY_FOCUS);
@@ -4327,7 +4292,6 @@ static void *event_loop_run(void *context)
                 profile_begin();
 
                 event_loop_dispatch_event(event);
-                (void)application_responsiveness_drain();
 
                 event_signal_flush();
                 ts_reset();

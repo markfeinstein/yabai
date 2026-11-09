@@ -843,7 +843,6 @@ TEST_FUNC(macos_version_classifies_named_and_future_releases,
     TEST_CHECK(workspace_is_macos_golden_gate(), true);
     TEST_CHECK(workspace_is_macos_tahoe(), false);
     TEST_CHECK(workspace_is_macos_future(), false);
-    TEST_CHECK(workspace_is_macos_tahoe_or_newer(), true);
 
     workspace_set_macos_version(26);
     TEST_CHECK(workspace_is_macos_tahoe(), true);
@@ -855,21 +854,6 @@ TEST_FUNC(macos_version_classifies_named_and_future_releases,
     TEST_CHECK(workspace_is_macos_future(), true);
     TEST_CHECK(workspace_is_macos_golden_gate(), false);
     TEST_CHECK(workspace_is_macos_tahoe(), false);
-    TEST_CHECK(workspace_is_macos_tahoe_or_newer(), true);
-    TEST_CHECK(workspace_is_macos_sequoia_or_newer(), true);
-
-    workspace_set_macos_version(15);
-    TEST_CHECK(workspace_is_macos_sequoia(), true);
-    TEST_CHECK(workspace_is_macos_tahoe(), false);
-    TEST_CHECK(workspace_is_macos_golden_gate(), false);
-    TEST_CHECK(workspace_is_macos_future(), false);
-    TEST_CHECK(workspace_is_macos_sequoia_or_newer(), true);
-    TEST_CHECK(workspace_is_macos_tahoe_or_newer(), false);
-
-    workspace_set_macos_version(10);
-    TEST_CHECK(workspace_is_macos_bigsur(), false);
-    TEST_CHECK(workspace_is_macos_future(), false);
-    TEST_CHECK(workspace_is_macos_monterey_or_newer(), false);
 
     workspace_set_macos_version(saved_macos_version);
 });

@@ -346,10 +346,7 @@ static enum doctor_probe doctor_access_as_identity(const struct doctor_identity 
 
 static enum doctor_probe doctor_screen_capture_preflight(void)
 {
-    if (@available(macOS 10.15, *)) {
-        return CGPreflightScreenCaptureAccess() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
-    }
-    return DOCTOR_PROBE_UNKNOWN;
+    return CGPreflightScreenCaptureAccess() ? DOCTOR_PROBE_YES : DOCTOR_PROBE_NO;
 }
 
 static struct doctor_collect_ops doctor_production_ops = {
