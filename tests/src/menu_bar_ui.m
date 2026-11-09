@@ -877,6 +877,8 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
     TEST_CHECK(button != nil);
     TEST_CHECK([strip superview] == button);
     TEST_CHECK([[strip subviews] count] == 4);
+    TEST_CHECK([button action] == @selector(performStatusItemAction:));
+    TEST_CHECK([button target] == controller);
 
     YBMenuBarScreenCell *active = [[strip subviews] lastObject];
     for (NSView *view in [strip subviews]) {
@@ -929,12 +931,18 @@ test_strip_cells_route_direct_focus_and_menu_actions(void)
         TEST_CHECK(log.space_id[i] == expected_space_ids[i]);
     }
 
+    TEST_CHECK([controller routeStatusItemEvent:up]);
+    TEST_CHECK(log.count == 4);
+    TEST_CHECK(log.type[3] == MENU_BAR_ACTION_FOCUS_SPACE);
+    TEST_CHECK(log.generation[3] == 73);
+    TEST_CHECK(log.space_id[3] == expected_space_ids[0]);
+
     YBMenuBarScreenCell *before_gap = [[strip subviews] objectAtIndex:1];
     YBMenuBarScreenCell *after_gap = [[strip subviews] objectAtIndex:2];
     NSPoint gap = NSMakePoint((NSMaxX([before_gap frame]) + NSMinX([after_gap frame])) * 0.5,
                               NSMidY([strip bounds]));
     TEST_CHECK([strip hitTest:gap] == strip);
-    TEST_CHECK(log.count == 3);
+    TEST_CHECK(log.count == 4);
 
     [controller clearStatusItem];
     [controller release];
@@ -1009,7 +1017,7 @@ test_expanded_render_uses_direct_actions_and_manual_menu(void)
     TEST_CHECK(button != nil);
     TEST_CHECK([button menu] == nil);
     TEST_CHECK([menu_bar_ui_state(controller).strip_view menu] == nil);
-    TEST_CHECK([button action] == @selector(showStatusMenu:));
+    TEST_CHECK([button action] == @selector(performStatusItemAction:));
     TEST_CHECK([button target] == controller);
     TEST_CHECK([[button toolTip] containsString:@"click an inactive Space"]);
     TEST_CHECK([[button accessibilityLabel] isEqualToString:@"yabai Spaces"]);

@@ -211,6 +211,8 @@ yb_draw_display_separator(NSView *strip, NSRect left_cell, NSRect right_cell)
 - (id)initWithCallbacks:(const struct menu_bar_callbacks *)callbacks;
 - (void)shutdown;
 - (void)receiveSnapshot:(struct menu_bar_snapshot *)snapshot clear:(bool)clear;
+- (bool)routeStatusItemEvent:(NSEvent *)event;
+- (void)performStatusItemAction:(id)sender;
 - (void)showStatusMenu:(id)sender;
 - (void)performScreenAction:(id)sender;
 - (void)performMenuAction:(id)sender;
@@ -1673,7 +1675,7 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [button setTitle:@""];
         [button setImage:nil];
         [button setTarget:self];
-        [button setAction:@selector(showStatusMenu:)];
+        [button setAction:@selector(performStatusItemAction:)];
         [self setStatusToolTipBase:@"yabai Spaces — click an inactive Space to focus it; use the active Space, right-click or press and hold for the menu."];
         [button setAccessibilityLabel:@"yabai Spaces"];
         [button setAccessibilityValue:yb_status_accessibility_value(_snapshot)];
@@ -1833,6 +1835,31 @@ yb_section_header_menu_item(NSString *title, NSString *tool_tip)
         [self installStatusStrip:expanded];
     } else {
         [self installStatusStrip:[self buildCompactStrip]];
+    }
+}
+
+- (bool)routeStatusItemEvent:(NSEvent *)event
+{
+    if (!_strip_view || !event || [event type] != NSEventTypeLeftMouseUp) return false;
+
+    NSWindow *window = [_strip_view window];
+    if (!window || [event windowNumber] != [window windowNumber]) return false;
+
+    NSPoint point = [_strip_view convertPoint:[event locationInWindow] fromView:nil];
+    if (!NSPointInRect(point, [_strip_view bounds])) return false;
+
+    [(YBMenuBarStripView *) _strip_view activatePoint:point];
+    return true;
+}
+
+- (void)performStatusItemAction:(id)sender
+{
+    // AppKit and third-party menu-bar managers can occasionally let the host
+    // NSStatusBarButton win hit testing instead of its strip subview. Preserve
+    // the click coordinate so this fallback selects the intended Space rather
+    // than treating every intercepted click as a request to open the menu.
+    if (![self routeStatusItemEvent:[NSApp currentEvent]]) {
+        [self showStatusMenu:sender];
     }
 }
 
