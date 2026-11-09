@@ -220,10 +220,13 @@ run_make debug release asan tsan >/dev/null
 # declared macOS deployment floor.
 awk '
     /^xcrun$/ { if (seen && !floor) bad = 1; seen = 1; floor = 0; next }
-    /^xcrun-arg:-mmacosx-version-min=14.0$/ { floor = 1 }
+    /^xcrun-arg:-mmacosx-version-min=26.0$/ { floor = 1 }
     END { if (!seen || !floor) bad = 1; exit bad }
 ' "$XCRUN_LOG"
-! grep -F 'xcrun-arg:-mmacosx-version-min=11.0' "$XCRUN_LOG"
+! grep -F 'xcrun-arg:-mmacosx-version-min=14.0' "$XCRUN_LOG"
+! grep -F 'xcrun-arg:x86_64' "$XCRUN_LOG"
+grep -Fq 'xcrun-arg:arm64' "$XCRUN_LOG"
+grep -Fq 'xcrun-arg:arm64e' "$XCRUN_LOG"
 for config in debug release asan tsan; do
     test -x "$WORK/bin/$config/yabai"
     test -f "$WORK/bin/$config/osax/generated.c"

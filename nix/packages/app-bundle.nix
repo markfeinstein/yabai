@@ -18,6 +18,7 @@ let
     CFBundlePackageType = "APPL";
     CFBundleShortVersionString = bundleVersion;
     CFBundleVersion = bundleVersion;
+    LSMinimumSystemVersion = "26.0";
     LSUIElement = true;
     NSHumanReadableCopyright = "Copyright © 2019 Åsmund Vikane. All rights reserved.";
   };

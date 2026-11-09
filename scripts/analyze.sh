@@ -8,8 +8,8 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 arch=$(uname -m)
 case "$arch" in
-    arm64|x86_64) ;;
-    *) echo "unsupported analyzer architecture: $arch" >&2; exit 1 ;;
+    arm64) ;;
+    *) echo "the analyzer requires Apple Silicon: $arch" >&2; exit 1 ;;
 esac
 
 xcrun_bin=${XCRUN:-xcrun}
@@ -32,7 +32,7 @@ printf '%s\n' "$sources" | while IFS= read -r source; do
         -Xanalyzer -analyzer-opt-analyze-headers \
         -Xanalyzer -analyzer-output=plist-multi-file \
         "$root/$source" \
-        -fno-objc-arc -arch "$arch" -mmacosx-version-min=14.0 \
+        -fno-objc-arc -arch "$arch" -mmacosx-version-min=26.0 \
         -F/System/Library/PrivateFrameworks \
         -o "$report" >"$log" 2>&1; then
         cat "$log" >&2

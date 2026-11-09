@@ -17,7 +17,7 @@ concurrency:
 jobs:
   pin:
     name: Pin ${{ inputs.tag }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     permissions:
       contents: write
@@ -122,6 +122,10 @@ jobs:
           plist="$app/Contents/Info.plist"
           test -x "$executable"
           test -f "$plist"
+          /usr/bin/lipo "$executable" -verify_arch arm64
+          test "$(/usr/bin/lipo -archs "$executable")" = arm64
+          test "$(/usr/bin/otool -arch arm64 -l "$executable" | awk '$1 == "minos" { print $2 }')" = 26.0
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")" = 26.0
 
           requirement='identifier "com.markfeinstein.yabai" and anchor apple generic and certificate leaf[subject.OU] = "GYXXG6S7KM"'
           /usr/bin/codesign --verify --strict -R "=$requirement" "$executable"

@@ -57,7 +57,7 @@ jobs:
     name: Build unsigned application
     needs: check-release
     if: ${{ needs.check-release.outputs.already_published != 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     permissions:
       contents: read
@@ -133,9 +133,9 @@ jobs:
           make test
           make release VERSION="$BUILD_VERSION"
           test "$(bin/release/yabai --version)" = "yabai-v$BUILD_VERSION"
-          for arch in arm64 x86_64; do
-            lipo bin/release/yabai -verify_arch "$arch"
-          done
+          lipo bin/release/yabai -verify_arch arm64
+          test "$(lipo -archs bin/release/yabai)" = arm64
+          test "$(otool -arch arm64 -l bin/release/yabai | awk '$1 == "minos" { print $2 }')" = 26.0
 
       - name: Stage unsigned application
         run: |
@@ -164,7 +164,7 @@ jobs:
   sign:
     name: Sign, notarize, and publish application
     needs: build
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     environment: release-signing
     permissions:

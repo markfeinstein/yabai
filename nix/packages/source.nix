@@ -52,6 +52,6 @@ stdenvNoCC.mkDerivation {
     homepage = "https://github.com/markfeinstein/yabai";
     license = lib.licenses.mit;
     mainProgram = "yabai";
-    platforms = lib.platforms.darwin;
+    platforms = [ "aarch64-darwin" ];
   };
 }
