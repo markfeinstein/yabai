@@ -1,4 +1,5 @@
 name: signed-release
+run-name: signed-release ${{ inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -14,9 +15,48 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: signed-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  check-release:
+    name: Check release state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    outputs:
+      already_published: ${{ steps.release.outputs.already_published }}
+    steps:
+      - name: Check for existing GitHub release
+        id: release
+        run: |
+          set -euo pipefail
+          : "${RELEASE_TAG:?missing release tag}"
+          response=$(mktemp)
+          trap 'rm -f "$response"' EXIT
+          if gh api --include \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$response" 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Release \`$RELEASE_TAG\` is already published; build and signing jobs will be skipped." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -Eq '^HTTP/[0-9.]+ 404 ' "$response"; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "Release \`$RELEASE_TAG\` is not published; continuing with the protected release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$response" >&2
+            echo "Could not determine whether \`$RELEASE_TAG\` is already published." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
   build:
     name: Build unsigned application
+    needs: check-release
+    if: ${{ needs.check-release.outputs.already_published != 'true' }}
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
