@@ -1,41 +1,29 @@
 @interface display_identity_test_public_screen : NSObject
 @property(nonatomic) CGDirectDisplayID modernDisplayID;
-@property(nonatomic) uint32_t legacyDisplayID;
 @end
 
 @implementation display_identity_test_public_screen
 - (CGDirectDisplayID)CGDirectDisplayID { return self.modernDisplayID; }
-- (NSDictionary *)deviceDescription
-{
-    return @{ @"NSScreenNumber": @(self.legacyDisplayID) };
-}
 @end
 
-@interface display_identity_test_legacy_screen : NSObject
-@property(nonatomic) uint32_t legacyDisplayID;
+@interface display_identity_test_unresolved_screen : NSObject
 @end
 
-@implementation display_identity_test_legacy_screen
-- (NSDictionary *)deviceDescription
-{
-    return @{ @"NSScreenNumber": @(self.legacyDisplayID) };
-}
+@implementation display_identity_test_unresolved_screen
 @end
 
 TEST_FUNC(display_identity_prefers_public_screen_display_id,
 {
     display_identity_test_public_screen *screen = [display_identity_test_public_screen new];
     screen.modernDisplayID = 42;
-    screen.legacyDisplayID = 7;
     TEST_CHECK(workspace_screen_display_id((NSScreen *) screen), 42U);
     [screen release];
 });
 
-TEST_FUNC(display_identity_falls_back_to_legacy_screen_number,
+TEST_FUNC(display_identity_requires_public_screen_display_id,
 {
-    display_identity_test_legacy_screen *screen = [display_identity_test_legacy_screen new];
-    screen.legacyDisplayID = 42;
-    TEST_CHECK(workspace_screen_display_id((NSScreen *) screen), 42U);
+    display_identity_test_unresolved_screen *screen = [display_identity_test_unresolved_screen new];
+    TEST_CHECK(workspace_screen_display_id((NSScreen *) screen), kCGNullDirectDisplay);
     [screen release];
 });
 
@@ -43,7 +31,6 @@ TEST_FUNC(display_identity_treats_null_and_nonmatching_ids_as_unresolved,
 {
     display_identity_test_public_screen *screen = [display_identity_test_public_screen new];
     screen.modernDisplayID = kCGNullDirectDisplay;
-    screen.legacyDisplayID = 42;
     TEST_CHECK(workspace_screen_display_id((NSScreen *) screen), kCGNullDirectDisplay);
     TEST_CHECK(workspace_screen_matches_display((NSScreen *) screen, 0), false);
     TEST_CHECK(workspace_screen_matches_display((NSScreen *) screen, 42), false);

@@ -1298,10 +1298,6 @@ static id current_space_for_display_uuid(CFStringRef display_uuid, uint64_t spac
             dock_spaces, @selector(currentSpaceForDisplay:), display_id);
     }
 
-    if ([dock_spaces respondsToSelector:@selector(currentSpaceforDisplayUUID:)]) {
-        return ((id (*)(id, SEL, CFStringRef)) objc_msgSend)(
-            dock_spaces, @selector(currentSpaceforDisplayUUID:), display_uuid);
-    }
     return nil;
 }
 
