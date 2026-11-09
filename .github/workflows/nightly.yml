@@ -2,8 +2,13 @@ name: schedule-nightly
 
 on:
   schedule:
-    # 01:17 PST / 02:17 PDT. GitHub schedules use UTC.
-    - cron: "17 9 * * *"
+    # Primary nightly plus two recovery attempts, all in Pacific time.
+    - cron: "0 23 * * *"
+      timezone: "America/Los_Angeles"
+    - cron: "0 2 * * *"
+      timezone: "America/Los_Angeles"
+    - cron: "0 6 * * *"
+      timezone: "America/Los_Angeles"
   workflow_dispatch:
 
 permissions: {}
@@ -34,6 +39,7 @@ jobs:
         id: nightly
         run: |
           set -euo pipefail
+          # UTC date groups the 11 PM Pacific attempt with its 2 AM and 6 AM retries.
           nightly_tag="nightly-$(date -u +%Y%m%d)"
           source_sha=$(git rev-parse HEAD)
           should_dispatch=true
@@ -118,6 +124,19 @@ jobs:
             echo "$NIGHTLY_TAG was published by another run; no dispatch is needed." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
+          active_run_url=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow release.yml \
+            --limit 100 \
+            --json displayTitle,status,url \
+            | jq -r --arg title "signed-release $NIGHTLY_TAG" \
+              'map(select(.displayTitle == $title and .status != "completed")) | first | .url // empty')
+          if [ -n "$active_run_url" ]; then
+            echo "An active signed-release run already owns \`$NIGHTLY_TAG\`: $active_run_url" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           gh workflow run release.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$DEFAULT_BRANCH" \
