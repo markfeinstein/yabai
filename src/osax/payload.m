@@ -102,7 +102,6 @@ static uint64_t remove_space_fp;
 static uint64_t move_space_fp;
 static uint64_t set_front_window_fp;
 static uint64_t animation_time_addr;
-static bool macOSSequoia;
 static bool macOSNewSpaceMove;
 
 struct swift_string { uint64_t bits; void *object; };
@@ -664,13 +663,9 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
 {
     NSLog(@"[yabai-sa] checking for macOS %ld.%ld.%ld compatibility!", os_version.majorVersion, os_version.minorVersion, os_version.patchVersion);
 
-    if (os_version.majorVersion == 26) {
-        macOSSequoia = true;
-        return true;
-    }
+    if (os_version.majorVersion == 26) return true;
     if (os_version.majorVersion == 27) {
         NSLog(@"[yabai-sa] Detected macOS 27 experimental support; enabling verified scripting-addition capabilities only.");
-        macOSSequoia = true;
         return true;
     }
 
@@ -732,11 +727,8 @@ static void init_instances()
         //
         // @hack
         //
-        // NOTE(asmvik): For whatever reason, in Sonoma, DPDesktopPictureManager is initialized and swapped
-        // to an alternate storage location instead of where it used to be stored in previous macOS versions..
-        //
-        // This alternate storage location resides 8-bytes before the usual location, so we simply do
-        // the subtract to arrive at the correct location in cases where the usual location is null.
+        // Some supported Dock builds publish DPDesktopPictureManager in the
+        // adjacent slot. Fall back to that slot when the primary one is null.
         //
 
         if (dp_desktop_picture_manager == nil) {
@@ -1262,9 +1254,7 @@ static bool do_space_create(char *message)
     dispatch_sync(dispatch_get_main_queue(), ^{
         id display_space = display_space_for_display_uuid(display_uuid);
         if (display_space != nil) {
-            id new_space = macOSSequoia
-                         ? [[objc_getClass("ManagedSpace") alloc] init]
-                         : [[objc_getClass("Dock.ManagedSpace") alloc] init];
+            id new_space = [[objc_getClass("ManagedSpace") alloc] init];
             if (new_space != nil) {
                 asm__call_add_space(new_space, display_space, add_space_fp);
                 request_dispatched = true;
@@ -1280,10 +1270,8 @@ static bool do_space_create(char *message)
 }
 
 
-// Resolve the current space for a display UUID across Dock API generations:
-//   - pre-Sequoia:        -[Spaces currentSpaceforDisplayUUID:(NSString *)]
-//   - Sequoia .. 27.1:    -[Spaces currentSpaceForDisplayUUID:(NSString *)]
-//   - 27.2 (Dock 2571.x): -[Spaces currentSpaceForDisplay:(CGDirectDisplayID)]
+// Resolve the current space using the macOS 26/27 UUID selector or the
+// macOS 27.2 display-ID replacement.
 static id current_space_for_display_uuid(CFStringRef display_uuid, uint64_t space_id)
 {
     if (dock_spaces == nil || !display_uuid) return nil;
