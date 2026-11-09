@@ -85,6 +85,15 @@ let
     };
   };
 
+  ensuredSpaces = mkHome {
+    programs.yabai = {
+      service.enable = true;
+      spaces.ensureCount = 9;
+    };
+  };
+  ensureSpacesActivation = ensuredSpaces.config.home.activation.yabaiEnsureSpaces.data;
+  ensureSpacesScript = pkgs.writeText "yabai-ensure-spaces" ensureSpacesActivation;
+
   invalidRelativeExecutable = mkHome {
     programs.yabai.service.executable = "Applications/Yabai.app/Contents/MacOS/yabai";
   };
@@ -99,6 +108,10 @@ let
 
   invalidSettingsFile = mkHome {
     programs.yabai.settingsFile = pkgs.writeText "yabai-settings.jsonc" "{}";
+  };
+
+  invalidEnsureSpaces = mkHome {
+    programs.yabai.spaces.ensureCount = 9;
   };
 in
 assert head.config.programs.yabai.install.source == "head";
@@ -122,11 +135,71 @@ assert
   == "sha256-ARO20dOA4NefMRsYQaipzGpxEybZhs1uySK/eP5U2l4=";
 assert stableService.config.programs.yabai.service.finalExecutable == stableExecutable;
 assert lib.hasInfix stableExecutable stableService.config.home.activation.yabaiService.data;
+assert ensuredSpaces.config.programs.yabai.spaces.ensureCount == 9;
+assert lib.hasInfix "query --spaces" ensureSpacesActivation;
+assert lib.hasInfix "space --create" ensureSpacesActivation;
+assert lib.hasInfix "config reload" ensureSpacesActivation;
+assert lib.hasInfix "is-native-fullscreen" ensureSpacesActivation;
 assert toString head.config.xdg.configFile."yabai/yabai.jsonc".source != "";
 assert !(builtins.tryEval invalidRelativeExecutable.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidCommit.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidNightly.activationPackage.drvPath).success;
 assert !(builtins.tryEval invalidSettingsFile.activationPackage.drvPath).success;
+assert !(builtins.tryEval invalidEnsureSpaces.activationPackage.drvPath).success;
 pkgs.runCommand "yabai-home-manager-module-eval" { } ''
+  fixture=$TMPDIR/yabai-spaces
+  mkdir -p "$fixture"
+  state="$fixture/count"
+  reload="$fixture/reloaded"
+  mock="$fixture/yabai"
+
+  cat > "$mock" <<'SH'
+  #!${pkgs.bash}/bin/bash
+  set -euo pipefail
+  state="''${YABAI_SPACE_TEST_STATE:?}"
+  reload="''${YABAI_SPACE_TEST_RELOAD:?}"
+  case "$*" in
+    '-m query --spaces')
+      count=$(cat "$state")
+      printf '['
+      i=1
+      while [ "$i" -le "$count" ]; do
+        [ "$i" -eq 1 ] || printf ','
+        printf '{"is-native-fullscreen":false}'
+        i=$((i + 1))
+      done
+      printf ']\n'
+      ;;
+    '-m space --create')
+      count=$(cat "$state")
+      printf '%s\n' "$((count + 1))" > "$state"
+      ;;
+    '-m config reload')
+      touch "$reload"
+      ;;
+    *) exit 64 ;;
+  esac
+  SH
+  chmod +x "$mock"
+
+  activation="$fixture/activation"
+  {
+    printf '#!${pkgs.bash}/bin/bash\nset -euo pipefail\nerrorEcho() { printf "%%s\\n" "$*" >&2; }\n'
+    sed "1s|^service_executable=.*$|service_executable='$mock'|" ${ensureSpacesScript}
+  } > "$activation"
+  chmod +x "$activation"
+  ${pkgs.bash}/bin/bash -n "$activation"
+
+  printf '6\n' > "$state"
+  YABAI_SPACE_TEST_STATE="$state" YABAI_SPACE_TEST_RELOAD="$reload" "$activation"
+  test "$(cat "$state")" = 9
+  test -f "$reload"
+
+  rm -f "$reload"
+  printf '10\n' > "$state"
+  YABAI_SPACE_TEST_STATE="$state" YABAI_SPACE_TEST_RELOAD="$reload" "$activation"
+  test "$(cat "$state")" = 10
+  test ! -e "$reload"
+
   touch "$out"
 ''

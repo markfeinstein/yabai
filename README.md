@@ -95,6 +95,14 @@ programs.yabai.service.executable =
 
 The service activation runs after Home Manager's `copyApps` step and refuses to load the agent if the configured executable does not exist or is not executable.
 
+Home Manager can also ensure a minimum global count of ordinary Spaces after the service starts:
+
+```nix
+programs.yabai.spaces.ensureCount = 9;
+```
+
+Missing Spaces are created on the active display with `yabai -m space --create`; native-fullscreen Spaces do not count toward the requested total, and extra Spaces are never removed. When Spaces are added, the module reloads declarative settings so previously unavailable native rule targets can bind. Creation requires partial SIP disablement and a working scripting addition, and activation fails if the requested count cannot be reached. Leave the option at its default `null` to manage Spaces outside Home Manager.
+
 Available installation sources are:
 
 - `head`: compile the revision pinned by the flake input. This is the current default.

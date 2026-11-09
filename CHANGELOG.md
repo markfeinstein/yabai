@@ -8,6 +8,9 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+- Let the Home Manager module ensure a minimum global count of ordinary Spaces, creating missing Spaces after service startup and reloading settings so native rule targets can bind.
+
 ### Changed
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 

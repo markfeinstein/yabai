@@ -8,6 +8,7 @@
 }:
 let
   cfg = config.programs.yabai;
+  requiredSpaceCount = if cfg.spaces.ensureCount == null then 0 else cfg.spaces.ensureCount;
 
   pinnedRelease = rec {
     version = "0.0.1";
@@ -282,6 +283,72 @@ let
       fi
     fi
   '';
+
+  ensureSpaces = lib.hm.dag.entryAfter [ "yabaiService" ] ''
+    service_executable=${lib.escapeShellArg serviceExecutable}
+    required_space_count=${toString requiredSpaceCount}
+    reload_settings=${if validatedSettings == null then "0" else "1"}
+
+    if [ -n "''${DRY_RUN:-}" ]; then
+      echo "Would ensure at least $required_space_count ordinary yabai Spaces globally."
+    else
+      space_count() {
+        "$service_executable" -m query --spaces 2>/dev/null \
+          | ${pkgs.jq}/bin/jq -er '[.[] | select(.["is-native-fullscreen"] != true)] | length'
+      }
+
+      current_space_count=""
+      attempts=50
+      while [ "$attempts" -gt 0 ]; do
+        if current_space_count="$(space_count)"; then
+          break
+        fi
+        /bin/sleep 0.1
+        attempts=$((attempts - 1))
+      done
+      if [ -z "$current_space_count" ]; then
+        errorEcho "Could not query yabai Spaces after starting the service."
+        exit 1
+      fi
+
+      created_spaces=0
+      while [ "$current_space_count" -lt "$required_space_count" ]; do
+        previous_space_count=$current_space_count
+        if ! "$service_executable" -m space --create; then
+          errorEcho "Could not create the required yabai Space."
+          errorEcho "Space creation requires partial SIP disablement and a working scripting addition."
+          exit 1
+        fi
+
+        next_space_count=""
+        attempts=50
+        while [ "$attempts" -gt 0 ]; do
+          candidate_space_count="$(space_count || true)"
+          if [ -n "$candidate_space_count" ] \
+            && [ "$candidate_space_count" -gt "$previous_space_count" ]; then
+            next_space_count=$candidate_space_count
+            break
+          fi
+          /bin/sleep 0.1
+          attempts=$((attempts - 1))
+        done
+        if [ -z "$next_space_count" ]; then
+          errorEcho "The yabai Space count did not increase after creation."
+          exit 1
+        fi
+
+        current_space_count=$next_space_count
+        created_spaces=1
+      done
+
+      if [ "$created_spaces" -eq 1 ] && [ "$reload_settings" -eq 1 ]; then
+        if ! "$service_executable" -m config reload; then
+          errorEcho "Created the required Spaces, but could not reload yabai settings."
+          exit 1
+        fi
+      fi
+    fi
+  '';
 in
 {
   options.programs.yabai = {
@@ -340,6 +407,19 @@ in
           Defaults to the latest release verified by this module revision.
         '';
       };
+    };
+
+    spaces.ensureCount = lib.mkOption {
+      type = with lib.types; nullOr ints.positive;
+      default = null;
+      example = 9;
+      description = ''
+        Minimum global count of ordinary (non-native-fullscreen) Spaces.
+        Missing Spaces are created on the active display after the service
+        starts; extra Spaces are never removed. Creation requires partial SIP
+        disablement and a working scripting addition, and activation fails if
+        the requested count cannot be reached.
+      '';
     };
 
     settings = lib.mkOption {
@@ -420,6 +500,10 @@ in
           message = "programs.yabai.service.executable must be an absolute path";
         }
         {
+          assertion = cfg.spaces.ensureCount == null || cfg.service.enable;
+          message = "programs.yabai.spaces.ensureCount requires programs.yabai.service.enable";
+        }
+        {
           assertion =
             !cfg.enable
             || cfg.install.source != "commit"
@@ -470,8 +554,10 @@ in
     })
 
     {
-      home.activation.yabaiService =
-        if cfg.enable && cfg.service.enable then enableService else disableService;
+      home.activation = {
+        yabaiService = if cfg.enable && cfg.service.enable then enableService else disableService;
+        yabaiEnsureSpaces = lib.mkIf (cfg.enable && cfg.spaces.ensureCount != null) ensureSpaces;
+      };
     }
   ];
 }
