@@ -166,7 +166,8 @@ jobs:
     needs: build
     runs-on: macos-26
     timeout-minutes: 70
-    environment: release-signing
+    environment:
+      name: ${{ needs.build.outputs.channel == 'nightly' && 'nightly-signing' || 'release-signing' }}
     permissions:
       contents: write
     env:
