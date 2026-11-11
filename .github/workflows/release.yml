@@ -153,11 +153,30 @@ jobs:
             com.markfeinstein.yabai
           /usr/bin/ditto -c -k --keepParent "$app" "$RUNNER_TEMP/unsigned-Yabai.zip"
 
+      - name: Render release notes from changelog
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_CHANNEL" = nightly ]; then
+            changelog_section=Unreleased
+          else
+            changelog_section=$BASE_VERSION
+          fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 scripts/extract_changelog.py CHANGELOG.md "$changelog_section" > "$notes"
+          {
+            printf '\n---\n\n'
+            printf '[View the complete changelog](https://github.com/%s/blob/%s/CHANGELOG.md)\n' \
+              "$GITHUB_REPOSITORY" "$RELEASE_TAG"
+          } >> "$notes"
+          test -s "$notes"
+
       - name: Upload unsigned application
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-yabai
-          path: ${{ runner.temp }}/unsigned-Yabai.zip
+          path: |
+            ${{ runner.temp }}/unsigned-Yabai.zip
+            ${{ runner.temp }}/release-notes.md
           if-no-files-found: error
           retention-days: 1
 
@@ -532,15 +551,17 @@ jobs:
           CHECKSUM: ${{ steps.archive.outputs.checksum }}
           DMG: ${{ steps.archive.outputs.dmg }}
           DMG_CHECKSUM: ${{ steps.archive.outputs.dmg_checksum }}
+          RELEASE_NOTES: ${{ runner.temp }}/download/release-notes.md
         run: |
           set -euo pipefail
+          test -s "$RELEASE_NOTES"
           if [ "$RELEASE_CHANNEL" = nightly ]; then
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Nightly $BUILD_VERSION" \
               --prerelease \
-              --generate-notes \
+              --notes-file "$RELEASE_NOTES" \
               "$ASSET" \
               "$CHECKSUM" \
               "$DMG" \
@@ -550,7 +571,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "$RELEASE_TAG" \
-              --generate-notes \
+              --notes-file "$RELEASE_NOTES" \
               "$ASSET" \
               "$CHECKSUM" \
               "$DMG" \
