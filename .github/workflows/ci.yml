@@ -33,7 +33,7 @@ jobs:
       - name: Offline evidence-gate self-tests
         run: make classifier-corpus-gate native-tab-evidence-gate
       - name: Release-note extraction tests
-        run: python3 tests/extract_changelog_test.py
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tests/extract_changelog_test.py
       - name: AX frame request benchmark
         run: make test-benchmark-ax
 
