@@ -408,6 +408,102 @@ TEST_FUNC(hotkey_callback_does_not_reclaim_a_rejected_consumed_job,
     }
 })
 
+static size_t hotkey_job_test_allocation_size;
+static bool hotkey_job_test_fail_allocation;
+static struct hotkey_action_job *hotkey_job_test_pending;
+
+static void *hotkey_job_test_allocate(size_t size)
+{
+    hotkey_job_test_allocation_size = size;
+    return hotkey_job_test_fail_allocation ? NULL : malloc(size);
+}
+
+static bool hotkey_job_test_capture_action(void *context)
+{
+    hotkey_job_test_pending = context;
+    return true;
+}
+
+struct hotkey_job_test_execution
+{
+    const struct hotkey_action *expected;
+    size_t count;
+    size_t executed;
+    bool matched;
+};
+
+static bool hotkey_job_test_execute(const struct hotkey_action *action, void *context)
+{
+    struct hotkey_job_test_execution *execution = context;
+    execution->matched = execution->matched && execution->executed < execution->count &&
+        memcmp(action, &execution->expected[execution->executed], sizeof(*action)) == 0;
+    ++execution->executed;
+    return true;
+}
+
+TEST_FUNC(hotkey_callback_sizes_action_jobs_to_the_owned_sequence,
+{
+    TEST_SAVE(hotkey_action_job_allocate);
+    TEST_SAVE(hotkey_test_post_action);
+    TEST_SAVE(hotkey_test_action_executor);
+    TEST_SAVE(hotkey_test_action_context);
+    TEST_SAVE(hotkey_manager.delivery);
+    hotkey_action_job_allocate = hotkey_job_test_allocate;
+    hotkey_test_set_action_poster(hotkey_job_test_capture_action);
+    struct hotkey_action expected[HOTKEY_MAX_ACTIONS] = {0};
+    struct hotkey_action actions[HOTKEY_MAX_ACTIONS];
+    for (size_t i = 0; i < array_count(expected); ++i) {
+        expected[i].type = HOTKEY_ACTION_CHANGE_WINDOW_RATIO;
+        expected[i].data.change_window_ratio.delta = (float) i + 1.0f;
+    }
+    struct hotkey_binding_case binding_case = {
+        .disposition = HOTKEY_DISPOSITION_CONSUME, .transition_mode = HOTKEY_TRANSITION_NONE,
+        .actions = actions
+    };
+    struct hotkey_binding binding = {
+        .keystroke = { kVK_ANSI_J, 0 }, .cases = &binding_case, .case_count = 1
+    };
+    struct hotkey_config_model config = {
+        .present = true, .enabled = true, .bindings = &binding, .binding_count = 1
+    };
+    const size_t counts[] = { 1, 2, HOTKEY_MAX_ACTIONS };
+    for (size_t i = 0; i <= array_count(counts); ++i) {
+        hotkey_job_test_fail_allocation = i == array_count(counts);
+        size_t count = hotkey_job_test_fail_allocation ? 1 : counts[i];
+        binding_case.action_count = count;
+        memcpy(actions, expected, sizeof(actions));
+        hotkey_manager_install_config(&config);
+        hotkey_job_test_allocation_size = 0;
+        hotkey_job_test_pending = NULL;
+        CGEventRef down = CGEventCreateKeyboardEvent(NULL, kVK_ANSI_J, true);
+        TEST_CHECK(down != NULL, true);
+        if (!down) continue;
+        CGEventSetFlags(down, 0);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, down, NULL) == NULL, true);
+        TEST_CHECK(hotkey_job_test_allocation_size,
+                   offsetof(struct hotkey_action_job, actions) + count * sizeof(*actions));
+        TEST_CHECK(hotkey_job_test_pending != NULL, !hotkey_job_test_fail_allocation);
+
+        // Queued actions must remain self-contained after the config is replaced.
+        memset(actions, 0, sizeof(actions));
+        hotkey_manager_install_config(NULL);
+        if (hotkey_job_test_pending) {
+            TEST_CHECK(hotkey_job_test_pending->count, count);
+            TEST_CHECK(memcmp(hotkey_job_test_pending->actions, expected, count * sizeof(*actions)), 0);
+            struct hotkey_job_test_execution execution = { .expected = expected, .count = count, .matched = true };
+            hotkey_test_set_action_executor(hotkey_job_test_execute, &execution);
+            EVENT_HANDLER_HOTKEY_ACTION(hotkey_job_test_pending, 0);
+            hotkey_job_test_pending = NULL;
+            hotkey_test_set_action_executor(NULL, NULL);
+            TEST_CHECK(execution.executed, count);
+            TEST_CHECK(execution.matched, true);
+        }
+        CFRelease(down);
+    }
+    hotkey_job_test_fail_allocation = false;
+    hotkey_manager_install_config(NULL);
+});
+
 struct hotkey_lifecycle_serialization_test
 {
     pthread_mutex_t mutex;

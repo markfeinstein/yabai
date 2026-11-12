@@ -5,7 +5,7 @@ extern struct event_loop g_event_loop;
 struct hotkey_action_job
 {
     size_t count;
-    struct hotkey_action actions[HOTKEY_MAX_ACTIONS];
+    struct hotkey_action actions[];
 };
 
 struct hotkey_event_context
@@ -61,11 +61,24 @@ static struct hotkey_manager_state hotkey_manager = {
 };
 
 #ifdef TESTS
+static void *(*hotkey_action_job_allocate)(size_t) = malloc;
 static bool (*hotkey_key_state)(CGKeyCode) = NULL;
 static void (*hotkey_test_reconcile_locked_hook)(void);
 static void (*hotkey_test_reconcile_observer)(bool);
 static void (*hotkey_test_mode_timeout_scheduler)(uint64_t, uint32_t);
+#else
+#define hotkey_action_job_allocate malloc
 #endif
+
+static struct hotkey_action_job *hotkey_action_job_create(const struct hotkey_action *actions, size_t count)
+{
+    if (!actions || !count || count > HOTKEY_MAX_ACTIONS) return NULL;
+    struct hotkey_action_job *job = hotkey_action_job_allocate(sizeof(*job) + count * sizeof(*actions));
+    if (!job) return NULL;
+    job->count = count;
+    memcpy(job->actions, actions, count * sizeof(*actions));
+    return job;
+}
 
 static bool hotkey_modifier_key_is_down(CGKeyCode keycode)
 {
@@ -407,11 +420,7 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
             }
         }
         if (key_down && (!repeat || match.repeat) && match.action_count) {
-            job = malloc(sizeof(*job));
-            if (job) {
-                job->count = match.action_count;
-                memcpy(job->actions, match.actions, match.action_count * sizeof(*job->actions));
-            }
+            job = hotkey_action_job_create(match.actions, match.action_count);
         }
     }
     if (key_down && !repeat && !mode_changed && config && hotkey_manager.active_mode >= 0 &&
