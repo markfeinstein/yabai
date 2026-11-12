@@ -16,6 +16,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 ### Changed
 - Reuse tracked keyboard delivery decisions on key release, avoiding redundant native modifier queries and shortcut matching while preserving pass-through and consumed key pairs.
 - Allocate queued native shortcut jobs for their actual action count instead of always reserving the maximum 16-action sequence.
+- Resolve a scratchpad window's Space and stickiness from one WindowServer membership query per toggle instead of two.
 - Require macOS 26 or 27 on Apple Silicon, publish thin arm64 releases with a 26.0 deployment floor, and remove Intel builds, implementation paths, tests, and package outputs.
 - Upgrade checkout and artifact-transfer workflow actions to pinned Node.js 24 releases.
 - Enable the menu bar by default with the panel interface and automatic layout, and default auto-balance and native edge resizing to on.

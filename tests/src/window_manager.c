@@ -288,6 +288,41 @@ TEST_FUNC(scratchpad_ordered_query_failure_preserves_automatic_mode,
     TEST_RESTORE(window_manager_window_is_ordered_in);
 });
 
+static int window_manager_test_membership_calls;
+static uint64_t window_manager_test_membership_sid;
+static bool window_manager_test_membership_sticky;
+
+static void window_manager_test_scratchpad_membership(uint32_t wid, uint64_t *sid, bool *is_sticky)
+{
+    (void) wid;
+    ++window_manager_test_membership_calls;
+    *sid = window_manager_test_membership_sid;
+    *is_sticky = window_manager_test_membership_sticky;
+}
+
+TEST_FUNC(scratchpad_visibility_uses_one_membership_query,
+{
+    TEST_OVERRIDE(window_manager_scratchpad_membership, window_manager_test_scratchpad_membership);
+    struct window window = { .id = 43 };
+
+    window_manager_test_membership_sid = 7;
+    window_manager_test_membership_sticky = false;
+    window_manager_test_membership_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_on_visible_space(&window, 7), true);
+    TEST_CHECK(window_manager_test_membership_calls, 1);
+
+    window_manager_test_membership_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_on_visible_space(&window, 8), false);
+    TEST_CHECK(window_manager_test_membership_calls, 1);
+
+    window_manager_test_membership_sticky = true;
+    window_manager_test_membership_calls = 0;
+    TEST_CHECK(window_manager_scratchpad_on_visible_space(&window, 8), true);
+    TEST_CHECK(window_manager_test_membership_calls, 1);
+
+    TEST_RESTORE(window_manager_scratchpad_membership);
+});
+
 static char *window_manager_test_string_copy_failure(char *value)
 {
     (void) value;

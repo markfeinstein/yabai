@@ -215,6 +215,13 @@ static void (*window_test_serialization_membership)(uint32_t, uint64_t *, bool *
 #define window_test_serialization_membership window_serialization_membership
 #endif
 
+// Resolves the window's primary Space and stickiness from one WindowServer
+// membership query; equivalent to window_space() plus window_is_sticky().
+void window_space_and_sticky(uint32_t wid, uint64_t *sid, bool *is_sticky)
+{
+    window_test_serialization_membership(wid, sid, is_sticky);
+}
+
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success)
 {
     if (count) *count = 0;

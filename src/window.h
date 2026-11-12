@@ -217,6 +217,7 @@ static inline void window_set_rule_flag(struct window *w, enum window_rule_flag 
 CF_RETURNS_RETAINED CFStringRef window_display_uuid(uint32_t wid);
 uint32_t window_display_id(uint32_t wid);
 uint64_t window_space(uint32_t wid);
+void window_space_and_sticky(uint32_t wid, uint64_t *sid, bool *is_sticky);
 uint64_t *window_space_list_with_status(uint32_t wid, int *count, bool *success);
 uint64_t *window_space_list(uint32_t wid, int *count);
 bool window_space_membership_contains(CFArrayRef space_list_ref, uint64_t sid);

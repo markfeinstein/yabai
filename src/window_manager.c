@@ -3661,6 +3661,21 @@ static CGError (*window_manager_window_is_ordered_in)(int, uint32_t, uint8_t *) 
 #define window_manager_window_is_ordered_in SLSWindowIsOrderedIn
 #endif
 
+#ifdef TESTS
+static void (*window_manager_scratchpad_membership)(uint32_t, uint64_t *, bool *) = window_space_and_sticky;
+#else
+#define window_manager_scratchpad_membership window_space_and_sticky
+#endif
+
+// One Space-membership query answers both "on this Space" and "sticky".
+static bool window_manager_scratchpad_on_visible_space(struct window *window, uint64_t sid)
+{
+    uint64_t window_sid = 0;
+    bool is_sticky = false;
+    window_manager_scratchpad_membership(window->id, &window_sid, &is_sticky);
+    return window_sid == sid || is_sticky;
+}
+
 static bool window_manager_scratchpad_ordered_state(struct window *window, int forced_mode, uint8_t *ordered_in)
 {
     return forced_mode != 0 ||
@@ -3674,8 +3689,7 @@ bool window_manager_toggle_scratchpad_window(struct window_manager *wm, struct w
     uint64_t sid = space_manager_active_space();
     if (!sid) return false;
 
-    // TODO(asmvik): Both functions use the same underlying API and could be combined in a single function to reduce redundant work.
-    bool visible_space = window_space(window->id) == sid || window_is_sticky(window->id);
+    bool visible_space = window_manager_scratchpad_on_visible_space(window, sid);
 
     uint8_t ordered_in = 0;
     if (!window_manager_scratchpad_ordered_state(window, forced_mode, &ordered_in)) return false;
