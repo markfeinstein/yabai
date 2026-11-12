@@ -73,6 +73,7 @@ bool space_manager_equalize_space(struct space_manager *sm, uint64_t sid, uint32
 bool space_manager_balance_space(struct space_manager *sm, uint64_t sid, uint32_t axis_flag);
 void space_manager_toggle_window_split(struct space_manager *sm, struct window *window);
 int space_manager_mission_control_index(uint64_t sid);
+void space_manager_mission_control_index_pair(uint64_t sid_a, uint64_t sid_b, int *index_a, int *index_b);
 uint64_t space_manager_mission_control_space(int desktop_id);
 uint64_t space_manager_cursor_space(void);
 uint64_t space_manager_prev_space(uint64_t sid);

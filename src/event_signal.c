@@ -331,8 +331,9 @@ void event_signal_push(enum signal_type type, void *context)
         uint64_t sid        = g_space_manager.current_space_id;
         uint64_t recent_sid = g_space_manager.last_space_id;
 
-        int index        = space_manager_mission_control_index(sid);
-        int recent_index = space_manager_mission_control_index(recent_sid);
+        int index;
+        int recent_index;
+        space_manager_mission_control_index_pair(sid, recent_sid, &index, &recent_index);
 
         es->arg_name[0]  = ts_alloc_unaligned(arg_size);
         es->arg_value[0] = ts_alloc_unaligned(arg_size);

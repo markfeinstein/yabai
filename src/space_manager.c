@@ -876,6 +876,18 @@ int space_manager_mission_control_index(uint64_t sid)
     return result;
 }
 
+// Resolves two Mission Control indices from a single topology copy.
+void space_manager_mission_control_index_pair(uint64_t sid_a, uint64_t sid_b, int *index_a, int *index_b)
+{
+    *index_a = 0;
+    *index_b = 0;
+    CFArrayRef topology = space_manager_query_managed_display_spaces(g_connection);
+    if (!topology) return;
+    *index_a = managed_space_index(topology, sid_a);
+    *index_b = managed_space_index(topology, sid_b);
+    CFRelease(topology);
+}
+
 uint64_t space_manager_mission_control_space(int desktop_id)
 {
     CFArrayRef topology = SLSCopyManagedDisplaySpaces(g_connection);
@@ -1237,8 +1249,9 @@ enum space_op_error space_manager_swap_space_with_space(uint64_t acting_sid, uin
     bool acting_sid_is_first = !acting_prev_sid || acting_prev_did != acting_did;
     bool selector_sid_is_first = !selector_prev_sid || selector_prev_did != selector_did;
 
-    int acting_mci = space_manager_mission_control_index(acting_sid);
-    int selector_mci = space_manager_mission_control_index(selector_sid);
+    int acting_mci;
+    int selector_mci;
+    space_manager_mission_control_index_pair(acting_sid, selector_sid, &acting_mci, &selector_mci);
     bool success = true;
     bool partial_commit = false;
 
@@ -1299,7 +1312,10 @@ enum space_op_error space_manager_move_space_to_space(uint64_t acting_sid, uint6
                                                 selector_sid, acting_sid, false,
                                                 acting_prev_sid, &partial_commit);
     } else if (!acting_sid_is_first && !selector_sid_is_first) {
-        if (space_manager_mission_control_index(acting_sid) > space_manager_mission_control_index(selector_sid)) {
+        int acting_mci;
+        int selector_mci;
+        space_manager_mission_control_index_pair(acting_sid, selector_sid, &acting_mci, &selector_mci);
+        if (acting_mci > selector_mci) {
             success = scripting_addition_move_space_after_space(acting_sid, selector_prev_sid, acting_sid == space_manager_active_space());
         } else {
             success = scripting_addition_move_space_after_space(acting_sid, selector_sid, acting_sid == space_manager_active_space());
@@ -1352,8 +1368,9 @@ static bool (*space_manager_test_perform_gesture)(int, int) = space_gesture_perf
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
 {
-    int cur_index = space_manager_mission_control_index(display_space_id(new_did));
-    int new_index = space_manager_mission_control_index(new_sid);
+    int cur_index;
+    int new_index;
+    space_manager_mission_control_index_pair(display_space_id(new_did), new_sid, &cur_index, &new_index);
     if (!cur_index || !new_index) return false;
 
     int count = abs(new_index - cur_index);

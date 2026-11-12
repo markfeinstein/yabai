@@ -1370,6 +1370,32 @@ TEST_FUNC(message_space_query_reuses_topology_across_serialization,
     ts_reset();
 });
 
+TEST_FUNC(space_mission_control_index_pair_copies_topology_once,
+{
+    TEST_OVERRIDE(space_manager_query_managed_display_spaces, message_space_query_managed_display_spaces);
+    int index_a = -1;
+    int index_b = -1;
+
+    message_space_query_topology_call_count = 0;
+    space_manager_mission_control_index_pair(42, 41, &index_a, &index_b);
+    TEST_CHECK(message_space_query_topology_call_count, 1);
+    TEST_CHECK(index_a, 2);
+    TEST_CHECK(index_b, 1);
+
+    message_space_query_topology_call_count = 0;
+    space_manager_mission_control_index_pair(41, 99, &index_a, &index_b);
+    TEST_CHECK(message_space_query_topology_call_count, 1);
+    TEST_CHECK(index_a, 1);
+    TEST_CHECK(index_b, 0);
+
+    message_space_query_topology_call_count = 0;
+    space_manager_mission_control_index_pair(0, 41, &index_a, &index_b);
+    TEST_CHECK(index_a, 0);
+    TEST_CHECK(index_b, 1);
+
+    TEST_RESTORE(space_manager_query_managed_display_spaces);
+});
+
 TEST_FUNC(message_window_query_reuses_topology_across_serialization,
 {
     bool temp_storage_ready = test_temp_storage_ensure(KILOBYTES(64));
