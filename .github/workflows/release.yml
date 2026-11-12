@@ -153,6 +153,19 @@ jobs:
             com.markfeinstein.yabai
           /usr/bin/ditto -c -k --keepParent "$app" "$RUNNER_TEMP/unsigned-Yabai.zip"
 
+      # Nightly tags are immutable and may predate release-tooling changes on
+      # the dispatching branch. Run tooling from the workflow's own revision so
+      # these steps always match it, while release content still comes from the tag.
+      - name: Checkout release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          sparse-checkout: |
+            scripts/extract_changelog.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Render release notes from changelog
         run: |
           set -euo pipefail
@@ -162,7 +175,7 @@ jobs:
             changelog_section=$BASE_VERSION
           fi
           notes="$RUNNER_TEMP/release-notes.md"
-          python3 scripts/extract_changelog.py CHANGELOG.md "$changelog_section" > "$notes"
+          python3 .release-tooling/scripts/extract_changelog.py CHANGELOG.md "$changelog_section" > "$notes"
           {
             printf '\n---\n\n'
             printf '[View the complete changelog](https://github.com/%s/blob/%s/CHANGELOG.md)\n' \

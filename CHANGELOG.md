@@ -26,6 +26,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 ### Fixed
 - Reject missing scratchpad mutation targets instead of dereferencing null window pointers.
 - Move hosted CI, signing, and artifact verification to macOS 26 Apple Silicon runners.
+- Run release-note tooling from the release workflow's own revision so an immutable nightly tag created before a tooling change can still be built and published.
 
 ## [0.0.1] - 2026-11-08
 
