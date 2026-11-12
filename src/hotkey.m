@@ -366,6 +366,19 @@ static CGEventRef hotkey_event_callback(CGEventTapProxy proxy, CGEventType type,
 
     uint16_t keycode = (uint16_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
     bool key_down = type == kCGEventKeyDown;
+    if (!key_down) {
+        // A tracked release must follow its key-down delivery decision even if
+        // modifiers, focus, mode, or configuration changed while it was held.
+        // Skip native modifier queries and binding scans that cannot affect it.
+        pthread_mutex_lock(&hotkey_manager.lock);
+        enum hotkey_delivery delivery = hotkey_manager.delivery[keycode];
+        if (delivery != HOTKEY_DELIVERY_UNTRACKED) {
+            hotkey_manager.delivery[keycode] = HOTKEY_DELIVERY_UNTRACKED;
+            pthread_mutex_unlock(&hotkey_manager.lock);
+            return delivery == HOTKEY_DELIVERY_PASS ? event : NULL;
+        }
+        pthread_mutex_unlock(&hotkey_manager.lock);
+    }
     bool repeat = key_down && CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat) != 0;
     uint16_t modifiers = hotkey_modifiers_from_event(CGEventGetFlags(event));
     struct hotkey_match_result match;

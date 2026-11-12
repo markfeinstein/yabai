@@ -244,6 +244,80 @@ TEST_FUNC(hotkey_callback_preserves_key_delivery_across_mode_changes,
     }
 })
 
+static int hotkey_release_test_modifier_queries;
+
+static bool hotkey_release_test_key_state(CGKeyCode keycode)
+{
+    (void) keycode;
+    ++hotkey_release_test_modifier_queries;
+    return false;
+}
+
+TEST_FUNC(hotkey_callback_reuses_tracked_key_delivery_without_modifier_queries,
+{
+    TEST_SAVE(hotkey_key_state);
+    TEST_SAVE(hotkey_manager.delivery);
+    hotkey_key_state = hotkey_release_test_key_state;
+    struct hotkey_binding_case cases[] = {
+        { .disposition = HOTKEY_DISPOSITION_CONSUME, .transition_mode = HOTKEY_TRANSITION_NONE },
+        { .disposition = HOTKEY_DISPOSITION_PASS_THROUGH, .transition_mode = HOTKEY_TRANSITION_NONE }
+    };
+    struct hotkey_binding bindings[] = {
+        { .keystroke = { kVK_ANSI_A, HOTKEY_MODIFIER_COMMAND }, .cases = &cases[0], .case_count = 1 },
+        { .keystroke = { kVK_ANSI_S, HOTKEY_MODIFIER_COMMAND }, .cases = &cases[1], .case_count = 1 }
+    };
+    struct hotkey_config_model config = {
+        .present = true, .enabled = true, .bindings = bindings, .binding_count = array_count(bindings)
+    };
+
+    for (size_t i = 0; i < array_count(bindings); ++i) {
+        uint16_t keycode = bindings[i].keystroke.keycode;
+        hotkey_manager.delivery[keycode] = HOTKEY_DELIVERY_UNTRACKED;
+        hotkey_manager_install_config(&config);
+        CGEventRef down = CGEventCreateKeyboardEvent(NULL, keycode, true);
+        CGEventRef up = CGEventCreateKeyboardEvent(NULL, keycode, false);
+        TEST_CHECK(down != NULL && up != NULL, true);
+        if (!down || !up) {
+            if (down) CFRelease(down);
+            if (up) CFRelease(up);
+            continue;
+        }
+        CGEventSetFlags(down, kCGEventFlagMaskCommand);
+        CGEventSetFlags(up, kCGEventFlagMaskControl);
+        CGEventRef expected_down = i == 0 ? NULL : down;
+        CGEventRef expected_up = i == 0 ? NULL : up;
+        hotkey_release_test_modifier_queries = 0;
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyDown, down, NULL), expected_down);
+        TEST_CHECK(hotkey_release_test_modifier_queries, 2);
+
+        // Config and modifier changes cannot change an already tracked release.
+        hotkey_manager_install_config(NULL);
+        hotkey_release_test_modifier_queries = 0;
+        CGEventRef synthetic_up = CGEventCreateKeyboardEvent(NULL, keycode, false);
+        TEST_CHECK(synthetic_up != NULL, true);
+        if (synthetic_up) {
+            CGEventSetIntegerValueField(synthetic_up, kCGEventSourceUserData, (int64_t) HOTKEY_SYNTHETIC_EVENT_TAG);
+            TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, synthetic_up, NULL), synthetic_up);
+            TEST_CHECK(hotkey_manager.delivery[keycode] != HOTKEY_DELIVERY_UNTRACKED, true);
+            CFRelease(synthetic_up);
+        }
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, up, NULL), expected_up);
+        TEST_CHECK(hotkey_release_test_modifier_queries, 0);
+        TEST_CHECK(hotkey_manager.delivery[keycode], HOTKEY_DELIVERY_UNTRACKED);
+
+        // An orphan release still uses the current binding, not the old decision.
+        hotkey_release_test_modifier_queries = 0;
+        hotkey_manager_install_config(&config);
+        CGEventSetFlags(up, kCGEventFlagMaskCommand);
+        TEST_CHECK(hotkey_event_callback(NULL, kCGEventKeyUp, up, NULL), expected_up);
+        TEST_CHECK(hotkey_release_test_modifier_queries, 2);
+        TEST_CHECK(hotkey_manager.delivery[keycode], HOTKEY_DELIVERY_UNTRACKED);
+        CFRelease(down);
+        CFRelease(up);
+    }
+    hotkey_manager_install_config(NULL);
+});
+
 static uint64_t hotkey_timeout_test_generations[4];
 static uint32_t hotkey_timeout_test_durations[4];
 static int hotkey_timeout_test_count;
