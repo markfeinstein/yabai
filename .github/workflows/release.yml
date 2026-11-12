@@ -53,23 +53,34 @@ jobs:
             exit 1
           fi
 
-  build:
-    name: Build unsigned application
+  # Hosted macOS 26 arm64 capacity can be exhausted, in which case GitHub
+  # cancels the job without starting it. build-macos-27 then runs the same
+  # steps; the 26.0 deployment target keeps the binary compatible with
+  # macOS 26. A build that started and failed on macOS 26 is never retried.
+  build-macos-26:
+    name: Build unsigned application (macOS 26)
     needs: check-release
     if: ${{ needs.check-release.outputs.already_published != 'true' }}
     runs-on: macos-26
+    continue-on-error: true
     timeout-minutes: 30
     permissions:
       contents: read
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-    outputs:
+    outputs: &build-outputs
+      started: ${{ steps.runner.outputs.started }}
+      passed: ${{ steps.result.outputs.passed }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       channel: ${{ steps.version.outputs.channel }}
       base_version: ${{ steps.version.outputs.base_version }}
       build_version: ${{ steps.version.outputs.build_version }}
       bundle_version: ${{ steps.version.outputs.bundle_version }}
-    steps:
+    steps: &build-steps
+      - name: Record runner acquisition
+        id: runner
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,6 +203,67 @@ jobs:
             ${{ runner.temp }}/release-notes.md
           if-no-files-found: error
           retention-days: 1
+
+      - name: Record success
+        id: result
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  build-macos-27:
+    name: Build unsigned application (macOS 27)
+    needs:
+      - check-release
+      - build-macos-26
+    if: ${{ !cancelled() && needs.check-release.outputs.already_published != 'true' && needs.build-macos-26.outputs.started != 'true' }}
+    # Preview GitHub-hosted macOS 27 arm64 image; see .github/actionlint.yaml.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    outputs: *build-outputs
+    steps: *build-steps
+
+  build:
+    name: Select unsigned application build
+    needs:
+      - check-release
+      - build-macos-26
+      - build-macos-27
+    if: ${{ !cancelled() && needs.check-release.outputs.already_published != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      release_tag: ${{ steps.select.outputs.release_tag }}
+      channel: ${{ steps.select.outputs.channel }}
+      base_version: ${{ steps.select.outputs.base_version }}
+      build_version: ${{ steps.select.outputs.build_version }}
+      bundle_version: ${{ steps.select.outputs.bundle_version }}
+    steps:
+      - name: Require one passing build
+        id: select
+        env:
+          PRIMARY: ${{ toJSON(needs.build-macos-26.outputs) }}
+          FALLBACK: ${{ toJSON(needs.build-macos-27.outputs) }}
+        run: |
+          set -euo pipefail
+          if [ "$(jq -r '.started // ""' <<<"$PRIMARY")" = true ]; then
+            selected=$PRIMARY
+            label="macOS 26"
+          else
+            selected=$FALLBACK
+            label="macOS 27 (macOS 26 runner unavailable)"
+          fi
+          if [ "$(jq -r '.passed // ""' <<<"$selected")" != true ]; then
+            echo "The $label build did not pass." >&2
+            exit 1
+          fi
+          for key in release_tag channel base_version build_version bundle_version; do
+            value=$(jq -r --arg key "$key" '.[$key] // ""' <<<"$selected")
+            test -n "$value"
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          done
+          echo "Using the unsigned application built on $label." >> "$GITHUB_STEP_SUMMARY"
 
   sign:
     name: Sign, notarize, and publish application

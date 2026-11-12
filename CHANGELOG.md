@@ -20,6 +20,7 @@ preserved separately in [UPSTREAM_CHANGELOG.md](UPSTREAM_CHANGELOG.md).
 - Resolve paired Mission Control indices for `space_changed` signals, Space swaps and moves, and gesture-based Space focus from one managed-topology copy instead of two.
 - Require macOS 26 or 27 on Apple Silicon, publish thin arm64 releases with a 26.0 deployment floor, and remove Intel builds, implementation paths, tests, and package outputs.
 - Upgrade checkout and artifact-transfer workflow actions to pinned Node.js 24 releases.
+- Run CI and the unsigned release build on the hosted macOS 27 arm64 image when no macOS 26 arm64 runner can be acquired, keeping the 26.0 deployment target; signing and artifact pinning still use macOS 26.
 - Enable the menu bar by default with the panel interface and automatic layout, and default auto-balance and native edge resizing to on.
 - Move the Home Manager interface to `programs.yabai` and expose declarative JSONC through the conventional `settings` and `settingsFile` options.
 

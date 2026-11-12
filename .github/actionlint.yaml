@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    # GitHub-hosted macOS 27 arm64 preview image, not yet known to actionlint.
+    - xcode-27
+    # Prepared self-hosted Macs used by manual live workflows.
+    - yabai-live-integration

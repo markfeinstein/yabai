@@ -7,15 +7,29 @@ on:
 permissions:
   contents: read
 
+# Hosted macOS 26 arm64 capacity can be exhausted, in which case GitHub
+# cancels the job without starting it. The macOS 27 job then runs the same
+# steps. A job that started and failed on macOS 26 is never retried on 27.
 jobs:
   macos-offline:
     runs-on: macos-26
-    steps:
+    continue-on-error: true
+    outputs:
+      started: ${{ steps.runner.outputs.started }}
+      passed: ${{ steps.result.outputs.passed }}
+    steps: &macos-offline-steps
+      - name: Record runner acquisition
+        id: runner
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify macOS 26 arm64 runner
+      - name: Verify macOS 26 or 27 arm64 runner
         run: |
           test "$(uname -m)" = arm64
-          test "$(sw_vers -productVersion | cut -d. -f1)" -eq 26
+          os_major=$(sw_vers -productVersion | cut -d. -f1)
+          case "$os_major" in
+            26|27) echo "Running on macOS $(sw_vers -productVersion) arm64." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "unsupported macOS major version: $os_major" >&2; exit 1 ;;
+          esac
       - name: Install pinned documentation generator
         run: |
           gem install --no-document asciidoctor --version 2.0.26
@@ -91,3 +105,39 @@ jobs:
           esac
       - name: Working tree remains clean
         run: test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Record success
+        id: result
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
+
+  macos-offline-27:
+    needs: macos-offline
+    if: ${{ !cancelled() && needs.macos-offline.outputs.started != 'true' }}
+    # Preview GitHub-hosted macOS 27 arm64 image; see .github/actionlint.yaml.
+    runs-on: xcode-27
+    outputs:
+      passed: ${{ steps.result.outputs.passed }}
+    steps: *macos-offline-steps
+
+  ci-result:
+    name: ci result
+    needs:
+      - macos-offline
+      - macos-offline-27
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require one passing macOS run
+        env:
+          PRIMARY_STARTED: ${{ needs.macos-offline.outputs.started }}
+          PRIMARY_PASSED: ${{ needs.macos-offline.outputs.passed }}
+          FALLBACK_PASSED: ${{ needs.macos-offline-27.outputs.passed }}
+        run: |
+          set -euo pipefail
+          if [ "$PRIMARY_STARTED" = true ]; then
+            test "$PRIMARY_PASSED" = true || { echo "macOS 26 run failed" >&2; exit 1; }
+            echo "Passed on the macOS 26 runner." >> "$GITHUB_STEP_SUMMARY"
+          else
+            test "$FALLBACK_PASSED" = true || { echo "macOS 26 was unavailable and the macOS 27 run did not pass" >&2; exit 1; }
+            echo "macOS 26 was unavailable; passed on the macOS 27 runner." >> "$GITHUB_STEP_SUMMARY"
+          fi
